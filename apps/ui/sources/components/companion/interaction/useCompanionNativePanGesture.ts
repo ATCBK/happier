@@ -80,6 +80,10 @@ export type UseCompanionNativePanGestureParams<TDragState> = Readonly<{
     noDragRegions: readonly CompanionNoDragRegionRect[];
     /** UI-thread admission against the consumer's measured surface (must be a worklet). */
     canStartAt?: (point: CompanionPoint) => boolean;
+    /** A changed input authority retires the old gesture even when chrome remains draggable. */
+    admissionKey?: string;
+    /** UI-thread geometry for direct manipulation (e.g. a leading-edge resize grip). */
+    resolveDragPoint?: (input: Readonly<{ start: CompanionPoint; translation: CompanionPoint }>) => CompanionPoint;
     /**
      * The companion's own settle. Injected rather than baked in: the pet arrives with a clipped
      * overshoot, the Voice orb is critically damped and must not inherit that bounce.
@@ -156,9 +160,12 @@ export function useCompanionNativePanGesture<TDragState = never>(
     const [dragState, setDragState] = React.useState<TDragState | null>(null);
     const suppressNextPressRef = React.useRef(false);
     const enabled = params.enabled !== false;
+    const admissionKeyRef = React.useRef(params.admissionKey);
 
     React.useEffect(() => {
-        if (enabled && params.initialPoint.x === targetX.value && params.initialPoint.y === targetY.value) return;
+        const admissionChanged = admissionKeyRef.current !== params.admissionKey;
+        admissionKeyRef.current = params.admissionKey;
+        if (!admissionChanged && enabled && params.initialPoint.x === targetX.value && params.initialPoint.y === targetY.value) return;
         cancelAnimation(translateX);
         cancelAnimation(translateY);
         // A new placement or control takeover invalidates the in-flight gesture's old closure.
@@ -174,6 +181,7 @@ export function useCompanionNativePanGesture<TDragState = never>(
         setPoint(params.initialPoint);
     }, [
         enabled,
+        params.admissionKey,
         params.initialPoint.x,
         params.initialPoint.y,
         startX,
@@ -223,6 +231,14 @@ export function useCompanionNativePanGesture<TDragState = never>(
     const resolveReleaseTarget = params.resolveReleaseTarget;
     const resolveDragState = params.resolveDragState;
     const continuousPosition = params.positionPublication !== 'release';
+    const resolveDragPoint = params.resolveDragPoint;
+    const dragPoint = React.useCallback((translationX: number, translationY: number) => {
+        'worklet';
+        const start = { x: startX.value, y: startY.value };
+        return clampPoint(resolveDragPoint
+            ? resolveDragPoint({ start, translation: { x: translationX, y: translationY } })
+            : { x: start.x + translationX, y: start.y + translationY }, params.bounds);
+    }, [startX, startY, resolveDragPoint, params.bounds]);
 
     const animateToPoint = React.useCallback((target: CompanionPoint, velocityX: number, velocityY: number) => {
         'worklet';
@@ -287,10 +303,7 @@ export function useCompanionNativePanGesture<TDragState = never>(
                 || Math.abs(translationY) >= COMPANION_NATIVE_PAN_DRAG_THRESHOLD_PT;
             moved.value = moved.value || nextMoved;
 
-            const nextPoint = clampPoint({
-                x: startX.value + translationX,
-                y: startY.value + translationY,
-            }, params.bounds);
+            const nextPoint = dragPoint(translationX, translationY);
             translateX.value = nextPoint.x;
             translateY.value = nextPoint.y;
             if (continuousPosition) runOnJS(publishPoint)(nextPoint);
@@ -308,10 +321,9 @@ export function useCompanionNativePanGesture<TDragState = never>(
 
             const velocityX = success ? readFinite(event.velocityX) : 0;
             const velocityY = success ? readFinite(event.velocityY) : 0;
-            const released = clampPoint(success ? {
-                x: startX.value + readFinite(event.translationX),
-                y: startY.value + readFinite(event.translationY),
-            } : { x: translateX.value, y: translateY.value }, params.bounds);
+            const released = success
+                ? dragPoint(readFinite(event.translationX), readFinite(event.translationY))
+                : clampPoint({ x: translateX.value, y: translateY.value }, params.bounds);
             settleRelease(released, velocityX, velocityY);
         })
         .onFinalize(() => {
@@ -330,6 +342,7 @@ export function useCompanionNativePanGesture<TDragState = never>(
             if (resolveDragState) runOnJS(publishDragState)(null);
         }), [
             continuousPosition,
+            dragPoint,
             animateToPoint,
             enabled,
             ended,

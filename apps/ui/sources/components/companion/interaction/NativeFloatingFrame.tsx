@@ -1,10 +1,11 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
-import Animated, { measure, useAnimatedRef } from 'react-native-reanimated';
+import Animated, { measure, useAnimatedRef, useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import {
     HAPPIER_FLOATING_FRAME_METRICS,
     resolveFloatingFrameRect,
+    resolveFloatingFrameResizeRect,
     type HappierFloatingFrameNativeBindingProps,
 } from '@happier-dev/plugin-ui/presentation';
 
@@ -17,17 +18,27 @@ export function NativeFloatingFrame(props: HappierFloatingFrameNativeBindingProp
     const nativeRef = useAnimatedRef<View>();
     const noDragRegions = useCompanionNoDragRegions();
     const { rect, availableRect, avoidRects, aspectRatio, chromeHeight, minWidth, bodyRect } = props;
-    const enabled = props.mode === 'floating' && props.moveInput === 'surface';
+    const enabled = props.mode === 'floating';
+    const width = useSharedValue(rect.width);
+    const height = useSharedValue(rect.height);
+    const resizeRight = useSharedValue(rect.x + rect.width);
+    const resizeY = useSharedValue(rect.y);
+    const [portalActive, setPortalActive] = React.useState(false);
+    React.useEffect(() => {
+        width.value = rect.width;
+        height.value = rect.height;
+    }, [rect.width, rect.height, width, height]);
     const bounds = React.useMemo(() => ({
         minX: availableRect.x, maxX: Math.max(availableRect.x, availableRect.x + availableRect.width - rect.width),
         minY: availableRect.y, maxY: Math.max(availableRect.y, availableRect.y + availableRect.height - rect.height),
     }), [availableRect, rect.width, rect.height]);
     const pan = useCompanionNativePanGesture({
         enabled,
+        admissionKey: props.moveInput,
         bounds,
         initialPoint: { x: rect.x, y: rect.y },
         noDragRegions,
-        // Buttons/footer/grip keep their own input. Admission uses the transformed frame's actual
+        // Registered buttons and the resize grip keep their own input. Admission uses the transformed frame's actual
         // window position, rather than the settled rect or a stale onLayout screen measurement.
         canStartAt: (point) => {
             'worklet';
@@ -36,10 +47,11 @@ export function NativeFloatingFrame(props: HappierFloatingFrameNativeBindingProp
             const x = point.x - measured.pageX;
             const y = point.y - measured.pageY;
             const bodyTop = bodyRect.y - rect.y;
-            const bodyBottom = bodyTop + bodyRect.height;
+            const bodyBottom = bodyTop + height.value - chromeHeight;
             const grip = HAPPIER_FLOATING_FRAME_METRICS.gripSize * 2;
-            return x >= 0 && x <= rect.width && y >= bodyTop && y <= bodyBottom
-                && !(x <= grip && y >= bodyBottom - grip);
+            if (x < 0 || x > width.value || y < 0 || y > height.value) return false;
+            if (x <= grip && y >= bodyBottom - grip && y <= bodyBottom) return false;
+            return props.moveInput === 'surface' || y < bodyTop || y > bodyBottom;
         },
         releaseMotion: props.releaseMotion,
         motionPolicy: props.reducedMotion ? 'snap' : 'animate',
@@ -47,30 +59,79 @@ export function NativeFloatingFrame(props: HappierFloatingFrameNativeBindingProp
         resolveReleaseTarget: ({ released, projected }) => {
             'worklet';
             const placement = resolveFloatingFrameRect({
-                rect: { ...rect, ...released }, availableRect, avoidRects,
+                rect: { ...released, width: width.value, height: height.value }, availableRect, avoidRects,
                 aspectRatio, chromeHeight, minWidth, projectedPoint: projected,
             });
             return placement.fits ? { x: placement.rect.x, y: placement.rect.y } : released;
         },
         onDragRelease: ({ target }) => {
             const placement = resolveFloatingFrameRect({
-                rect: { ...rect, ...target }, availableRect, avoidRects, aspectRatio, chromeHeight, minWidth,
+                rect: { ...target, width: width.value, height: height.value }, availableRect, avoidRects, aspectRatio, chromeHeight, minWidth,
             });
             if (placement.fits) props.onRectChange(placement.rect, { kind: 'settle' });
             else props.onModeChange('docked');
         },
     });
+    // Movement and resize are two bindings over the same companion pan/lifecycle owner, just as
+    // web uses two companion pointer sessions. Resize never projects a throw or publishes frames.
+    const resize = useCompanionNativePanGesture({
+        enabled, admissionKey: props.moveInput,
+        initialPoint: { x: rect.width, y: 0 },
+        bounds: { minX: 0, maxX: availableRect.width, minY: 0, maxY: 0 },
+        noDragRegions: [],
+        canStartAt: () => {
+            'worklet';
+            resizeRight.value = pan.translateX.value + width.value;
+            resizeY.value = pan.translateY.value;
+            return true;
+        },
+        resolveDragPoint: ({ start, translation }) => {
+            'worklet';
+            const next = resolveFloatingFrameResizeRect({
+                rect: { x: resizeRight.value - start.x, y: resizeY.value, width: start.x, height: height.value },
+                availableRect, aspectRatio, chromeHeight,
+                minWidth: Math.max(HAPPIER_FLOATING_FRAME_METRICS.gripSize * 2, minWidth ?? 0),
+                translationX: translation.x,
+            });
+            width.value = next.width;
+            height.value = next.height;
+            pan.translateX.value = next.x;
+            pan.translateY.value = next.y;
+            return { x: next.width, y: 0 };
+        },
+        releaseMotion: props.releaseMotion,
+        motionPolicy: 'snap', positionPublication: 'release',
+        onDragRelease: () => {
+            const placement = resolveFloatingFrameRect({
+                rect: { x: pan.translateX.value, y: pan.translateY.value, width: width.value, height: height.value },
+                availableRect, avoidRects, aspectRatio, chromeHeight, minWidth,
+            });
+            if (!placement.fits) { props.onModeChange('docked'); return; }
+            width.value = placement.rect.width;
+            height.value = placement.rect.height;
+            pan.translateX.value = placement.rect.x;
+            pan.translateY.value = placement.rect.y;
+            props.onRectChange(placement.rect, { kind: 'settle' });
+        },
+    });
+    const overlay = enabled && props.grip ? <GestureDetector gesture={resize.gesture}>{props.grip}</GestureDetector> : null;
+    const sizeStyle = useAnimatedStyle(() => ({ width: width.value, height: height.value }));
+    const localGripStyle = useAnimatedStyle(() => ({
+        position: 'absolute', left: 0, top: bodyRect.y - rect.y,
+        width: width.value, height: Math.max(0, height.value - chromeHeight),
+    }));
     const motion = React.useMemo(() => ({
         x: pan.translateX, y: pan.translateY, anchorX: rect.x, anchorY: rect.y,
-    }), [pan.translateX, pan.translateY, rect.x, rect.y]);
+        width, height, chromeHeight, overlay, onPortalActiveChange: setPortalActive,
+    }), [pan.translateX, pan.translateY, rect.x, rect.y, width, height, chromeHeight, overlay]);
 
     return <RetainedPresentationNativeMotionContext.Provider value={props.mode === 'docked' ? null : motion}>
         <GestureDetector gesture={pan.gesture}>
             <Animated.View ref={nativeRef} collapsable={false} style={props.mode === 'docked' ? undefined : [
-                { position: 'absolute', left: 0, top: 0, width: rect.width, height: rect.height },
-                pan.animatedStyle,
+                { position: 'absolute', left: 0, top: 0 }, sizeStyle, pan.animatedStyle,
             ]}>
                 {props.children}
+                {!portalActive && overlay ? <Animated.View style={localGripStyle} pointerEvents="box-none">{overlay}</Animated.View> : null}
             </Animated.View>
         </GestureDetector>
     </RetainedPresentationNativeMotionContext.Provider>;

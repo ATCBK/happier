@@ -55,6 +55,7 @@ export * from './interaction/useCompanionPointerDragSession.js';
 export {
   frameRectsOverlap,
   resolveFloatingFrameRect,
+  resolveFloatingFrameResizeRect,
   type FrameRect,
   type FloatingFrameMode,
   type FloatingFrameGeometry,

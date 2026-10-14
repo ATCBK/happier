@@ -25,6 +25,7 @@ import {
   resolveFloatingFrameCorner,
   resolveFloatingFrameCornerRect,
   resolveFloatingFrameRect,
+  resolveFloatingFrameResizeRect,
   type FloatingFrameCorner,
   type FloatingFrameMode,
   type FrameRect,
@@ -52,6 +53,8 @@ export type HappierFloatingFrameNativeBindingProps = Pick<FloatingFrameProps,
     releaseMotion: CompanionReleaseMotion;
     chromeHeight: number;
     bodyRect: FrameRect;
+    /** The existing grip, carried above a retained native body by the host binding. */
+    grip?: ReactNode;
 }>;
 
 export type FloatingFrameProps = Readonly<{
@@ -412,21 +415,12 @@ export function FloatingFrame(props: FloatingFrameProps) {
       if (!gesture) return;
       // The grip sits at the body's leading-bottom corner; the trailing-top corner stays put.
       const current = latest.current;
-      const right = gesture.start.x + gesture.start.width;
-      const width = Math.max(
-        resolveMinimumWidth(current),
-        Math.min(
-          right - current.availableRect.x,
-          gesture.start.width - move.totalDeltaX,
-        ),
-      );
-      const height = resolveFloatingFrameHeight(width, current.aspectRatio, {
-        footer: current.footer != null,
+      gesture.current = resolveFloatingFrameResizeRect({
+        rect: gesture.start, availableRect: current.availableRect,
+        translationX: move.totalDeltaX, aspectRatio: current.aspectRatio,
+        chromeHeight: resolveFloatingFrameChromeHeight({ footer: current.footer != null }),
+        minWidth: resolveMinimumWidth(current),
       });
-      gesture.current = clampRect(
-        { x: right - width, y: gesture.start.y, width, height },
-        current.availableRect,
-      );
       current.onRectChange(gesture.current, { kind: 'move' });
     },
     onDragEnd: () => {
@@ -586,6 +580,34 @@ export function FloatingFrame(props: FloatingFrameProps) {
     onKeyDown: onGripKeyDown,
   } satisfies Pick<HTMLAttributes<HTMLElement>, 'onKeyDown'>;
 
+  const grip = floating ? (
+    <View
+      ref={resizeSession.dragTargetRef}
+      testID={props.testID ? `${props.testID}-grip` : undefined}
+      accessibilityLabel={props.resizeLabel}
+      role="button"
+      focusable
+      {...gripEventHandlers}
+      style={[
+        {
+          position: 'absolute', left: 0, bottom: 0,
+          width: HAPPIER_FLOATING_FRAME_METRICS.gripSize * 2,
+          height: HAPPIER_FLOATING_FRAME_METRICS.gripSize * 2,
+          opacity: controlsShown ? 1 : 0,
+        },
+        Platform.OS === 'web' ? ({ cursor: 'nesw-resize' } as object) : null,
+        controlsTransition,
+      ]}
+      {...webOnly({ happierFloatingFrameGrip: 'true' })}
+      {...resizeSession.pointerHandlers}
+    >
+      <View pointerEvents="none" style={{
+        position: 'absolute', left: 8, bottom: 8, width: 8, height: 8,
+        borderLeftWidth: 2, borderBottomWidth: 2, borderBottomLeftRadius: 3,
+        borderColor: props.colors?.grip ?? environmentTheme?.colors.mutedText,
+      }} />
+    </View>
+  ) : null;
   const frame = (
     <View
       ref={moveSession.dragTargetRef}
@@ -597,7 +619,7 @@ export function FloatingFrame(props: FloatingFrameProps) {
       {...frameEventHandlers}
       style={[
         frameStyle,
-        NativeBinding && props.mode !== 'docked' ? { position: 'relative', left: 0, top: 0 } : null,
+        NativeBinding && props.mode !== 'docked' ? { position: 'relative', left: 0, top: 0, width: '100%', height: '100%' } : null,
         { flexDirection: 'column', gap: HAPPIER_FLOATING_FRAME_METRICS.gap },
         transition,
       ]}
@@ -642,47 +664,7 @@ export function FloatingFrame(props: FloatingFrameProps) {
         })}
       >
         {props.children}
-        {floating ? (
-          <View
-            ref={resizeSession.dragTargetRef}
-            testID={props.testID ? `${props.testID}-grip` : undefined}
-            accessibilityLabel={props.resizeLabel}
-            role="button"
-            focusable
-            {...gripEventHandlers}
-            style={[
-              {
-                position: 'absolute',
-                left: 0,
-                bottom: 0,
-                width: HAPPIER_FLOATING_FRAME_METRICS.gripSize * 2,
-                height: HAPPIER_FLOATING_FRAME_METRICS.gripSize * 2,
-                opacity: controlsShown ? 1 : 0,
-              },
-              Platform.OS === 'web'
-                ? ({ cursor: 'nesw-resize' } as object)
-                : null,
-              controlsTransition,
-            ]}
-            {...webOnly({ happierFloatingFrameGrip: 'true' })}
-            {...resizeSession.pointerHandlers}
-          >
-            <View
-              pointerEvents="none"
-              style={{
-                position: 'absolute',
-                left: 8,
-                bottom: 8,
-                width: 8,
-                height: 8,
-                borderLeftWidth: 2,
-                borderBottomWidth: 2,
-                borderBottomLeftRadius: 3,
-                borderColor: props.colors?.grip ?? environmentTheme?.colors.mutedText,
-              }}
-            />
-          </View>
-        ) : null}
+        {NativeBinding ? null : grip}
       </View>
       {props.footer != null ? (
         <View
@@ -709,6 +691,7 @@ export function FloatingFrame(props: FloatingFrameProps) {
       reducedMotion={props.reducedMotion} releaseMotion={motion}
       chromeHeight={resolveFloatingFrameChromeHeight({ footer: props.footer != null })}
       bodyRect={resolveFloatingFrameBodyRect(props.mode === 'expanded' ? props.availableRect : props.rect, { footer: props.footer != null })}
+      grip={grip}
     >{frame}</NativeBinding>
   ) : frame;
 }
