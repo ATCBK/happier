@@ -9,7 +9,7 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutor>[0];
 type HostRequesterContext = Pick<RpcHandlerContext, 'machineAdmission' | 'verifyMachineAdmissionCurrent'
     | 'requesterSessionBootstrap' | 'sessionActionOrigin' | 'callerInputAuthorization' | 'callerInputConstraints'
     | 'workspaceSyncSourceRouting' | 'workspaceSyncTargetRouting' | 'workspaceSyncSourceWriterTargetRouting' | 'workspaceSyncSeedRouting'
-    | 'originalActionEnvelope' | 'workspaceSyncSourceExecution' | 'deadlineAtMs'>;
+    | 'originalActionEnvelope' | 'workspaceSyncSourceExecution' | 'deadlineAtMs' | 'requestStartedAtMs'>;
 
 export type RpcActionExecutorContext = ActionExecutorContext & HostRequesterContext & Readonly<{
     signal?: AbortSignal;
@@ -106,6 +106,7 @@ export function buildActionExecutorContextForRpc(
 
     return {
         ...(params.deadlineAtMs === undefined ? {} : { deadlineAtMs: params.deadlineAtMs }),
+        ...(params.requestStartedAtMs === undefined ? {} : { requestStartedAtMs: params.requestStartedAtMs }),
         ...(params.machineAdmission ? { machineAdmission: params.machineAdmission } : {}),
         ...(params.verifyMachineAdmissionCurrent ? { verifyMachineAdmissionCurrent: params.verifyMachineAdmissionCurrent } : {}),
         ...(params.requesterSessionBootstrap ? { requesterSessionBootstrap: params.requesterSessionBootstrap } : {}),

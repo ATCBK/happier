@@ -1016,12 +1016,16 @@ export async function listCodexSessionCandidates(input: Readonly<{
   searchTerm?: string;
   searchMode?: 'fast' | 'full';
   searchTarget?: 'metadata' | 'content';
+  scanDeadlineAtMs?: number;
   ripgrep?: AgentExternalSessionsInvocation['ripgrep'];
   resultBudget?: Readonly<{ fits(page: CodexCandidateListPage): boolean }>;
   /** Include internal threads (approval reviewers, spawned sub-agents). Absent: top-level sessions only. */
   includeThreads?: boolean;
 }> & CodexExternalSessionInvocationBounds): Promise<CodexCandidateListPage> {
-  const contentSearchControl = input.searchTarget === 'content' ? createExternalSessionContentSearchControl(input) : undefined;
+  const contentSearchControl = input.searchTarget === 'content' ? createExternalSessionContentSearchControl({
+    signal: input.signal,
+    deadlineAtMs: input.scanDeadlineAtMs ?? input.deadlineAtMs,
+  }) : undefined;
   const params = contentSearchControl
     ? { ...input, contentSearchControl, onProgress: contentSearchControl.checkWork }
     : input;

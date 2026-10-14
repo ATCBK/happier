@@ -172,6 +172,7 @@ export function createAgentExternalSessionsExecutionSurface(
                     request.deadlineAtMs,
                 ),
                 ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
+                ...(request.scanDeadlineAtMs === undefined ? {} : { scanDeadlineAtMs: request.scanDeadlineAtMs }),
                 ...(request.searchTerm === undefined ? {} : { searchTerm: request.searchTerm }),
                 ...(request.searchMode === undefined ? {} : { searchMode: request.searchMode }),
                 ...(request.searchTarget === undefined ? {} : { searchTarget: request.searchTarget }),

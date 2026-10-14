@@ -395,6 +395,7 @@ export function registerActionSpecRpcHandlers(params: RegisterActionSpecRpcHandl
                     ...(externalActionTarget ? { externalActionTarget } : {}),
                     ...(execution.signal ? { signal: execution.signal } : {}),
                     ...(context?.deadlineAtMs === undefined ? {} : { deadlineAtMs: context.deadlineAtMs }),
+                    ...(context?.requestStartedAtMs === undefined ? {} : { requestStartedAtMs: context.requestStartedAtMs }),
                     ...(context?.callerAuthority ? { callerAuthority: context.callerAuthority } : {}),
                     ...(context?.sessionActionOrigin ? { sessionActionOrigin: context.sessionActionOrigin } : {}),
                     ...(context?.authorization?.kind === 'session.write'
