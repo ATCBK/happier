@@ -46,7 +46,7 @@ afterEach(() => { standardCleanup(); storage.setState(originalState, true); });
 describe('declared setting Action writer', () => {
     it('admits Profiles and other direct Account preferences at the shared settings ingress', async () => {
         const account = await createSecretSettingsTestHarness({ settings: settingsParse({
-            useProfiles: false, useMachinePickerSearch: false, analyticsOptOut: false,
+            useProfiles: false, useMachinePickerSearch: false, analyticsOptOut: false, sessionTmuxTmpDir: '/custom/tmp',
             actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
         }) });
         let profile: ReturnType<typeof useSettingMutable<'useProfiles'>> | undefined;
@@ -85,7 +85,7 @@ describe('declared setting Action writer', () => {
         const features = createRootLayoutFeaturesResponse();
         expect(tryWriteServerEnabledBitInPlace(features, 'connectedServices.quotas', true)).toBe(true);
         const account = await createSecretSettingsTestHarness({ features, settings: settingsParse({
-            useProfiles: false,
+            useProfiles: false, sessionUsageGaugeLabels: false,
             actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
         }) });
         let apply: ReturnType<typeof useApplySettings> | undefined;
