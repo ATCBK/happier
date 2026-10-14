@@ -8,6 +8,9 @@ import { applyRegisteredSessionStateFieldMutationToMetadata } from '@/api/sessio
 import type { RegisteredSessionStateFieldMutationV1 } from '@/api/session/client/transport/mutations/sessionClientDurableMutationTypes';
 import type { RoleOverrideMutationV1 } from '@happier-dev/protocol/prompts/roles/roleOverrideRecordV1';
 import { createRpcCallError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { RoleActionOutputSchemasV1, SessionRolesV1Schema, createRoleSourceReaderV1 } from '@happier-dev/protocol';
+import { resolveCliAgentStartContextV1 } from './resolveCliAgentStartContextV1';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 describe('role Action effects', () => {
   beforeEach(() => {
@@ -17,6 +20,43 @@ describe('role Action effects', () => {
       promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] } });
   });
   afterEach(() => resetActiveAccountSettingsSnapshotForTests());
+  it('writes an originless Run’s role and notes through canonical admission and the durable Session owner', async () => {
+    let metadata = createTestMetadata();
+    const roleActionExecute = createRoleActionExecutor({ sessionId: 'origin',
+      readSessionMetadata: () => metadata,
+      readSettingsOverrides: () => ({ status: 'ready', overrides: {} }),
+      readRoleSources: createRoleSourceReaderV1({}),
+      // The outbox storage port is the boundary; real mutations are applied beneath it.
+      stageSessionStateMutation: async mutation => {
+        metadata = applyRegisteredSessionStateFieldMutationToMetadata(metadata, mutation);
+      },
+    });
+    const startContext = resolveCliAgentStartContextV1({ sessionId: 'detached-step',
+      machineId: 'machine', directory: '/repo', backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
+      metadata: null, starterDepth: 0, turnDepth: 0, callerPermissionMode: 'default', settings: null, roles: {},
+      runCaller: { runId: 'workflow-run', runDepth: 4, runOriginSessionId: 'origin' } });
+    if (!startContext) throw new Error('Expected host-produced Run caller');
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), roleActionExecute,
+      isActionApprovalRequired: () => false });
+    const context = { surface: 'agent' as const, authority: 'account_automation' as const,
+      callerPermissionMode: 'default', workspaceWrites: 'allow' as const, agentStartContext: startContext };
+    const role = await executor.execute('session.role.set', { sessionId: 'origin', roleId: 'builder' }, context);
+    expect(role).toEqual({ ok: true, result: { updated: true } });
+    if (!role.ok) throw new Error('Expected admitted Run role write');
+    expect(RoleActionOutputSchemasV1['session.role.set'].parse(role.result)).toEqual(role.result);
+    expect(readSessionRoleIdV1(metadata)).toBe('builder');
+    expect(await executor.execute('session.notes.set', { sessionId: 'origin', notes: 'Run brief' }, context))
+      .toEqual({ ok: true, result: { updated: true } });
+    expect(SessionRolesV1Schema.parse(metadata.work?.sessionRolesV1).notes).toBe('Run brief');
+    expect(await executor.execute('session.notes.set', { sessionId: 'unrelated', notes: 'Forbidden' }, context))
+      .toMatchObject({ ok: false, errorCode: 'subtree_denied' });
+    const { runOriginSessionId: _origin, ...callerWithoutOrigin } = startContext.caller.kind === 'originless'
+      ? startContext.caller : (() => { throw new Error('Expected genuine originless caller'); })();
+    expect(await executor.execute('session.notes.set', { sessionId: 'origin', notes: 'Forbidden' }, {
+      ...context, agentStartContext: { ...startContext, caller: callerWithoutOrigin },
+    })).toMatchObject({ ok: false, errorCode: 'subtree_denied' });
+    expect(metadata.work?.sessionRolesV1?.notes).toBe('Run brief');
+  });
   it('refuses an unenforceable built-in Role without waiting for unrelated Account inventory', async () => {
     let releaseSettings!: (value: Readonly<Record<string, unknown>>) => void;
     const settings = new Promise<Readonly<Record<string, unknown>>>(resolve => { releaseSettings = resolve; });
