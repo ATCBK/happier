@@ -2883,6 +2883,11 @@ try {
     Remove-Item -Path (Join-Path $LegacyBinDir "happier.exe") -Force -ErrorAction SilentlyContinue
   }
 
+  # New terminals and the background service must read the same credentials.
+  # Persist the resolved state home, which may differ from the binary install dir.
+  [Environment]::SetEnvironmentVariable("HAPPIER_HOME_DIR", $DaemonServiceStateHomeDir, [EnvironmentVariableTarget]::User)
+  $env:HAPPIER_HOME_DIR = $DaemonServiceStateHomeDir
+
   if ($NoPathUpdate -ne "1") {
     $userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
     $pathEntries = @()

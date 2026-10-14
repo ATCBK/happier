@@ -4,6 +4,7 @@ set -euo pipefail
 CHANNEL="${HAPPIER_CHANNEL:-stable}"
 PRODUCT="${HAPPIER_PRODUCT:-cli}"
 INSTALL_DIR="${HAPPIER_INSTALL_DIR:-$HOME/.happier}"
+STATE_HOME_DIR="${HAPPIER_HOME_DIR:-${INSTALL_DIR}}"
 BIN_DIR="${HAPPIER_BIN_DIR:-$HOME/.local/bin}"
 WITH_DAEMON="${HAPPIER_WITH_DAEMON-}"
 WITH_DAEMON_EXPLICIT=0
@@ -1329,10 +1330,9 @@ invoke_installer_command_with_daemon_service_context() {
   local channel_label=""
   channel_label="$(display_channel_label "${CHANNEL}")"
   local installer_strategy="${HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY:-}"
-  local state_home_dir="${HAPPIER_HOME_DIR:-${INSTALL_DIR}}"
 
   local -a env_cmd=(env
-    "HAPPIER_HOME_DIR=${state_home_dir}"
+    "HAPPIER_HOME_DIR=${STATE_HOME_DIR}"
     "HAPPIER_PUBLIC_RELEASE_CHANNEL=${channel_label}"
     "HAPPIER_DAEMON_SERVICE_CHANNEL=${channel_label}"
     ${installer_strategy:+"HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY=${installer_strategy}"}
@@ -2670,8 +2670,8 @@ append_path_hint() {
   local home_export_line=""
   local home_export_value=""
   local default_install_dir="${HOME}/.happier"
-  if [[ "${INSTALL_DIR}" != "${default_install_dir}" ]]; then
-    home_export_value="$(shell_single_quote_literal "${INSTALL_DIR}")"
+  if [[ "${STATE_HOME_DIR}" != "${default_install_dir}" ]]; then
+    home_export_value="$(shell_single_quote_literal "${STATE_HOME_DIR}")"
     home_export_line="export HAPPIER_HOME_DIR=${home_export_value}"
   fi
   local rc_files=()
