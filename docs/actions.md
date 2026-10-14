@@ -738,6 +738,10 @@ Stop, revoke, replacement and undo use the canonical dangerous-Action policy
 carried into Action admission; disabled Actions remain disabled. Per-Machine
 terminal host and tmux preferences use the declared
 `settings.set` binding `machines.terminal.host`, not a parallel settings writer.
+The keyed `machines.connection.direct` binding takes a Machine id and
+`default`, `direct` or `relay`. The Machine Connection row and agents use this
+same Account-scoped setting. `default` removes only that Machine's override;
+the Account default and other Machines' preferences stay intact.
 The Machine Tools install button uses `machines.capabilities.install` for
 install, upgrade and reinstall, delegating to the daemon's existing
 `capabilities.invoke` installer. It is a dangerous Action with the ordinary
@@ -763,6 +767,11 @@ floor. The daemon's filesystem refusal facts remain separate from approval.
 The UI's Vitals current/history and Processes inventory reads enter those same
 Actions. Their shared stores retain the parked watches as transport demand;
 watch renewal does not create another Action invocation or sampler.
+The Guard-get operation lifetime is declared once in the Protocol's
+[`Guard operation contract`](../packages/protocol/src/machines/guard/actionIdsV1.ts)
+and consumed by both CLI and UI adapters. After bounded transport setup,
+`machines.guard.get` waits for the caller's completion or cancellation; reads
+still check the captured Account before disclosing the answer.
 `machines.list { refresh: true }` runs the existing Home machine inventory
 fetch-and-apply owner before listing, including Overview Retry and page refresh.
 Omitting `refresh` retains the cached UI list; the CLI inventory already fetches
@@ -789,6 +798,13 @@ offers Check again. These are review and selection rules; the Action's own
 approval policy still governs execution. Full Suggestion widgets offer inline
 Approve only when the entire proposal fits their visible rows; Review opens the
 complete proposal for larger sets.
+
+Permanent `machines.storage.deleteNow` requests use this same item-review body,
+fresh check and signed subset-narrowing decision. Their inputs contain no claimed
+verdicts, so only the check establishes Safe default selections. Approval names
+permanent deletion and its lack of Undo. Receipts use the execution's measured
+freed bytes and per-item outcomes, including skipped items; they do not read
+Trash or offer Restore/Empty operations.
 
 Storage proposal receipts retain the exact Trash entry ids still present when
 the original execution settles. On reopening, the shared proposal controller
