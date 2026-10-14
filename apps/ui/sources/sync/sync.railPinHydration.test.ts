@@ -5,6 +5,7 @@ import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessio
 import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
+import { V2SessionByIdNotFoundSchema } from '@happier-dev/protocol/sessions/control/contract';
 
 import { createPlainAccountEncryptionCurrentnessFixture, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -32,7 +33,7 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
         connection = undefined;
     });
 
-    it.each(['retained', 'new', 'overtaken', 'list-only-newer'] as const)('hydrates %s pinned Bots alongside list and dual-surface pins', async membership => {
+    it.each(['retained', 'new', 'overtaken', 'list-only-newer', 'reloaded', 'reloaded-unavailable', 'reloaded-removed'] as const)('hydrates %s pinned Bots alongside list and dual-surface pins', async membership => {
         const pins = [
             { sessionId: 'list-only', sortKey: 'a', pinnedAt: 1, listPinned: true, railPinned: false },
             { sessionId: 'rail-only', sortKey: 'b', pinnedAt: 2, listPinned: false, railPinned: true },
@@ -83,6 +84,12 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
                 const record = records.get(sessionId);
                 if (!record) return null;
                 exactReads.push(sessionId);
+                if (membership === 'reloaded-unavailable' && staleSnapshotAvailable && sessionId === 'rail-only') {
+                    return Response.json({ error: 'unavailable' }, { status: 503 });
+                }
+                if (membership === 'reloaded-removed' && staleSnapshotAvailable && sessionId === 'rail-only') {
+                    return Response.json(V2SessionByIdNotFoundSchema.parse({ error: 'Session not found' }), { status: 404 });
+                }
                 return Response.json({ session: serveNewerRow
                     ? { ...record, seq: 14, updatedAt: 3, metadataVersion: 2 }
                     : record });
@@ -104,7 +111,25 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
             expect(storage.getState().sessions['rail-only']).toMatchObject({ seq: 14, metadataVersion: 2 });
             serveNewerRow = false;
         }
-        staleSnapshotAvailable = membership === 'overtaken' || membership === 'list-only-newer';
+        if (membership === 'reloaded' || membership === 'reloaded-unavailable' || membership === 'reloaded-removed') {
+            await sync.refreshSessions({ awaitSessionListHydration: true });
+            // Navigation opens newer tuple data. A reload keeps the warm list
+            // projection but retires the opened Session entity.
+            serveNewerRow = true;
+            await sync.ensureSessionVisibleForMessageRoute('rail-only', { forceRefresh: true, hydrateMessages: false });
+            expect(storage.getState().sessions['rail-only']).toMatchObject({ seq: 14, metadataVersion: 2 });
+            const { ['rail-only']: _railSession, ...sessions } = storage.getState().sessions;
+            storage.setState({ sessions });
+            staleSnapshotAvailable = true;
+            expect(storage.getState().sessionListRowsByServerId[serverId]['rail-only']).toMatchObject({ seq: 14, metadataVersion: 2 });
+        }
+        staleSnapshotAvailable = staleSnapshotAvailable || membership === 'overtaken' || membership === 'list-only-newer';
+        if (membership === 'reloaded-unavailable') {
+            await expect(sync.refreshSessions({ awaitSessionListHydration: true })).rejects.toThrow('Required session shell hydration failed for rail-only');
+            expect(storage.getState().sessions['rail-only']).toBeUndefined();
+            expect(storage.getState().sessionListRowsByServerId[serverId]['rail-only']).toMatchObject({ seq: 14, metadataVersion: 2 });
+            return;
+        }
         if (membership === 'list-only-newer') {
             // A newer list projection without the opened Session entity cannot
             // be promoted to successful required hydration.
@@ -121,6 +146,12 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
         }
         await sync.refreshSessions({ awaitSessionListHydration: true });
 
+        if (membership === 'reloaded-removed') {
+            expect(storage.getState().sessions['rail-only']).toBeUndefined();
+            expect(storage.getState().sessionListRowsByServerId[serverId]['rail-only']).toBeUndefined();
+            return;
+        }
+
         expect(new Set(exactReads)).toEqual(new Set(['list-only', 'rail-only', 'both']));
         const organization = readSessionOrganizationProjectionCached(storage.getState(), serverId);
         expect(organization.pinnedSessionIds).toEqual(['list-only', 'both']);
@@ -129,7 +160,7 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
         const entries = buildAppRailEntries([], { botHomes: [{ serverId, organization,
             rowsBySessionId: storage.getState().sessionListRowsByServerId[serverId] ?? {} }] });
         expect(entries.bots.map(entry => entry.sessionId)).toEqual(['rail-only', 'both']);
-        if (membership === 'overtaken') {
+        if (membership === 'overtaken' || membership === 'reloaded') {
             expect(storage.getState().sessions['rail-only']).toMatchObject({ seq: 14, metadataVersion: 2 });
             expect(storage.getState().sessionListRowsByServerId[serverId]['rail-only']).toMatchObject({ seq: 14, metadataVersion: 2 });
         }
