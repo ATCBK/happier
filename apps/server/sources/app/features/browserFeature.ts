@@ -43,7 +43,7 @@ const BROWSER_PERMISSION_KINDS = BrowserPermissionKindV1Schema.options;
 const BROWSER_DIAGNOSTIC_FAMILIES = BrowserDiagnosticFamilyV1Schema.options;
 
 /** `unavailable` is the absent-fidelity sentinel, not a fidelity the server can offer. */
-const BROWSER_DIAGNOSTIC_FIDELITIES = BrowserDiagnosticFidelityV1Schema.exclude(["unavailable"]).options;
+const BROWSER_DIAGNOSTIC_FIDELITIES = BrowserDiagnosticFidelityV1Schema.options.filter((fidelity) => fidelity !== 'unavailable');
 
 const BROWSER_CONTEXT_KINDS = BrowserContextKindV1Schema.options;
 
@@ -54,7 +54,7 @@ const BROWSER_CONTEXT_KINDS = BrowserContextKindV1Schema.options;
 const BROWSER_AUTOMATION_ACTIONS = BrowserAutomationImplementedActionKindV1Schema.options;
 
 /** `unavailable` is the absent-fidelity sentinel, not a fidelity the server can offer. */
-const BROWSER_AUTOMATION_FIDELITIES = BrowserAutomationFidelityV1Schema.exclude(["unavailable"]).options;
+const BROWSER_AUTOMATION_FIDELITIES = BrowserAutomationFidelityV1Schema.options.filter((fidelity) => fidelity !== 'unavailable');
 
 const BROWSER_RECORDING_RETENTION_CLASSES = BrowserRecordingRetentionClassV1Schema.options;
 

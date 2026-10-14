@@ -1,3 +1,4 @@
+import './configureZodLocale';
 import { runLightServerMain } from '@/flavors/light/main';
 import { readSharedQaSchemaMismatchDiagnostic } from '@/storage/prismaErrors';
 

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { normalizeOidcAllowRules } from "@/app/auth/providers/oidc/oidcProviderConfig";
 import {
     TeamIdentityConnectionExternalReferenceV1Schema,
@@ -11,49 +11,45 @@ import { ManagedIdentityProviderKindV1Schema, type ManagedIdentityProviderKindV1
 export const ManagedIdentityProviderKindSchema = ManagedIdentityProviderKindV1Schema;
 export type ManagedIdentityProviderKind = ManagedIdentityProviderKindV1;
 
-const NonEmptyStringSchema = z.string().trim().min(1);
+const NonEmptyStringSchema = z.string().check(z.trim(), z.minLength(1));
 const StringListSchema = z.array(NonEmptyStringSchema);
 
-const OidcProviderConfigSchema = z.object({
+const OidcProviderConfigSchema = z.strictObject({
     v: z.literal(1),
     kind: z.literal("oidc"),
     issuer: NonEmptyStringSchema,
     clientId: NonEmptyStringSchema,
-    clientAuthenticationMethod: z.enum(["client_secret_post", "client_secret_basic"])
-        .default("client_secret_post"),
-    scopes: NonEmptyStringSchema.refine(
-        (value) => value.split(/\s+/u).some((scope) => scope.toLowerCase() === "openid"),
-        "OIDC scopes must include openid",
-    ),
-    httpTimeoutSeconds: z.number().int().min(1).max(120),
-    claims: z.object({
+    clientAuthenticationMethod: z._default(z.enum(["client_secret_post", "client_secret_basic"]), "client_secret_post"),
+    scopes: NonEmptyStringSchema.check(z.refine((value) => value.split(/\s+/u).some((scope) => scope.toLowerCase() === "openid"), "OIDC scopes must include openid")),
+    httpTimeoutSeconds: z.number().check(z.int(), z.minimum(1), z.maximum(120)),
+    claims: z.strictObject({
         login: NonEmptyStringSchema,
         email: NonEmptyStringSchema,
         groups: NonEmptyStringSchema,
-    }).strict(),
-    allow: z.object({
+    }),
+    allow: z.pipe(z.strictObject({
         usersAllowlist: StringListSchema,
         emailDomains: StringListSchema,
         groupsAny: StringListSchema,
         groupsAll: StringListSchema,
-    }).strict().transform(normalizeOidcAllowRules),
+    }), z.transform(normalizeOidcAllowRules)),
     fetchUserInfo: z.boolean(),
     storeRefreshToken: z.boolean(),
-    ui: z.object({
-        buttonColor: NonEmptyStringSchema.nullable(),
-        iconHint: NonEmptyStringSchema.nullable(),
-    }).strict(),
-}).strict();
+    ui: z.strictObject({
+        buttonColor: z.nullable(NonEmptyStringSchema),
+        iconHint: z.nullable(NonEmptyStringSchema),
+    }),
+});
 
-const WorkosProviderConfigSchema = z.object({
+const WorkosProviderConfigSchema = z.strictObject({
     v: z.literal(1),
     kind: z.literal("workos_sso"),
-}).strict();
+});
 
-const GithubProviderConfigSchema = z.object({
+const GithubProviderConfigSchema = z.strictObject({
     v: z.literal(1),
     kind: z.literal("github_app_identity"),
-}).strict();
+});
 
 const IdentityProviderConfigSchema = z.discriminatedUnion("kind", [
     OidcProviderConfigSchema,
@@ -61,11 +57,11 @@ const IdentityProviderConfigSchema = z.discriminatedUnion("kind", [
     GithubProviderConfigSchema,
 ]);
 
-const IdentityProviderSecretsSchema = z.object({
+const IdentityProviderSecretsSchema = z.strictObject({
     v: z.literal(1),
     kind: z.literal("oidc"),
-    clientSecret: z.string().min(1),
-}).strict();
+    clientSecret: z.string().check(z.minLength(1)),
+});
 
 export type IdentityProviderConfig = z.infer<typeof IdentityProviderConfigSchema>;
 export type OidcProviderConfig = z.infer<typeof OidcProviderConfigSchema>;
@@ -105,31 +101,31 @@ export function parseIdentityProviderSecrets(
         : { ok: false, code: "provider_secret_unreadable" };
 }
 
-const SuccessfulTestSchema = z.object({
+const SuccessfulTestSchema = z.strictObject({
     runtimeFingerprint: NonEmptyStringSchema,
-}).strict();
+});
 const ConnectionObservationSchema = z.discriminatedUnion("kind", [
-    z.object({
+    z.strictObject({
         v: z.literal(1),
         kind: z.literal("oidc"),
-        successfulTest: SuccessfulTestSchema.nullable(),
-    }).strict(),
-    z.object({
+        successfulTest: z.nullable(SuccessfulTestSchema),
+    }),
+    z.strictObject({
         v: z.literal(1),
         kind: z.literal("workos_sso"),
-        presentation: z.object({
+        presentation: z.nullable(z.strictObject({
             displayName: NonEmptyStringSchema,
             strategy: NonEmptyStringSchema,
             status: NonEmptyStringSchema,
             lastCheckedAt: z.iso.datetime(),
-        }).strict().nullable(),
-        successfulTest: SuccessfulTestSchema.nullable(),
-    }).strict(),
-    z.object({
+        })),
+        successfulTest: z.nullable(SuccessfulTestSchema),
+    }),
+    z.strictObject({
         v: z.literal(1),
         kind: z.literal("github_app_identity"),
-        successfulTest: SuccessfulTestSchema.nullable(),
-    }).strict(),
+        successfulTest: z.nullable(SuccessfulTestSchema),
+    }),
 ]);
 
 export type TeamIdentityConnectionExternalReference = TeamIdentityConnectionExternalReferenceV1;

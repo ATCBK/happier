@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import { serializerCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { installDbModuleMock } from '../testkit/dbMocks';
 
 const transaction = vi.fn();

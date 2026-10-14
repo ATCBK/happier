@@ -14,7 +14,7 @@ import { mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInT
   type ReservedAccountScopedKvRowDomain } from '@/app/kv/reservedAccountScopedKvRow';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
 import { inTx, type Tx } from '@/storage/inTx';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 
 export const notificationChannelCatalogRowDomain = {
   label: 'Notification channel catalog',

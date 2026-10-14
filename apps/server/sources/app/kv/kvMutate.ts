@@ -2,7 +2,7 @@ import { inTx, afterTx, type Tx } from "@/storage/inTx";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { eventRouter, buildKVBatchUpdateUpdate } from "@/app/events/eventRouter";
 import * as privacyKit from "privacy-kit";
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import {
     assertAccountJsonKvAccountEncryptionTransitionStoredContent,
@@ -25,9 +25,9 @@ export interface KVMutation {
 export const KvMutationRequestSchema = z.object({
     mutations: z.array(z.object({
         key: z.string(),
-        value: z.string().nullable(),
+        value: z.nullable(z.string()),
         version: z.number(),
-    })).min(1).max(100),
+    })).check(z.minLength(1), z.maxLength(100)),
 });
 
 export interface KVMutateResult {

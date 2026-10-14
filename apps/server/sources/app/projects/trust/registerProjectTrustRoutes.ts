@@ -3,7 +3,7 @@ import {
     ProjectTrustListRequestV1Schema, ProjectTrustListResponseV1Schema, ProjectTrustMutationRequestV1Schema,
     ProjectTrustMutationResponseV1Schema, ProjectTrustStorageUnavailableV1Schema,
 } from '@happier-dev/protocol/workspaces/projectSetup/projectTrustRowV1';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { Fastify } from '@/app/api/types';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
@@ -11,8 +11,8 @@ import { asServerProtocolZod } from '@/app/api/utils/protocolComposableZodAdapte
 import { PresentUserRequiredResponseSchema, requirePresentUser } from '@/app/api/utils/requirePresentUser';
 import { listProjectTrust, mutateProjectTrust, readProjectTrust } from './projectTrustRowService';
 
-const errors = { 400: z.object({ error: z.literal('invalid-params') }).strict(),
-    503: asServerProtocolZod(ProjectTrustStorageUnavailableV1Schema), 500: z.object({ error: z.literal('internal') }).strict() };
+const errors = { 400: z.strictObject({ error: z.literal('invalid-params') }),
+    503: asServerProtocolZod(ProjectTrustStorageUnavailableV1Schema), 500: z.strictObject({ error: z.literal('internal') }) };
 const rateLimit = () => ({ rateLimit: resolveApiHotEndpointRateLimit(process.env, 'account.settings') });
 const unavailable = (reason: 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch' | 'invalid-stored-content') => ({ error: 'project_trust_storage_unavailable' as const, reason });
 

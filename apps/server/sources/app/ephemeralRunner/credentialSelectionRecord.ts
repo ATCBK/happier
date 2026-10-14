@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { RunnerCredentialSelectionBindingV1Schema } from "@happier-dev/protocol/ephemeralRunner/review";
 import { RunnerCredentialSelectionResolutionRequestV1Schema } from "@happier-dev/protocol/teams";
@@ -9,10 +9,10 @@ import { RunnerCredentialSelectionResolutionRequestV1Schema } from "@happier-dev
  * creator may seal and review this result, but cannot substitute another exact
  * broker Machine when publishing the review.
  */
-export const StoredRunnerCredentialSelectionV1Schema = z.object({
+export const StoredRunnerCredentialSelectionV1Schema = z.strictObject({
     v: z.literal(1),
     request: RunnerCredentialSelectionResolutionRequestV1Schema,
     binding: RunnerCredentialSelectionBindingV1Schema,
-}).strict();
+});
 
 export type StoredRunnerCredentialSelectionV1 = z.infer<typeof StoredRunnerCredentialSelectionV1Schema>;

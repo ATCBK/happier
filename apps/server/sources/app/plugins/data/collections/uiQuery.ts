@@ -5,7 +5,7 @@ import { PluginCollectionUiQueryResultV1Schema, isCanonicalPluginCollectionIndex
 import { computeCanonicalDomainSeparatedDigest } from '@happier-dev/protocol/crypto/canonicalDigest';
 import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { type PluginCollectionScalarKindV1 } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { db } from "@/storage/db";

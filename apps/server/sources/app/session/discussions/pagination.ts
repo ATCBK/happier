@@ -1,5 +1,5 @@
 import * as privacyKit from "privacy-kit";
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import type { Prisma } from "@prisma/client";
 
@@ -12,11 +12,11 @@ const TEXT_DECODER = new TextDecoder();
  * position the client already received; it is not signed, and it grants nothing
  * on its own because every page still re-evaluates current Session access.
  */
-const SessionDiscussionListCursorV1Schema = z.object({
+const SessionDiscussionListCursorV1Schema = z.strictObject({
     v: z.literal(1),
-    at: z.number().int(),
-    id: z.string().min(1),
-}).strict();
+    at: z.number().check(z.int()),
+    id: z.string().check(z.minLength(1)),
+});
 
 export type SessionDiscussionListCursorV1 = z.infer<typeof SessionDiscussionListCursorV1Schema>;
 

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { AutomationConversationActionHttpPathsV1, AutomationConversationActionHttpRequestSchemasV1 } from '@happier-dev/protocol/automations/event';
 import { AutomationConversationAdmitResultV1Schema } from '@happier-dev/protocol/automations/result-delivery';

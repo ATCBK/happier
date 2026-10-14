@@ -14,6 +14,7 @@ export default defineConfig({
     ...resolveVitestWorkers(),
     globals: true,
     environment: 'node',
+    setupFiles: ['./sources/configureZodLocale.ts'],
     testTimeout: 20_000,
     hookTimeout: 20_000,
     include: ['sources/**/*.test.ts', 'sources/**/*.spec.ts', 'scripts/**/*.test.ts', 'scripts/**/*.spec.ts'],

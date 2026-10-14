@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import type { Prisma } from "@prisma/client";
 
 // Nullable Session uniqueness was not enforced on retained Account reports.
@@ -12,11 +12,11 @@ export const legacyUsageReportCanonicalOrder = [
 export const LegacyUsageReportRouteBodySchema = z.object({
     key: z.string(),
     sessionId: z.string(),
-    tokens: z.object({ total: z.number() }).catchall(z.number()),
-    cost: z.object({ total: z.number() }).catchall(z.number()),
+    tokens: z.catchall(z.object({ total: z.number() }), z.number()),
+    cost: z.catchall(z.object({ total: z.number() }), z.number()),
 });
 
-export const LegacyUsageReportDataSchema = LegacyUsageReportRouteBodySchema.pick({ tokens: true, cost: true });
+export const LegacyUsageReportDataSchema = z.pick(LegacyUsageReportRouteBodySchema, { tokens: true, cost: true });
 
 /** Retained bridge metadata may be a Prisma object or its stored JSON string. */
 export function readLegacyUsageReportKey(metadata: unknown): string | null {

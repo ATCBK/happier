@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { AccountEncryptionMigrateAutomationInventoryItemSchema, AccountEncryptionMigrateAutomationStageItemSchema } from '@happier-dev/protocol/account/encryptionMigrate';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import {
     inspectAutomationAccountEncryptionTransitionInTx,
@@ -93,29 +93,29 @@ function nonNegativeBigInt(value: unknown): bigint | null {
     return null;
 }
 
-const RawStageStateSchema = z.object({
-    transitionId: z.string().uuid(),
-    sourceParticipantCount: z.number().int().nonnegative(),
-    sourceRunCount: z.number().int().nonnegative(),
+const RawStageStateSchema = z.strictObject({
+    transitionId: z.string().check(z.uuid()),
+    sourceParticipantCount: z.number().check(z.int(), z.nonnegative()),
+    sourceRunCount: z.number().check(z.int(), z.nonnegative()),
     sourceEncodedBytes: z.union([z.bigint(), z.number(), z.string()]),
-    stagedParticipantCount: z.number().int().nonnegative(),
-    stagedRunCount: z.number().int().nonnegative(),
+    stagedParticipantCount: z.number().check(z.int(), z.nonnegative()),
+    stagedRunCount: z.number().check(z.int(), z.nonnegative()),
     stagedSourceBytes: z.union([z.bigint(), z.number(), z.string()]),
     stagedTargetBytes: z.union([z.bigint(), z.number(), z.string()]),
-}).strict();
+});
 
-const RawStoredStageSchema = z.object({
-    id: z.string().uuid(),
-    transitionId: z.string().uuid(),
+const RawStoredStageSchema = z.strictObject({
+    id: z.string().check(z.uuid()),
+    transitionId: z.string().check(z.uuid()),
     participantKind: z.enum(["definition", "run", "workflow_invocation"]),
-    participantId: z.string().min(1).max(256),
-    automationId: z.string().min(1).max(256).nullable(),
-    sourceRevision: z.number().int().nonnegative().nullable(),
-    sourceContent: z.string().min(1),
-    targetContent: z.string().min(1).nullable(),
+    participantId: z.string().check(z.minLength(1), z.maxLength(256)),
+    automationId: z.nullable(z.string().check(z.minLength(1), z.maxLength(256))),
+    sourceRevision: z.nullable(z.number().check(z.int(), z.nonnegative())),
+    sourceContent: z.string().check(z.minLength(1)),
+    targetContent: z.nullable(z.string().check(z.minLength(1))),
     sourceEncodedBytes: z.union([z.bigint(), z.number(), z.string()]),
-    targetEncodedBytes: z.union([z.bigint(), z.number(), z.string()]).nullable(),
-}).strict();
+    targetEncodedBytes: z.nullable(z.union([z.bigint(), z.number(), z.string()])),
+});
 
 function parseStageState(value: unknown): AccountEncryptionTransitionAutomationStageState | null {
     const parsed = RawStageStateSchema.safeParse(value);
@@ -716,7 +716,7 @@ export async function listAccountEncryptionTransitionAutomationStageIdsForCleanu
         ORDER BY ${sql.participantKind} ASC, ${sql.participantId} ASC
         LIMIT ${take}
     `);
-    const parsed = z.array(z.object({ id: z.string().uuid() }).strict()).safeParse(rows);
+    const parsed = z.array(z.strictObject({ id: z.string().check(z.uuid()) })).safeParse(rows);
     return parsed.success ? parsed.data.map((row) => row.id) : [];
 }
 

@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { isSessionEncryptionModeAllowedByStoragePolicy, resolveEffectiveDefaultAccountEncryptionMode } from '@happier-dev/protocol/encryption/storagePolicyDecisions';
 import { SessionSharedMetadataV1Schema, validateSessionOwnerMetadataEnvelopeForAccountModeV1, type SessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { type SessionInitialAccessMaterializedV1 } from '@happier-dev/protocol/sessions/access/sessionInitialAccessDraftV1';
@@ -205,9 +206,9 @@ export function prepareLayout1SessionCreate(
         workDepth: request.workDepth,
     });
     if (!origin.success) return { ok: false, rejection: { reason: "invalid-params" } };
-    const reportsTo = SessionReportsToV1Schema.optional().safeParse(request.reportsTo);
+    const reportsTo = z.optional(SessionReportsToV1Schema).safeParse(request.reportsTo);
     if (!reportsTo.success) return { ok: false, rejection: { reason: "invalid-params" } };
-    const initialTriggers = SessionInitialTriggerAdmissionV1Schema.array().optional().safeParse(request.initialTriggers);
+    const initialTriggers = z.optional(z.array(SessionInitialTriggerAdmissionV1Schema)).safeParse(request.initialTriggers);
     if (!initialTriggers.success) {
         return { ok: false, rejection: { reason: "session-initial-trigger-invalid", code: "invalid_input" } };
     }

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema, PromptLibraryRowReadResponseV1Schema,
   PromptLibraryRowMutationV1Schema, PromptLibraryRowMutationResponseV1Schema, PromptLibraryRowsListResponseV1Schema,
 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
@@ -9,8 +9,8 @@ import { inTx } from '@/storage/inTx';
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
 import { listPromptLibraryRowsInTx, mutatePromptLibraryRowInTx, readPromptLibraryRowInTx } from './promptLibraryRows';
 
-const params = z.object({ key: asServerProtocolZod(PromptLibraryCatalogKeyV1Schema) }).strict();
-const internal = z.object({ error: z.literal('internal') }).strict();
+const params = z.strictObject({ key: asServerProtocolZod(PromptLibraryCatalogKeyV1Schema) });
+const internal = z.strictObject({ error: z.literal('internal') });
 
 /** Authenticated Account identity, never a caller-supplied Account or public KV key. */
 export function registerPromptLibraryRoutes(app: Fastify): void {

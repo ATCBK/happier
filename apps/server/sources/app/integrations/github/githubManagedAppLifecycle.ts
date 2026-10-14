@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import type { HomeAdministrationEventDetailV1 } from '@happier-dev/protocol/home/governance';
 import type { ManagedGitHubAppTeamConsumerV1 } from '@happier-dev/protocol/identity/githubApps';
 import { randomUUID } from "node:crypto";

@@ -13,7 +13,7 @@ import {
     verifyRunnerMachineContentKeyBindingV1,
 } from "@happier-dev/protocol/ephemeralRunner/machineContentKeyBinding";
 import { RunnerActivationReviewV1Schema } from "@happier-dev/protocol/ephemeralRunner/review";
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { createSessionMachineAccessKeyInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { readSessionDraftInTx } from "@/app/account/sessionDrafts/sessionDraftService";
@@ -77,11 +77,11 @@ function projectSessionCreateRejection(
     return { status: "conflict", reason: "binding_mismatch" };
 }
 
-const StoredRunnerBootstrapV1Schema = z.object({
+const StoredRunnerBootstrapV1Schema = z.strictObject({
     v: z.literal(1),
-    content: z.string().min(1).max(1024 * 1024),
-    requestDigest: z.string().min(1),
-}).strict();
+    content: z.string().check(z.minLength(1), z.maxLength(1024 * 1024)),
+    requestDigest: z.string().check(z.minLength(1)),
+});
 
 type StoredRunnerBootstrapV1 = z.infer<typeof StoredRunnerBootstrapV1Schema>;
 

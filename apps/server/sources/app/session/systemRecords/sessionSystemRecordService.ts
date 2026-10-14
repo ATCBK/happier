@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { Buffer } from "node:buffer";
 import { isDeepStrictEqual } from "node:util";
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { isStoredContentKindAllowedForSessionByStoragePolicy, type SessionStoredContentKind } from '@happier-dev/protocol/encryption/storagePolicyDecisions';
 import { getSessionSystemRecordKindPolicy, getSessionSystemRecordPayloadSchema, SESSION_SYSTEM_RECORD_CATALOG, type SessionSystemRecordKindPolicy, type SessionSystemRecordCatalog } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordCatalog';
@@ -672,11 +672,11 @@ function persistedV1Address(pluginId: string | undefined, address: SessionSystem
 
 // Only the typed visual writer persists this wrapper. Request content remains
 // the strict plain/encrypted envelope and can never supply creation metadata.
-const StoredSessionSurfaceRecordV1Schema = createStoredReadSchema(z.object({
+const StoredSessionSurfaceRecordV1Schema = createStoredReadSchema(z.strictObject({
     t: z.literal("session_surface_record_v1"),
     content: SessionSystemRecordContentSchema,
     creator: SessionSystemRecordCreatorV1Schema,
-}).strict());
+}));
 const StoredSessionSystemRecordContentSchema = createStoredReadSchema(SessionSystemRecordContentSchema);
 
 function isSurfaceItemAddress(address: Readonly<{ ownerKind: string; namespace: string }>, kind: string): boolean {

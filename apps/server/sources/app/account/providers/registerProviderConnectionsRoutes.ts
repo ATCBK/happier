@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsRowReadResponseV1Schema,
   ProviderConnectionsRowMutationV1Schema, ProviderConnectionsRowMutationResponseV1Schema,
 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
@@ -9,7 +9,7 @@ import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorCon
 import { inTx } from '@/storage/inTx';
 import { mutateProviderConnectionsRowInTx, readProviderConnectionsRowInTx } from './connectionRows';
 
-const internal = z.object({ error: z.literal('internal') }).strict();
+const internal = z.strictObject({ error: z.literal('internal') });
 
 /** Account identity comes only from authentication; public KV cannot address this singleton. */
 export function registerProviderConnectionsRoutes(app: Fastify): void {

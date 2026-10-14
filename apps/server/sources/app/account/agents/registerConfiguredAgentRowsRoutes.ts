@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema, AcpCatalogRowMutationV1Schema,
     AcpCatalogRowMutationResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import type { Fastify } from '@/app/api/types';
@@ -8,7 +8,7 @@ import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorCon
 import { inTx } from '@/storage/inTx';
 import { readConfiguredAgentCatalogRowInTx, mutateConfiguredAgentCatalogRow } from './configuredAgentRows';
 
-const internal = z.object({ error: z.literal('internal') }).strict();
+const internal = z.strictObject({ error: z.literal('internal') });
 
 export function registerConfiguredAgentRowsRoutes(app: Fastify): void {
     const config = { rateLimit: resolveApiHotEndpointRateLimit(process.env, 'account.settings') };

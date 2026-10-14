@@ -7,7 +7,7 @@ import { computeCanonicalDomainSeparatedDigest } from '@happier-dev/protocol/cry
 import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { resolvePluginCollectionMigrationChainV1 } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
 import { PluginUiArtifactDigestV1Schema } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
-import { z } from "zod";
+import { z } from "zod/mini";
 import semver from "semver";
 import { createReleaseLessDeclarationV1, readCurrentReleaseLessDeclarationV1, type ReleaseLessDeclarationV1 } from "@/app/plugins/availability/currentDeclaration";
 
@@ -325,7 +325,7 @@ function decodeSourcePageCursor(input: Readonly<{
 }
 
 function parseReleaseContracts(value: unknown): readonly PluginCollectionContractRefV1[] {
-    const parsed = z.array(PluginCollectionContractRefV1Schema).max(32).safeParse(value);
+    const parsed = z.array(PluginCollectionContractRefV1Schema).check(z.maxLength(32)).safeParse(value);
     if (!parsed.success) {
         throw new PluginCollectionCandidatePreparationOperationError(
             "collection_candidate_preparation_contract_mismatch",

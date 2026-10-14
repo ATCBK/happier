@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { isServerFeatureEnabledForRequest } from "@/app/features/catalog/serverFeatureGate";
 import { AUTOMATION_INT_COLUMN_MAX } from '@happier-dev/protocol/automations/automationColumnBoundsV1';
 import { AUTOMATION_TEMPLATE_CIPHERTEXT_MAX_CHARS, AUTOMATION_TEMPLATE_ENCRYPTED_V1_KIND, AUTOMATION_TEMPLATE_PLAIN_V1_KIND, AutomationTemplateEnvelopeSchema, LegacyEncryptedAutomationTemplateEnvelopeSchema, LegacyPlainAutomationTemplateEnvelopeSchema } from '@happier-dev/protocol/automations/automationTemplateEnvelope';
@@ -38,51 +38,51 @@ export class AutomationEventFilterValidationError extends AutomationValidationEr
     }
 }
 
-const AssignmentSchema = z.object({
-    machineId: z.string().trim().min(1),
-    enabled: z.boolean().optional(),
-    priority: z.number().int().min(-100).max(100).optional(),
-}).strict();
+const AssignmentSchema = z.strictObject({
+    machineId: z.string().check(z.trim(), z.minLength(1)),
+    enabled: z.optional(z.boolean()),
+    priority: z.optional(z.number().check(z.int(), z.minimum(-100), z.maximum(100))),
+});
 
 const ScheduleSchema = z.discriminatedUnion("kind", [
-    z.object({
+    z.strictObject({
         kind: z.literal("interval"),
-        everyMs: z.number().int().min(1_000).max(AUTOMATION_INT_COLUMN_MAX),
-        timezone: z.string().trim().min(1).optional().nullable(),
-    }).strict(),
-    z.object({
+        everyMs: z.number().check(z.int(), z.minimum(1_000), z.maximum(AUTOMATION_INT_COLUMN_MAX)),
+        timezone: z.nullable(z.optional(z.string().check(z.trim(), z.minLength(1)))),
+    }),
+    z.strictObject({
         kind: z.literal("cron"),
-        scheduleExpr: z.string().trim().min(1).max(256),
-        timezone: z.string().trim().min(1).optional().nullable(),
-    }).strict(),
+        scheduleExpr: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+        timezone: z.nullable(z.optional(z.string().check(z.trim(), z.minLength(1)))),
+    }),
 ]);
 
 const LegacyScheduleSchema = z.discriminatedUnion("kind", [
-    ...ScheduleSchema.options,
-    z.object({ kind: z.literal("manual") }).strict(),
+    ...ScheduleSchema._zod.def.options,
+    z.strictObject({ kind: z.literal("manual") }),
 ]);
 
-const UpsertSchema = z.object({
-    name: z.string().trim().min(1).max(128),
-    description: z.string().max(2_000).optional().nullable(),
-    enabled: z.boolean().default(true),
+const UpsertSchema = z.strictObject({
+    name: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+    description: z.nullable(z.optional(z.string().check(z.maxLength(2_000)))),
+    enabled: z._default(z.boolean(), true),
     schedule: LegacyScheduleSchema,
     targetType: z.enum(["new_session", "existing_session"]),
-    templateCiphertext: z.string().trim().min(1).max(AUTOMATION_TEMPLATE_CIPHERTEXT_MAX_CHARS),
-    assignments: z.array(AssignmentSchema).optional(),
-}).strict();
+    templateCiphertext: z.string().check(z.trim(), z.minLength(1), z.maxLength(AUTOMATION_TEMPLATE_CIPHERTEXT_MAX_CHARS)),
+    assignments: z.optional(z.array(AssignmentSchema)),
+});
 
-const PatchSchema = z.object({
-    name: z.string().trim().min(1).max(128).optional(),
-    description: z.string().max(2_000).optional().nullable(),
-    enabled: z.boolean().optional(),
-    schedule: LegacyScheduleSchema.optional(),
-    targetType: z.enum(["new_session", "existing_session"]).optional(),
-    templateCiphertext: z.string().trim().min(1).max(AUTOMATION_TEMPLATE_CIPHERTEXT_MAX_CHARS).optional(),
-    assignments: z.array(AssignmentSchema).optional(),
-}).strict();
+const PatchSchema = z.strictObject({
+    name: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(128))),
+    description: z.nullable(z.optional(z.string().check(z.maxLength(2_000)))),
+    enabled: z.optional(z.boolean()),
+    schedule: z.optional(LegacyScheduleSchema),
+    targetType: z.optional(z.enum(["new_session", "existing_session"])),
+    templateCiphertext: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(AUTOMATION_TEMPLATE_CIPHERTEXT_MAX_CHARS))),
+    assignments: z.optional(z.array(AssignmentSchema)),
+});
 
-function toMessage(error: z.ZodError): string {
+function toMessage(error: z.core.$ZodError): string {
     const issue = error.issues[0];
     if (!issue) return "Invalid automation payload";
     const path = issue.path.join(".") || "payload";

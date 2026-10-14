@@ -1,5 +1,5 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { Fastify } from "@/app/api/types";
 import { resolveMachineAdmissionInTx, resolveEffectiveMachineRoleInTx } from '@/app/machines/machineAccess';
 import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
@@ -141,11 +141,11 @@ export function registerManagedMachineRoutes(app: Fastify): void {
     app.post('/v1/machines/managed/controller/activation-failed', { preHandler: app.authenticate,
         schema: { body: ManagedPendingActivationFailureRequestV1Schema, response: {
             200: PendingActivationFailureResponseV1Schema,
-            400: z.object({ error: z.string() }).passthrough(),
-            403: z.union([z.object({ error: z.string() }).passthrough(), z.object({ code: z.string() }).strict()]),
-            404: z.union([z.object({ error: z.string() }).passthrough(), z.object({ code: z.string() }).strict()]),
-            409: z.object({ code: z.string() }).strict(),
-            500: z.object({ error: z.string() }).passthrough(),
+            400: z.looseObject({ error: z.string() }),
+            403: z.union([z.looseObject({ error: z.string() }), z.strictObject({ code: z.string() })]),
+            404: z.union([z.looseObject({ error: z.string() }), z.strictObject({ code: z.string() })]),
+            409: z.strictObject({ code: z.string() }),
+            500: z.looseObject({ error: z.string() }),
         } } },
         async (request, reply) => respond(reply, async () => {
             const verified = await requireManagedPolicyRequest(request, '/v1/machines/managed/controller/activation-failed', request.body.target, 'activation-failure');

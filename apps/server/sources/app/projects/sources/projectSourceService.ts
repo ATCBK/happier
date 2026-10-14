@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import * as privacyKit from 'privacy-kit';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';

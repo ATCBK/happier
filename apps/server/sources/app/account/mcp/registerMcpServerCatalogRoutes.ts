@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
     MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogRowReadResponseV1Schema,
     McpServerCatalogRowMutationV1Schema, McpServerCatalogRowMutationResponseV1Schema,
@@ -10,7 +10,7 @@ import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorCon
 import { inTx } from '@/storage/inTx';
 import { mutateMcpServerCatalogRowInTx, readMcpServerCatalogRowInTx } from './serverRows';
 
-const internal = z.object({ error: z.literal('internal') }).strict();
+const internal = z.strictObject({ error: z.literal('internal') });
 
 /** Authenticated Account identity, never a caller-supplied Account or arbitrary KV key. */
 export function registerMcpServerCatalogRoutes(app: Fastify): void {

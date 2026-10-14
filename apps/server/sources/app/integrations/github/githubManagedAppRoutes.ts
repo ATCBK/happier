@@ -3,7 +3,7 @@ import { managedGitHubAppUserAuthorizationCallbackUrl } from "./githubManagedApp
 import { ManagedGitHubAppCreateInputV1Schema, ManagedGitHubAppCreateOutputV1Schema, ManagedGitHubAppManifestSetupStartInputV1Schema, ManagedGitHubAppManifestSetupStartOutputV1Schema, ManagedGitHubAppUpdateInputV1Schema, ManagedGitHubAppUpdateOutputV1Schema, ManagedGitHubAppInstallationV1Schema, ManagedGitHubAppErrorV1Schema, ManagedGitHubAppRemoveInputV1Schema, ManagedGitHubAppRemoveOutputV1Schema, ManagedGitHubAppsListInputV1Schema, ManagedGitHubAppsListOutputV1Schema, ManagedGitHubAppVerifyInstallationInputV1Schema, ManagedGitHubAppVerifyInstallationOutputV1Schema, type ManagedGitHubAppErrorCodeV1 } from '@happier-dev/protocol/identity/githubApps';
 import { TeamIdentityErrorV1Schema, type TeamIdentityErrorCodeV1 } from '@happier-dev/protocol/teams';
 import { randomBytes } from "node:crypto";
-import { z } from "zod";
+import { z } from "zod/mini";
 import {
     beginGitHubAppManifestSetup,
     completeGitHubAppManifestInstallationSetup,
@@ -31,7 +31,7 @@ import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
  * Home's managed identity provider routes already return. The response is the
  * union of both existing contracts rather than a third error vocabulary.
  */
-const ManagedGitHubAppRouteErrorV1Schema = ManagedGitHubAppErrorV1Schema.or(TeamIdentityErrorV1Schema);
+const ManagedGitHubAppRouteErrorV1Schema = z.union([ManagedGitHubAppErrorV1Schema, TeamIdentityErrorV1Schema]);
 
 const ERROR_RESPONSES = {
     403: ManagedGitHubAppRouteErrorV1Schema,
@@ -105,7 +105,7 @@ function errorStatus(code: ManagedGitHubAppRouteErrorCode): 403 | 404 | 409 | 50
 export function registerManagedGitHubAppRoutes(app: Fastify): void {
     app.get(
         "/v1/identity/github-apps/manifest-setup/submit",
-        { schema: { querystring: z.object({ handle: z.string().trim().min(1).max(512) }).strict() } },
+        { schema: { querystring: z.strictObject({ handle: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)) }) } },
         async (request, reply) => {
             const launch = await consumeGitHubAppManifestLaunch(request.query.handle);
             if (!launch) {
@@ -130,11 +130,11 @@ export function registerManagedGitHubAppRoutes(app: Fastify): void {
         "/v1/identity/github-apps/manifest-setup/complete",
         {
             schema: {
-                querystring: z.object({
-                    state: z.string().min(1),
-                    installation_id: z.string().regex(/^[1-9][0-9]*$/u),
-                    setup_action: z.string().optional(),
-                }).strict(),
+                querystring: z.strictObject({
+                    state: z.string().check(z.minLength(1)),
+                    installation_id: z.string().check(z.regex(/^[1-9][0-9]*$/u)),
+                    setup_action: z.optional(z.string()),
+                }),
             },
         },
         async (request, reply) => {

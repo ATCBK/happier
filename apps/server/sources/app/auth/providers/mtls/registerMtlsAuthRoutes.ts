@@ -1,5 +1,5 @@
 import { inTx } from "@/storage/inTx";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { AccountEncryptionMigrateExternalAuthBindingDigestV1Schema } from '@happier-dev/protocol/account/encryptionMigrate';
 import { PasswordCredentialMutationDigestV1Schema } from '@happier-dev/protocol/auth/passwordMutationChallenge';
 import { TeamInvitationAccountAdmissionV1Schema } from '@happier-dev/protocol/auth/accountAdmission';
@@ -183,16 +183,16 @@ export function registerMtlsAuthRoutes(app: Fastify): void {
         "/v1/auth/mtls/start",
         {
             schema: {
-                body: z.object({
+                body: z.strictObject({
                     returnTo: z.string(),
-                    teamId: z.string().trim().min(1).max(512),
-                    admission: TeamInvitationAccountAdmissionV1Schema.optional(),
-                }).strict(),
+                    teamId: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+                    admission: z.optional(TeamInvitationAccountAdmissionV1Schema),
+                }),
                 response: {
-                    200: z.object({
-                        startUrl: z.string().min(1),
-                        admissionReference: z.string().min(1),
-                    }).strict(),
+                    200: z.strictObject({
+                        startUrl: z.string().check(z.minLength(1)),
+                        admissionReference: z.string().check(z.minLength(1)),
+                    }),
                     400: z.object({ error: z.literal("invalid-returnTo") }),
                     403: z.object({ error: z.literal("not-eligible") }),
                 },
@@ -253,7 +253,7 @@ export function registerMtlsAuthRoutes(app: Fastify): void {
             schema: {
                 querystring: z.object({
                     returnTo: z.string(),
-                    admissionReference: z.string().optional(),
+                    admissionReference: z.optional(z.string()),
                 }),
                 response: {
                     302: z.any(),
@@ -287,7 +287,7 @@ export function registerMtlsAuthRoutes(app: Fastify): void {
             schema: {
                 querystring: z.object({
                     returnTo: z.string(),
-                    admissionReference: z.string().optional(),
+                    admissionReference: z.optional(z.string()),
                 }),
                 response: {
                     302: z.any(),
@@ -381,7 +381,7 @@ export function registerMtlsAuthRoutes(app: Fastify): void {
                         }),
                         z.object({
                             error: z.string(),
-                            code: z.string().optional(),
+                            code: z.optional(z.string()),
                         }),
                     ]),
                     403: z.object({ error: z.union([z.literal("e2ee-required"), z.literal("not-eligible"), z.literal("account-disabled")]) }),
@@ -413,19 +413,18 @@ export function registerMtlsAuthRoutes(app: Fastify): void {
                 (request.body as { purpose?: unknown } | undefined)?.purpose ?? "",
             ));
             const stepUpCandidate = z.discriminatedUnion("purpose", [
-                z.object({
+                z.strictObject({
                     purpose: z.literal("account_encryption_first_key"),
                     proofHash:
-                        z.string()
-                            .regex(/^[0-9a-f]{64}$/),
+                        z.string().check(z.regex(/^[0-9a-f]{64}$/)),
                     requestDigest:
                         AccountEncryptionMigrateExternalAuthBindingDigestV1Schema,
-                }).strict(),
-                z.object({
+                }),
+                z.strictObject({
                     purpose: z.literal("account_password_enrollment"),
-                    proofHash: z.string().regex(/^[0-9a-f]{64}$/),
+                    proofHash: z.string().check(z.regex(/^[0-9a-f]{64}$/)),
                     requestDigest: PasswordCredentialMutationDigestV1Schema,
-                }).strict(),
+                }),
             ]).safeParse(request.body);
             if (
                 isStepUpRequest
@@ -539,14 +538,14 @@ export function registerMtlsAuthRoutes(app: Fastify): void {
         {
             errorHandler: accountDirectoryAuthErrorHandler,
             schema: {
-                body: z.object({ code: z.string(), admissionReference: z.string().optional() }).strict(),
+                body: z.strictObject({ code: z.string(), admissionReference: z.optional(z.string()) }),
                 response: {
-                    200: z.object({
+                    200: z.strictObject({
                         success: z.literal(true),
                         token: z.string(),
-                        teamId: z.string().optional(),
-                        teamInvitationContinuation: TeamInvitationPostAuthContinuationV1Schema.optional(),
-                    }).strict(),
+                        teamId: z.optional(z.string()),
+                        teamInvitationContinuation: z.optional(TeamInvitationPostAuthContinuationV1Schema),
+                    }),
                     401: z.object({ error: z.literal("invalid-code") }),
                     403: z.object({ error: z.union([z.literal("account-disabled"), z.literal("e2ee-required")]) }),
                     409: z.object({ error: z.literal("restore-required") }),

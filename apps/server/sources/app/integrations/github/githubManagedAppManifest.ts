@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import type { ProviderCatalogContext } from "@/app/auth/providers/providerReference";
 import { auth } from "@/app/auth/auth";
@@ -32,20 +32,20 @@ const GITHUB_MANIFEST_PURPOSE = "github_app_manifest_setup" as const;
 const GITHUB_CALLBACK_PROVIDER_ID = "github";
 const GITHUB_MANIFEST_LAUNCH_PREFIX = "github_app_manifest_launch_";
 
-const GitHubManifestSetupContinuationSchema = z.object({
+const GitHubManifestSetupContinuationSchema = z.strictObject({
     v: z.literal(1),
-    actorAccountId: z.string().min(1),
+    actorAccountId: z.string().check(z.minLength(1)),
     owner: z.discriminatedUnion("kind", [
-        z.object({ kind: z.literal("home") }).strict(),
-        z.object({ kind: z.literal("team"), teamId: z.string().min(1) }).strict(),
+        z.strictObject({ kind: z.literal("home") }),
+        z.strictObject({ kind: z.literal("team"), teamId: z.string().check(z.minLength(1)) }),
     ]),
-    registrationId: z.string().min(1),
-    registrationRevision: z.number().int().positive(),
+    registrationId: z.string().check(z.minLength(1)),
+    registrationRevision: z.number().check(z.int(), z.positive()),
     // The initiating request's server-stamped authentication facts. The setup
     // return is a browser redirect with no Happier credential, so the finalizer
     // re-runs the same authorization with what the server observed.
-    authentication: GitHubAppManagementAuthenticationV1Schema.optional(),
-}).strict();
+    authentication: z.optional(GitHubAppManagementAuthenticationV1Schema),
+});
 
 export function isGitHubAppManifestSetupContinuationValue(value: string): boolean {
     try {
@@ -79,27 +79,27 @@ export function createGitHubAppManifest(input: Readonly<{
     });
 }
 
-const GitHubManifestLaunchSchema = z.object({
+const GitHubManifestLaunchSchema = z.strictObject({
     v: z.literal(1),
-    submitUrl: z.url().refine((value) => {
+    submitUrl: z.url().check(z.refine((value) => {
         const url = new URL(value);
         return url.protocol === "https:" && url.hostname === "github.com" && Boolean(url.searchParams.get("state"));
-    }),
-    manifest: z.string().min(1).max(65_536),
-}).strict();
+    })),
+    manifest: z.string().check(z.minLength(1), z.maxLength(65_536)),
+});
 
-const GitHubManifestConversionSchema = z.object({
-    id: z.number().int().positive().safe(),
-    slug: z.string().trim().min(1).max(256),
-    client_id: z.string().trim().min(1).max(256),
-    client_secret: z.string().trim().min(1),
-    webhook_secret: z.string().trim().min(1).optional(),
-    pem: z.string().trim().min(1),
-    owner: z.object({
-        id: z.number().int().positive().safe(),
-        login: z.string().trim().min(1).max(256),
-    }).passthrough(),
-}).passthrough();
+const GitHubManifestConversionSchema = z.looseObject({
+    id: z.number().check(z.int(), z.positive(), z.int()),
+    slug: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    client_id: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    client_secret: z.string().check(z.trim(), z.minLength(1)),
+    webhook_secret: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    pem: z.string().check(z.trim(), z.minLength(1)),
+    owner: z.looseObject({
+        id: z.number().check(z.int(), z.positive(), z.int()),
+        login: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    }),
+});
 
 export type BeginGitHubAppManifestSetupResult =
     | Readonly<{ status: "ready"; authorizeUrl: string }>

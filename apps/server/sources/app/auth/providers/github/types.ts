@@ -1,11 +1,11 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
-export const GitHubProfileSchema = z.object({
+export const GitHubProfileSchema = z.looseObject({
     id: z.number(),
     login: z.string(),
-    avatar_url: z.string().optional(),
-    name: z.string().nullable().optional(),
-}).passthrough();
+    avatar_url: z.optional(z.string()),
+    name: z.optional(z.nullable(z.string())),
+});
 
 export type GitHubProfile = z.infer<typeof GitHubProfileSchema>;
 

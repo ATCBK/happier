@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Fastify } from "@/app/api/types";
 import type { ReviewCommentActorRefV1 } from '@happier-dev/protocol/reviews/comments/v1';
 import type { ReviewCommentPrincipalHeaderV1 } from '@happier-dev/protocol/reviews/comments/actions';
-import type { z } from "zod";
+import type { z } from "zod/mini";
 import { GENERAL_PLUGIN_PERMISSION_SUBJECT_V1 } from '@happier-dev/protocol/plugins/permissions/grants';
 import { createReviewCommentPrincipalSigningInputV1, REVIEW_COMMENT_PRINCIPAL_HEADER_V1, ReviewCommentBulkTransitionRequestV1Schema, ReviewCommentGetRequestV1Schema, ReviewCommentListRequestV1Schema, ReviewCommentPrincipalHeaderV1Schema, stringifyReviewCommentPrincipalCanonicalJsonV1 } from '@happier-dev/protocol/reviews/comments/actions';
 import { REVIEW_COMMENT_DIRECT_WRITE_SCOPE_V1, ReviewCommentAttachEvidenceRequestV1Schema, ReviewCommentCreateRequestV1Schema, ReviewCommentEditRequestV1Schema, ReviewCommentRedactRequestV1Schema, ReviewCommentReplyRequestV1Schema, ReviewCommentSetDispositionRequestV1Schema, ReviewCommentTransitionRequestV1Schema } from '@happier-dev/protocol/reviews/comments/v1';
@@ -406,7 +406,7 @@ function sendOperationError(reply: any, error: unknown): unknown {
 }
 
 function parseReviewCommentRouteInput<T>(
-    schema: z.ZodType<T>,
+    schema: z.ZodMiniType<T>,
     input: unknown,
     code: ReviewCommentOperationError["code"],
 ): T {

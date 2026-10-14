@@ -14,6 +14,7 @@ export default defineConfig({
         ...resolveVitestWorkers(),
         globals: true,
         environment: "node",
+        setupFiles: ["./sources/configureZodLocale.ts"],
         include: ["**/*.dbcontract.spec.ts"],
         exclude: [...resolveVitestFeatureTestExcludeGlobs()],
         isolate: true,

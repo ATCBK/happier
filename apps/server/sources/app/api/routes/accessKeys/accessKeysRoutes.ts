@@ -1,5 +1,5 @@
 import { Fastify } from "../../types";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { log } from "@/utils/logging/log";
 import { inTx } from "@/storage/inTx";
 import {
@@ -20,12 +20,12 @@ export function accessKeysRoutes(app: Fastify) {
             }),
             response: {
                 200: z.object({
-                    accessKey: z.object({
+                    accessKey: z.nullable(z.object({
                         data: z.string(),
                         dataVersion: z.number(),
                         createdAt: z.number(),
                         updatedAt: z.number()
-                    }).nullable()
+                    }))
                 }),
                 404: z.object({
                     error: z.literal('Session or machine not found')
@@ -82,13 +82,13 @@ export function accessKeysRoutes(app: Fastify) {
             response: {
                 200: z.object({
                     success: z.boolean(),
-                    accessKey: z.object({
+                    accessKey: z.optional(z.object({
                         data: z.string(),
                         dataVersion: z.number(),
                         createdAt: z.number(),
                         updatedAt: z.number()
-                    }).optional(),
-                    error: z.string().optional()
+                    })),
+                    error: z.optional(z.string())
                 }),
                 404: z.object({
                     error: z.literal('Session or machine not found')
@@ -146,7 +146,7 @@ export function accessKeysRoutes(app: Fastify) {
             }),
             body: z.object({
                 data: z.string(),
-                expectedVersion: z.number().int().min(0)
+                expectedVersion: z.number().check(z.int(), z.minimum(0))
             }),
             response: {
                 200: z.union([

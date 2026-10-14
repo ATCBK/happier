@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { RunnerActivationCloseReasonV1Schema } from '@happier-dev/protocol/ephemeralRunner/activation';
 import type { Tx } from '@/storage/inTx';
 

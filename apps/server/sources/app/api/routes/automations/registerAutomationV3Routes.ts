@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { AUTOMATION_V3_RUN_LIST_MAX_ITEMS, AutomationAssignmentUpdateRequestSchema, AutomationV3SettingsSchema, AutomationV3SettingsUpdateRequestSchema, AutomationV3WorkerClaimRequestSchema, AutomationV3WorkerAssignmentsResponseSchema, AutomationV3WorkerExecutionDispatchSettlementRequestSchema, AutomationV3WorkerFailRequestSchema, AutomationV3WorkerHeartbeatRequestSchema, AutomationV3WorkerHeartbeatResponseSchema, AutomationV3WorkerStartRequestSchema, AutomationV3WorkerStartResponseSchema, AutomationV3WorkerSucceedRequestSchema, AutomationV3ClearRunHistoryResponseSchema, AutomationDeleteResponseSchema, AutomationDefinitionCreateRequestSchema, AutomationDefinitionReconcileRequestSchema, AutomationDefinitionPatchRequestSchema, AutomationDefinitionListRequestSchema, AutomationDefinitionListResponseSchema, AutomationTriggerCreateRequestSchema, AutomationTriggerDeleteRequestSchema, AutomationTriggerPatchRequestSchema, AutomationV3RunMutationResponseSchema, AutomationV3RunReplyHandoffRedeliverRequestSchema, AutomationV3RunListResponseSchema } from '@happier-dev/protocol/automations/automationApiV3';
 import { AutomationExecutionRunLifecycleReportRequestSchema, AutomationExecutionRunLifecycleSourcesResponseSchema } from '@happier-dev/protocol/automations/automationRunLifecycle';
@@ -100,8 +100,8 @@ function sendStoredContentFailure(reply: { code(code: number): { send(body: unkn
     return reply.code(409).send({ error: "automation_stored_content_unavailable" });
 }
 
-function isAutomationDefinitionValidationError(error: unknown): error is AutomationValidationError | z.ZodError {
-    return error instanceof AutomationValidationError || error instanceof z.ZodError;
+function isAutomationDefinitionValidationError(error: unknown): error is AutomationValidationError | z.core.$ZodError {
+    return error instanceof AutomationValidationError || error instanceof z.core.$ZodError;
 }
 
 async function toAutomationDefinitionDetailWithCurrentEventStatus(
@@ -120,7 +120,7 @@ async function toAutomationDefinitionDetailWithCurrentEventStatus(
     );
 }
 
-function automationDefinitionValidationMessage(error: AutomationValidationError | z.ZodError): string {
+function automationDefinitionValidationMessage(error: AutomationValidationError | z.core.$ZodError): string {
     if (error instanceof AutomationSessionLifecycleRegistrationValidationError) return error.code;
     if (error instanceof AutomationValidationError) return error.message;
     const issue = error.issues[0];
@@ -128,9 +128,9 @@ function automationDefinitionValidationMessage(error: AutomationValidationError 
     return `${path}: ${issue?.message ?? "Invalid automation payload"}`;
 }
 
-const AutomationRunNowHeadersSchema = z.object({
-    "idempotency-key": AutomationManualIdempotencyKeyV1Schema.optional(),
-}).passthrough();
+const AutomationRunNowHeadersSchema = z.looseObject({
+    "idempotency-key": z.optional(AutomationManualIdempotencyKeyV1Schema),
+});
 
 export function registerAutomationV3Routes(
     app: Fastify,
@@ -572,7 +572,7 @@ export function registerAutomationV3Routes(
     app.get("/v3/automations/worker/assignments", {
         preHandler: app.authenticate,
         schema: {
-            querystring: z.object({ machineId: z.string().trim().min(1) }),
+            querystring: z.object({ machineId: z.string().check(z.trim(), z.minLength(1)) }),
         },
     }, async (request, reply) => {
         if (!await resolveExactAutomationWorkerPublisher({
@@ -603,7 +603,7 @@ export function registerAutomationV3Routes(
 
     app.get("/v3/automations/worker/run-lifecycle", {
         preHandler: app.authenticate,
-        schema: { querystring: z.object({ machineId: z.string().trim().min(1) }) },
+        schema: { querystring: z.object({ machineId: z.string().check(z.trim(), z.minLength(1)) }) },
     }, async (request, reply) => {
         if (!await resolveExactAutomationWorkerPublisher({ dependencies: workerPublisherDependencies,
             accountId: request.userId, request, path: "/v3/automations/worker/run-lifecycle",
@@ -893,11 +893,11 @@ export function registerAutomationV3Routes(
     app.get("/v3/automations/runs", {
         preHandler: [app.authenticate, requirePresentUser],
         schema: {
-            querystring: z.object({
+            querystring: z.strictObject({
                 attention: z.literal("required"),
-                limit: z.coerce.number().int().min(1).max(AUTOMATION_V3_RUN_LIST_MAX_ITEMS).optional(),
-                cursor: z.string().optional(),
-            }).strict(),
+                limit: z.optional(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(AUTOMATION_V3_RUN_LIST_MAX_ITEMS))),
+                cursor: z.optional(z.string()),
+            }),
         },
     }, async (request) => {
         const result = await listAutomationRuns({
@@ -914,11 +914,11 @@ export function registerAutomationV3Routes(
         preHandler: [app.authenticate, requirePresentUser],
         schema: {
             params: z.object({ id: z.string() }),
-            querystring: z.object({
-                limit: z.coerce.number().int().min(1).max(AUTOMATION_V3_RUN_LIST_MAX_ITEMS).optional(),
-                cursor: z.string().optional(),
-                attention: z.literal("required").optional(),
-            }).optional(),
+            querystring: z.optional(z.object({
+                limit: z.optional(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(AUTOMATION_V3_RUN_LIST_MAX_ITEMS))),
+                cursor: z.optional(z.string()),
+                attention: z.optional(z.literal("required")),
+            })),
         },
     }, async (request, reply) => {
         const result = await listAutomationRuns({

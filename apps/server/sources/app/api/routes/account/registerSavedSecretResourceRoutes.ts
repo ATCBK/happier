@@ -1,5 +1,5 @@
 import { decodeBase64, encodeBase64 } from "privacy-kit";
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { SavedSecretResourceActionErrorV1Schema, SavedSecretResourceEnvelopeRepairInputV1Schema, SavedSecretResourceEnvelopeRepairOutputV1Schema, SavedSecretResourceRecipientEnvelopeInputV1Schema, SharedSavedSecretCreateInputV1Schema, SharedSavedSecretDeleteInputV1Schema, SharedSavedSecretDeleteOutputV1Schema, SharedSavedSecretGrantsSetInputV1Schema, SharedSavedSecretListOutputV1Schema, SharedSavedSecretMutationOutputV1Schema, SharedSavedSecretPromoteInputV1Schema, SharedSavedSecretPromoteOutputV1Schema, SharedSavedSecretUpdateInputV1Schema } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
 import { SavedSecretResourceMaterialsResponseV1Schema, SavedSecretResourceEnvelopeCensusRequestV1Schema, SavedSecretResourceEnvelopeCensusResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';

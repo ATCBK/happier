@@ -1,5 +1,5 @@
 import type { Server, Socket } from "socket.io";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { SESSION_HUMAN_PRESENCE_SNAPSHOT_EVENT, type SessionHumanPresenceLocationV1, type SessionHumanPresenceSnapshotV1, type SessionHumanPresenceTypingSetV1 } from '@happier-dev/protocol/sessions';
 import { type SessionAccessAccountSummaryV1 } from '@happier-dev/protocol/sessions/access/sessionAccessPrincipalV1';
 import { SessionIdSchema } from '@happier-dev/protocol/sessions/idsV1';
@@ -49,10 +49,10 @@ function readTypingLocation(socket: Readonly<{ data: PresenceTypingSocketData }>
 export const SESSION_HUMAN_PRESENCE_ACCESS_CHANGED_SERVER_EVENT =
     "session-human-presence:access-changed:v1";
 
-const SessionHumanPresenceAccessChangedServerEnvelopeSchema = z.object({
+const SessionHumanPresenceAccessChangedServerEnvelopeSchema = z.strictObject({
     v: z.literal(1),
     sessionId: z.unknown(),
-}).strict();
+});
 
 function parseSessionHumanPresenceAccessChangedServerPayload(raw: unknown): string | null {
     const envelope = SessionHumanPresenceAccessChangedServerEnvelopeSchema.safeParse(raw);

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { z } from "zod";
+import type { z } from "zod/mini";
 import { SessionBoardMutationV1Schema, sessionBoardMutationUsesLayoutV1, type SessionBoardMutationV1, type SessionBoardMutationResultV1 } from '@happier-dev/protocol/sessions/board/mutations';
 import { SessionBoardLayoutV1Schema } from '@happier-dev/protocol/sessions/board/layout';
 import { SessionSurfaceItemV1Schema, isSessionSurfaceItemSourceCompatible } from '@happier-dev/protocol/sessions/board/item';

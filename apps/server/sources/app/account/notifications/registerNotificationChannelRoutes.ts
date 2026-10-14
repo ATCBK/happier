@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { NOTIFICATION_CHANNELS_ROUTE_V1, NotificationChannelCatalogReadResponseV1Schema,
   NotificationChannelCatalogMutationV1Schema, NotificationChannelCatalogMutationResponseV1Schema,
 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
@@ -14,7 +14,7 @@ import { inTx } from '@/storage/inTx';
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
 import { mutateNotificationChannelCatalog, readNotificationChannelCatalogInTx } from './channelRows';
 
-const internal = z.object({ error: z.literal('internal') }).strict();
+const internal = z.strictObject({ error: z.literal('internal') });
 
 export function registerNotificationChannelRoutes(app: Fastify): void {
   const config = { rateLimit: resolveApiHotEndpointRateLimit(process.env, 'account.settings') };

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
 import { type ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 
@@ -66,7 +66,7 @@ export function bugReportDiagnosticsRoutes(app: Fastify) {
     app.get("/v1/diagnostics/bug-report-snapshot", {
         schema: {
             querystring: z.object({
-                lines: z.coerce.number().int().min(10).max(500).optional(),
+                lines: z.optional(z.coerce.number().check(z.int(), z.minimum(10), z.maximum(500))),
             }),
         },
         preHandler: app.authenticate,

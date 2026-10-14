@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { z as mini } from 'zod/mini';
 import { AccountEncryptionMigrateExternalAuthBindingDigestV1Schema } from '@happier-dev/protocol/account/encryptionMigrate';
 import { ManagedGitHubAppOwnerV1Schema } from '@happier-dev/protocol/identity/githubApps';
 import { PasswordCredentialMutationDigestV1Schema } from '@happier-dev/protocol/auth/passwordMutationChallenge';
@@ -68,11 +69,11 @@ export const oauthStateAttemptSchema = z.object({
         networkPolicyFingerprint: z.string().trim().min(1),
         githubInstallationId: z.string().regex(/^[1-9][0-9]*$/u),
         githubOrganizationId: z.string().regex(/^[1-9][0-9]*$/u),
-        authentication: GitHubAppManagementAuthenticationV1Schema.optional(),
+        authentication: mini.optional(GitHubAppManagementAuthenticationV1Schema),
     }).strict().optional(),
     githubAppManifestSetup: z.object({
         owner: ManagedGitHubAppOwnerV1Schema,
-        authentication: GitHubAppManagementAuthenticationV1Schema.optional(),
+        authentication: mini.optional(GitHubAppManagementAuthenticationV1Schema),
     }).strict().optional(),
     endpointUrl: z.string().url().optional(),
     endpointServerIdentityId: z.string().trim().min(1).optional(),

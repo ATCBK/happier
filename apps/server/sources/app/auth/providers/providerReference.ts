@@ -1,5 +1,5 @@
 import { AuthProviderIdSchema, type AuthProviderId } from '@happier-dev/protocol/auth/providers';
-import { z } from "zod";
+import { z } from "zod/mini";
 
 /**
  * Exact provider context an identity-provider lookup was resolved in.
@@ -32,15 +32,15 @@ export type ProviderReference = Readonly<{
 }>;
 
 /** Strict reader for the catalog reference stored in an OAuth attempt or pending record. */
-export const ProviderReferenceSchema: z.ZodType<ProviderReference> = z.object({
+export const ProviderReferenceSchema: z.ZodMiniType<ProviderReference> = z.strictObject({
     id: AuthProviderIdSchema,
     source: z.enum(["built_in", "deployment", "managed"]),
-    runtimeFingerprint: z.string().min(1),
+    runtimeFingerprint: z.string().check(z.minLength(1)),
     context: z.discriminatedUnion("kind", [
-        z.object({ kind: z.literal("home") }).strict(),
-        z.object({ kind: z.literal("team"), teamId: z.string().min(1) }).strict(),
+        z.strictObject({ kind: z.literal("home") }),
+        z.strictObject({ kind: z.literal("team"), teamId: z.string().check(z.minLength(1)) }),
     ]),
-}).strict();
+});
 
 /**
  * Closed internal guard describing which provider operation a runtime resolution serves. It is

@@ -1,6 +1,6 @@
 import * as privacyKit from "privacy-kit";
 import { randomBytes, randomUUID } from "node:crypto";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { canonicalizeKeyChallengeV2AudienceOrigin, type KeyChallengeV2IssueResponse } from '@happier-dev/protocol/auth/keyChallenge';
 import { decodePasswordCredentialFieldV1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
 import { createPasswordCredentialMutationDigestV1, createPasswordMutationChallengeSigningInputV1, PasswordMutationChallengeV1Schema, PASSWORD_CREDENTIAL_MUTATION_OPERATION_V1, type PasswordCredentialMutationV1, type PasswordMutationChallengeProofV1, type PasswordMutationChallengeV1 } from '@happier-dev/protocol/auth/passwordMutationChallenge';
@@ -40,10 +40,10 @@ const VERIFIED_NATIVE_PASSWORD_EVIDENCE_PREFIX = "email_password:v1:";
 // Native identities are generated CUIDs by AccountIdentityLifecycle (25 characters).
 // Together with the maximum credential revision this encodes to 98 characters,
 // within the existing MySQL VARCHAR(191) challenge evidence column.
-const VerifiedNativePasswordEvidenceV1Schema = z.object({
-    nativeIdentityId: z.string().min(1).max(256),
-    credentialRevision: z.number().int().min(1).max(2_147_483_647),
-}).strict();
+const VerifiedNativePasswordEvidenceV1Schema = z.strictObject({
+    nativeIdentityId: z.string().check(z.minLength(1), z.maxLength(256)),
+    credentialRevision: z.number().check(z.int(), z.minimum(1), z.maximum(2_147_483_647)),
+});
 export type VerifiedNativePasswordEvidenceV1 = z.infer<typeof VerifiedNativePasswordEvidenceV1Schema>;
 
 export function encodeVerifiedNativePasswordEvidenceV1(evidence: VerifiedNativePasswordEvidenceV1): string {

@@ -1,4 +1,4 @@
-import { ZodError } from "zod";
+import { z as zodMiniCore0 } from "zod/mini";
 
 import type { BoundReviewCommentEventSensitiveEnvelopeV1, ReviewCommentEventSensitiveMigrationLayoutV1, ReviewCommentSensitiveMigrationSourceV1, ReviewCommentStructuralV1 } from '@happier-dev/protocol/reviews/comments/content';
 import type { ReviewCommentEventV1 } from '@happier-dev/protocol/reviews/comments/v1';
@@ -51,7 +51,7 @@ export type ReviewCommentAccountEncryptionMigrationFailureStatus =
 export function classifyReviewCommentAccountEncryptionMigrationError(
     error: unknown,
 ): ReviewCommentAccountEncryptionMigrationFailureStatus | null {
-    if (error instanceof ZodError) return "invalid_content";
+    if (error instanceof zodMiniCore0.core.$ZodError) return "invalid_content";
     if (!(error instanceof Error)) return null;
     if (error.message === "review_comment_migration_inventory_not_empty") {
         return "not_empty";

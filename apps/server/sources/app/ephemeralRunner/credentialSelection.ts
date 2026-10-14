@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { RunnerCredentialSelectionBindingV1Schema } from "@happier-dev/protocol/ephemeralRunner/review";
 import { RunnerCredentialSelectionResolutionRequestV1Schema, type RunnerCredentialSelectionResolutionRequestV1, type RunnerCredentialSelectionResolutionResponseV1 } from '@happier-dev/protocol/teams';
@@ -417,7 +418,7 @@ async function readCurrentSelection(input: Readonly<{
                 return { ok: false, reason: "resource_corrupt" } as const;
             }
             const source = TeamCredentialSourceBindingV1Schema.safeParse(rawSource);
-            const policy = TeamCredentialRequestPolicyV1Schema.nullable().safeParse(rawPolicy);
+            const policy = z.nullable(TeamCredentialRequestPolicyV1Schema).safeParse(rawPolicy);
             if (!source.success || !policy.success) return { ok: false, reason: "resource_corrupt" } as const;
             const resolved = await resolvePlannedRunnerCredentialSelectionBindingInTx(tx, {
                 accountId: input.creatorAccountId,

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import * as privacyKit from "privacy-kit";
 
 import { AccountSettingsStoredContentEnvelopeSchema, type AccountSettingsStoredContentEnvelope } from '@happier-dev/protocol/account/settings/accountSettingsStoredContentEnvelope';
@@ -6,8 +6,8 @@ import { decryptString, encryptString } from "@/modules/encrypt";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 
 const DbPlainSettingsWrapperSchema = z.discriminatedUnion("t", [
-    z.object({ t: z.literal("plain"), v: z.unknown() }).strict(),
-    z.object({ t: z.literal("sealed_v1"), c: z.string().min(1) }).strict(),
+    z.strictObject({ t: z.literal("plain"), v: z.unknown() }),
+    z.strictObject({ t: z.literal("sealed_v1"), c: z.string().check(z.minLength(1)) }),
 ]);
 
 export class PlainAccountSettingsStorageUnavailableError extends Error {
