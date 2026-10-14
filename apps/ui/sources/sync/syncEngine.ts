@@ -234,6 +234,7 @@ import {
 } from './domains/state/sessionViewportPersistence';
 import { sessionViewportStorageKey } from './domains/state/sessionLocalStateKeys';
 import { machineProcessesStore } from './domains/machines/processes/machineProcessesStore';
+import { machineResourceStore } from './domains/machines/resources/machineResourceStore';
 import {
     captureActiveServerAccountScopeCurrentness,
     captureActiveServerAccountScopeLifetime,
@@ -2849,6 +2850,16 @@ class Sync {
         storage.getState().restoreSessionListQueryMemberships(serverId, accountId);
     }
 
+    /** Read only the already-bound exact-Home projection; this never acquires transport. */
+    public readSessionSystemRecordObservation = (address: SessionAddress) => {
+        for (const repository of this.sessionSystemRecordRepositories.values()) {
+            if (!areServerProfileIdentifiersEquivalent(repository.scope.serverId, address.serverId)) continue;
+            const authority = repository.readObservationAuthority(address);
+            if (authority) return { ...authority, scope: repository.scope, session: address, repository };
+        }
+        return null;
+    };
+
     /** Execute under one explicit Home/Account lease; no callback may retain request. */
     public withSessionSystemRecordRuntime = async <T>(
         address: SessionAddress,
@@ -2876,7 +2887,8 @@ class Sync {
         try {
             if (!isCurrent() || !areServerProfileIdentifiersEquivalent(authority.scope.serverId, sessionAddress.serverId)) return { status: 'forbidden' };
             if (!authority.context.credentials) return { status: 'forbidden' };
-            let readSessionEncryption = () => authority.context.encryption?.getSessionEncryption(sessionAddress.sessionId) ?? null;
+            const sessionEncryption = authority.context.encryption;
+            let readSessionEncryption = () => sessionEncryption?.getSessionEncryption(sessionAddress.sessionId) ?? null;
             // Reuse the canonical exact-Session hydration and its in-flight
             // coalescer. Several record observers must not each perform another
             // full Session read merely to obtain mode/access/key context.
@@ -2927,6 +2939,11 @@ class Sync {
                 };
             };
             const contentContext = readContentContext();
+            repository.retainObservationAuthority(sessionAddress, {
+                readCapabilities: () => readSession()?.access?.capabilities ?? null,
+                readContentContext,
+                isCurrent,
+            });
             const value = await operation({
                 scope: authority.scope,
                 request: async (path, init, options) => {
@@ -3162,6 +3179,7 @@ class Sync {
         retireActiveServerAccountScopeLifetime();
         invalidateAccountEncryptionModeCache();
         machineProcessesStore.reset();
+        machineResourceStore.reset();
         // Session System Record repositories are qualified by their captured
         // Home/Account credential, not by whichever Home owns the focused
         // socket. Credential mutation retires the exact Home above; switching

@@ -36,6 +36,7 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
 });
 
 afterEach(async () => {
+    vi.unstubAllGlobals();
     await serverScopedRpcSocketPool.stopAll();
     serverScopedRpcSocketPool.resetForTests();
     resetScopedMachineTransportCacheForTests();
@@ -187,6 +188,33 @@ it('relays an unreachable direct endpoint, skips it after relay success, and ret
         expect(readMachineRequestReachabilityObservation(home.scope, 'machine-1', 'loopback_direct')?.outcome).toBe('succeeded');
     } finally {
         if (directListening) await closeHttp(direct);
+        await home.close();
+    }
+});
+
+it('relays the browser SOCKS preflight failure through real route selection and Home RPC', async () => {
+    const direct = createServer();
+    const port = await listen(direct);
+    const home = await createDirectRelayHome(port);
+    const realFetch = globalThis.fetch;
+    const attempts: string[] = [];
+    // Chromium exposes net::ERR_SOCKS_CONNECTION_FAILED to fetch as this
+    // TypeError; the network code itself is only visible to browser tooling.
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === `http://127.0.0.1:${port}${PEER_MACHINE_RPC_DIRECT_PATH_V2}`) {
+            attempts.push(init?.method ?? 'GET');
+            throw new TypeError('Failed to fetch');
+        }
+        return realFetch(input, init);
+    });
+    try {
+        await expect(home.call()).resolves.toEqual({ route: 'relay', params: { includeWorkers: true } });
+        expect(attempts).toEqual(['OPTIONS']);
+        expect(home.calls).toHaveLength(1);
+        expect(readMachineRequestReachabilityObservation(home.scope, 'machine-1', 'loopback_direct')?.outcome).toBe('failed');
+        expect(readMachineRequestReachabilityObservation(home.scope, 'machine-1')?.outcome).toBe('succeeded');
+    } finally {
+        await closeHttp(direct);
         await home.close();
     }
 });

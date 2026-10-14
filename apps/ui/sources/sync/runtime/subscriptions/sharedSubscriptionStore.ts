@@ -114,6 +114,7 @@ type SharedSubscriptionStoreEntry<TInput, TState, TSnapshotClient, TWatchClient>
     watchAbortController: AbortController | null;
     watching: boolean;
     watchRetired: boolean;
+    watchRecoveryRequested: boolean;
     nowMs: () => number;
 };
 
@@ -168,6 +169,7 @@ export function createSharedSubscriptionStore<
                 watchAbortController: null,
                 watching: false,
                 watchRetired: false,
+                watchRecoveryRequested: false,
                 nowMs: options?.nowMs ?? Date.now,
             };
             entries.set(key, entry);
@@ -231,6 +233,7 @@ export function createSharedSubscriptionStore<
             return;
         }
         entry.watching = true;
+        entry.watchRecoveryRequested = false;
         const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
         entry.watchAbortController = abortController;
         void (async () => {
@@ -246,14 +249,13 @@ export function createSharedSubscriptionStore<
                     return;
                 }
                 if (outcome.status === 'unavailable') {
-                    entry.watchRetired = true;
-                    return;
+                    entry.watchRetired = !entry.watchRecoveryRequested;
                 }
                 if (outcome.status === 'changed') {
                     setState(entry, config.applySnapshot(entry.state, outcome.snapshot));
                 }
             } catch {
-                if (!abortController?.signal.aborted) entry.watchRetired = true;
+                if (!abortController?.signal.aborted) entry.watchRetired = !entry.watchRecoveryRequested;
             } finally {
                 if (entry.watchAbortController === abortController) {
                     entry.watching = false;
@@ -355,6 +357,7 @@ export function createSharedSubscriptionStore<
                 // An Action's successful read publishes here instead of calling
                 // invalidate. Its fresh snapshot also restores the parked watch;
                 // otherwise a recovered surface stops receiving later changes.
+                if (entry.watching) entry.watchRecoveryRequested = true;
                 entry.watchRetired = false;
                 runWatchLoop(entry);
             }
