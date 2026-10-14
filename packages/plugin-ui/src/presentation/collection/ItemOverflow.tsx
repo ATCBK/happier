@@ -39,22 +39,32 @@ export type HappierItemOverflowProps = Readonly<{
   testID?: string;
 }>;
 
-/** Shared trailing-overflow identity/state; adapters retain portal/focus/back. */
-export function HappierItemOverflow(props: HappierItemOverflowProps): ReactElement | null {
+/** Shared overflow-open state; host menu adapters retain their portal and action admission. */
+export function useHappierItemOverflowState(
+  props: Pick<HappierItemOverflowProps, 'open' | 'onOpenChange'>,
+  enabled = true,
+) {
   const [ownedOpen, setOwnedOpen] = useState(false);
   const open = props.open ?? ownedOpen;
-  const enabledIds = props.actions.filter((action) => !action.disabled).map((action) => action.id);
-  const enabled = props.secondaryActionsEnabled !== false && enabledIds.length > 0;
   useEffect(() => {
     if (!enabled) {
       setOwnedOpen(false);
       props.onOpenChange?.(false);
     }
   }, [enabled, props.onOpenChange]);
-  const setOpen = useCallback((nextOpen: boolean) => {
-    if (props.open === undefined) setOwnedOpen(nextOpen);
-    props.onOpenChange?.(nextOpen);
-  }, [props.onOpenChange, props.open]);
+  const setOpen = useCallback((nextOpen: boolean | ((current: boolean) => boolean)) => {
+    const resolved = typeof nextOpen === 'function' ? nextOpen(open) : nextOpen;
+    if (props.open === undefined) setOwnedOpen(resolved);
+    props.onOpenChange?.(resolved);
+  }, [props.onOpenChange, props.open, open]);
+  return { open, setOpen };
+}
+
+/** Shared trailing-overflow identity/state; adapters retain portal/focus/back. */
+export function HappierItemOverflow(props: HappierItemOverflowProps): ReactElement | null {
+  const enabledIds = props.actions.filter((action) => !action.disabled).map((action) => action.id);
+  const enabled = props.secondaryActionsEnabled !== false && enabledIds.length > 0;
+  const { open, setOpen } = useHappierItemOverflowState(props, enabled);
   const onSelect = useCallback((id: string) => {
     if (!enabled || !enabledIds.includes(id)) return;
     props.onSelect(id);

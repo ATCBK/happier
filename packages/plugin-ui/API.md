@@ -543,6 +543,10 @@ Declaration: `dist/index.d.ts`
 - type `HappierMaterialRole` from `dist/index.d.ts`
 - value `HappierMaterialRoleProvider` from `dist/index.d.ts`
 - type `HappierMaterialSurfaceRender` from `dist/index.d.ts`
+- type `HappierMemoryFactItemProps` from `dist/index.d.ts`
+- value `HappierMemoryFactRow` from `dist/index.d.ts`
+- type `HappierMemoryFactRowHost` from `dist/index.d.ts`
+- type `HappierMemoryFactRowProps` from `dist/index.d.ts`
 - type `HappierMenuContent` from `dist/index.d.ts`
 - type `HappierMenuEntry` from `dist/index.d.ts`
 - type `HappierMenuGroupDescriptor` from `dist/index.d.ts`
@@ -889,6 +893,8 @@ Declaration: `dist/index.d.ts`
 - type `IntervalTimelineInterval` from `dist/index.d.ts`
 - type `IntervalTimelineProps` from `dist/index.d.ts`
 - value `Item` from `dist/index.d.ts`
+- value `ItemAddRow` from `dist/index.d.ts`
+- type `ItemAddRowProps` from `dist/index.d.ts`
 - value `ItemGroup` from `dist/index.d.ts`
 - type `ItemGroupProps` from `dist/index.d.ts`
 - type `ItemProps` from `dist/index.d.ts`
@@ -1388,6 +1394,7 @@ Declaration: `dist/advanced/index.d.ts`
 - value `isPluginUiResourceReadAuthorityLost` from `dist/advanced/index.d.ts`
 - value `materializeHappierRenderableImage` from `dist/advanced/index.d.ts`
 - value `pluginUiResourceReferenceKey` from `dist/advanced/index.d.ts`
+- value `pluginUiResourceReferenceLabel` from `dist/advanced/index.d.ts`
 - value `useFindSurfaceRegistrationWithHost` from `dist/advanced/index.d.ts`
 - value `useOptionalPluginUiScrollActivityTracker` from `dist/advanced/index.d.ts`
 - value `useSessionPartClaim` from `dist/advanced/index.d.ts`
@@ -1911,6 +1918,10 @@ Declaration: `dist/components/index.d.ts`
 - type `HappierMaterialRole` from `dist/components/index.d.ts`
 - value `HappierMaterialRoleProvider` from `dist/components/index.d.ts`
 - type `HappierMaterialSurfaceRender` from `dist/components/index.d.ts`
+- type `HappierMemoryFactItemProps` from `dist/components/index.d.ts`
+- value `HappierMemoryFactRow` from `dist/components/index.d.ts`
+- type `HappierMemoryFactRowHost` from `dist/components/index.d.ts`
+- type `HappierMemoryFactRowProps` from `dist/components/index.d.ts`
 - type `HappierMenuContent` from `dist/components/index.d.ts`
 - type `HappierMenuEntry` from `dist/components/index.d.ts`
 - type `HappierMenuGroupDescriptor` from `dist/components/index.d.ts`
@@ -2257,6 +2268,8 @@ Declaration: `dist/components/index.d.ts`
 - type `IntervalTimelineInterval` from `dist/components/index.d.ts`
 - type `IntervalTimelineProps` from `dist/components/index.d.ts`
 - value `Item` from `dist/components/index.d.ts`
+- value `ItemAddRow` from `dist/components/index.d.ts`
+- type `ItemAddRowProps` from `dist/components/index.d.ts`
 - value `ItemGroup` from `dist/components/index.d.ts`
 - type `ItemGroupProps` from `dist/components/index.d.ts`
 - type `ItemProps` from `dist/components/index.d.ts`

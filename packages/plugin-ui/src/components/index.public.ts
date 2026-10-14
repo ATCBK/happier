@@ -1,9 +1,16 @@
 export * from './Action.js';
+export { ApprovalPendingNotice, type ApprovalPendingNoticeProps } from './ApprovalPendingNotice.js';
 export { ApprovalPrompt, type ApprovalPromptProps } from './ApprovalPrompt.js';
 export * from './Button.js';
 export * from './Collection.js';
 export type { CollectionVirtualizer, CollectionVirtualizerHandle, CollectionVirtualizerRequest } from '../presentation/collection/collectionVirtualizer.js';
 export * from './Content.js';
+export {
+  HappierMemoryFactRow,
+  type HappierMemoryFactItemProps,
+  type HappierMemoryFactRowHost,
+  type HappierMemoryFactRowProps,
+} from '../presentation/content/MemoryFactRow.js';
 export { Chart, DataRows, DataTable, Metric, type ChartProps, type DataRowsProps, type MetricProps } from './Data.js';
 export {
   AgentCursor,
@@ -40,6 +47,7 @@ export {
   type ItemProps, type ListItemProps, type ListAccessibilityPattern, type ItemGroupProps,
 } from './List.js';
 export { CountedDisclosureItem, type CountedDisclosureItemProps } from './CountedDisclosureItem.js';
+export { ItemAddRow, type ItemAddRowProps } from './ItemAddRow.js';
 export * from './NavigationList.js';
 export * from './PageHeader.js';
 export {

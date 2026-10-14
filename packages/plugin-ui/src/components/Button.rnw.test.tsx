@@ -80,6 +80,23 @@ async function activateWithEnter(button: HTMLElement): Promise<void> {
 }
 
 describe('plugin-ui Button renders real React Native pressable semantics', () => {
+  it('exposes none, mixed, all, then none for a controlled checkbox group', () => {
+    function GroupCheckbox() {
+      const states = [false, 'mixed', true] as const;
+      const [index, setIndex] = useState(0);
+      return <HappierPressable accessibilityRole="checkbox" accessibilityLabel="Collect group" checked={states[index]}
+        onPress={() => setIndex(current => (current + 1) % states.length)} />;
+    }
+    const mount = mountSurface(<GroupCheckbox />);
+    try {
+      const checkbox = mount.container.querySelector<HTMLElement>('[role="checkbox"]')!;
+      for (const checked of ['false', 'mixed', 'true', 'false']) {
+        expect(checkbox.getAttribute('aria-checked')).toBe(checked);
+        act(() => { checkbox.click(); });
+      }
+    } finally { mount.unmount(); }
+  });
+
   it.each([
     { disabled: true, busy: false },
     { disabled: false, busy: true },

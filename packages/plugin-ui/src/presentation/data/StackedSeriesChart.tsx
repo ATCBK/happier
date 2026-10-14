@@ -93,6 +93,8 @@ export type StackedSeriesChartProps = Readonly<{
   /** Callers supply localized unavailable wording. */
   unknownLabel?: string;
   valueFormatter?: (value: number) => string;
+  /** The caller's reading of a numeric x (a time bucket as its date) for exact values and Details. */
+  coordinateFormatter?: (x: number) => string;
   onSelect?: (bucketId: string) => void;
   /** Host overlay adapter; the chart retains selection and exact values. */
   renderBucket?: (bucket: HappierSeriesBucket, visual: ReactNode, select: () => void) => ReactNode;
@@ -224,8 +226,9 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
   const unknown = props.unknownLabel ?? '—';
   const magnitude = (value: number) => props.mirrored ? Math.abs(value) : value;
   const format = (value: number) => props.valueFormatter ? props.valueFormatter(magnitude(value)) : formatHappierDataValue(magnitude(value), text.locale);
+  const reading = { formatCoordinate: props.coordinateFormatter, locale: text.locale };
   const describe = (bucket: HappierSeriesBucket) => describeHappierSeriesBucket(props.mirrored
-    ? { ...bucket, values: bucket.values.map((entry) => ({ ...entry, value: entry.value === null ? null : magnitude(entry.value) })) } : bucket, unknown);
+    ? { ...bucket, values: bucket.values.map((entry) => ({ ...entry, value: entry.value === null ? null : magnitude(entry.value) })) } : bucket, unknown, reading);
   const selected = geometry.buckets.find((bucket) => bucket.id === selectedId) ?? null;
   const select = (id: string) => { setSelectedId(id); props.onSelect?.(id); };
   // A series without its own colour takes the accent's ordered ramp, spread so several read apart.
@@ -523,7 +526,8 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
       {geometry.buckets.map((bucket, index) => bucketControl(bucket, index, <HappierText style={text.caption} tabularNumbers>{describe(bucket)}</HappierText>, { justifyContent: 'center' }))}
     </View> : valuesExpanded ? <HappierDataTable theme={props.theme} label={props.label}
       columns={[{ label: props.label }, ...props.series.map((entry) => ({ label: entry.label }))]}
-      rows={geometry.buckets.map((bucket) => [describeHappierSeriesCoordinate(bucket), ...bucket.values.map((entry) => entry.value === null ? unknown : magnitude(entry.value))])}
+      // Details keeps every meaningful digit (a display formatter may abbreviate); coordinates read in the caller's words.
+      rows={geometry.buckets.map((bucket) => [describeHappierSeriesCoordinate(bucket, reading), ...bucket.values.map((entry) => entry.value === null ? unknown : magnitude(entry.value))])}
       testID={props.testID ? `${props.testID}-values` : undefined} /> : null}
   </View>;
 }

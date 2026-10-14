@@ -1,10 +1,11 @@
 import type { ReactElement } from 'react';
+import { Platform } from 'react-native';
 
 import { usePluginHostApi } from '../hostApi/context.js';
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
 import { HappierScrollArea } from '../presentation/layout/Layout.js';
 import { HappierStack } from '../presentation/layout/Layout.js';
-import { HappierText } from '../presentation/text/Text.js';
+import { HappierText, HappierTextSelectabilityScope } from '../presentation/text/Text.js';
 import {
   HappierMarkdown,
 } from '../presentation/content/Markdown.js';
@@ -146,7 +147,9 @@ export function CodeBlock({
 
   return (
     <HappierStack gap={8}>
-      {content}
+      <HappierTextSelectabilityScope suppressSelection={Platform.OS === 'android' && Boolean(copyLabel)}>
+        {content}
+      </HappierTextSelectabilityScope>
       {copyLabel ? (
         <Button
           title={behavior.copied ? (copiedLabel ?? copyLabel) : copyLabel}

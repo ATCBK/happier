@@ -141,7 +141,7 @@ export function Treemap(props: HappierTreemapProps) {
     [tiles, width, height],
   );
   const order = useMemo(
-    () => tiles.filter((tile) => tile.folded === null).map((tile) => tile.key),
+    () => tiles.map((tile) => tile.key),
     [tiles],
   );
   const rank = useMemo(

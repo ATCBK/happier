@@ -13,7 +13,12 @@ import type { HappierCollectionLayoutMode } from '../collection/collectionLayout
  * horizontal padding to line something up.
  */
 export const HAPPIER_PAGE_METRICS = Object.freeze({
-  columnMaxWidthPx: Object.freeze({ reading: 704, wide: 944 }),
+  /**
+   * Page columns, each including its sheets' 16 px inset on both sides: `reading` (sheets 672), `wide`
+   * (a grid or a library, sheets 912) and `dashboard` (a dashboard's card grid, cards 1200; Home's widgets,
+   * atmosphere lab `.at-wsec`, so the grid reads wider than the composer above it).
+   */
+  columnMaxWidthPx: Object.freeze({ reading: 704, wide: 944, dashboard: 1232 }),
   /** Centred task dialogs: narrow confirmation, standard task, and a wider form. */
   dialogWidthPx: Object.freeze({ narrow: 360, default: 464, wide: 560 }),
   /** Inside a card or a free-standing group: the row inset, so a card's text lines up with a sheet's rows. */

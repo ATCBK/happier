@@ -1,4 +1,5 @@
 import { act } from 'react';
+import { Platform } from 'react-native';
 import { describe, expect, it, vi } from 'vitest';
 
 import { mountThroughReactNativeWeb } from '../rnwMount.testSupport.js';
@@ -40,6 +41,35 @@ describe('bounded Markdown and Code presentation', () => {
     expect(writeClipboard).toHaveBeenCalledWith('const ready = true;');
     expect(mount.container.textContent).toContain('Copied');
     mount.unmount();
+  });
+
+  it('keeps Android code selectable only when no copy control replaces native selection', () => {
+    const originalPlatform = Platform.OS;
+    const context = createSurfaceContext();
+    try {
+      for (const [platform, copyLabel, expected] of [
+        ['android', 'Copy code', 'none'],
+        ['android', undefined, 'text'],
+        ['web', 'Copy code', 'text'],
+      ] as const) {
+        // The OS is a genuine host boundary; the presentation and text policy remain real.
+        Platform.OS = platform;
+        const mount = mountThroughReactNativeWeb(
+          <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+            <CodeBlock code="const ready = true;" copyLabel={copyLabel} />
+          </PluginUiProvider>,
+        );
+        try {
+          const text = mount.container.querySelector<HTMLElement>('[dir="auto"]');
+          expect(text?.textContent).toBe('const ready = true;');
+          expect(getComputedStyle(text!).userSelect, `${platform}/${copyLabel}`).toBe(expected);
+        } finally {
+          mount.unmount();
+        }
+      }
+    } finally {
+      Platform.OS = originalPlatform;
+    }
   });
 
   it('does not arm a copied-state timer after its clipboard request outlives the surface', async () => {

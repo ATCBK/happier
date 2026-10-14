@@ -47,34 +47,52 @@ import { resolveHappierTextScaleOwnership } from './textScaleOwnership.js';
  * every `unistyles_*` style, collapsing app-wide text to the react-native-web
  * 14px/400 default.
  */
-const TextSelectabilityContext = createContext<boolean>(false);
+const TextSelectabilityContext = createContext<Readonly<{
+  selectable: boolean;
+  suppressed: boolean;
+}>>({ selectable: false, suppressed: false });
 
 
 export type HappierTextSelectabilityScopeProps = Readonly<{
-  selectable: boolean;
+  selectable?: boolean;
+  /** Prevent native selection from competing with a region's scroll gesture. */
+  suppressSelection?: boolean;
   children: ReactNode;
 }>;
 
 /**
  * Make every descendant text selectable (or not) without threading a prop.
  *
- * A nearer explicit `selectable` prop still wins, so a scope sets the default
- * for a region rather than overriding individual decisions.
+ * Explicit text props override the default. Suppression overrides selection
+ * throughout a region, including nested defaults, so native long presses cannot
+ * steal its horizontal scroll gesture.
  */
 export function HappierTextSelectabilityScope({
   selectable,
+  suppressSelection = false,
   children,
 }: HappierTextSelectabilityScopeProps) {
+  const inherited = useContext(TextSelectabilityContext);
+  const value = useMemo(() => ({
+    selectable: selectable ?? inherited.selectable,
+    suppressed: inherited.suppressed || suppressSelection,
+  }), [inherited.selectable, inherited.suppressed, selectable, suppressSelection]);
   return (
-    <TextSelectabilityContext.Provider value={selectable}>
+    <TextSelectabilityContext.Provider value={value}>
       {children}
     </TextSelectabilityContext.Provider>
   );
 }
 
+/** Shared selectability policy for plain and enriched native text adapters. */
+export function useHappierTextSelectability(selectable?: boolean): boolean {
+  const scope = useContext(TextSelectabilityContext);
+  return !scope.suppressed && (selectable ?? scope.selectable);
+}
+
 /** Facts shared by the portable primitive and core's private native adapter. */
 export type HappierTextPresentation = Readonly<{
-  /** The explicit prop wins over the nearest selection scope. */
+  /** Explicit props override defaults unless selection is suppressed by a scope. */
   selectable: boolean;
   /** The resolved scale for manually scaled style metrics. */
   metricScale: number;
@@ -96,7 +114,7 @@ export function useHappierTextPresentation({
   textScale,
 }: HappierTextPresentationInput): HappierTextPresentation {
   const environmentAccessibility = useOptionalHappierUiAccessibility();
-  const selectableFromScope = useContext(TextSelectabilityContext);
+  const resolvedSelectable = useHappierTextSelectability(selectable);
   const scaleOwnership = resolveHappierTextScaleOwnership({
     ...(textScale === undefined ? {} : { explicitTextScale: textScale }),
     ...(environmentAccessibility === null
@@ -105,12 +123,11 @@ export function useHappierTextPresentation({
   });
 
   return useMemo(() => ({
-    selectable: selectable ?? selectableFromScope,
+    selectable: resolvedSelectable,
     metricScale: scaleOwnership.metricScale,
     allowHostFontScaling: scaleOwnership.allowHostFontScaling,
   }), [
-    selectable,
-    selectableFromScope,
+    resolvedSelectable,
     scaleOwnership.allowHostFontScaling,
     scaleOwnership.metricScale,
   ]);

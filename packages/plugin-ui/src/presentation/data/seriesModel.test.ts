@@ -53,4 +53,21 @@ describe('neutral stacked series geometry', () => {
     expect(model.describeHappierSeriesBucket(geometry.buckets[0]!, 'Unknown')).toContain('A 0.00004');
     expect(model.describeHappierSeriesBucket(geometry.buckets[0]!, 'Unknown')).toContain('2.3456789');
   });
+  it('reads exact values in words people use: no float noise, and time coordinates as dates, never epoch numbers', () => {
+    expect(model.formatHappierDataValue(0.1 + 0.2, 'en-US')).toBe('0.3');
+    expect(model.formatHappierDataValue(2.3456789, 'en-US')).toBe('2.3456789');
+    expect(model.formatHappierDataValue(123456789.123, 'en-US')).toBe('123,456,789.123');
+    const at = Date.UTC(2026, 9, 14, 9, 30);
+    const geometry = model.resolveHappierSeriesGeometry([
+      { id: 'cost', label: 'Cost', points: [{ id: 'd', x: at, label: 'Tue', y: 0.1 + 0.2 }] },
+    ], { width: 100, height: 50, variant: 'bar' });
+    const asDate = (x: number) => new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeZone: 'UTC' }).format(x);
+    const coordinate = model.describeHappierSeriesCoordinate(geometry.buckets[0]!, { formatCoordinate: asDate, locale: 'en-US' });
+    expect(coordinate).not.toMatch(/\d{4},\d{3}/);
+    expect(coordinate).toContain('2026');
+    expect(coordinate).toBe('Tue · Oct 14, 2026');
+    const bucket = model.describeHappierSeriesBucket(geometry.buckets[0]!, 'Unknown', { formatCoordinate: asDate, locale: 'en-US' });
+    expect(bucket).toContain('Cost 0.3');
+    expect(bucket).not.toContain(String(at));
+  });
 });

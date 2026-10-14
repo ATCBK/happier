@@ -3,6 +3,7 @@ import { Platform, View, type ViewStyle } from 'react-native';
 
 import { useHappierPageSection } from '../layout/PageSection.js';
 import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
+import { HAPPIER_MENU_ROW_METRICS } from '../interaction/Menu.js';
 import { HAPPIER_RADIUS_V1 } from '../../environment/radius.js';
 import type { HappierPageTextStep } from '../layout/pageText.js';
 import { resolveHappierTypeScale, type HappierTypeEmphasis, type HappierTypeRole } from '../text/typeScale.js';
@@ -257,6 +258,12 @@ const groupLabelStyle: ViewStyle = {
   paddingBottom: M.groupLabelPaddingBottom,
 };
 const groupLabelFirstStyle: ViewStyle = { paddingTop: M.groupLabelFirstPaddingTop };
+const groupLabelMenuStyle: ViewStyle = {
+  ...groupLabelRowStyle,
+  paddingHorizontal: HAPPIER_MENU_ROW_METRICS.paddingHorizontalPx,
+  paddingTop: HAPPIER_MENU_ROW_METRICS.paddingVerticalPx + HAPPIER_MENU_ROW_METRICS.sectionPaddingVerticalPx,
+  paddingBottom: HAPPIER_MENU_ROW_METRICS.sectionPaddingVerticalPx,
+};
 const groupLabelLeadStyle: ViewStyle = { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 };
 const groupLabelMarkStyle: ViewStyle = { width: 16, height: 16, alignItems: 'center', justifyContent: 'center' };
 const markStyle: ViewStyle = {
@@ -327,6 +334,11 @@ export function HappierCollectionListGroupLabel(props: Readonly<{
   mark?: ReactNode;
   /** One short state at the label's end, spoken once for every row it concerns. */
   trailing?: ReactNode;
+  /**
+   * `menu`: the label heads menu-role rows in a popover or sheet, so it starts on their text edge with the
+   * menu's row rhythm above it (the same edge `Menu` group labels use), not on the column's content inset.
+   */
+  presentation?: 'list' | 'menu';
 }>): ReactElement {
   const { Text } = props.host;
   // Inside a page section's sheet the label heads a group of the sheet's rows
@@ -341,7 +353,9 @@ export function HappierCollectionListGroupLabel(props: Readonly<{
             paddingTop: 0,
             paddingBottom: HAPPIER_PAGE_METRICS.groupHeadingGapPx,
           }]
-        : [groupLabelStyle, props.first ? groupLabelFirstStyle : null]}
+        : props.presentation === 'menu'
+          ? groupLabelMenuStyle
+          : [groupLabelStyle, props.first ? groupLabelFirstStyle : null]}
       accessibilityRole="header"
     >
       <View style={groupLabelLeadStyle}>
