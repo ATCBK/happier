@@ -22,6 +22,25 @@ afterEach(async () => {
     for (const id of profiles.splice(0)) await removeServerProfile(id);
 });
 
+it('keeps widget placement internals behind the canonical Details disclosure', async () => {
+    const presentation = describeApprovalActionFields({ actionId: 'widgets.group.add', actionArgs: {
+        surface: { serverId: 'home', accountId: 'account', owner: { kind: 'home' } },
+        group: { kind: 'group', id: 'opaque-group', title: 'Release checks', width: 'full', frameStyle: 'card', dividers: 'hairline', children: [
+            { kind: 'widget', instance: { v: 1, id: 'opaque-child', displayName: 'Pull requests', bindings: {},
+                definition: { kind: 'installed', surface: { pluginId: 'happier.triage', localId: 'latest' } } } },
+        ] },
+    } });
+    for (const anatomy of ['card', 'page'] as const) {
+        const screen = await renderScreen(<ActionApprovalFieldsCard presentation={presentation} anatomy={anatomy} />);
+        expect(screen.getTextContent()).toContain('Release checks');
+        expect(screen.getTextContent()).toContain('Pull requests');
+        for (const value of ['opaque-group', 'opaque-child', 'happier.triage', 'latest']) expect(screen.getTextContent()).not.toContain(value);
+        const details = screen.findAllByTestId('approvals.technical-details').find(node => typeof node.props.onExpandedChange === 'function');
+        await act(async () => { details?.props.onExpandedChange(true); });
+        for (const value of ['opaque-group', 'opaque-child', 'happier.triage', 'latest']) expect(screen.getTextContent()).toContain(value);
+    }
+});
+
 it('reads the declared setting name and exact new value in both approval anatomies', async () => {
     const anchor = 'delegation.workDepthLimit';
     const presentation = describeApprovalActionFields({ actionId: 'settings.set', actionArgs: { anchor, value: 3 } });
@@ -46,12 +65,13 @@ it('the approval Details page preserves an exact remote host id when a session h
     const hostId = 'exact-remote-host';
     const session = createSessionFixture();
     if (!session.metadata) throw new Error('Missing Session metadata fixture');
+    const metadata = session.metadata;
     await act(async () => {
         storage.getState().applySessions([
             createSessionFixture({ id: hostId, serverId: profile.id,
-                metadata: { ...session.metadata, name: 'Unrelated same-id session' } }),
+                metadata: { ...metadata, name: 'Unrelated same-id session' } }),
             createSessionFixture({ id: profile.id, serverId: profile.id,
-                metadata: { ...session.metadata, name: 'Session sharing Home token' } }),
+                metadata: { ...metadata, name: 'Session sharing Home token' } }),
         ]);
     });
     const presentation = { rows: [

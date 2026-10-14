@@ -11,6 +11,8 @@ import {
   type WidgetDefinitionActionIdV1,
 } from '../../widgets/definitionActionsV1.js';
 import { WidgetSnapshotPostInputV1Schema, WidgetSnapshotPostOutputV1Schema } from '../../widgets/widgetSnapshotV1.js';
+import { readBuiltinWidgetDescriptorV1 } from '../../widgets/builtinWidgetDescriptorV1.js';
+import { WidgetDefinitionRefV1Schema } from '../../widgets/widgetInstanceV1.js';
 import { WIDGET_LAYOUT_FRAGMENT_ACTION_IDS_V1, WidgetLayoutFragmentActionInputSchemasV1, WidgetLayoutFragmentActionOutputSchemasV1,
   type WidgetLayoutFragmentActionIdV1 } from '../../widgets/fragmentActionsV1.js';
 
@@ -128,6 +130,20 @@ function readRecord(value: unknown): Readonly<Record<string, unknown>> {
     : {};
 }
 
+function widgetApprovalName(raw: unknown): string | null {
+  const instance = readRecord(raw);
+  if (typeof instance.displayName === 'string' && instance.displayName.trim()) return instance.displayName.trim();
+  const definition = WidgetDefinitionRefV1Schema.safeParse(instance.definition);
+  return definition.success ? readBuiltinWidgetDescriptorV1(definition.data)?.title ?? null : null;
+}
+
+function widgetGroupApprovalContents(raw: unknown): string {
+  const group = readRecord(raw);
+  const children = Array.isArray(group.children) ? group.children : [];
+  const names = children.map(child => widgetApprovalName(readRecord(child).instance) ?? 'Widget');
+  return names.length ? ` with ${names.join(' · ')}` : '';
+}
+
 /** Domain-owned approval sentence for widget mutations; raw structured operands stay in Details. */
 function describeWidgetActionApprovalSummary(actionId: WidgetInstanceActionIdV1, input: unknown): string | null {
   const value = readRecord(input);
@@ -154,7 +170,9 @@ function describeWidgetActionApprovalSummary(actionId: WidgetInstanceActionIdV1,
     case 'widgets.item.inputs.reset': return `Reset settings for ${quote(itemName)} on ${target}.`;
     case 'widgets.item.refresh': return `Refresh ${quote(itemName)} on ${target}.`;
     case 'widgets.group.create': return `Create ${quote(groupName)} on ${target}.`;
-    case 'widgets.group.add': return `Add ${quote(groupName)} to ${target}.`;
+    case 'widgets.group.add': {
+      return `Add ${quote(groupName)} to ${target}${widgetGroupApprovalContents(group)}.`;
+    }
     case 'widgets.group.ungroup': return `Ungroup ${quote(groupName)} on ${target}.`;
     case 'widgets.group.set': return `Change ${quote(groupName)}${width ? ` to ${width}` : ''} on ${target}.`;
     case 'widgets.group.inputs.set': return `Change shared settings for ${quote(groupName)} on ${target}.`;
@@ -373,6 +391,12 @@ export const WIDGET_LAYOUT_FRAGMENT_ACTION_SPECS_V1: readonly (PreNormalizedActi
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
     inputSchema: WidgetLayoutFragmentActionInputSchemasV1[id], outputSchema: WidgetLayoutFragmentActionOutputSchemasV1[id],
+    approvalPresentation: { summary: input => {
+      const value = readRecord(input);
+      const fragment = readRecord(value.fragment);
+      const name = typeof fragment.name === 'string' && fragment.name.trim() ? fragment.name.trim() : 'group';
+      return id === 'widgets.fragment.create' ? `Save ${quote(name)} to Your widgets${widgetGroupApprovalContents(fragment.group)}.` : null;
+    } },
     inputHints: { description: WIDGET_LAYOUT_FRAGMENT_ACTION_COPY[id][1], fields: WIDGET_LAYOUT_FRAGMENT_ACTION_FIELDS[id] }, cli: { acceptsServerId: true, commands: [{ path: id.split('.'), visibility: 'canonical' }] },
   } as const satisfies PreNormalizedActionSpec;
 });

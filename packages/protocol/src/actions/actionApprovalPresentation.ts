@@ -248,6 +248,7 @@ function appendApprovalStructuredEntries(
   value: unknown,
   depth: number,
   output: ApprovalStructuredValueEntry[],
+  widgetStructure = false,
 ): void {
   const encodedBytes = key === 'contentBase64' && typeof value === 'string'
     ? readCanonicalPaddedBase64DecodedLength(value) : null;
@@ -261,7 +262,8 @@ function appendApprovalStructuredEntries(
     // A session-looking key there stays data, so an arbitrary value cannot borrow a session's name.
     const keyReference = describeApprovalKeyReference(key, value);
     const reference = keyReference?.kind === 'session' ? undefined : keyReference;
-    const technical = !reference && (isTechnicalApprovalKey(key) || isEmptyApprovalValue(value));
+    const technical = !reference && (isTechnicalApprovalKey(key) || isEmptyApprovalValue(value)
+      || widgetStructure && key !== undefined && ['id', 'instanceId', 'groupId', 'artifactId', 'pluginId', 'localId', 'kind'].includes(key));
     output.push({
       label, value: formatApprovalEntryValue(key, value), depth,
       ...(reference ? { reference } : {}),
@@ -270,21 +272,22 @@ function appendApprovalStructuredEntries(
     return;
   }
   output.push({ label, value: null, depth });
-  appendApprovalStructuredMembers(value, depth + 1, output);
+  appendApprovalStructuredMembers(value, depth + 1, output,
+    widgetStructure && !['bindings', 'context', 'inputSchema', 'inputs', 'network'].includes(key ?? ''));
 }
 
-function appendApprovalStructuredMembers(value: unknown, depth: number, output: ApprovalStructuredValueEntry[]): void {
+function appendApprovalStructuredMembers(value: unknown, depth: number, output: ApprovalStructuredValueEntry[], widgetStructure = false): void {
   const members: [string | undefined, string, unknown][] = Array.isArray(value)
     ? value.map((item, index) => [undefined, String(index + 1), item])
     : Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, humanizeApprovalKey(key), item]);
-  for (const [key, label, item] of members) appendApprovalStructuredEntries(key, label, item, depth, output);
+  for (const [key, label, item] of members) appendApprovalStructuredEntries(key, label, item, depth, output, widgetStructure);
 }
 
 /** Readable entries for one structured JSON value; scalars and flat lists read fine as they are. */
-function describeApprovalStructuredValue(values: readonly unknown[]): readonly ApprovalStructuredValueEntry[] | undefined {
+function describeApprovalStructuredValue(values: readonly unknown[], widgetStructure = false): readonly ApprovalStructuredValueEntry[] | undefined {
   if (values.length !== 1 || isApprovalScalar(values[0])) return undefined;
   const output: ApprovalStructuredValueEntry[] = [];
-  appendApprovalStructuredMembers(values[0], 0, output);
+  appendApprovalStructuredMembers(values[0], 0, output, widgetStructure);
   return output;
 }
 
@@ -446,13 +449,15 @@ export function describeApprovalActionFields(input: Readonly<{
     }
     const reference = describeApprovalReference(input.actionId, field, values, presentationInput);
     // A typed reference already reads by its name; entries are for values nothing else can read.
-    const entries = field.widget === 'json' && !reference ? describeApprovalStructuredValue(values) : undefined;
+    const entries = field.widget === 'json' && !reference ? describeApprovalStructuredValue(values,
+      input.actionId.startsWith('widgets.') && ['instance', 'group', 'fragment', 'definition'].includes(field.path)) : undefined;
     const technical = !reference && (isTechnicalApprovalKey(field.path.split('.').at(-1))
       || values.length > 0 && values.every(isEmptyApprovalValue)
       // The visual summary already names this item. Preserve its exact identity
       // in Details, rather than adding an opaque id to that first reading.
       || field.path === 'itemId' && Boolean(readApprovalVisualItem(input.actionId, presentationInput)?.title?.trim())
-      || input.actionId.startsWith('providers.') && field.path === 'action');
+      || input.actionId.startsWith('providers.') && field.path === 'action'
+      || input.actionId === 'widgets.fragment.create' && field.path === 'artifactId');
     rows.push({
       kind: 'value', path: field.path, title: field.title, value,
       ...(reference ? { reference } : {}),

@@ -179,6 +179,40 @@ describe('approval field presentation', () => {
     );
   });
 
+  it('names a copied group and its widgets while keeping routing identities behind Details', () => {
+    const input = { surface: { serverId: 'home', accountId: 'account', owner: { kind: 'home' } },
+      group: { kind: 'group', id: 'opaque-group', title: 'Capacity and PRs copy', width: 'full',
+        frameStyle: 'card', dividers: 'hairline', children: [
+          { kind: 'widget', instance: { v: 1, id: 'opaque-capacity', definition: { kind: 'builtin', id: 'usage_capacity' }, bindings: {} } },
+          { kind: 'widget', instance: { v: 1, id: 'opaque-prs', displayName: 'New in PRs & Issues',
+            definition: { kind: 'installed', surface: { pluginId: 'happier.triage', localId: 'latest' } }, bindings: {} } },
+        ] } };
+    expect(getActionSpec('widgets.group.add').approvalPresentation?.summary(input))
+      .toBe('Add “Capacity and PRs copy” to Home with Capacity · New in PRs & Issues.');
+    const row = describeApprovalActionFields({ actionId: 'widgets.group.add', actionArgs: input }).rows.find(row => row.path === 'group');
+    if (row?.kind !== 'value') throw new Error('Missing group reading');
+    expect(row.entries?.filter(entry => ['opaque-group', 'opaque-capacity', 'opaque-prs', 'happier.triage', 'latest'].includes(entry.value ?? '')))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ value: 'opaque-group', technical: true }),
+        expect.objectContaining({ value: 'happier.triage', technical: true })]));
+  });
+
+  it('summarizes saving a group as its named content rather than its Artifact operands', () => {
+    const input = { account: { serverId: 'home', accountId: 'account' }, artifactId: 'opaque-fragment', fragment: {
+      name: 'Release checks', inputs: { fields: [] }, inputSchema: { type: 'object' }, group: {
+        width: 'full', frameStyle: 'card', dividers: 'hairline', children: [{ kind: 'widget', instance: {
+          v: 1, definition: { kind: 'builtin', id: 'usage_capacity' }, bindings: { label: { kind: 'value', value: { id: 'my-visible-id' } } },
+        } }],
+      },
+    } };
+    expect(getActionSpec('widgets.fragment.create').approvalPresentation?.summary(input))
+      .toBe('Save “Release checks” to Your widgets with Capacity.');
+    const fields = describeApprovalActionFields({ actionId: 'widgets.fragment.create', actionArgs: input });
+    expect(fields.rows.find(row => row.path === 'artifactId')).toMatchObject({ technical: true });
+    const fragment = fields.rows.find(row => row.path === 'fragment');
+    if (fragment?.kind !== 'value') throw new Error('Missing fragment review');
+    expect(fragment.entries?.find(entry => entry.value === 'my-visible-id')).not.toHaveProperty('technical');
+  });
+
   it('gives a structured JSON value readable labelled entries beside its exact literal', () => {
     const intent = { kind: 'create', board: { title: 'Launch plan', boardId: null, tags: ['ui', 'qa'], items: [{ title: 'Ship' }] } };
     const presentation = describeApprovalActionFields({ actionId: 'boards.apply', actionArgs: { intent } });
@@ -219,10 +253,10 @@ describe('approval field presentation', () => {
     ]);
     expect(entries('instance')).toEqual([
       { label: 'V', value: '1', depth: 0, technical: true },
-      { label: 'Id', value: 'qaf1-usage-b', depth: 0 },
+      { label: 'Id', value: 'qaf1-usage-b', depth: 0, technical: true },
       { label: 'Definition', value: null, depth: 0 },
-      { label: 'Kind', value: 'Artifact', depth: 1 },
-      { label: 'Artifact id', value: 'a2881e01', depth: 1 },
+      { label: 'Kind', value: 'Artifact', depth: 1, technical: true },
+      { label: 'Artifact id', value: 'a2881e01', depth: 1, technical: true },
       { label: 'Bindings', value: '{}', depth: 0, technical: true },
       { label: 'Display name', value: 'Usage b', depth: 0 },
     ]);

@@ -213,6 +213,8 @@ function collectApprovalTechnicalLines(rows: readonly ApprovalFieldRow[]): reado
     for (const row of rows) {
         if (row.kind !== 'value') continue;
         if (row.reference) lines.push({ key: row.path, label: row.title, value: row.value });
+        else if (row.technical && !row.entries && row.path !== 'v'
+            && !['', '{}', '[]', 'null'].includes(row.value)) lines.push({ key: row.path, label: row.title, value: row.value });
         if (!row.entries) continue;
         const trail: string[] = [];
         row.entries.forEach((entry, index) => {
@@ -220,7 +222,8 @@ function collectApprovalTechnicalLines(rows: readonly ApprovalFieldRow[]): reado
             if (entry.value === null) { trail.push(entry.label); return; }
             // Versions and empty values do not identify the effect. Exact ids behind resolved
             // names do, so the disclosure retains only those references.
-            if (entry.reference) {
+            if (entry.reference || entry.technical && entry.label !== 'V'
+                && !['', '{}', '[]', 'null'].includes(entry.value)) {
                 lines.push({ key: `${row.path}:${index}`, label: [row.title, ...trail, entry.label].join(' › '), value: entry.value });
             }
         });
