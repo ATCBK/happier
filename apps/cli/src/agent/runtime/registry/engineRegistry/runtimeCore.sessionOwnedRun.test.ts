@@ -97,6 +97,22 @@ function createContributions() {
 
 describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
   it.each([
+    { mode: 'read_only', writes: 'deny' as const, read: { decision: 'approved' }, edit: { decision: 'denied' } },
+    { mode: 'no_tools', writes: 'deny' as const, read: { decision: 'denied' }, edit: { decision: 'denied' } },
+    { mode: 'default', writes: 'deny' as const, read: null, edit: { decision: 'denied' } },
+    { mode: 'default', writes: 'allow' as const, read: null, edit: null },
+  ])('enforces the $mode Run ceiling without a recipe allowlist (workspace writes=$writes)', async ({ mode, writes, read, edit }) => {
+    const parent = createExecutionRunPermissionHandler({ permissionMode: 'default', backendId: AGENT_ID });
+    const scope = createRunScopedExecutionPermissionHandler({ runId: 'child', controllerOccurrenceId: 'child-occurrence', handler: parent,
+      toolPolicy: resolveSessionOwnedRunToolPolicy({ agentId: AGENT_ID, parentMetadata: null,
+        options: { permissionMode: mode, workspaceWrites: writes } }),
+    });
+    expect(scope.handler.getImmediateDecision?.('read', 'Read', { file_path: '/pinned/context.txt' })).toEqual(read);
+    expect(scope.handler.getImmediateDecision?.('edit', 'Edit', { file_path: '/pinned/context.txt', old_string: 'before', new_string: 'after' })).toEqual(edit);
+    await scope.dispose('Test completed');
+  });
+
+  it.each([
     { label: 'legacy omission', causal: {}, expected: 'approved_for_session' },
     { label: 'own undefined', causal: { causalPermissionAuthority: undefined }, expected: 'denied' },
     { label: 'own null', causal: { causalPermissionAuthority: null }, expected: 'denied' },

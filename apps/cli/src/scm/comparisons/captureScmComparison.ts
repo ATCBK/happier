@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, unlink } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rename, rm, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
@@ -23,6 +23,9 @@ import type { ReadRepositoryCheckpointTranscriptPage } from '../checkpoints/read
 import { recoverRepositoryCheckpointEvidence } from '../checkpoints/recoverRepositoryCheckpointEvidence';
 import { readPullRequestComparison, type ReadPullRequestComparisonPage } from './readPullRequestComparisonPage';
 import type { ScmDiffSummaryPromptFile } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/buildDiffSummaryPrompt';
+import { materializeGitRepositoryCheckpoint } from '../checkpoints/materializeGitRepositoryCheckpoint';
+import { createGitTemporaryIndex } from '@happier-dev/cli-common/scm/gitTemporaryIndex';
+import { splitUnifiedDiffByFile } from '@happier-dev/protocol/diff/splitUnifiedDiffByFile';
 
 export type CapturedScmComparison = Readonly<{
   metadata: ScmDiffSummaryMetadata;
@@ -52,6 +55,85 @@ function comparisonPath(id: string, sessionId?: string): string {
     throw Object.assign(new Error('Captured comparison identity is invalid'), { code: 'DIFF_UNAVAILABLE' });
   }
   return join(configuration.activeServerDir, 'runtime', 'scm', 'comparisons', comparisonNamespace(sessionId), `${id}.json`);
+}
+
+/** The capture owner supplies both immutable surrounding-file endpoints to an analysis Run. */
+export async function prepareCapturedScmComparisonInvestigation(input: Readonly<{
+  cwd: string; comparisonId: string; sessionId?: string; directory: string;
+}>): Promise<Readonly<{ beforeDirectory: string; afterDirectory: string }>> {
+  const captured = await readCapturedScmComparison(input);
+  const endpoints = captured.comparison.endpoints;
+  if (!endpoints.before || !endpoints.after) throw Object.assign(new Error('Captured endpoint objects are unavailable for surrounding-file investigation'), { code: 'DIFF_UNAVAILABLE' });
+  // Retained pre-fix captures may contain replacement-influenced patches under
+  // original object IDs. The canonical raw reader must agree with their supplied
+  // evidence before a Run combines that evidence with raw surrounding files.
+  if (captured.comparison.source.kind !== 'pullRequest') {
+    try {
+      const repository = captured.comparison.repository.rootPath;
+      let index: string | undefined;
+      if (captured.comparison.source.kind === 'workingTree') {
+        const stored = StoredComparisonReadSchema.parse(JSON.parse(await readFile(comparisonPath(input.comparisonId, input.sessionId), 'utf8')));
+        const indexRef = `refs/happier/comparisons/${comparisonNamespace(input.sessionId)}/${input.comparisonId}/index`;
+        index = stored.retainedRefs.find(ref => ref.ref === indexRef)?.oid;
+        if (!index) throw new Error('Captured staged lineage is unavailable');
+      }
+      const created = await createGitTemporaryIndex({ cwd: repository, seed: { kind: 'tree', treeOid: endpoints.before }, runGit: runGitCheckpointCommand });
+      if (!created.success) throw new Error(created.error);
+      try {
+        for (const file of captured.comparison.inventory.files) {
+          if (file.evidence.state !== 'available') continue;
+          const sections = splitUnifiedDiffByFile(file.evidence.unifiedDiff ?? '', { preserveText: true });
+          const layers = [...new Set(file.occurrences.map(change => change.layer ?? 'combined'))];
+          if (sections.length !== layers.length) throw new Error('Captured file lineage is unavailable');
+          for (const [position, section] of sections.entries()) {
+            const layer = layers[position];
+            const before = index && layer !== 'staged' ? index : endpoints.before;
+            const after = index && layer === 'staged' ? index : endpoints.after;
+            const restored = await runGitCheckpointCommand({ cwd: repository, args: ['read-tree', before], env: created.tempIndex.env });
+            if (!restored.success) throw new Error(restored.stderr);
+            const applied = await runGitCheckpointCommand({ cwd: repository,
+              args: ['apply', '--cached', '--binary', '--unidiff-zero', '--whitespace=nowarn'], stdin: section, env: created.tempIndex.env });
+            if (!applied.success) throw new Error(applied.stderr);
+            const paths = file.changeKind === 'renamed' && file.previousPath ? [file.previousPath, file.path] : [file.path];
+            // Native Git proves resulting object bytes/modes and rename/deletion
+            // membership. Current diff context/formatting is not a data witness.
+            const witness = await runGitCheckpointCommand({ cwd: repository,
+              args: ['diff', '--cached', '--no-ext-diff', '--no-textconv', '--raw', '--no-abbrev', '-z', after,
+                '--', ...paths.map(path => `:(literal)${path}`)], env: created.tempIndex.env });
+            if (!witness.success || witness.stdout !== '') throw new Error('Captured comparison evidence does not agree with its raw endpoint lineage');
+          }
+        }
+      } finally { created.tempIndex.cleanup(); }
+    } catch (error) {
+      throw Object.assign(new Error('Captured comparison evidence is unavailable for surrounding-file investigation', { cause: error }), { code: 'DIFF_UNAVAILABLE' });
+    }
+  }
+  const root = input.directory;
+  await mkdir(root, { recursive: true });
+  if (!(await lstat(root)).isDirectory()) throw Object.assign(new Error('The pinned investigation root is unavailable'), { code: 'DIFF_UNAVAILABLE' });
+  const pinned = join(root, 'pinned');
+  const existing = await lstat(pinned).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error; });
+  if (existing) {
+    const before = await lstat(join(pinned, 'before')).catch(() => null);
+    const after = await lstat(join(pinned, 'after')).catch(() => null);
+    if (!existing.isDirectory() || !before?.isDirectory() || !after?.isDirectory()) {
+      throw Object.assign(new Error('The pinned investigation directory is unavailable'), { code: 'DIFF_UNAVAILABLE' });
+    }
+    return { beforeDirectory: join(pinned, 'before'), afterDirectory: join(pinned, 'after') };
+  }
+  const directory = await mkdtemp(join(root, 'preparing-'));
+  const beforeDirectory = join(directory, 'before');
+  const afterDirectory = join(directory, 'after');
+  try {
+    for (const [endpoint, target] of [[endpoints.before, beforeDirectory], [endpoints.after, afterDirectory]] as const) {
+      await materializeGitRepositoryCheckpoint({ cwd: captured.comparison.repository.rootPath, endpoint, directory: target });
+    }
+    await rename(directory, pinned);
+    return { beforeDirectory: join(pinned, 'before'), afterDirectory: join(pinned, 'after') };
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true });
+    throw Object.assign(new Error('Captured endpoint objects are unavailable for surrounding-file investigation', { cause: error }), { code: 'DIFF_UNAVAILABLE' });
+  }
 }
 
 function promptFiles(comparison: ScmComparison): ScmDiffSummaryPromptFile[] {
@@ -90,7 +172,7 @@ export async function readCapturedScmComparison(input: Readonly<{
   return { metadata: stored.metadata, comparison: stored.comparison, files: promptFiles(stored.comparison) };
 }
 
-/** Explicit saved-result deletion disposes only pins recorded by this comparison owner. */
+/** Explicit captured-comparison deletion disposes only pins recorded by this owner. */
 export async function deleteCapturedScmComparison(input: Readonly<{
   cwd: string; comparisonId: string; sessionId?: string;
 }>): Promise<void> {

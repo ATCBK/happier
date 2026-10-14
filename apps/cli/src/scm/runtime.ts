@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import { isAbsolute, relative, sep } from 'path';
 import path, { delimiter as PATH_DELIMITER } from 'node:path';
-import { accessSync, constants as fsConstants, realpathSync } from 'node:fs';
+import { accessSync, closeSync, constants as fsConstants, openSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 import { createScmCapabilities } from '@happier-dev/protocol/scm/capabilities';
@@ -105,6 +105,8 @@ export function runScmCommand(input: {
     env?: Record<string, string | undefined>;
     signal?: AbortSignal;
     stdoutConsumer?: BackendCommandStreamInput['stdoutConsumer'];
+    /** Internal host-owned output file; exclusive creation, without collecting stdout. */
+    stdoutFilePath?: string;
 }): Promise<ScmExecResult> {
     const execEnv = input.env ? { ...process.env, ...input.env } : process.env;
     const resolvedBinPath = resolveSystemScmBinPath(input.bin, execEnv);
@@ -128,13 +130,28 @@ export function runScmCommand(input: {
         });
     }
 
+    if (input.stdoutFilePath && (input.stdoutConsumer || input.stdinInteraction)) {
+        return Promise.resolve({ success: false, stdout: '',
+            stderr: 'SCM stdout file cannot be combined with a stdout consumer or interaction', exitCode: -1 });
+    }
+
     return new Promise((resolvePromise) => {
-        const child = spawn(resolvedBinPath, input.args, {
-            cwd: input.cwd,
-            env: execEnv,
-            stdio: ['pipe', 'pipe', 'pipe'],
-            windowsHide: true,
-        });
+        let stdoutDescriptor: number | undefined;
+        let child: ReturnType<typeof spawn>;
+        try {
+            if (input.stdoutFilePath) stdoutDescriptor = openSync(input.stdoutFilePath, 'wx', 0o600);
+            child = spawn(resolvedBinPath, input.args, {
+                cwd: input.cwd,
+                env: execEnv,
+                stdio: ['pipe', stdoutDescriptor ?? 'pipe', 'pipe'],
+                windowsHide: true,
+            });
+        } catch (error) {
+            if (stdoutDescriptor !== undefined) closeSync(stdoutDescriptor);
+            resolvePromise({ success: false, stdout: '',
+                stderr: error instanceof Error ? error.message : String(error), exitCode: -1 });
+            return;
+        }
 
         let stdout = '';
         let stderr = '';
@@ -159,6 +176,14 @@ export function runScmCommand(input: {
             if (resolved) return;
             resolved = true;
             input.signal?.removeEventListener('abort', abort);
+            if (stdoutDescriptor !== undefined) {
+                try { closeSync(stdoutDescriptor); }
+                catch (error) {
+                    result = { ...result, success: false,
+                        stderr: [result.stderr, error instanceof Error ? error.message : String(error)].filter(Boolean).join('\n') };
+                }
+                stdoutDescriptor = undefined;
+            }
             resolvePromise(result);
         };
 
@@ -229,7 +254,7 @@ export function runScmCommand(input: {
             if (remaining <= 0) {
                 outputLimitExceeded = true;
                 stderr += `\nSCM command output limit exceeded (${maxOutputBytes} bytes)`;
-                if (input.stdinInteraction || input.stdoutConsumer) abort();
+                if (input.stdinInteraction || input.stdoutConsumer || input.stdoutFilePath) abort();
                 else child.kill('SIGKILL');
                 return;
             }
@@ -244,7 +269,7 @@ export function runScmCommand(input: {
                 outputBytes = maxOutputBytes;
                 outputLimitExceeded = true;
                 stderr += `\nSCM command output limit exceeded (${maxOutputBytes} bytes)`;
-                if (input.stdinInteraction || input.stdoutConsumer) abort();
+                if (input.stdinInteraction || input.stdoutConsumer || input.stdoutFilePath) abort();
                 else child.kill('SIGKILL');
                 return;
             }
@@ -259,7 +284,7 @@ export function runScmCommand(input: {
 
         const timer = setTimeout(() => {
             timedOut = true;
-            if (input.stdinInteraction || input.stdoutConsumer) abort();
+            if (input.stdinInteraction || input.stdoutConsumer || input.stdoutFilePath) abort();
             else child.kill('SIGKILL');
         }, timeoutMs);
 
@@ -290,13 +315,13 @@ export function runScmCommand(input: {
             }
         };
 
-        child.stdout.on('data', (chunk) => {
+        child.stdout?.on('data', (chunk) => {
             const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
             appendOutput('stdout', buffer);
             observeInteraction(buffer);
         });
 
-        child.stderr.on('data', (chunk) => {
+        child.stderr?.on('data', (chunk) => {
             appendOutput('stderr', Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
         });
 

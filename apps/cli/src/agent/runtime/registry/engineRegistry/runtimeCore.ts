@@ -76,13 +76,12 @@ export function resolveSessionOwnedRunToolPolicy(params: Readonly<{
     agentId: string;
 }>): Parameters<typeof createRunScopedExecutionPermissionHandler>[0]['toolPolicy'] {
     const { options } = params;
-    if (options.start?.allowedTools === undefined && options.start?.unlistedTools === undefined) return undefined;
     return {
         permissionMode: options.permissionMode,
         backendId: params.agentId,
         workspaceWrites: readSessionWorkspaceWritesV1(params.parentMetadata) === 'deny' ? 'deny' : options.workspaceWrites,
-        allowedTools: options.start.allowedTools,
-        unlistedTools: options.start.unlistedTools,
+        allowedTools: options.start?.allowedTools,
+        unlistedTools: options.start?.unlistedTools,
         ...(Object.hasOwn(options, 'causalPermissionAuthority') ? { causalPermissionAuthority: options.causalPermissionAuthority } : {}),
     };
 }
