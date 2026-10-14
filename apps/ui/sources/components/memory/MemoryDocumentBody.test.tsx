@@ -328,17 +328,15 @@ describe('MemoryDocumentBody', () => {
         const foreignHome = await homes.addHome({ name: 'Foreign memory', serverUrl: 'https://foreign-memory.test', serverIdentityId: 'srv_foreign_memory', accountId: 'foreign-a', active: false });
         homes.answer(foreignHome, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
         const stored = homes.artifacts(serverId).read(original.artifactId)!;
+        if (stored.bodyVersion === undefined) throw new Error('Missing stored Artifact body revision');
         await homes.artifacts(foreignHome).handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({
             id: stored.id, header: stored.header, body: stored.body, dataEncryptionKey: stored.dataEncryptionKey,
         }) });
-        const foreignArtifact = {
-            ...homes.artifacts(foreignHome).read(original.artifactId), access: remoteAccess,
-            ownerAccountId: remoteAccess === 'owner' ? 'foreign-a' : 'another-owner',
-        };
-        homes.answer(foreignHome, '/v1/artifacts/' + original.artifactId, { body: foreignArtifact });
-        // The Home serves the same caller access on the qualified detail and header inventory.
-        const { body: _body, ...foreignHeader } = foreignArtifact;
-        homes.answer(foreignHome, '/v1/artifacts?limit=500', { body: [foreignHeader] });
+        if (remoteAccess !== 'owner') {
+            homes.artifacts(foreignHome).replaceStoredRow({ ...homes.artifacts(foreignHome).read(original.artifactId)!,
+                ownerAccountId: 'another-owner' });
+            homes.artifacts(foreignHome).seedAccountGrant(original.artifactId, 'foreign-a', remoteAccess);
+        }
         const ref = { ...original, serverId: foreignHome };
         serveAccountContext(false, [{ id: 'account.memory', ref, enabled: true, placement: 'system_append' }]);
         if (localAccess) storage.getState().applyArtifacts([{ ...storage.getState().artifacts[original.artifactId]!, access: localAccess }]);
@@ -356,12 +354,12 @@ describe('MemoryDocumentBody', () => {
             <SessionMemorySection session={session} serverId={serverId} />
         </InjectedAuthProvider>);
         await settled(() => expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready'));
+        await settled(() => expect(screen.getTextContent()).toContain('7 facts'));
         expect(machineRpc).toHaveBeenCalled();
         machineRpc.mock.calls.forEach(([request]) => expect(request).toMatchObject({
             serverId: 'srv_memory_body', accountId: 'account-a', machineId: 'memory-machine', method: RPC_METHODS.DAEMON_MEMORY_STATUS,
             payload: { scope: { type: 'session', sessionId: 's1' } },
         }));
-        await settled(() => expect(screen.getTextContent()).toContain('7 facts'));
         expect(screen.getTextContent()).toContain('2 facts');
         expect(screen.getTextContent()).not.toContain('99 facts');
         expect(screen.findByType(MemoryDocumentBody).props.readOnly).toBe(readOnly);
@@ -375,10 +373,10 @@ describe('MemoryDocumentBody', () => {
             <MemoryDocumentScreen artifactId={ref.artifactId} serverId={foreignHome} />
         </InjectedAuthProvider>);
         await settled(() => expect(page.findByType(MemoryDocumentBody).props.source.status).toBe('ready'));
+        await settled(() => expect(page.getTextContent()).toContain('7 facts'));
         expect(machineRpc).toHaveBeenCalled();
         machineRpc.mock.calls.forEach(([request]) => expect(request).toMatchObject({ serverId: 'srv_foreign_memory',
             accountId: 'foreign-a', payload: { scope: { type: 'global' } } }));
-        await settled(() => expect(page.getTextContent()).toContain('7 facts'));
         expect(page.findByType(MemoryDocumentBody).props.readOnly).toBe(readOnly);
         expect(Boolean(page.findByTestId('memory-document.remember'))).toBe(!readOnly);
     });
@@ -415,7 +413,7 @@ describe('MemoryDocumentBody', () => {
         const screen = await renderDocument(ref);
         const actions: readonly ItemAction[] = screen.findByType(ItemRowActions).props.actions;
         await React.act(async () => {
-            actions.find(action => action.id === 'edit')!.onPress();
+            actions.find(action => action.id === 'edit')!.onPress!();
         });
         await React.act(async () => { screen.changeTextByTestId('memory.draft', 'Account A private draft'); });
         expect(screen.findByTestId('memory.draft')?.props.value).toBe('Account A private draft');
@@ -449,7 +447,7 @@ describe('MemoryDocumentBody', () => {
         await settled(() => expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready'));
         const mountedBody = screen.findByType(MemoryDocumentBody);
         const actions: readonly ItemAction[] = screen.findByType(ItemRowActions).props.actions;
-        await React.act(async () => { actions.find(action => action.id === 'edit')!.onPress(); });
+        await React.act(async () => { actions.find(action => action.id === 'edit')!.onPress!(); });
         await React.act(async () => { screen.changeTextByTestId('memory-document.draft', 'Account A unpublished private draft'); });
         const retiredSave: () => void = screen.findByType(InlineAddExpander).props.onSave;
         if (replacement === 'missing-fact') {
@@ -462,16 +460,7 @@ describe('MemoryDocumentBody', () => {
         await homes.switchAccount(serverId, 'account-b');
         // B really reads and can edit A's shared document. Neither an unavailable read nor
         // shared-memory approval may hide reuse of A's unpublished draft under B's writer.
-        homes.answer(serverId, 'GET /v1/artifacts/' + ref.artifactId, { select: () => ({ body: {
-            ...homes.artifacts(serverId).read(ref.artifactId), ownerAccountId: 'account-a', access: 'edit',
-        } }) });
-        homes.answer(serverId, '/v1/artifacts?limit=500', { select: () => {
-            const { body: _body, ...header } = homes.artifacts(serverId).read(ref.artifactId)!;
-            return { body: [{ ...header, ownerAccountId: 'account-a', access: 'edit' }] };
-        } });
-        homes.answer(serverId, '/v1/artifacts/' + ref.artifactId + '/access/grants', { body: {
-            artifactId: ref.artifactId, ownerAccountId: 'account-a', access: 'edit', grants: [],
-        } });
+        homes.artifacts(serverId).seedAccountGrant(ref.artifactId, 'account-b', 'edit');
         const replacementSettings = { ...baseline.settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
             v: 1, approvalWaivedSurfaces: { 'memory.update': ['ui'], 'memory.remember': ['ui'] },
         }) };
@@ -735,7 +724,8 @@ describe('MemoryDocumentBody', () => {
         const attached = account.read().find(entry => entry.id === 'account.memory');
         expect(attached).toBeTruthy();
         if (!attached || attached.ref.kind !== 'doc') throw new Error('Missing Account memory attachment');
-        expect(storedBody(attached.ref)).toMatchObject({ index: [{ text: 'Prefers short commits.' }] });
+        const attachedRef: PromptDocArtifactRefV1 = { ...attached.ref, kind: attached.ref.kind };
+        expect(storedBody(attachedRef)).toMatchObject({ index: [{ text: 'Prefers short commits.' }] });
     });
 
     it.each(['remember', 'edit'] as const)('a real Artifact CAS conflict refreshes the current version and keeps what was typed (%s)', async (operation) => {
@@ -743,7 +733,7 @@ describe('MemoryDocumentBody', () => {
         const screen = await renderDocument(ref, { composing: operation === 'remember' });
         if (operation === 'edit') {
             const actions: readonly ItemAction[] = screen.findByType(ItemRowActions).props.actions;
-            await React.act(async () => { actions.find(action => action.id === 'edit')!.onPress(); });
+            await React.act(async () => { actions.find(action => action.id === 'edit')!.onPress!(); });
         }
         const target = screen.findByType(MemoryDocumentBody).props.source.target;
         if (!target) throw new Error('Missing reviewed Memory target');
@@ -788,7 +778,7 @@ describe('MemoryDocumentBody', () => {
         const screen = await renderDocument(ref, { topic });
         const before = screen.findByType(MemoryDocumentBody).props.source.view.revision;
         const actions: readonly ItemAction[] = screen.findByType(ItemRowActions).props.actions;
-        await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress(); });
+        await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress!(); });
         await settled(() => {
             // The accepted forget collapses the row in place (lab `c-mem` Motion); it leaves once closed.
             expect(factSlot(screen, 'original')?.props.expanded).toBe(false);
@@ -831,7 +821,7 @@ describe('MemoryDocumentBody', () => {
         const ref = await seedDocument({ v: 1, index: [fact('gone', 'Forget me.'), fact('kept', 'Keep me.')], topics: [] });
         const screen = await renderDocument(ref);
         const actions: readonly ItemAction[] = screen.findAllByType(ItemRowActions)[0]!.props.actions;
-        await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress(); });
+        await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress!(); });
         await settled(() => {
             expect(readPresentationNotice()?.undo).toBeTruthy();
             expect(factSlot(screen, 'gone')).toBeNull();
@@ -863,7 +853,7 @@ describe('MemoryDocumentBody', () => {
         const ref = await seedDocument({ v: 1, index: [original], topics: [] });
         const screen = await renderDocument(ref);
         const actions: readonly ItemAction[] = screen.findByType(ItemRowActions).props.actions;
-        await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress(); });
+        await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress!(); });
         await settled(() => {
             expect(factSlot(screen, 'original')?.props.expanded).toBe(false);
             expect(readPresentationNotice()?.undo).toBeTruthy();
@@ -903,7 +893,7 @@ describe('MemoryDocumentBody', () => {
         const ref = await seedDocument({ v: 1, index: [original], topics: [] });
         const screen = await renderDocument(ref);
         const actions: readonly ItemAction[] = screen.findByType(ItemRowActions).props.actions;
-        await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress(); });
+        await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress!(); });
         await settled(() => {
             expect(readPresentationNotice()?.undo).toBeTruthy();
             expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready');
@@ -915,19 +905,9 @@ describe('MemoryDocumentBody', () => {
         await connection?.dispose();
         connection = null;
         await homes.switchAccount(serverId, 'account-b');
-        // The same Plain Artifact remains owned by A and edit-granted to B. Reads expose B's
-        // actual grant; the incumbent HTTP/CAS boundary still admits version-matching writes.
-        homes.answer(serverId, 'GET /v1/artifacts/' + ref.artifactId, { select: () => ({ body: {
-            ...homes.artifacts(serverId).read(ref.artifactId), ownerAccountId: 'account-a', access: 'edit',
-        } }) });
-        homes.answer(serverId, '/v1/artifacts?limit=500', { select: () => {
-            const shared = homes.artifacts(serverId).read(ref.artifactId)!;
-            const { body: _body, ...header } = shared;
-            return { body: [{ ...header, ownerAccountId: 'account-a', access: 'edit' }] };
-        } });
-        homes.answer(serverId, '/v1/artifacts/' + ref.artifactId + '/access/grants', { body: {
-            artifactId: ref.artifactId, ownerAccountId: 'account-a', access: 'edit', grants: [],
-        } });
+        // B's real edit grant admits current B writes through the same HTTP/CAS owner;
+        // it must not let a retained A intent borrow that writer.
+        homes.artifacts(serverId).seedAccountGrant(ref.artifactId, 'account-b', 'edit');
         // B explicitly allows this UI Action. Sharing's Ask-first default must not mask
         // whether a retained A intent borrows B's admitted writer.
         const replacementSettings = { ...baseline.settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
@@ -996,8 +976,9 @@ describe('MemoryDocumentBody', () => {
         expect(attached).toBeTruthy();
         if (!attached || attached.ref.kind !== 'doc') throw new Error('Missing scope memory attachment');
         expect(created).toHaveBeenCalledWith({ ref: attached.ref, attachment: 'attached' });
-        expect(await readMemory(attached.ref)).toMatchObject({ body: { index: [{ text: 'Use the shared build script.', sourceSessionRef: null }] } });
-        expect(storedBody(attached.ref).index).toMatchObject([{ text: 'Use the shared build script.' }]);
+        const attachedRef: PromptDocArtifactRefV1 = { ...attached.ref, kind: attached.ref.kind };
+        expect(await readMemory(attachedRef)).toMatchObject({ body: { index: [{ text: 'Use the shared build script.', sourceSessionRef: null }] } });
+        expect(storedBody(attachedRef).index).toMatchObject([{ text: 'Use the shared build script.' }]);
         if (project) expect(project.read()).toMatchObject({ pinned: true, hidden: true });
     });
 
