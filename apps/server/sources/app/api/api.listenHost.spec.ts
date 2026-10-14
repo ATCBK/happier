@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fastify from 'fastify';
+import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 import {
   ACCOUNT_STORED_CONTENT_COMPATIBILITY_HTTP_HEADER,
   SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER,
@@ -88,6 +89,7 @@ describe('createApiCorsOptions', () => {
           'idempotency-key',
           'x-happier-session-list-timing',
           SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER,
+          AUTHORITY_CEILING_HEADER_V1,
         ].join(','),
       },
     });
@@ -109,6 +111,7 @@ describe('createApiCorsOptions', () => {
     expect(preflight.headers['access-control-allow-headers']).toContain(
       SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER,
     );
+    expect(preflight.headers['access-control-allow-headers']).toContain(AUTHORITY_CEILING_HEADER_V1);
     expect(response.headers['server-timing']).toBe('happier_v2_sessions_total;dur=1.000');
     expect(response.headers['access-control-expose-headers']).toContain('server-timing');
     expect(response.headers['x-happier-retry-reason']).toBe('server_unavailable');
