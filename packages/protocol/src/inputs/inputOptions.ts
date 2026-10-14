@@ -235,7 +235,7 @@ export async function resolveInputOptions(params: Readonly<{
   const modelId = readDynamicOptionModelId(input, actionId);
   const directory = readDynamicOptionDirectory(input, actionId);
 
-  if (optionsSourceId === 'usage.query.period') {
+  if (optionsSourceId === 'usage.query.period' || optionsSourceId === inputTypeOptionsSourceId({ hostType: 'usageQuery', field: 'period' })) {
     const draft = isRecord(params.input.query) ? params.input.query : params.input;
     return { ok: true, result: readUsagePeriodOptions(draft.period) };
   }

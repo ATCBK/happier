@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { updatePersonalProjectContextV1 } from '../projects/projectContextV1.js';
 import type { ProjectAccountOrganizationV1 } from '../projects/projectAccountRowsV1.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { createActionExecutor as createRawActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
 import type { ActionDefinitionV1 } from './actionDefinitionV1.js';
@@ -36,6 +36,9 @@ import { SPAWN_SESSION_ERROR_CODES } from '../sessions/spawnSession.js';
 import { SessionDirectoryIntentV1Schema } from '../sessions/creation/sessionDirectoryIntentV1.js';
 import { ExecutionRunLaunchOriginSchema } from '../execution/runs/startRequest.js';
 import { getUsageQueryKey, normalizeUsageQuery } from '../inputs/usageQuery.js';
+import { readUsagePeriodOptions } from '../inputs/usageQuery.js';
+import { createWorkflowDefinitionActions } from './executor/workflowDefinitions.js';
+import { WorkflowActionInputSchemasV1 } from '../workflows/actionsV1.js';
 import { readBuiltinWidgetDescriptorV1 } from '../widgets/builtinWidgetDescriptorV1.js';
 import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1 } from '../widgets/widgetSurfaceArtifactV1.js';
 import { UsageQueryBatchResultSchema } from '../usage/resolveUsagePageAggregation.js';
@@ -461,6 +464,33 @@ describe('createActionExecutor (inventory/discovery)', () => {
         .resolves.toMatchObject({ ok: false, errorCode: 'credential_scope_denied' });
     }
     expect(reads).toHaveLength(4);
+  });
+  it('discovers type-only Workflow Period choices through the same owner as an explicit Action source, including a saved range', async () => {
+    const workflow = 'plugin:com.acme.inputs/period';
+    const definitions = createWorkflowDefinitionActions({
+      readPluginWorkflows: () => [{ workflow, pluginId: 'com.acme.inputs', version: '1.0.0', title: 'Period',
+        definition: { version: 1, inputs: [{ name: 'period', valueType: 'json', required: true,
+          inputType: { hostType: 'usageQuery', field: 'period' } }], defaults: {},
+          blocks: [{ kind: 'wait', id: 'review', document: { text: 'Review', references: [], attachments: [] }, result: { kind: 'text' } }] } }],
+      artifactStore: { list: async () => ({ items: [] }), read: async () => null,
+        create: async () => { throw new Error('Discovery cannot write'); },
+        update: async () => { throw new Error('Discovery cannot write'); },
+        delete: async () => { throw new Error('Discovery cannot write'); } },
+      readWorkflowTriggerSummaries: async () => new Map(), encodeListCursor: row => row.artifactId,
+      assertDefinitionWriteAllowed: () => { throw new Error('Discovery cannot write'); },
+    });
+    const executor = createActionExecutor({ ...createDeps(), workflowAction: async args => {
+      if (args.actionId !== 'workflow.definition.list') throw new Error('Discovery only lists admitted Workflows');
+      return definitions.list(WorkflowActionInputSchemasV1['workflow.definition.list'].parse(args.input));
+    } });
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    for (const period of [undefined, { startMs: 100, endMs: 200 }]) {
+      const explicit = await executor.execute('action.options.resolve', { optionsSourceId: 'usage.query.period', draftInput: { period } }, context);
+      const typed = await executor.execute('action.options.resolve', { consumer: { kind: 'workflow', workflow }, fieldPath: 'period',
+        draftInput: { period } }, context);
+      expect(explicit).toMatchObject({ ok: true, result: { options: readUsagePeriodOptions(period) } });
+      expect(typed, JSON.stringify(typed)).toMatchObject({ ok: true, result: { options: readUsagePeriodOptions(period) } });
+    }
   });
   it('resolves the Workflow-admitted notification source through headless Action discovery', async () => {
     const executor = createActionExecutor({ ...createDeps(), notificationChannelsList: async () => ({
@@ -2656,7 +2686,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       kindVersion: z.literal(1),
       inputSchema: z.object({
         properties: z.record(z.string(), z.record(z.string(), z.unknown())),
-        $defs: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+        $defs: z.optional(z.record(z.string(), z.record(z.string(), z.unknown()))),
       }),
     }) }) }).parse(spawnResult);
     const schema = discovery.result.actionSpec.inputSchema;
