@@ -103,6 +103,10 @@ replacement-chain redirection. An older daemon's legacy spawn method is retried 
 on the same selected machine after a method-capability refusal. Untargeted local
 creation and trusted in-daemon transports retain their existing control paths.
 
+The RPC acknowledgement boundary distinguishes typed pre-execution refusals from
+uncertain submissions. A refusal clears uncertain launch recovery; transport errors
+after dispatch preserve the launch nonce for recovery on the selected machine.
+
 `--auto` is an alias for `--permission-mode auto` and uses the existing permission
 intent parser. For OpenCode, this allows reads and edits while other tools can still
 require approval. Happier's session permission policy takes precedence over the
