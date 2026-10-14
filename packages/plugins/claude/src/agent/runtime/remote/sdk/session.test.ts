@@ -50,7 +50,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       { exec: exec.service, sessionHooks: hooks.service });
     const params = {
       ctx, directory: '/tmp/claude-project', launchEnv: {}, happierSessionId: 'sdk-confined',
-      permissionMode: 'yolo', allowedTools: ['Read(//tmp/attachments/**)', 'mcp__wilson__*'],
+      permissionMode: 'yolo', allowedTools: ['read(//tmp/attachments/**)', 'websearch', 'mcp__wilson__*'],
       unlistedTools: 'deny' as const,
       advancedOptions: { tools: ['default'] },
     };
@@ -59,8 +59,8 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       await operations.sendProviderTurnPrompt('process the attachment');
       await vi.waitFor(() => expect(exec.spawnClient).toHaveBeenCalledOnce());
       const args = exec.spawnClient.mock.calls[0]?.[0].launch.args ?? [];
-      expect(args[args.indexOf('--tools') + 1]).toBe('Read');
-      expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read(//tmp/attachments/**),mcp__wilson__*');
+      expect(args[args.indexOf('--tools') + 1]).toBe('Read,WebSearch');
+      expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read(//tmp/attachments/**),WebSearch,mcp__wilson__*');
       expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
       expect(args).not.toContain('--allow-dangerously-skip-permissions');
       const pluginFiles = hooks.service.createPluginDir.mock.calls[0]?.[0].files ?? [];
@@ -70,7 +70,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       expect(fallback({ hook_event_name: 'PreToolUse', tool_name: 'Read' }).hookSpecificOutput.permissionDecision).toBe('deny');
       const terminal = await operations.prepareTerminalPresentation();
       if (terminal.kind !== 'terminal_launch') throw new Error('Expected native terminal launch');
-      expect(terminal.plan.argv[terminal.plan.argv.indexOf('--tools') + 1]).toBe('Read');
+      expect(terminal.plan.argv[terminal.plan.argv.indexOf('--tools') + 1]).toBe('Read,WebSearch');
       expect(terminal.plan.argv[terminal.plan.argv.indexOf('--permission-mode') + 1]).toBe('dontAsk');
     } finally { await operations.disposeProviderSession(); }
   });
@@ -128,7 +128,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     expect(hooks.service.disposePluginDir).toHaveBeenCalledWith('/tmp/happier-claude-hook-plugin');
   });
 
-  it('witnesses native MCP inventory and deduplicated calls through successful SDK completion', async () => {
+  it.each([undefined, 0])('witnesses native MCP inventory and deduplicated calls through successful SDK completion (queued count %s)', async queuedTurnCount => {
     const exec = createSdkExecFixture();
     const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
     const operations = createClaudeAgentSdkProviderOperations({ ctx, directory: '/tmp/claude-project', launchEnv: {},
@@ -154,8 +154,11 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         content: [{ type: 'tool_use', id: 'call-1', name: 'mcp__docs__find', input: { query: 'private text' } }] } };
       await exec.emit(call);
       await exec.emit(call);
+      await exec.emit({ type: 'result', subtype: 'success', is_error: false, result: 'queued work remains', session_id: 'native-mcp',
+        queued_turn_count: 1, usage: {}, modelUsage: {} });
+      expect(events).not.toContainEqual(expect.objectContaining({ kind: 'mcp-tool-usage' }));
       await exec.emit({ type: 'result', subtype: 'success', is_error: false, result: 'done', session_id: 'native-mcp',
-        queued_turn_count: 0, usage: {}, modelUsage: {} });
+        ...(queuedTurnCount === undefined ? {} : { queued_turn_count: queuedTurnCount }), usage: {}, modelUsage: {} });
       await operations.waitForProviderTurnCompletion();
       expect(events).toContainEqual(expect.objectContaining({ kind: 'mcp-tool-usage', coverage: 'complete',
         servers: [{ serverName: 'docs', toolCallCount: 1, schemaBytes: null },

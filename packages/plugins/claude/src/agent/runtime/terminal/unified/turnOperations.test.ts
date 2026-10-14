@@ -93,7 +93,7 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
       ctx: createPluginContextFixture(terminalHost.service, createEventsFixture().service, { sessionHooks: hooks.service }),
       directory: '/tmp/claude-project', happierSessionId: 'unified-confined',
       hostPreference: 'zellij' as const, launchEnv: {}, permissionMode: 'yolo',
-      allowedTools: ['WebSearch', 'mcp__wilson__*'], unlistedTools: 'deny' as const,
+      allowedTools: ['websearch', 'mcp__wilson__*'], unlistedTools: 'deny' as const,
     };
     const operations = createClaudeUnifiedTerminalProviderOperations(params);
     try {

@@ -1901,7 +1901,7 @@ export function createClaudeAgentSdkTurnOperations(
                         && Object.keys(params.mcpServers ?? {}).length > 0) {
                         publishRuntimeEvent(ClaudeProviderEventSchema.parse({ kind: 'mcp-tool-usage',
                             sessionId: readRuntimeEventSessionId(), turnId: currentTurnId, emittedAtMs: Date.now(),
-                            ...mcpUsage.finish(Date.now(), !shouldContinueForBackgroundTasks && message.queued_turn_count === 0) }));
+                            ...mcpUsage.finish(Date.now(), !shouldContinueForBackgroundTasks) }));
                     }
                     const turnEndContextUsageRefresh = params.publishTranscriptMessages === true
                         ? requestAndPublishContextUsage(turnQuery).catch((error: unknown) => {
