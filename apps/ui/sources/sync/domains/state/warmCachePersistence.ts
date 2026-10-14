@@ -14,6 +14,7 @@ import { SessionViewerProjectionV1Schema } from '@happier-dev/protocol/sessions/
 import { PendingActivationAuthorizationV1Schema } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 import { PluginUiTargetedContributionsV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { z } from 'zod';
+import * as zMini from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { MachinePublishedAgentInventoryV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import { SkillFoundListResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
@@ -249,16 +250,16 @@ export const SessionListCacheEntryV1Schema = z.object({
     activeAt: z.number(),
     archivedAt: z.number().nullable(),
     lastViewedSessionSeq: z.number().int().nonnegative().nullable().optional(),
-    viewer: SessionViewerProjectionV1Schema.optional(),
+    viewer: zMini.optional(SessionViewerProjectionV1Schema),
     pendingCount: z.number().int().nonnegative().optional(),
     pendingBlockedCount: z.number().int().nonnegative().optional(),
     pendingVersion: z.number().int().nonnegative().optional(),
-    pendingActivationAuthorization: PendingActivationAuthorizationV1Schema.nullable().optional(),
-    latestTurnStatus: PrimaryTurnStatusV1Schema.nullable().optional(),
+    pendingActivationAuthorization: zMini.optional(zMini.nullable(PendingActivationAuthorizationV1Schema)),
+    latestTurnStatus: zMini.optional(zMini.nullable(PrimaryTurnStatusV1Schema)),
     latestTurnStatusObservedAt: z.number().int().nonnegative().nullable().optional(),
-    lastRuntimeIssue: SessionRuntimeIssueV1Schema.nullable().optional(),
+    lastRuntimeIssue: zMini.optional(zMini.nullable(SessionRuntimeIssueV1Schema)),
     runtimeActivityActiveCount: z.number().int().nonnegative().nullable().optional(),
-    runtimeActivityState: SessionRuntimeActivityStateSchema.nullable().optional(),
+    runtimeActivityState: zMini.optional(zMini.nullable(SessionRuntimeActivityStateSchema)),
     runtimeActivityObservedAt: z.number().int().nonnegative().nullable().optional(),
     runtimeActivityRevision: z.number().int().nonnegative().nullable().optional(),
     runtimeActivitySourceClass: z.never().optional(),
@@ -273,11 +274,11 @@ export const SessionListCacheEntryV1Schema = z.object({
     // Additive current authority. Absence keeps old cache bytes readable and
     // permits only the released flattened fallback; null preserves malformed
     // current ingress as unavailable across a restart.
-    effectiveAccess: SessionEffectiveAccessV1Schema.nullable().optional(),
+    effectiveAccess: zMini.optional(zMini.nullable(SessionEffectiveAccessV1Schema)),
     accessLevel: z.enum(['view', 'edit', 'admin']).optional(),
     canApprovePermissions: z.boolean().optional(),
     responsibleAccountId: z.string().min(1).nullable().optional(),
-    responsibleAccount: SessionAccessAccountSummaryV1Schema.nullable().optional(),
+    responsibleAccount: zMini.optional(zMini.nullable(SessionAccessAccountSummaryV1Schema)),
     name: z.string().optional(),
     summaryText: z.string().nullable().optional(),
     path: z.string(),
@@ -294,8 +295,8 @@ export const SessionListCacheEntryV1Schema = z.object({
             machineId: z.string().min(1),
             remoteSessionId: z.string().min(1),
             source: ExternalSessionsSourceSchema,
-            runtimeDescriptorV1: RuntimeDescriptorV1Schema.optional(),
-            linkData: PluginAgentExternalSessionLinkDataSchema.optional(),
+            runtimeDescriptorV1: zMini.optional(RuntimeDescriptorV1Schema),
+            linkData: zMini.optional(PluginAgentExternalSessionLinkDataSchema),
             codexBackendMode: z.never().optional(),
         }).passthrough(),
     ).nullable().optional(),
@@ -331,9 +332,9 @@ export const SessionListCacheEntryV1Schema = z.object({
 export type SessionListCacheEntryV1 = z.infer<typeof SessionListCacheEntryV1Schema>;
 
 export const MachineDisplayCacheEntryV1Schema = z.object({
-    agentInventory: createStoredReadSchema(MachinePublishedAgentInventoryV1Schema).optional().catch(undefined),
+    agentInventory: zMini.catch(zMini.optional(createStoredReadSchema(MachinePublishedAgentInventoryV1Schema)), undefined),
     machineId: z.string().min(1),
-    kind: MachineKindFromLegacyProjectionSchema.optional(),
+    kind: zMini.optional(MachineKindFromLegacyProjectionSchema),
     metadataVersion: z.number().int().nonnegative(),
     updatedAt: z.number(),
     active: z.boolean(),

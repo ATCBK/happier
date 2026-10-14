@@ -1,7 +1,7 @@
 import type { SessionInitialAccessDraftV1, SessionAuthoringExecutionTargetV2, TemporaryComputerActivationRefV1 } from '@happier-dev/protocol';
 import { z } from 'zod';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { nullable } from 'zod/mini';
+import { nullable, optional } from 'zod/mini';
 import type { ZenTaskSource } from '@/sync/domains/todos/todoStoredContent';
 import type { Settings } from '../settings/settings';
 import { voiceSettingsParse } from '../settings/voiceSettings';
@@ -167,8 +167,9 @@ export type NewSessionComposerAttachmentSeedV1 = Readonly<{
 }>;
 
 // Retained only to import the predecessor device-local singleton draft.
-const NewSessionDraftExecutionTargetSchema = SessionExecutionTargetV1Schema.extend({
-    selectionOrigin: MachinePoolSelectionOriginV1Schema.optional(),
+const NewSessionDraftExecutionTargetSchema = z.object({
+    ...SessionExecutionTargetV1Schema.shape,
+    selectionOrigin: optional(MachinePoolSelectionOriginV1Schema),
 }).strict();
 
 export interface NewSessionDraft {

@@ -1,5 +1,6 @@
 import { SessionAuthoringTerminalV1Schema } from '@happier-dev/protocol/sessions/authoring/creationFieldsV1';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { z as mini } from 'zod/mini';
 import { SessionAuthoringValueV1Schema, type SessionAuthoringTerminalV1, type SessionAuthoringValueV1 } from '@happier-dev/protocol/sessions/authoring/index';
 
 import type { Session } from '@/sync/domains/state/storageTypes';
@@ -41,7 +42,7 @@ export function normalizeSessionAuthoringConnectedServices(
 export function normalizeSessionAuthoringTerminal(
     value: unknown,
 ): SessionAuthoringTerminalV1 | null {
-    const parsed = createStoredReadSchema(SessionAuthoringTerminalV1Schema).nullable().safeParse(value);
+    const parsed = mini.nullable(createStoredReadSchema(SessionAuthoringTerminalV1Schema)).safeParse(value);
     return parsed.success ? parsed.data : null;
 }
 

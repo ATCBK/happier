@@ -1,3 +1,4 @@
+import { pick } from 'zod/mini';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { backoff } from '@/utils/timing/time';
 import { Artifact, ArtifactCreateRequest, ArtifactUpdateRequest, ArtifactUpdateResponse } from '@/sync/domains/artifacts/artifactTypes';
@@ -66,7 +67,7 @@ async function readWriteRefusal(response: Response, fallback: string): Promise<H
     return new HappyError(message, false, { status: response.status });
 }
 
-const artifactAuthorityProjectionSchema = ArtifactAccessRecipientCensusResponseV1Schema.pick({
+const artifactAuthorityProjectionSchema = pick(ArtifactAccessRecipientCensusResponseV1Schema, {
     ownerAccountId: true, access: true, encryptionMode: true,
 });
 

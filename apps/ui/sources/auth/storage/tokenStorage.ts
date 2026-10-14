@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import { z } from 'zod';
+import * as zMini from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { AccountContinuationIntent } from '@happier-dev/cli-common/accountService';
 import { AccountEncryptionMigrateRequestBindingDigestV1Schema } from '@happier-dev/protocol/account/encryptionMigrate';
@@ -1459,7 +1460,7 @@ function isPendingExternalAuthFieldsValid(value: unknown): value is PendingExter
 
 const PendingExternalAuthSchema = z.object({
     provider: z.string(),
-    presentation: AuthEntryProviderPresentationV1Schema.optional(),
+    presentation: zMini.optional(AuthEntryProviderPresentationV1Schema),
     proof: z.string().optional(),
     secret: z.string().optional(),
     mode: z.enum(['keyed', 'keyless']).optional(),
@@ -1473,7 +1474,7 @@ const PendingExternalAuthSchema = z.object({
         admissionReference: z.string(), teamId: z.string(), homeServerIdentityId: z.string(),
         destination: z.object({ kind: z.literal('team_sign_in'), teamId: z.string() }).strict(),
     }).strict().optional(),
-    postAuthInvitation: TeamInvitationPostAuthContinuationV1Schema.optional(),
+    postAuthInvitation: zMini.optional(TeamInvitationPostAuthContinuationV1Schema),
     accountEncryptionFirstKey: z.object({
         accountId: z.string(), requestDigest: z.string(), requestJson: z.string(),
         createdAt: z.number(), expiresAt: z.number(), pending: z.string().optional(),

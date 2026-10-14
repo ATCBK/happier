@@ -5,6 +5,7 @@ import { SessionDraftAddressV1Schema } from '@happier-dev/protocol/drafts/sessio
 import { buildSettingArtifacts } from '@happier-dev/protocol/settings/registry/buildSettingArtifacts';
 import { defineSettingDefinitions } from '@happier-dev/protocol/settings/registry/settingDefinition';
 import { z } from 'zod';
+import * as zMini from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { normalizeAccountSettingsServerSelection } from '@/sync/domains/settings/parse/accountSettingsServerSelectionNormalization';
@@ -64,8 +65,8 @@ function normalizeLastUsedBackendTarget(value: unknown, storedRead = false) {
 }
 
 const LastUsedBackendTargetSchema = defineStoredReadProjection(
-    z.preprocess((value) => normalizeLastUsedBackendTarget(value), PersistedBackendTargetRefV2Schema.nullable()),
-    () => z.preprocess((value) => normalizeLastUsedBackendTarget(value, true), createStoredReadSchema(PersistedBackendTargetRefV2Schema).nullable()),
+    z.preprocess((value) => normalizeLastUsedBackendTarget(value), zMini.nullable(PersistedBackendTargetRefV2Schema)),
+    () => z.preprocess((value) => normalizeLastUsedBackendTarget(value, true), zMini.nullable(createStoredReadSchema(PersistedBackendTargetRefV2Schema))),
 );
 
 export const ServerSelectionGroupSchema = z.object({

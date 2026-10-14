@@ -1,3 +1,4 @@
+import { omit } from 'zod/mini';
 import { SessionDiscussionSelectionSourceV1Schema, type SessionDiscussionSelectionSourceV1 } from '@happier-dev/protocol/sessions/discussions/content';
 import type { SessionDiscussionOpenedMessageV1 } from '@happier-dev/protocol/sessions/discussions/actions';
 
@@ -75,7 +76,7 @@ export function prepareDiscussionSelectionHandoff(params: Readonly<{
     entries.sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
     if (entries.length === 0) return null;
 
-    const source = SessionDiscussionSelectionSourceV1Schema.omit({ draftCorrelationId: true }).parse({
+    const source = omit(SessionDiscussionSelectionSourceV1Schema, { draftCorrelationId: true }).parse({
         kind: 'session_discussion',
         sessionId: params.sessionId,
         discussionId: params.discussionId,

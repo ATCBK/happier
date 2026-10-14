@@ -9,7 +9,8 @@ import {
 import { t } from '@/text';
 import { WIDGET_MOVE_UNCHANGED_CODE } from './entityDropNoChange';
 
-export const WidgetLayoutDropDestinationSchema = AnchoredListPositionV1Schema.extend({
+export const WidgetLayoutDropDestinationSchema = z.object({
+    ...AnchoredListPositionV1Schema.shape,
     groupId: z.string().trim().min(1).nullable().optional(),
 }).strict();
 export type WidgetLayoutDropDestination = z.infer<typeof WidgetLayoutDropDestinationSchema>;

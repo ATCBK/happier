@@ -1,3 +1,4 @@
+import './sources/boot/configureZodLocale';
 import '@expo/metro-runtime';
 import { installWorkspaceBrowserHistory } from './sources/components/appShell/workspace/workspaceBrowserTransport';
 

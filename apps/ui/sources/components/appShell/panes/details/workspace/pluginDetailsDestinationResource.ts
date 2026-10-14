@@ -21,7 +21,7 @@ export type PluginDetailsDestinationResourceV1 = Readonly<{
 export const PluginDetailsDestinationResourceV1Schema = z.object({
     kind: z.literal(PLUGIN_DETAILS_DESTINATION_RESOURCE_KIND),
     destination: PersistedPluginUiDestinationReferenceV1Schema,
-    instanceKey: PluginUiInstanceKeyV1Schema.optional(),
+    instanceKey: z.optional(PluginUiInstanceKeyV1Schema),
 }).strip();
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

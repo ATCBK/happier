@@ -25,7 +25,7 @@ const AuthoringMemoryProjectionSchema: z.ZodObject<{
     recentMachinePaths: z.array(LegacyRecentMachinePathSchema),
     lastUsedProfile: LegacyLastUsedProfileSchema,
     lastEngineSelectionsByScopeV1: LegacyRememberedEngineSelectionsByScopeV1Schema,
-    workflowProjectTargetsByDefinitionId: WorkflowProjectTargetsByDefinitionIdV1Schema.optional(),
+    workflowProjectTargetsByDefinitionId: z.optional(WorkflowProjectTargetsByDefinitionIdV1Schema),
 }).strict();
 const StoredAuthoringMemoryProjectionSchema = createStoredReadSchema(AuthoringMemoryProjectionSchema);
 

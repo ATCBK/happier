@@ -4,12 +4,13 @@ import { buildBackendTargetKeyV2, BackendTargetKeyV2Schema, parseBackendTargetKe
 import { SessionModelSelectionV1Schema, type SessionModelSelectionV1 } from '@happier-dev/protocol/providers/model-selection';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { z } from 'zod';
+import * as zMini from 'zod/mini';
 
 const RememberedEngineSelectionV1Schema = z.object({
     v: z.literal(1),
-    modelSelection: SessionModelSelectionV1Schema.nullable(),
+    modelSelection: zMini.nullable(SessionModelSelectionV1Schema),
     acpSessionModeId: z.string().trim().min(1).nullable().optional(),
-    sessionConfigOptionOverrides: AcpConfigOptionOverridesV1Schema.nullable().optional(),
+    sessionConfigOptionOverrides: zMini.optional(zMini.nullable(AcpConfigOptionOverridesV1Schema)),
     updatedAt: z.number().finite().nonnegative(),
 }).strict();
 const StoredRememberedEngineSelectionV1Schema = createStoredReadSchema(RememberedEngineSelectionV1Schema);

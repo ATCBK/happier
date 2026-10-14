@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { nullable, omit } from 'zod/mini';
 
 import { ComposerAgentContinuationIntentV1Schema, SessionAgentTransitionInputV1Schema } from '@happier-dev/protocol/sessions/agentTransition';
 import { ComposerAttachmentDraftV1Schema, MAX_COMPOSER_ATTACHMENT_INSTANCES_V1, type ComposerAttachmentDraftV1 } from '@happier-dev/protocol/runtime/input/composerAttachmentV1';
@@ -307,12 +308,12 @@ export type SessionDraftValueByFieldId = Readonly<{
 export type SessionDraftValueFieldId = keyof SessionDraftValueByFieldId;
 
 export const SESSION_DRAFT_VALUE_SCHEMAS = {
-    'routing.recipient': ParticipantRecipientV1Schema.nullable(),
+    'routing.recipient': nullable(ParticipantRecipientV1Schema),
     'routing.agentContinuation': SessionArmedAgentContinuationSchema,
     'routing.executionRunRequestedAction': PendingRequestedActionV1Schema,
     'structuredInput.composerAttachments': z.array(ComposerAttachmentDraftV1Schema).max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1),
     'structuredInput.mentions': ComposerStructuredInputMentionsSchema,
-    'structuredInput.sessionDiscussionSelectionSourceV1': SessionDiscussionSelectionSourceV1Schema.omit({ draftCorrelationId: true }),
+    'structuredInput.sessionDiscussionSelectionSourceV1': omit(SessionDiscussionSelectionSourceV1Schema, { draftCorrelationId: true }),
 } satisfies Readonly<Record<SessionDraftValueFieldId, z.ZodType>>;
 
 export type SessionDraftValueEnvelope<FieldId extends SessionDraftValueFieldId = SessionDraftValueFieldId> = Readonly<{
