@@ -7,6 +7,22 @@ import { readPortableCatalogAccountSettingBindingV1 } from './catalogAccountSett
 import { readBuiltInSettingDeclarationV1 } from './settingsDeclarations.js';
 
 describe('portable SCM Summary setting admission', () => {
+    it('stores the canonical native model reference rather than a task-specific selector', () => {
+        const value = encodeScmDiffSummaryModelOverride({ backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 'custom/model' });
+        expect(JSON.parse(value.slice('model:'.length))).toEqual({ agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'custom/model' });
+        const selector = { backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 'custom/model' };
+        const retained = `model:${JSON.stringify({ ...JSON.parse(value.slice('model:'.length)), future: { irrelevant: true } })}`;
+        expect(resolveScmDiffSummaryModelSelection({ storedValue: retained, catalogProfiles: [
+            { catalogId: value, title: 'Custom', modelSelector: selector, structuredOutput: 'supported' },
+        ] })).toMatchObject({ success: true, modelSelector: selector });
+    });
+    it('filters the same catalog by typed purpose without forbidding runner-only models', () => {
+        const models = [{ id: 'structured', name: 'Structured', capabilities: { structuredOutput: 'supported' as const } },
+            { id: 'text', name: 'Text', capabilities: { structuredOutput: 'unsupported' as const } }];
+        const params = { backendTarget: { kind: 'backend' as const, backendId: 'catalog-agent' }, models };
+        expect(buildScmDiffSummaryModelProfiles({ ...params, purpose: 'walkthrough' }).map(profile => profile.title)).toEqual(['Structured']);
+        expect(buildScmDiffSummaryModelProfiles({ ...params, purpose: 'runner' }).map(profile => profile.title)).toEqual(['Structured', 'Text']);
+    });
     it('keeps surrounding-file investigation off until explicitly enabled through the shared setting owner', async () => {
         const key = 'scm.diffSummary.investigateSurroundingFiles';
         expect(resolveScmDiffSummarySettings({ storedSettings: {}, catalogProfiles: [] }).investigateSurroundingFiles).toBe(false);

@@ -4,6 +4,8 @@ import type { ProviderModelDescriptorV1 } from '../../models/descriptor.js';
 import type { CapabilitySupport } from '../../providers/capabilities/v1.js';
 import { ACCOUNT_SETTING_DEFINITIONS, type AccountSettings } from '../../account/settings/accountSettings.js';
 import type { SettingDomainValueV1 } from './settingsOwnerActions.js';
+import { ProviderBoundModelRefSchema } from '../../providers/selection/v1.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 export type ScmDiffSummarySettingsV1 = Pick<AccountSettings, 'scm.diffSummary.prefetch' | 'scm.diffSummary.modelProfileOverride'>
     & Partial<Pick<AccountSettings, 'scm.diffSummary.outputLanguage' | 'scm.diffSummary.investigateSurroundingFiles'>>;
@@ -59,19 +61,29 @@ function resolveModelOverride(
     if (typeof raw !== 'string') return null;
     const catalogId = raw.trim();
     if (!catalogId) return null;
-    return catalogProfiles.find((profile) => profile.catalogId === catalogId) ?? null;
+    const selector = decodeScmDiffSummaryModelOverride(catalogId);
+    const canonicalId = selector ? encodeScmDiffSummaryModelOverride(selector) : catalogId;
+    return catalogProfiles.find((profile) => profile.catalogId === canonicalId) ?? null;
 }
 
 const MODEL_SELECTOR_PREFIX = 'model:';
+const StoredModelSelectionSchema = createStoredReadSchema(ProviderBoundModelRefSchema);
 
 /** The existing string preference carries the canonical selector, never a display label. */
 export function encodeScmDiffSummaryModelOverride(selector: ScmDiffSummaryModelSelector): string {
-    return `${MODEL_SELECTOR_PREFIX}${JSON.stringify(ScmDiffSummaryModelSelectorSchema.parse(selector))}`;
+    const parsed = ScmDiffSummaryModelSelectorSchema.parse(selector);
+    const selection = ProviderBoundModelRefSchema.parse({ agentTargetKey: parsed.backendTargetKey,
+        providerConnectionId: null, modelId: parsed.modelId ?? 'default' });
+    return `${MODEL_SELECTOR_PREFIX}${JSON.stringify(selection)}`;
 }
 
 export function decodeScmDiffSummaryModelOverride(value: string): ScmDiffSummaryModelSelector | null {
     if (!value.startsWith(MODEL_SELECTOR_PREFIX)) return null;
-    try { return ScmDiffSummaryModelSelectorSchema.parse(JSON.parse(value.slice(MODEL_SELECTOR_PREFIX.length))); }
+    try {
+        const selection = StoredModelSelectionSchema.parse(JSON.parse(value.slice(MODEL_SELECTOR_PREFIX.length)));
+        if (selection.providerConnectionId !== null) return null;
+        return { backendTargetKey: selection.agentTargetKey, modelId: selection.modelId };
+    }
     catch { return null; }
 }
 
