@@ -208,13 +208,18 @@ describe('shared flat reorder UI binding', () => {
             expect(runtime.getSnapshot().phase).toBe('pending');
             expect.soft(order()).toEqual(['grip:b', 'grip:a', 'grip:c']);
             expect(StyleSheet.flatten(row().props.style)?.opacity).toBeLessThan(1);
+            const announcement = () => screen.findByTestId('list.status')!.findAllByType(Text)
+                .map(node => node.props.children).join('');
+            expect(announcement()).toContain('entityDragDrop.preview.pendingDetail');
             f.model.ids = ['b', 'a', 'c'];
             await screen.update(f.render());
             expect.soft(StyleSheet.flatten(row().props.style)?.opacity ?? 1).toBe(1);
             expect.soft(screen.findByTestId('list.staged') === null).toBe(true);
+            expect.soft(announcement()).toBe('');
             await act(async () => { acknowledgement.resolve(); await move; });
             expect(order()).toEqual(['grip:b', 'grip:a', 'grip:c']);
             expect(StyleSheet.flatten(row().props.style)?.opacity ?? 1).toBe(1);
+            expect(announcement()).toBe('');
         } finally { unsubscribe(); acknowledgement.resolve(); await move; }
     });
 
