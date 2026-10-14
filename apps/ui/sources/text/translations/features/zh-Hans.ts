@@ -13259,6 +13259,7 @@ const widgetFrameTranslations = { 'zh-Hans': {
         groupCannotTake: ({ group }) => `需要全宽；${group} 是半宽`,
         groupA11y: ({ name }) => `分组：${name}`,
         groupCount: ({ count }) => `分组 · ${count}`,
+        groupCopyOf: ({ count, index, total }) => `分组 · ${count} · 副本 ${index}/${total}`,
         groupWidgetCount: ({ count }) => `分组 · ${count} 个小组件`,
         addsAtWidth: ({ width }) => `将以${width}添加。`,
         presetEdited: "已编辑",

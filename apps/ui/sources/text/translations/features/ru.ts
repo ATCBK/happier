@@ -13301,6 +13301,7 @@ const widgetFrameTranslations = { ru: {
         groupCannotTake: ({ group }) => `Нужна полная ширина; у «${group}» половина`,
         groupA11y: ({ name }) => `Группа: ${name}`,
         groupCount: ({ count }) => `Группа · ${count}`,
+        groupCopyOf: ({ count, index, total }) => `Группа · ${count} · Копия ${index} из ${total}`,
         groupWidgetCount: ({ count }) => `Группа · виджетов: ${count}`,
         addsAtWidth: ({ width }) => `Добавит с шириной: ${width}.`,
         presetEdited: "Изменено",

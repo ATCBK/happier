@@ -13275,6 +13275,7 @@ const widgetFrameTranslations = { pt: {
         groupCannotTake: ({ group }) => `Precisa da largura inteira; ${group} é de metade`,
         groupA11y: ({ name }) => `Grupo: ${name}`,
         groupCount: ({ count }) => `Grupo · ${count}`,
+        groupCopyOf: ({ count, index, total }) => `Grupo · ${count} · Cópia ${index} de ${total}`,
         groupWidgetCount: ({ count }) => count === 1 ? 'Grupo · 1 widget' : `Grupo · ${count} widgets`,
         addsAtWidth: ({ width }) => `Adiciona com largura ${width}.`,
         presetEdited: "Editado",

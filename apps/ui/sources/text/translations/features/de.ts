@@ -12769,6 +12769,7 @@ const widgetFrameTranslations = { de: {
         groupCannotTake: ({ group }) => `Braucht die volle Breite; ${group} ist halb`,
         groupA11y: ({ name }) => `Gruppe: ${name}`,
         groupCount: ({ count }) => `Gruppe · ${count}`,
+        groupCopyOf: ({ count, index, total }) => `Gruppe · ${count} · Kopie ${index} von ${total}`,
         groupWidgetCount: ({ count }) => count === 1 ? 'Gruppe · 1 Widget' : `Gruppe · ${count} Widgets`,
         addsAtWidth: ({ width }) => `Fügt es mit Breite ${width} hinzu.`,
         presetEdited: "Bearbeitet",

@@ -134,6 +134,7 @@ export const HomeLayoutEditor = React.memo(function HomeLayoutEditor(props: Read
                     <EditorRowView
                         key={row.id}
                         row={row}
+                        copy={groupCopyOf(rows, row)}
                         layout={layout}
                         showDivider={index < rows.length - 1 || layout.hiddenSetupStepCount > 0}
                     />
@@ -159,14 +160,29 @@ function rowIcon(row: EditorRow): IconName {
     return findHomeHubBuiltinSection(row.section.id)?.icon ?? 'squares-four';
 }
 
-function rowSubtitle(row: EditorRow): string {
-    if (row.section.kind === 'group') return t('widgetFrame.groupCount', { count: row.section.children.length });
+/**
+ * Groups placed from one saved group read the same, so a row says which copy it is among those that share
+ * its title (in the order Home shows them); a group with a title of its own needs no such mark.
+ */
+function groupCopyOf(rows: readonly EditorRow[], row: EditorRow): Readonly<{ index: number; total: number }> | null {
+    if (row.section.kind !== 'group') return null;
+    const title = homeHubSectionTitle(row.section);
+    const same = rows.filter(other => other.section.kind === 'group' && homeHubSectionTitle(other.section) === title);
+    return same.length > 1 ? { index: same.indexOf(row) + 1, total: same.length } : null;
+}
+
+function rowSubtitle(row: EditorRow, copy: ReturnType<typeof groupCopyOf>): string {
+    if (row.section.kind === 'group') {
+        const count = row.section.children.length;
+        return copy ? t('widgetFrame.groupCopyOf', { count, ...copy }) : t('widgetFrame.groupCount', { count });
+    }
     if (row.section.kind === 'widget') return row.section.widget?.pluginName ?? t('sessionBoard.item.pluginUnavailable.title');
     return findHomeHubBuiltinSection(row.section.id)?.description() ?? t('homeIndex.builtIn');
 }
 
 function EditorRowView(props: Readonly<{
     row: EditorRow;
+    copy: ReturnType<typeof groupCopyOf>;
     layout: HomeHubLayout;
     showDivider: boolean;
 }>) {
@@ -193,7 +209,7 @@ function EditorRowView(props: Readonly<{
                     <Item
                         testID={`home-layout.${row.id}`}
                         title={title}
-                        subtitle={rowSubtitle(row)}
+                        subtitle={rowSubtitle(row, props.copy)}
                         icon={<Icon name={rowIcon(row)} />}
                         showChevron={false}
                         showDivider={props.showDivider && size === null}

@@ -83,6 +83,8 @@ export type WidgetFrameTranslation = Readonly<{
     groupCannotTake: (params: Readonly<{ group: string }>) => string;
     groupA11y: (params: Readonly<{ name: string }>) => string;
     groupCount: (params: Readonly<{ count: number }>) => string;
+    /** A saved group added more than once: which copy this row is, so identical rows tell apart. */
+    groupCopyOf: (params: Readonly<{ count: number; index: number; total: number }>) => string;
     /** A group's sheet header, beside its name: "Group · 4 widgets". */
     groupWidgetCount: (params: Readonly<{ count: number }>) => string;
     addsAtWidth: (params: Readonly<{ width: string }>) => string;
@@ -180,6 +182,7 @@ export const widgetFrameTranslationsEnglish = { en: {
         groupCannotTake: ({ group }) => `Needs the full width; ${group} is half`,
         groupA11y: ({ name }) => `Group: ${name}`,
         groupCount: ({ count }) => `Group · ${count}`,
+        groupCopyOf: ({ count, index, total }) => `Group · ${count} · Copy ${index} of ${total}`,
         groupWidgetCount: ({ count }) => count === 1 ? 'Group · 1 widget' : `Group · ${count} widgets`,
         addsAtWidth: ({ width }) => `Adds it at ${width} width.`,
         presetEdited: "Edited",

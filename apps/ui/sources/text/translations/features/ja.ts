@@ -13263,6 +13263,7 @@ const widgetFrameTranslations = { ja: {
         groupCannotTake: ({ group }) => `全幅が必要です。${group} は半分です`,
         groupA11y: ({ name }) => `グループ: ${name}`,
         groupCount: ({ count }) => `グループ · ${count}`,
+        groupCopyOf: ({ count, index, total }) => `グループ · ${count} · コピー ${index}/${total}`,
         groupWidgetCount: ({ count }) => `グループ · ウィジェット ${count} 個`,
         addsAtWidth: ({ width }) => `幅「${width}」で追加します。`,
         presetEdited: "編集済み",
