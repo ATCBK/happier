@@ -762,7 +762,7 @@ function recordFullyHydratedListTelemetry(params: Readonly<{
     });
 }
 
-function isHydratedSessionCurrentForListState(
+export function isHydratedSessionCurrentForListState(
     session: HydratedSession,
     getCurrentSessionListRenderable: CurrentSessionListRenderableLookup | undefined,
 ): boolean {
@@ -1373,6 +1373,8 @@ export async function fetchAndApplySessions(params: {
     prioritizeSessionIds?: ReadonlyArray<string>;
     activeSessionIds?: ReadonlyArray<string>;
     requiredHydrationSessionIds?: ReadonlyArray<string>;
+    /** Reuse the containing Sync's exact reader when a required summary is superseded. */
+    hydrateRequiredSession?: (sessionId: string, accountCurrentness: AccountEncryptionCurrentnessResponse | undefined) => Promise<void>;
     awaitSessionListHydration?: boolean;
     sessionListEagerHydrationCount?: number;
     sessionListHydrationConcurrencyLimit?: number;
@@ -2156,15 +2158,29 @@ export async function fetchAndApplySessions(params: {
                                             // read through detail/socket hydration. Skipping its older
                                             // snapshot is not a required-hydration failure; a newer
                                             // list-only projection still cannot satisfy that contract.
-                                            const existingSession = params.getExistingSession?.(row.id);
-                                            const currentSession = existingSession
-                                                && existingSession.serverId === decryptedSession.serverId
-                                                && existingSession.seq >= decryptedSession.seq
-                                                && existingSession.updatedAt >= decryptedSession.updatedAt
-                                                && classifySessionTupleApplyCurrentness(decryptedSession, existingSession).fullyCurrent
-                                                && hasAuthoritativeSessionRouteData(existingSession)
-                                                && isHydratedSessionCurrentForListState(existingSession, params.getCurrentSessionListRenderable)
-                                                ? existingSession : null;
+                                            const readCurrentSession = () => {
+                                                const existingSession = params.getExistingSession?.(row.id);
+                                                return existingSession
+                                                    && existingSession.serverId === decryptedSession.serverId
+                                                    && existingSession.seq >= decryptedSession.seq
+                                                    && existingSession.updatedAt >= decryptedSession.updatedAt
+                                                    && classifySessionTupleApplyCurrentness(decryptedSession, existingSession).fullyCurrent
+                                                    && hasAuthoritativeSessionRouteData(existingSession)
+                                                    && isHydratedSessionCurrentForListState(existingSession, params.getCurrentSessionListRenderable)
+                                                    ? existingSession : null;
+                                            };
+                                            let currentSession = readCurrentSession();
+                                            if (!currentSession && isRequiredHydrationRow && params.hydrateRequiredSession) {
+                                                // A reload can retain a newer list projection without
+                                                // an opened entity. Demand its exact source through
+                                                // the same owner used for off-page required Sessions.
+                                                await params.hydrateRequiredSession(row.id, accountCurrentness);
+                                                if (!shouldContinue() || !isSessionCurrent(row.id)) {
+                                                    markRequiredHydrationResult(row, null);
+                                                    return null;
+                                                }
+                                                currentSession = readCurrentSession();
+                                            }
                                             markRequiredHydrationResult(row, currentSession);
                                             return null;
                                         }
