@@ -1,3 +1,5 @@
+// Load the real Workflow schema owner before the contribution's cyclic SDK graph.
+import '@happier-dev/protocol/workflows/workflowV1';
 import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +16,29 @@ import type {
 } from '@happier-dev/plugin-sdk/exec/protocol-clients';
 
 import { createCodexExternalSessionsContribution } from './contribution.js';
+import { ExternalSessionCandidateMatchV1Schema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
+import { parseCodexContentSearchProgress } from './transcriptSource.js';
+
+const contentReadClock = vi.hoisted(() => ({ advance: null as (() => void) | null,
+  slowOffset: 64 * 1024,
+  onRead: null as ((position: number, length: number) => Promise<void>) | null }));
+// Native filesystem and clock are the only substituted boundaries.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
+    const handle = await actual.open(...args);
+    return new Proxy(handle, { get(target, property) {
+      if (property === 'read') return async (...readArgs: Parameters<typeof target.read>) => {
+        const result = await Reflect.apply(target.read, target, readArgs);
+        if (typeof readArgs[3] === 'number' && typeof readArgs[2] === 'number') await contentReadClock.onRead?.(readArgs[3], readArgs[2]);
+        if (typeof readArgs[3] === 'number' && readArgs[3] >= contentReadClock.slowOffset) contentReadClock.advance?.();
+        return result;
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    } });
+  } };
+});
 
 function jsonl(value: unknown): string {
   return `${JSON.stringify(value)}\n`;
@@ -115,6 +140,107 @@ function invocation(overrides: Readonly<{
 }
 
 describe('Codex public Agent External Sessions contribution', () => {
+  it('advances slow native decoding under identical budgets with rollback and semantic ordinals intact', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-progress-'));
+    const clock = Date.now;
+    let now = clock();
+    try {
+      const codexHome = join(root, 'codex-home');
+      const day = join(codexHome, 'sessions', '2026', '07', '23');
+      await mkdir(day, { recursive: true });
+      const id = '11111111-1111-1111-1111-111111111111';
+      const laterId = '22222222-2222-2222-2222-222222222222';
+      const path = join(day, `rollout-2026-07-23T08-00-00-${id}.jsonl`);
+      const message = (role: string, text: string, minute: number) => jsonl({ type: 'response_item', timestamp: `2026-07-23T08:${String(minute).padStart(2, '0')}:00.000Z`, payload: { type: 'message', role, content: [{ type: role === 'user' ? 'input_text' : 'output_text', text }] } });
+      await writeFile(path, [jsonl({ type: 'session_meta', payload: { id, cwd: '/repo' } }),
+        message('user', 'kept prompt', 1), message('assistant', 'kept reply', 2), message('assistant', 'kept reply', 2),
+        message('user', 'abandoned prompt', 3), message('assistant', 'body-only phrase abandoned', 4),
+        jsonl({ type: 'event_msg', payload: { type: 'thread_rolled_back', num_turns: 1 } }),
+        message('user', 'replacement prompt', 5),
+        ...Array.from({ length: 10_000 }, (_, index) => message('assistant', `dense native reply ${index}`, 5)),
+        jsonl({ type: 'response_item', timestamp: '2026-07-23T08:05:10.000Z', payload: { type: 'function_call', name: 'spawn_agent', call_id: 'spawn-call', arguments: JSON.stringify({ prompt: 'inspect native correlation', nickname: 'worker', role: 'explorer' }) } }),
+        message('assistant', 'interim reply', 5),
+        ...Array.from({ length: 4 }, (_, index) => jsonl({ type: 'world_state', payload: { padding: 'x'.repeat(70_000), index } })),
+        message('assistant', 'interim reply', 5),
+        jsonl({ type: 'response_item', timestamp: '2026-07-23T08:05:20.000Z', payload: { type: 'function_call_output', call_id: 'spawn-call', output: JSON.stringify({ agent_id: 'child-thread' }) } }),
+        jsonl({ type: 'event_msg', timestamp: '2026-07-23T08:05:20.000Z', payload: { type: 'collab_agent_spawn_end', new_thread_id: 'child-thread' } }),
+        ...Array.from({ length: 4 }, (_, index) => jsonl({ type: 'world_state', payload: { padding: 'x'.repeat(70_000), index } })),
+        message('assistant', 'body-only phrase active', 6)].join(''));
+      const fixtureBytes = await readFile(path);
+      contentReadClock.slowOffset = fixtureBytes.indexOf(Buffer.from('"type":"world_state"')) + 64 * 1024;
+      const laterPath = join(day, `rollout-2026-07-23T07-00-00-${laterId}.jsonl`);
+      await writeFile(laterPath, jsonl({ type: 'session_meta', payload: { id: laterId, cwd: '/repo' } }) + message('assistant', 'body-only phrase next file', 0));
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: codexHome } });
+      const source = { kind: 'codexHome', home: 'user', homePath: codexHome };
+      const ripgrep = { run: async () => ({ exitCode: 0, stdout: `${path}\0${laterPath}\0`, stderr: '' }) };
+      Date.now = () => now;
+      let cursor: string | undefined;
+      let firstCursor: string | undefined;
+      let semanticCursor: string | undefined;
+      let hitCursor: string | undefined;
+      const hits: Array<{ remoteSessionId: string; match?: { snippet: string; sourceItemId: string; messageIndex: number } }> = [];
+      const seen = new Set<string>();
+      for (let page = 0; page < 80; page += 1) {
+        contentReadClock.advance = () => { now += 60; };
+        const result = await contribution.listCandidates({ ...invocation(), source, maxItems: 1, searchTarget: 'content', searchTerm: 'body-only phrase', scanDeadlineAtMs: now + 100, cursor, ripgrep });
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new Error(result.message);
+        for (const candidate of result.value.candidates) {
+          if (candidate.match) ExternalSessionCandidateMatchV1Schema.parse(candidate.match);
+          hits.push(candidate);
+        }
+        if (!result.value.nextCursor) { cursor = undefined; break; }
+        expect(seen.has(result.value.nextCursor)).toBe(false);
+        // The native cursor remains inside the real strict result byte budget
+        // even with ten thousand projected rows before the slow suffix.
+        expect(Buffer.byteLength(result.value.nextCursor)).toBeLessThan(8 * 1024);
+        seen.add(result.value.nextCursor);
+        firstCursor ??= result.value.nextCursor;
+        const envelope = JSON.parse(Buffer.from(result.value.nextCursor, 'base64url').toString()) as Record<string, unknown>;
+        const progress = parseCodexContentSearchProgress(envelope.contentProgress);
+        if (progress?.phase === 'matching' && progress.streams[0]?.semantic.pending.length) semanticCursor ??= result.value.nextCursor;
+        if (progress?.hit) hitCursor ??= result.value.nextCursor;
+        cursor = result.value.nextCursor;
+      }
+      expect(cursor).toBeUndefined();
+      expect(hits).toMatchObject([{ remoteSessionId: id, match: { snippet: 'body-only phrase active', messageIndex: 10_005 } }, { remoteSessionId: laterId, match: { snippet: 'body-only phrase next file', messageIndex: 0 } }]);
+      expect(firstCursor).toBeDefined();
+      if (!firstCursor) throw new Error('Expected native progress');
+      contentReadClock.advance = null;
+      expect(semanticCursor).toBeDefined();
+      expect(hitCursor).toBeDefined();
+      if (!semanticCursor || !hitCursor) throw new Error('Expected native semantic and hit continuations');
+      const parsed = JSON.parse(Buffer.from(hitCursor, 'base64url').toString()) as Record<string, unknown>;
+      const forged = parseCodexContentSearchProgress(parsed.contentProgress);
+      if (!forged?.hit) throw new Error('Expected native hit locator');
+      // Cursor hit facts cannot authorize a snippet: the actual native row must match.
+      const promptOffset = Buffer.byteLength(jsonl({ type: 'session_meta', payload: { id, cwd: '/repo' } }));
+      forged.hit.row = { startOffsetBytes: promptOffset, endOffsetBytes: promptOffset + Buffer.byteLength(message('user', 'kept prompt', 1)) };
+      forged.hit.id = forged.hit.id.replace(/:\d{12}:\d{3}$/u, `:${String(promptOffset).padStart(12, '0')}:000`);
+      parsed.contentProgress = forged;
+      await expect(contribution.listCandidates({ ...invocation(), source, maxItems: 1, searchTarget: 'content', searchTerm: 'body-only phrase',
+        cursor: Buffer.from(JSON.stringify(parsed)).toString('base64url'), scanDeadlineAtMs: now + 10_000, ripgrep })).resolves.toMatchObject({ ok: false, code: 'source_invalid' });
+      const controller = new AbortController();
+      const pendingEnvelope = JSON.parse(Buffer.from(semanticCursor, 'base64url').toString()) as Record<string, unknown>;
+      const pendingOffset = parseCodexContentSearchProgress(pendingEnvelope.contentProgress)!.streams[0]!.semantic.pending[0]!.row.startOffsetBytes;
+      contentReadClock.onRead = async (position) => { if (position === pendingOffset) controller.abort(); };
+      await expect(contribution.listCandidates({ ...invocation({ signal: controller.signal }), source, maxItems: 1, searchTarget: 'content', searchTerm: 'body-only phrase',
+        cursor: semanticCursor, scanDeadlineAtMs: now + 10_000, ripgrep })).resolves.toMatchObject({ ok: false, code: 'cancelled' });
+      let changedAtFinalRow = false;
+      contentReadClock.onRead = async (position, length) => {
+        if (position > contentReadClock.slowOffset && length < 1024 && !changedAtFinalRow) {
+          changedAtFinalRow = true;
+          await appendFile(path, jsonl({ type: 'world_state', payload: {} }));
+        }
+      };
+      await expect(contribution.listCandidates({ ...invocation(), source, maxItems: 1, searchTarget: 'content', searchTerm: 'body-only phrase',
+        cursor: firstCursor, scanDeadlineAtMs: now + 10_000, ripgrep })).resolves.toMatchObject({ ok: false, code: 'source_invalid' });
+      expect(changedAtFinalRow).toBe(true);
+      contentReadClock.onRead = null;
+      await expect(contribution.listCandidates({ ...invocation(), source, maxItems: 1, searchTarget: 'content', searchTerm: 'body-only phrase',
+        cursor: firstCursor, scanDeadlineAtMs: now + 10_000, ripgrep })).resolves.toMatchObject({ ok: false, code: 'source_invalid' });
+    } finally { contentReadClock.advance = null; contentReadClock.onRead = null; contentReadClock.slowOffset = 64 * 1024; Date.now = clock; await rm(root, { recursive: true, force: true }); }
+  });
   it('yields content work at its cooperative scan deadline while retaining hard invocation enforcement', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-public-content-deadline-'));
     const clock = Date.now;

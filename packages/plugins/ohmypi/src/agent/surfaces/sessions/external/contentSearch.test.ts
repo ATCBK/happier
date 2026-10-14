@@ -1,12 +1,23 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import * as fileSystem from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+// Initialize the canonical Workflow graph before the SDK's broad author exports.
+import '@happier-dev/protocol/workflows/workflowV1';
 import { createOhMyPiExternalSessionsContribution } from './contribution.js';
+
+// Slow real native reads are an OS boundary; codecs and search remain real.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
 
 const roots: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  vi.mocked(fileSystem.open).mockReset().mockImplementation(actual.open);
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -39,6 +50,54 @@ async function fixture() {
 }
 
 describe('ohmypi direct conversation content search', () => {
+  it('advances equally budgeted native pages, preserving active-branch ordinals and reaching the next file', async () => {
+    const { contribution, request } = await fixture();
+    const { ExternalSessionsCandidatesListResponseSchema } = await import('@happier-dev/protocol/sessions/external/daemonRpcV1');
+    const directory = join(request.source.agentDir, 'sessions', '-repo');
+    const path = join(directory, '2026-07-23T10-00-00-000Z_session.jsonl');
+    const rows = [
+      { type: 'session', version: 3, id: 'session', timestamp: '2026-07-23T10:00:00.000Z', cwd: '/repo' },
+      ...Array.from({ length: 150 }, (_, index) => ({ type: 'message', id: `row-${index}`, parentId: index === 0 ? null : `row-${index - 1}`,
+        timestamp: '2026-07-23T10:00:00.000Z', message: { role: 'user', content: index === 10 ? 'slow native needle earliest' : index === 149 ? 'slow native needle latest' : 'ordinary body' } }))
+        .flatMap((row, index) => index === 9 ? [row, { ...row, id: 'abandoned', message: { role: 'user', content: 'slow native needle abandoned' } }] : [row]),
+    ];
+    await writeFile(path, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+    await writeFile(join(directory, 'next.jsonl'), [
+      { type: 'session', version: 3, id: 'next', timestamp: '2026-07-23T10:00:00.000Z', cwd: '/repo' },
+      { type: 'message', id: 'next-row', parentId: null, timestamp: '2026-07-23T10:00:00.000Z', message: { role: 'user', content: 'slow native needle next' } },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+    let clock = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.mocked(fileSystem.open).mockImplementation(async (...args) => {
+      const handle = await actual.open(...args);
+      clock += 3000;
+      return handle;
+    });
+    const hits = [];
+    let cursor: string | null = null;
+    let partialPages = 0;
+    for (let page = 0; page < 40; page += 1) {
+      const result = await contribution.listCandidates({ ...request, maxItems: 10, searchTerm: 'slow native needle',
+        deadlineAtMs: clock + 1_000_000, scanDeadlineAtMs: clock + 15_000, ...(cursor ? { cursor } : {}) });
+      if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+      expect(ExternalSessionsCandidatesListResponseSchema.safeParse({ ok: true, ...result.value }).success).toBe(true);
+      hits.push(...result.value.candidates);
+      if (!result.value.nextCursor) {
+        expect(result.value.contentCoverage).toBe('complete');
+        cursor = null;
+        break;
+      }
+      partialPages += 1;
+      expect(result.value.contentCoverage).toBe('partial');
+      if (cursor) expect(result.value.nextCursor).not.toBe(cursor);
+      cursor = result.value.nextCursor;
+    }
+    expect(partialPages).toBeGreaterThan(1);
+    expect(cursor).toBeNull();
+    expect(hits.map(hit => hit.remoteSessionId)).toEqual(['session', 'next']);
+    expect(hits[0]?.match).toMatchObject({ snippet: 'slow native needle earliest', messageIndex: 10 });
+  });
   it.each(['body-only phrase', 'body-only phrase with "quotes"\n東京', '東京 café'])('finds decoded active-branch body %s with its transcript locator', async (query) => {
     const { contribution, request, body } = await fixture();
     const result = await contribution.listCandidates({ ...request, searchTerm: query });

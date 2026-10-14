@@ -1,3 +1,5 @@
+// Initialize the real Workflow schema before the SDK during its ongoing Mini migration.
+import '@happier-dev/protocol/workflows/workflowV1';
 import { execFile } from 'node:child_process';
 import { appendFile, mkdir, mkdtemp, realpath, rm, utimes, writeFile } from 'node:fs/promises';
 import * as fileSystem from 'node:fs/promises';
