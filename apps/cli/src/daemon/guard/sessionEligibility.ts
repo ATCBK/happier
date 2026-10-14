@@ -40,6 +40,8 @@ export function readSessionActivityEligibility(tracked: TrackedSession, inventor
 
 export async function readCurrentSessionEligibility(input: Readonly<{
   access: Parameters<typeof withTrackedSessionRpc>[0];
+  /** Initial exact-owner observation only; post-draft activity is always read again. */
+  inventory?: LiveWorkInventoryV1;
 }>): Promise<SessionEligibility> {
   const unavailable = { eligible: false, reasons: [{ kind: 'not_resumable' }] } as const;
   try {
@@ -55,8 +57,15 @@ export async function readCurrentSessionEligibility(input: Readonly<{
       if (!metadata) return unavailable;
       const resume = { sessionId: access.sessionId, rawSession: access.rawSession, metadata,
         fallbackMachineId: input.access.machineId };
+      const items = input.inventory?.items.filter(item => item.ownerRef === input.access.tracked);
+      // Aggregate unknown coverage may belong to another Session or Machine
+      // owner. Only this runner's complete four-category observation is reused.
+      const observed = items && (['session', 'input', 'agents', 'attention'] as const)
+        .every(category => items.some(item => item.category === category))
+        ? { items, coverage: items.some(item => item.state === 'unknown') ? 'unknown' as const : 'complete' as const }
+        : undefined;
       const preliminary = evaluateSessionEligibility({ tracked: input.access.tracked,
-        inventory: await activity.read(), resume, draft: { status: 'absent' } });
+        inventory: observed ?? await activity.read(), resume, draft: { status: 'absent' } });
       if (!preliminary.eligible) return preliminary;
       const draft = await readSessionDraftPresence({ sessionId: access.sessionId, signal: input.access.signal,
         requester: { token: access.credentials.token, serverHttpBaseUrl: access.serverHttpBaseUrl,

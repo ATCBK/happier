@@ -36,13 +36,13 @@ export function createDaemonTransferRuntimeState(params: Readonly<{
   directPeer: DirectPeerRuntimeConfig;
   tailscaleServe?: DaemonTransferListenerState;
 }>): NonNullable<DaemonState['transfer']> {
-  const directPeerSupported = params.directPeer.featureEnabled && params.directPeer.serverEnabled;
-  const loopbackConfigured = directPeerSupported;
+  const loopbackConfigured = params.directPeer.featureEnabled && params.directPeer.serverEnabled;
 
   return {
+    // Bootstrap installs the prepared Home owner independently of direct listener publication.
     supported: {
-      import: directPeerSupported,
-      export: directPeerSupported,
+      import: true,
+      export: true,
     },
     listenerClasses: {
       loopback_http: createListenerState({
@@ -146,7 +146,9 @@ export function createDaemonTransferRuntimeStatePublisher(params: Readonly<{
           status: 'running',
           transfer: initialTransferState,
         } : StoredMachinePublishedDaemonStateV1Schema.parse(state);
-        let transferState = baseState.transfer ?? initialTransferState;
+        // The live bootstrap and listener owners, not an incumbent daemon's
+        // persisted projection, define the current transfer application.
+        let transferState = initialTransferState;
         if (latestDirectLifecycleState) {
           transferState = applyDirectTransferServerLifecycleState(
             transferState,
@@ -200,6 +202,7 @@ export function createDaemonTransferRuntimeStatePublisher(params: Readonly<{
   return {
     async attachApiMachine(nextApiMachine) {
       apiMachine = nextApiMachine;
+      if (nextApiMachine) hasPendingState = true;
       await scheduleFlush();
     },
 

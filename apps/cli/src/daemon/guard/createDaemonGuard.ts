@@ -76,9 +76,23 @@ export async function createDaemonGuard(input: DaemonGuardInput): Promise<Daemon
         return track([input.inventory.subscribe(listener)]);
     };
     const defaults = MachineGuardPolicyV1Schema.parse({});
+    const readPolicy = () => {
+        const current = input.policy.read();
+        return current.status === 'ready' ? current.policy.guard : defaults;
+    };
     const runtime = createGuardRuntime({ vitals: input.sampler,
-        readPolicy: () => { const current = input.policy.read(); return current.status === 'ready' ? current.policy.guard : defaults; },
-        subscribePolicy: input.policy.subscribe, subscribe: subscribeFacts, policyWork,
+        readPolicy,
+        subscribePolicy: listener => {
+            // The metadata revision also covers unrelated Machine fields. Only
+            // a changed Guard decision invalidates an in-flight Guard plan.
+            let observed = JSON.stringify(readPolicy());
+            return input.policy.subscribe(() => {
+                const current = JSON.stringify(readPolicy());
+                if (current === observed) return;
+                observed = current;
+                listener();
+            });
+        }, subscribe: subscribeFacts, policyWork,
         readFacts: async runtimeSignal => {
             const signal = runtimeSignal ?? lifetime.signal;
             let facts: Awaited<ReturnType<DaemonGuardInput['readFacts']>> | undefined;

@@ -65,6 +65,8 @@ export function createLocalServiceInventoryRoutes(input: Readonly<{
             return input.refreshSnapshot ? await input.refreshSnapshot() : input.registry.getSnapshot();
         },
         async watchSnapshot(request = {}) {
+            if (request.signal?.aborted) return { changed: false };
+            if (input.ensureFreshSnapshot) await input.ensureFreshSnapshot();
             return await watches.parkWatch({
                 isNewer: () => typeof request.sinceGeneratedAt === 'number'
                     && input.registry.getSnapshot().generatedAt > request.sinceGeneratedAt,

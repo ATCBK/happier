@@ -17,10 +17,11 @@ import type { SessionHandoffDirectPeerTransferHandle } from '@/api/machine/sessi
 import { createFileTransferPayloadSource } from '@/machines/transfer/transferPayloadSource';
 import type { DirectTransferServerLifecycle } from '@/machines/transfer/directTransferServerLifecycle';
 import type { PreparedFilesystemTransferScope } from '@/machines/transfer/preparedFilesystemTransferScope';
-import { resolveFoundSkillDownloadSource } from '@/prompts/skills/native/resolveFoundSkillDownloadSource';
+import { prepareFoundSkillExport } from '@/machines/transfer/prepareFoundSkillExport';
 import { resolveRegistryItemDownloadSource } from '@/registries/registryTransferPayload';
 import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import { prepareWorkspaceFileExport } from '@/machines/transfer/prepareWorkspaceFileExport';
+import { resolveDirectPeerServerEnabled } from '@/machines/transfer/transferRuntimeConfig';
 import { prepareWorkspaceSyncSeedExport } from '@/machines/transfer/prepareWorkspaceSyncSeedExport';
 import { resolveComposerMediaStageDownloadSource } from '@/transfers/targets/resolveComposerMediaStageDownloadSource';
 import { createActiveDaemonComposerMediaStageStore } from '@/transfers/staging/composerMediaStageStore';
@@ -65,7 +66,6 @@ import type { DaemonServerWorkScheduler } from '../serverWork';
 import { createDaemonConnectivityCoordinator } from '../connection/createDaemonConnectivityCoordinator';
 import type { ConnectedServiceQuotasLoopHandle } from '../connectedServices/quotas/startConnectedServiceQuotasLoop';
 import { logger } from '@/ui/logger';
-import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptAssetAdapterRegistry';
 import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { bindPluginDaemonConnectionStateSource } from '@/agent/runtime/registry/pluginConnectionStateSource';
 import { tryAcquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
@@ -437,6 +437,7 @@ async function maybeStartPeerMediationLoopback(params: Readonly<{
             return tcpTunnelApplicationPort === null ? null : { port: tcpTunnelApplicationPort };
           }
           if (handshake.flow === 'finite_transfer') {
+            if (!resolveDirectPeerServerEnabled()) return null;
             return params.directPeerServerLifecycle
               ? { port: await params.directPeerServerLifecycle.ensureListening() }
               : null;
@@ -620,6 +621,7 @@ export async function retireMachineSyncRuntimeAttempt(
 }
 
 export type BootstrapMachineSyncRuntimeParams = Readonly<{
+  mcpServers?: MachineRpcHandlerDeps['mcpServers'];
   cliVersion: string;
   machineId: string;
   machine: Machine;
@@ -678,7 +680,6 @@ export type BootstrapMachineSyncRuntimeParams = Readonly<{
     localCapability: string;
     close(): Promise<void>;
   }>>;
-  directTransferPromptAssetAdapterRegistry: ReturnType<typeof createPromptAssetAdapterRegistry>;
   directTransferRegistryHost: ReturnType<typeof createCliRegistryHostV1>;
   connectedServiceRefreshLoopHandle: ConnectedServiceRefreshLoopHandle | null;
   connectedServiceQuotasLoopHandle: ConnectedServiceQuotasLoopHandle | null;
@@ -844,7 +845,6 @@ export async function bootstrapMachineSyncRuntime(
 
   if (connectedApiMachine) {
     try {
-      await params.attachTransferRuntimeStatePublisher(connectedApiMachine);
       if (params.reconcileConnectedServicesProjection) {
         connectedApiMachine.onConnectedServicesProjection(params.reconcileConnectedServicesProjection);
       }
@@ -939,6 +939,13 @@ export async function bootstrapMachineSyncRuntime(
           filesystemScope?: PreparedFilesystemTransferScope,
           context?: RpcHandlerContext,
         ) => {
+          if (input.t === 'prompt_asset_download_v1') {
+            return await prepareFoundSkillExport({
+              lifecycle: directPeerServerLifecycle,
+              request: { path: input.path },
+              ...(context ? { signal: context.signal } : {}),
+            });
+          }
           if (input.t === 'workspace_file_download_v1') {
             return await prepareWorkspaceFileExport({ lifecycle: directPeerServerLifecycle,
               accessPolicy: params.filesystemAccessPolicy, request: input,
@@ -967,13 +974,8 @@ export async function bootstrapMachineSyncRuntime(
             };
           }
           const resolvedSource =
-            input.t === 'prompt_asset_download_v1'
-              ? await resolveFoundSkillDownloadSource({
-                  request: { path: input.path },
-                  ...(context ? { signal: context.signal } : {}),
-                })
-              : input.t === 'prompt_registry_download_v1'
-                ? await resolveRegistryItemDownloadSource({
+            input.t === 'prompt_registry_download_v1'
+              ? await resolveRegistryItemDownloadSource({
                     host: context?.machineAdmission
                       ? createCliRegistryHostV1({credentials:params.credentials,signal:context.signal,machineAdmission:context.machineAdmission})
                       : params.directTransferRegistryHost,
@@ -984,7 +986,7 @@ export async function bootstrapMachineSyncRuntime(
                       version: input.version,
                     },
                   })
-                : input.t === 'composer_media_stage_inspect_v1'
+              : input.t === 'composer_media_stage_inspect_v1'
                     ? await resolveComposerMediaStageDownloadSource({
                         request: {
                           ...input,
@@ -1018,11 +1020,9 @@ export async function bootstrapMachineSyncRuntime(
           });
 
           const transferId = `${
-            input.t === 'prompt_asset_download_v1'
-              ? 'prompt-asset-download'
-              : input.t === 'prompt_registry_download_v1'
-                ? 'prompt-registry-download'
-                : input.t === 'composer_media_stage_inspect_v1'
+            input.t === 'prompt_registry_download_v1'
+              ? 'prompt-registry-download'
+              : input.t === 'composer_media_stage_inspect_v1'
                   ? 'composer-media-inspection'
                 : 'workspace-file-download'
           }:${randomUUID()}`;
@@ -1348,6 +1348,7 @@ export async function bootstrapMachineSyncRuntime(
         ...(directPeerTransferHandlers ? { directPeerTransfer: directPeerTransferHandlers } : {}),
         ...(directPeerServerLifecycle
           ? {
+              preparedMachineTransfer: { request: directPeerServerLifecycle.requestPreparedTransfer },
               directTransferImport: {
                 prepareImportSession: directPeerServerLifecycle.prepareImportSession,
                 abortImportSession: directPeerServerLifecycle.abortImportSession,
@@ -1362,6 +1363,7 @@ export async function bootstrapMachineSyncRuntime(
       },
       {
         createRegistryHost:(signal,context)=>createCliRegistryHostV1({credentials:params.credentials,signal,machineAdmission:context?.machineAdmission}),
+        ...(params.mcpServers ? { mcpServers: params.mcpServers } : {}),
         ...(params.sessionRunnerStatus ? { sessionRunnerStatus: params.sessionRunnerStatus } : {}),
         sessionPendingResetStartInstalled: pendingResetStartPorts !== null,
         npmRegistryProfiles: {
@@ -1984,6 +1986,7 @@ export async function bootstrapMachineSyncRuntime(
             return refreshMachineMetadataForCurrentDaemon(base, {
               host: params.preferredHost,
               platform: readLocalHostIdentity().platform,
+              arch: os.arch(),
               happyCliVersion: params.cliVersion,
               homeDir: os.homedir(),
               happyHomeDir: params.happyHomeDir,
@@ -2044,6 +2047,10 @@ export async function bootstrapMachineSyncRuntime(
       }
 
       const operation = (async () => {
+        // Registration retains incumbent state. Publish this daemon's lazy
+        // transfer declaration only once the Machine transport is connected.
+        await params.attachTransferRuntimeStatePublisher(connectedApiMachine);
+        if (params.isShuttingDown()) return;
         // connect() starts the transport asynchronously. Settle dead markers only
         // on this connected edge; retain failures for reconnect or handoff resume.
         if (pendingOrphanedSessions.length > 0) {

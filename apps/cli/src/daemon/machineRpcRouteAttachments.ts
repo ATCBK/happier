@@ -4,6 +4,7 @@ import type { BrowserDaemonControlRoutes } from './browser/control/routes';
 import type { BrowserContextRoutes } from './browser/context/routes';
 import type { BrowserDiagnosticsRoutes } from './browser/diagnostics/routes';
 import type { BrowserRecordingRoutes } from './browser/recording/routes';
+import type { ComputerRoutes } from './computer/routes';
 import type { SimulatorPreviewRoutes } from './devices/simulator/previewRoutes.types';
 import type { DaemonLocalServicesMachineRpcRoutes } from '@/rpc/handlers/daemonLocalServices';
 import type { DaemonMachineVitalsRoutes } from '@/rpc/handlers/daemonMachineVitals';
@@ -24,6 +25,7 @@ export type DaemonMachineRpcRouteRegistrar = Pick<
   | 'registerMachineResourcesPolicyRoutes'
   | 'registerMachineGuardRoutes'
   | 'registerStorageRoutes'
+  | 'registerComputerRoutes'
   | 'registerBrowserControlRoutes'
   | 'registerBrowserContextRoutes'
   | 'registerBrowserDiagnosticsRoutes'
@@ -46,6 +48,7 @@ export type DaemonMachineRpcRouteAttachmentCache = Readonly<{
   attachMachineResourcesPolicyRoutes(routes: DaemonMachineResourcesPolicyRoutes): void;
   attachMachineGuardRoutes(routes: DaemonMachineGuardRoutes): void;
   attachStorageRoutes(routes: DaemonStorageRoutes): void;
+  attachComputerRoutes(resolveComputer: () => ComputerRoutes | null): void;
   attachBrowserControlRoutes(routes: BrowserDaemonControlRoutes): void;
   attachBrowserContextRoutes(routes: BrowserContextRoutes): void;
   attachBrowserDiagnosticsRoutes(routes: BrowserDiagnosticsRoutes): void;
@@ -70,6 +73,7 @@ export function createDaemonMachineRpcRouteAttachmentCache(input: Readonly<{
   let machineResourcesPolicyRoutes: DaemonMachineResourcesPolicyRoutes | null = null;
   let machineGuardRoutes: DaemonMachineGuardRoutes | null = null;
   let storageRoutes: DaemonStorageRoutes | null = null;
+  let resolveComputer: (() => ComputerRoutes | null) | null = null;
   let browserControlRoutes: BrowserDaemonControlRoutes | null = null;
   let browserContextRoutes: BrowserContextRoutes | null = null;
   let browserDiagnosticsRoutes: BrowserDiagnosticsRoutes | null = null;
@@ -138,6 +142,10 @@ export function createDaemonMachineRpcRouteAttachmentCache(input: Readonly<{
   }
 
   return {
+    attachComputerRoutes(resolve) {
+      resolveComputer = resolve;
+      input.getApiMachineForSessions()?.registerComputerRoutes(resolve);
+    },
     attachStorageRoutes(routes) {
       storageRoutes = routes;
       input.getApiMachineForSessions()?.registerStorageRoutes(routes);
@@ -253,6 +261,9 @@ export function createDaemonMachineRpcRouteAttachmentCache(input: Readonly<{
       }
       if (storageRoutes) {
         apiMachineForSessions.registerStorageRoutes(storageRoutes);
+      }
+      if (resolveComputer) {
+        apiMachineForSessions.registerComputerRoutes(resolveComputer);
       }
       if (browserControlRoutes) {
         apiMachineForSessions.registerBrowserControlRoutes(browserControlRoutes);

@@ -191,6 +191,10 @@ export function createStopSession(params: Readonly<{
     attachmentInfo: ExactTerminalHostAttachmentInfo;
     terminalMode: TerminalMode;
   }>) => Promise<ExactTerminalControlServiceabilityRetirement | void>;
+  retireAbsentTerminalControlServiceability?: (input: Readonly<{
+    sessionId: string;
+    trackedSession: TrackedSession;
+  }>) => Promise<ExactTerminalControlServiceabilityRetirement>;
   recoverStrandedTerminalControlServiceability?: (input: Readonly<{
     sessionId: string;
     expectedAttachmentId?: string;
@@ -818,6 +822,21 @@ export function createStopSession(params: Readonly<{
       return disposition.status === 'parked'
         ? incompleteStopSession(mapDispositionFailureReason(disposition.reason))
         : incompleteStopSession('destroy_failed');
+    }
+    if (!isPidFallback && params.retireAbsentTerminalControlServiceability) {
+      try {
+        let retired = false;
+        for (const trackedSession of expectedTrackedSessionsByPid.values()) {
+          if (await params.retireAbsentTerminalControlServiceability({ sessionId: normalizedSessionId, trackedSession }) === 'retired') {
+            retired = true;
+            break;
+          }
+        }
+        if (!retired) return incompleteStopSession('terminal_control_serviceability_retirement_failed');
+      } catch (error) {
+        logWarning('[DAEMON RUN] Failed to publish absent terminal control serviceability after runner Stop', error);
+        return incompleteStopSession('terminal_control_serviceability_retirement_failed');
+      }
     }
     return { status: 'stopped' };
   };

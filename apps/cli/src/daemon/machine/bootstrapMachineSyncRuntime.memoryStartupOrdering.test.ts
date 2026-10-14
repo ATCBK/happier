@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Machine } from '@/api/types';
-import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptAssetAdapterRegistry';
 import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import { DEFAULT_MEMORY_SETTINGS } from '@/settings/memorySettings';
 import { createDeferred } from '@/testkit/async/deferred';
@@ -120,7 +119,6 @@ describe('bootstrapMachineSyncRuntime memory startup ordering', () => {
       beforeShutdown: vi.fn(async () => {}),
       requestShutdown: vi.fn(),
       directPeerServerLifecycle: null,
-      directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
       directTransferRegistryHost: createCliRegistryHostV1(),
       connectedServiceRefreshLoopHandle: null,
       connectedServiceQuotasLoopHandle: null,

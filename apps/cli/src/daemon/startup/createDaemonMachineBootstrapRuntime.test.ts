@@ -97,7 +97,6 @@ function createBaseRuntimeParams(overrides: Partial<Parameters<typeof createDaem
     requestShutdown: vi.fn(),
     directPeerServerLifecycle: null,
     // Test fixture boundary: transfer registries are pass-through values and are not invoked by this test.
-    directTransferPromptAssetAdapterRegistry: {} as never,
     directTransferRegistryHost: {} as never,
     daemonServerWorkScheduler: {} as never,
     setDaemonServerWorkOnline: vi.fn(),

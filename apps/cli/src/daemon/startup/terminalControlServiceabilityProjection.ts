@@ -89,12 +89,16 @@ export function applyTerminalControlServiceabilityProjection(params: Readonly<{
 
 export function clearTerminalControlServiceabilityProjection(params: Readonly<{
   metadata: Record<string, unknown>;
-  retiredAttachmentId: string;
+  retiredAttachmentId?: string;
   retiredAt: number;
   terminalMode: TerminalMode;
 }>): Record<string, unknown> {
   const terminal = asRecord(params.metadata.terminal) ?? {};
   const existing = asRecord(terminal.controlServiceabilityV1);
+  // A proven plain runner has no attachment identity to retire. Never use that
+  // evidence to retire an independently recoverable terminal host.
+  if (params.retiredAttachmentId === undefined
+    && ((terminal.mode !== undefined && terminal.mode !== 'plain') || existing?.attachmentId !== undefined)) return params.metadata;
   if (existing && existing.attachmentId !== params.retiredAttachmentId) return params.metadata;
   if (existing?.retired === true && existing.attachmentId === params.retiredAttachmentId) return params.metadata;
   const existingObservedAt = typeof existing?.observedAt === 'number' && Number.isFinite(existing.observedAt)
@@ -107,7 +111,7 @@ export function clearTerminalControlServiceabilityProjection(params: Readonly<{
       mode: typeof terminal.mode === 'string' ? terminal.mode : params.terminalMode,
       controlServiceabilityV1: {
         v: 1,
-        attachmentId: params.retiredAttachmentId,
+        ...(params.retiredAttachmentId === undefined ? {} : { attachmentId: params.retiredAttachmentId }),
         state: 'unknown',
         observedAt: Math.max(params.retiredAt, existingObservedAt),
         reason: 'attachment_retired',

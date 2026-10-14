@@ -41,6 +41,7 @@ export async function waitForDaemonRunningWithinBudget(params: {
   pollMs: number;
   sleep?: (ms: number) => Promise<void>;
 }): Promise<boolean> {
+  let deadline = performance.now() + params.timeoutMs;
   if (await params.isRunning()) return true;
   if (params.shouldAbort?.()) return false;
 
@@ -49,20 +50,20 @@ export async function waitForDaemonRunningWithinBudget(params: {
       ? params.sleep
       : (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-  let remainingMs = params.timeoutMs;
   let nextPollMs = params.pollMs;
   for (;;) {
+    let remainingMs = deadline - performance.now();
     if (remainingMs <= 0) {
       // The startup budget is a reporting checkpoint while the owning process
       // or daemon control state still proves startup is live. Elapsed time alone
       // cannot turn that evidence into a failed start.
       if (!await params.isStillStarting?.()) return false;
       params.onStillStarting?.();
+      deadline = performance.now() + params.timeoutMs;
       remainingMs = params.timeoutMs;
     }
     const sleepMs = Math.min(nextPollMs, remainingMs);
     await sleep(sleepMs);
-    remainingMs -= sleepMs;
     if (await params.isRunning()) return true;
     if (params.shouldAbort?.()) return false;
     // Startup can be slow under load. Keep the first readiness probe quick, then

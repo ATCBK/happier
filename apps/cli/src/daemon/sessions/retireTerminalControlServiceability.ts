@@ -7,14 +7,17 @@ import type { TerminalMode } from '@/terminal/runtime/terminalConfig';
 import { clearTerminalControlServiceabilityProjection } from '../startup/terminalControlServiceabilityProjection';
 
 export type ExactTerminalControlServiceabilityRetirement = 'retired' | 'superseded';
+export type TerminalControlServiceabilityRetirementTarget = Readonly<{ attachmentId: string; terminalMode: TerminalMode; expectedRunner?: never }>
+    | Readonly<{ attachmentId?: never; terminalMode: 'plain'; expectedRunner: Readonly<{ pid: number; startTimeMs?: number }> }>;
 
 export async function retireExactTerminalControlServiceability(params: Readonly<{
     credentials: StoredCredentials;
     sessionId: string;
-    attachmentId: string;
-    terminalMode: TerminalMode;
     currentness?: SessionMetadataMutationCurrentness;
-}>): Promise<ExactTerminalControlServiceabilityRetirement> {
+}> & TerminalControlServiceabilityRetirementTarget): Promise<ExactTerminalControlServiceabilityRetirement> {
+    const matchesExpectedRunner = (metadata: Readonly<{ hostPid?: number; hostProcessStartTimeMs?: number }>) =>
+        !params.expectedRunner || (metadata.hostPid === params.expectedRunner.pid
+            && (params.expectedRunner.startTimeMs === undefined || metadata.hostProcessStartTimeMs === params.expectedRunner.startTimeMs));
     await verifySessionMetadataMutationCurrentness(params.currentness);
     const rawSession = await fetchSessionByIdCompat({
         token: params.credentials.token,
@@ -29,13 +32,17 @@ export async function retireExactTerminalControlServiceability(params: Readonly<
         sessionId: params.sessionId,
         rawSession,
         currentness: params.currentness,
-        updater: (metadata) => clearTerminalControlServiceabilityProjection({
-            metadata,
-            retiredAttachmentId: params.attachmentId,
-            retiredAt: Date.now(),
-            terminalMode: params.terminalMode,
-        }),
+        updater: (metadata) => {
+            if (!matchesExpectedRunner(metadata)) return metadata;
+            return clearTerminalControlServiceabilityProjection({
+                metadata,
+                retiredAttachmentId: params.attachmentId,
+                retiredAt: Date.now(),
+                terminalMode: params.terminalMode,
+            });
+        },
     });
+    if (!matchesExpectedRunner(updated.metadata)) return 'superseded';
     const terminal = updated.metadata.terminal;
     if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)) return 'superseded';
     const serviceability = (terminal as Record<string, unknown>).controlServiceabilityV1;

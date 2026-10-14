@@ -9,6 +9,20 @@ import {
 } from './waitForDaemonRunningWithinBudget';
 
 describe('waitForDaemonRunningWithinBudget', () => {
+  it('charges slow readiness probes to the existing wait checkpoint', async () => {
+    let elapsedMs = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => elapsedMs);
+    const timeoutMs = 1_000;
+    const probeMs = 600;
+    await expect(waitForDaemonRunningWithinBudget({
+      isRunning: async () => { elapsedMs += probeMs; return false; },
+      timeoutMs,
+      pollMs: 100,
+      sleep: async (ms) => { elapsedMs += ms; },
+    })).resolves.toBe(false);
+    expect(elapsedMs).toBeLessThanOrEqual(timeoutMs + probeMs);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -39,7 +53,9 @@ describe('waitForDaemonRunningWithinBudget', () => {
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(true);
-    const sleep = vi.fn(async () => undefined);
+    let elapsedMs = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => elapsedMs);
+    const sleep = vi.fn(async (ms: number) => { elapsedMs += ms; });
 
     await expect(waitForDaemonRunningWithinBudget({
       isRunning,
@@ -59,7 +75,9 @@ describe('waitForDaemonRunningWithinBudget', () => {
     const shouldAbort = vi.fn()
       .mockReturnValueOnce(false)
       .mockReturnValueOnce(true);
-    const sleep = vi.fn(async () => undefined);
+    let elapsedMs = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => elapsedMs);
+    const sleep = vi.fn(async (ms: number) => { elapsedMs += ms; });
 
     await expect(waitForDaemonRunningWithinBudget({
       isRunning,
@@ -75,12 +93,14 @@ describe('waitForDaemonRunningWithinBudget', () => {
   });
 
   it('backs off repeated misses while respecting the startup budget', async () => {
+    let elapsedMs = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => elapsedMs);
     const sleeps: number[] = [];
     await expect(waitForDaemonRunningWithinBudget({
       isRunning: async () => false,
       timeoutMs: 2_600,
       pollMs: 100,
-      sleep: async (ms) => { sleeps.push(ms); },
+      sleep: async (ms) => { elapsedMs += ms; sleeps.push(ms); },
     })).resolves.toBe(false);
     expect(sleeps).toEqual([100, 200, 400, 800, 1_000, 100]);
   });
@@ -113,6 +133,8 @@ describe('waitForDaemonRunningWithinBudget', () => {
   });
 
   it('ends an extended startup wait when its process exits before readiness', async () => {
+    let elapsedMs = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => elapsedMs);
     let starting = true;
     let checkpoints = 0;
     await expect(waitForDaemonRunningWithinBudget({
@@ -122,7 +144,7 @@ describe('waitForDaemonRunningWithinBudget', () => {
       onStillStarting: () => { checkpoints += 1; },
       timeoutMs: 5,
       pollMs: 5,
-      sleep: async () => { if (checkpoints > 0) starting = false; },
+      sleep: async (ms) => { elapsedMs += ms; if (checkpoints > 0) starting = false; },
     })).resolves.toBe(false);
     expect(checkpoints).toBe(1);
   });

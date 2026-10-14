@@ -32,7 +32,6 @@ import { resolveMachineTransferRuntimeConfig } from '@/machines/transfer/transfe
 import { createDaemonTransferRuntimeState, createDaemonTransferRuntimeStatePublisher } from '../transferRuntimeState';
 import { resolveTailscaleTransferListenerState } from '../resolveTailscaleTransferListenerState';
 import { resolveRunningCliRuntimeIdentity } from '@/packagedRuntime/resolveRunningCliRuntimeIdentity';
-import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptAssetAdapterRegistry';
 import { resolveFirstPartyLegacyConnectedServiceIdForQualifiedServiceKey } from '@/plugins/projection/registry/connectedAccountPurposeCompatibility';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
@@ -81,7 +80,8 @@ import {
   type DaemonServerWorkScheduler,
 } from '../serverWork';
 import { parseBooleanEnv } from '@happier-dev/protocol/env/parseBooleanEnv';
-import { buildQualifiedPluginContributionKey, type BuiltInLegacyConnectedAccountOperation, type ConnectedServiceExecutionAuthorityV1, type ConnectedServiceId, type QualifiedConnectedAccountProfileV4, type QualifiedConnectedAccountRef } from '@happier-dev/protocol';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import type { BuiltInLegacyConnectedAccountOperation, ConnectedServiceExecutionAuthorityV1, ConnectedServiceId, QualifiedConnectedAccountProfileV4, QualifiedConnectedAccountRef } from '@happier-dev/protocol';
 import type {
   AgentSpawnQualifiedPurposeBindingSnapshot,
 } from '../connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
@@ -170,6 +170,9 @@ export type StartDaemonRuntimeBootstrapParams = Readonly<{
     agentId: CatalogAgentId;
     connectedServicesBindingsRaw: unknown;
   }>) => Promise<AgentSpawnQualifiedPurposeBindingSnapshot | null>;
+  activatePurposeBindings?: ConstructorParameters<
+    typeof ConnectedServiceRefreshCoordinator
+  >[0]['activatePurposeBindings'];
   onQualifiedConnectedAccountCredentialUpdated?: (
     account: QualifiedConnectedAccountRef,
   ) => void | Promise<void>;
@@ -234,7 +237,6 @@ export type StartDaemonRuntimeBootstrapResult = Readonly<{
   initialDaemonState: DaemonState;
   directPeerServerLifecycle: DirectTransferServerLifecycle | null;
   transferLiveWorkProducer: LiveWorkProducerV1;
-  directTransferPromptAssetAdapterRegistry: ReturnType<typeof createPromptAssetAdapterRegistry>;
   directTransferRegistryHost: ReturnType<typeof createCliRegistryHostV1>;
   transferRuntimeStatePublisher: ReturnType<typeof createDaemonTransferRuntimeStatePublisher>;
   connectedServiceRefreshCoordinator: ConnectedServiceRefreshCoordinator | null;
@@ -256,72 +258,54 @@ export async function startDaemonRuntimeBootstrap(
   const directPeerRuntimeConfig = resolveMachineTransferRuntimeConfig();
   const stackDebugDirectPeerStartServer =
     await resolveStackDebugDirectPeerStartServer();
-  const directTransferPromptAssetAdapterRegistry = createPromptAssetAdapterRegistry({
-    readRegisteredAdapters: () => (
-      pluginReloadController.getState().activeRegistry?.promptAssetAdapters ?? new Map()
-    ),
-  });
   const directTransferRegistryHost = createCliRegistryHostV1({credentials:params.credentials});
   const directPeerServerEnabled = directPeerRuntimeConfig.directPeer.serverEnabled;
+  const tailscaleServeEnabled = directPeerServerEnabled && directPeerRuntimeConfig.tailscaleServe.enabled;
   const directPeerLocalListenerClasses = ['loopback_http' as const];
   const directPeerTransferListenerClasses = [
     ...directPeerLocalListenerClasses,
-    ...(directPeerRuntimeConfig.tailscaleServe.enabled ? ['tailscale_serve_https' as const] : []),
+    ...(tailscaleServeEnabled ? ['tailscale_serve_https' as const] : []),
   ] as const;
   const directPeerAdvertisedHosts = ['127.0.0.1'];
 
   let tailscaleTransferServeLifecycle: ReturnType<typeof createTailscaleTransferServeLifecycle> | null = null;
   let transferRuntimeStatePublisher: ReturnType<typeof createDaemonTransferRuntimeStatePublisher> | null = null;
 
-  const directPeerServerLifecycle = directPeerServerEnabled
-    ? createDirectTransferServerLifecycle({
-        admissionDrain: params.admissionDrain,
-        attachmentUpload: {
-          resolveSessionWorkingDirectory: createResolveHostedSessionWorkingDirectory({
-            pidToTrackedSession: params.pidToTrackedSession,
-            getMachineId: params.machineIdProvider,
-          }),
-        },
-        bindPort: directPeerRuntimeConfig.directPeer.bindPort,
-        bindHost: directPeerRuntimeConfig.directPeer.bindHost,
-        listenerClasses: directPeerTransferListenerClasses,
-        advertisedHosts: directPeerAdvertisedHosts,
-        idleStopMs: directPeerRuntimeConfig.directPeer.idleStopMs,
-        accessPolicy: params.filesystemAccessPolicy,
-        composerMediaStage: {
-          executionTarget: {
-            serverId: configuration.activeServerId,
-            machineId: params.machineId,
-          },
-          store: createActiveDaemonComposerMediaStageStore({ machineId: params.machineId }),
-        },
-        promptAssetUpload: {
-          adapterRegistry: directTransferPromptAssetAdapterRegistry,
-        },
-        ...(stackDebugDirectPeerStartServer
-          ? { startServer: stackDebugDirectPeerStartServer }
-          : {}),
-        resolveTailscaleServeHttpsBaseUrl: () => tailscaleTransferServeLifecycle?.getHttpsBaseUrlWithServePath() ?? null,
-        onStateChange: (state) => {
-          void transferRuntimeStatePublisher?.publishDirectTransferServerLifecycleState(state);
-          return tailscaleTransferServeLifecycle?.observeDirectTransferServerLifecycleState(state);
-        },
-      })
-    : null;
-  // The bootstrap owns this explicit enablement decision. An unavailable
-  // enabled lifecycle must not be confused with this configured absence.
-  const transferLiveWorkProducer: LiveWorkProducerV1 = directPeerServerLifecycle ? directPeerServerLifecycle.activity : {
-    read: () => ({ items: [], coverage: 'complete' }),
-    subscribe: () => () => {},
-  };
+  const directPeerServerLifecycle = createDirectTransferServerLifecycle({
+    admissionDrain: params.admissionDrain,
+    attachmentUpload: {
+      resolveSessionWorkingDirectory: createResolveHostedSessionWorkingDirectory({
+        pidToTrackedSession: params.pidToTrackedSession,
+        getMachineId: params.machineIdProvider,
+      }),
+    },
+    bindPort: directPeerRuntimeConfig.directPeer.bindPort,
+    bindHost: directPeerRuntimeConfig.directPeer.bindHost,
+    listenerClasses: directPeerTransferListenerClasses,
+    advertisedHosts: directPeerAdvertisedHosts,
+    idleStopMs: directPeerRuntimeConfig.directPeer.idleStopMs,
+    accessPolicy: params.filesystemAccessPolicy,
+    composerMediaStage: {
+      executionTarget: {
+        serverId: configuration.activeServerId,
+        machineId: params.machineId,
+      },
+      store: createActiveDaemonComposerMediaStageStore({ machineId: params.machineId }),
+    },
+    ...(stackDebugDirectPeerStartServer
+      ? { startServer: stackDebugDirectPeerStartServer }
+      : {}),
+    resolveTailscaleServeHttpsBaseUrl: () => tailscaleTransferServeLifecycle?.getHttpsBaseUrlWithServePath() ?? null,
+    onStateChange: (state) => {
+      void transferRuntimeStatePublisher?.publishDirectTransferServerLifecycleState(state);
+      return tailscaleTransferServeLifecycle?.observeDirectTransferServerLifecycleState(state);
+    },
+  });
+  // Home's prepared byte owner is independent of optional direct listener publication.
+  const transferLiveWorkProducer: LiveWorkProducerV1 = directPeerServerLifecycle.activity;
 
-  let stopDirectPeerServer: () => Promise<void> = async () => {};
+  const stopDirectPeerServer = async () => { await directPeerServerLifecycle.stop(); };
   let stopTailscaleTransferServeLifecycle: () => Promise<void> = async () => {};
-  if (directPeerServerLifecycle) {
-    stopDirectPeerServer = async () => {
-      await directPeerServerLifecycle.stop();
-    };
-  }
 
   const runningRuntime = resolveRunningCliRuntimeIdentity();
   const accountId = readAccountIdFromToken(params.credentials.token);
@@ -349,7 +333,7 @@ export async function startDaemonRuntimeBootstrap(
   // The caller completes the final daemon state before persisting it, so keep the
   // local file state and daemon state assembly together here.
   const initialTailscaleTransferListenerState = await resolveTailscaleTransferListenerState({
-    enabled: directPeerRuntimeConfig.tailscaleServe.enabled,
+    enabled: tailscaleServeEnabled,
     transferPort: directPeerRuntimeConfig.directPeer.bindPort,
     servePath: directPeerRuntimeConfig.tailscaleServe.servePath,
     httpsPort: directPeerRuntimeConfig.tailscaleServe.httpsPort,
@@ -380,9 +364,9 @@ export async function startDaemonRuntimeBootstrap(
       params.logger.warn(message, error);
     },
   });
-  if (directPeerServerLifecycle && directPeerRuntimeConfig.tailscaleServe.enabled) {
+  if (tailscaleServeEnabled) {
     tailscaleTransferServeLifecycle = createTailscaleTransferServeLifecycle({
-      enabled: directPeerRuntimeConfig.tailscaleServe.enabled,
+      enabled: tailscaleServeEnabled,
       servePath: directPeerRuntimeConfig.tailscaleServe.servePath,
       httpsPort: directPeerRuntimeConfig.tailscaleServe.httpsPort,
       env: params.processEnv,
@@ -408,7 +392,6 @@ export async function startDaemonRuntimeBootstrap(
     initialDaemonState,
     directPeerServerLifecycle,
     transferLiveWorkProducer,
-    directTransferPromptAssetAdapterRegistry,
     directTransferRegistryHost,
     transferRuntimeStatePublisher,
     connectedServiceRefreshCoordinator,
@@ -434,7 +417,7 @@ export async function startDaemonConnectedServiceRuntime(
     | 'listQualifiedConnectedAccountGroupQuotaTargets' | 'listScheduledQualifiedConnectedAccounts' | 'subscribeConnectedAccountInvalidations'
     | 'onQualifiedConnectedAccountCredentialUpdated' | 'qualifiedConnectedAccountEstablishedRuntimeOwner'
     | 'resolveConnectedServiceQualifiedPurposeBindingSnapshot' | 'resolveQualifiedConnectedAccountPeerClass'
-    | 'resolveQualifiedConnectedAccountPeerOperationTransport'> & Readonly<{
+    | 'resolveQualifiedConnectedAccountPeerOperationTransport' | 'activatePurposeBindings'> & Readonly<{
     accountSettingsSnapshot?: () => import('@/settings/accountSettings/activeAccountSettingsSnapshot').ActiveAccountSettingsSnapshot | null;
     connectedServicesMaterializationBaseDir?: string;
     isAccountRuntimeCurrent?: () => Promise<boolean>;
@@ -523,6 +506,9 @@ export async function startDaemonConnectedServiceRuntime(
       runAccountOperation: params.runAccountOperation,
       allowNativeAccountState: params.allowNativeAccountState,
       connectedAccountsOwner: params.connectedAccountsOwner,
+      ...(params.activatePurposeBindings
+        ? { activatePurposeBindings: params.activatePurposeBindings }
+        : {}),
       ...(params.resolveConnectedServiceQualifiedPurposeBindingSnapshot
         ? {
             resolveQualifiedPurposeBindingSnapshot:

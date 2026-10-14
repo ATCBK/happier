@@ -147,7 +147,6 @@ export function createManagedActivityInventory(params: Readonly<{
     let priorDecision: ActivityDecisionV1 | undefined;
     let publishedOwnerEdge = -1;
     let disposed = false;
-    let reads = Promise.resolve();
     let ownerEdge = 0;
     let inFlight: Readonly<{ ownerEdge: number; result: Promise<LiveWorkInventoryV1> }> | null = null;
     let unsubscribe: Array<() => void> | null = null;
@@ -175,8 +174,7 @@ export function createManagedActivityInventory(params: Readonly<{
         const observationsPending = Promise.allSettled(params.producers.map(producer => {
             try { return producer.read(); } catch (error) { return Promise.reject(error); }
         }));
-        const next = reads.then(async () => {
-            const observations = await observationsPending;
+        const next = observationsPending.then(observations => {
             const items: LiveWorkItemV1[] = [];
             let coverage: LiveWorkInventoryV1['coverage'] = observations.length ? 'complete' : 'unknown';
             for (const observation of observations) {
@@ -184,7 +182,9 @@ export function createManagedActivityInventory(params: Readonly<{
                 items.push(...observation.value.items);
                 if (observation.value.coverage === 'unknown') coverage = 'unknown';
             }
-            if (observedEdge !== ownerEdge) coverage = 'unknown';
+            // A retired observation neither blocks its successor nor changes the
+            // successor's idle anchor/publication when its transport finally replies.
+            if (observedEdge !== ownerEdge) return { items, coverage: 'unknown' as const };
             const settled = coverage === 'complete' && items.every(item => item.state === 'settled');
             // All applicable asynchronous owners must have proved absence before
             // starting the interval; a slow read cannot backdate an idle proof.
@@ -203,7 +203,6 @@ export function createManagedActivityInventory(params: Readonly<{
         inFlight = { ownerEdge: observedEdge, result: next };
         const release = () => { if (inFlight?.result === next) inFlight = null; };
         void next.then(release, release);
-        reads = next.then(() => {}, () => {});
         return next;
     };
     return {

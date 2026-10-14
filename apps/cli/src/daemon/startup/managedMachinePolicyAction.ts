@@ -1,4 +1,5 @@
-import { ActionApprovalRequestCreatedResultSchema, type ActionExecutorContext, type ActionExecutorDeps, type createActionExecutor } from '@happier-dev/protocol';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { ActionExecutorContext, ActionExecutorDeps, createActionExecutor } from '@happier-dev/protocol';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 
 /** The installed native owner retains its existing shared Action/Ask continuation. */

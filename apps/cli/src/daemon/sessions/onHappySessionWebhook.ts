@@ -1,4 +1,5 @@
 import type { Metadata, SessionCreationOutcome } from '@/api/types';
+import { invalidateProcessLaunchDiscovery } from '@/processes/launchNotification';
 import { configuration } from '@/configuration';
 import {
   SPAWN_SESSION_ERROR_CODES,
@@ -132,6 +133,7 @@ function registerExternalTrackedSession(input: Readonly<{
   const tracked: TrackedSession = { startedBy: 'happy directly - likely by user from terminal',
     happySessionId: input.sessionId, happySessionMetadataFromLocalWebhook: metadata, pid: input.pid };
   input.pidToTrackedSession.set(input.pid, tracked);
+  invalidateProcessLaunchDiscovery();
   return tracked;
 }
 
@@ -1134,6 +1136,7 @@ export function createOnHappySessionWebhook(params: Readonly<{
       if (onTrackedSessionReady) {
         await onTrackedSessionReady(trackedDaemonCanonicalSession);
       }
+      invalidateProcessLaunchDiscovery();
       await awaitTrackedMarkerPromotion();
       const spawnAwaiterPid =
         trackedDaemonCanonicalSession.spawnStartupAwaiterPid

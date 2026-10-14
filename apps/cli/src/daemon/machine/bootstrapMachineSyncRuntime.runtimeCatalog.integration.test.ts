@@ -52,7 +52,6 @@ import type { DaemonState, Machine } from '@/api/types';
 import { ApiMachineClient } from '@/api/apiMachine';
 import { createLocalServicePreviewRoutes } from '@/daemon/local/services/preview/routes';
 import { createLocalServicePreviewRegistry } from '@/daemon/local/services/preview/registry';
-import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptAssetAdapterRegistry';
 import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import { DEFAULT_MEMORY_SETTINGS } from '@/settings/memorySettings';
 
@@ -77,6 +76,8 @@ import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { createDirectTransferServerLifecycle } from '@/machines/transfer/directTransferServerLifecycle';
+import { reserveEphemeralPort } from '@/testkit/http/portUtils';
 
 type ConnectedApiMachineForBootstrap = NonNullable<Awaited<ReturnType<BootstrapMachineSyncRuntimeParams['createConnectedApiMachine']>>>;
 
@@ -327,7 +328,6 @@ describe('bootstrapMachineSyncRuntime', () => {
             beforeShutdown: vi.fn(async () => {}),
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
             directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
@@ -622,7 +622,6 @@ describe('bootstrapMachineSyncRuntime', () => {
             beforeShutdown: vi.fn(async () => {}),
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
             directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
@@ -711,7 +710,6 @@ describe('bootstrapMachineSyncRuntime', () => {
             beforeShutdown: vi.fn(async () => {}),
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
             directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
@@ -723,9 +721,10 @@ describe('bootstrapMachineSyncRuntime', () => {
         expect(sharedMutationCustody.close).not.toHaveBeenCalled();
     });
 
-    it('retires the machine client when attachment aborts bootstrap before workers start', async () => {
-        const attachmentFailure = new Error('transfer-runtime-attachment-failure');
+    it('retires the machine client when projection subscription aborts bootstrap before workers start', async () => {
+        const attachmentFailure = new Error('projection-subscription-failure');
         const fakeConnectedApiMachine = createApiMachineTransportFixture();
+        const onConnectedServicesProjection = vi.fn(() => { throw attachmentFailure; });
         const machine: Machine = {
             id: 'machine-attachment-failure',
             encryptionMode: 'plain',
@@ -747,10 +746,9 @@ describe('bootstrapMachineSyncRuntime', () => {
             filesystemAccessPolicy: { kind: 'osUser' },
             takeoverRequested: false,
             isShuttingDown: () => false,
-            createConnectedApiMachine: vi.fn(() => fakeConnectedApiMachine as unknown as ConnectedApiMachineForBootstrap),
-            attachTransferRuntimeStatePublisher: vi.fn(async () => {
-                throw attachmentFailure;
-            }),
+            createConnectedApiMachine: vi.fn(() => ({ ...fakeConnectedApiMachine, onConnectedServicesProjection }) as unknown as ConnectedApiMachineForBootstrap),
+            reconcileConnectedServicesProjection: async () => {},
+            attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine,
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
             startVoiceInferenceWorkerForMachine: vi.fn(async (): Promise<VoiceInferenceWorkerHandle | null> => null),
@@ -761,7 +759,6 @@ describe('bootstrapMachineSyncRuntime', () => {
             beforeShutdown: vi.fn(async () => {}),
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
             directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
@@ -838,7 +835,6 @@ describe('bootstrapMachineSyncRuntime', () => {
             beforeShutdown: vi.fn(async () => {}),
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
             directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
@@ -966,7 +962,6 @@ describe('bootstrapMachineSyncRuntime', () => {
             beforeShutdown: vi.fn(async () => {}),
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
             directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
@@ -1137,7 +1132,6 @@ describe('bootstrapMachineSyncRuntime', () => {
             beforeShutdown: vi.fn(async () => {}),
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
             directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
@@ -1414,7 +1408,6 @@ describe('bootstrapMachineSyncRuntime', () => {
             beforeShutdown: vi.fn(async () => {}),
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
             directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
@@ -1614,7 +1607,6 @@ describe('bootstrapMachineSyncRuntime', () => {
             beforeShutdown: vi.fn(async () => {}),
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
             directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
@@ -1796,7 +1788,6 @@ describe('bootstrapMachineSyncRuntime', () => {
             beforeShutdown: vi.fn(async () => {}),
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
             directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
@@ -2012,6 +2003,9 @@ describe('bootstrapMachineSyncRuntime', () => {
                 ? snapshot.features.capabilities.machines.peerMediation.grantSigningKeys
                 : [];
         };
+        const finiteTransfers = createDirectTransferServerLifecycle({
+            bindPort: await reserveEphemeralPort(), listenerClasses: ['loopback_http'],
+        });
 
         const result = await bootstrapMachineSyncRuntime({
             cliVersion: '0.0.0-test',
@@ -2039,11 +2033,10 @@ describe('bootstrapMachineSyncRuntime', () => {
             loadLocalSessionMetadataForHandoff: vi.fn(async () => null),
             beforeShutdown: vi.fn(async () => {}),
             requestShutdown: vi.fn(),
-            directPeerServerLifecycle: null,
+            directPeerServerLifecycle: finiteTransfers,
             machineIrohRuntime,
             acquireLocalServicePreviewApplication: previewRoutes.acquireNativeApplication,
             acquireWorkspaceSyncMachineIngress,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
             directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
@@ -2112,6 +2105,23 @@ describe('bootstrapMachineSyncRuntime', () => {
         });
         await expect(admission.resolveApplicationTarget({ handshake: tcpHandshake, authenticatedRemoteEndpointId: 'b'.repeat(64), signal: new AbortController().signal }))
             .resolves.toEqual({ port: 46012 });
+        const finiteHandshake = IrohMachineHandshakeV1Schema.parse({ ...tcpHandshake, flow: 'finite_transfer',
+            grant: { ...tcpHandshake.grant, payload: { ...tcpHandshake.grant.payload, flowKind: 'bounded_transfer',
+                scope: { kind: 'bounded_transfer', mode: 'carrier' },
+                iroh: { ...tcpHandshake.grant.payload.iroh, operationKind: 'finite_transfer' } } } });
+        try {
+            vi.stubEnv('HAPPIER_FEATURE_MACHINES_TRANSFER_DIRECT_PEER__ENABLED', 'true');
+            vi.stubEnv('HAPPIER_MACHINE_TRANSFER_DIRECT_PEER_SERVER_ENABLED', 'false');
+            await expect(admission.resolveApplicationTarget({ handshake: finiteHandshake,
+                authenticatedRemoteEndpointId: 'b'.repeat(64), signal: new AbortController().signal })).resolves.toBeNull();
+            vi.stubEnv('HAPPIER_MACHINE_TRANSFER_DIRECT_PEER_SERVER_ENABLED', 'true');
+            const finiteTarget = await admission.resolveApplicationTarget({ handshake: finiteHandshake,
+                authenticatedRemoteEndpointId: 'b'.repeat(64), signal: new AbortController().signal });
+            expect(finiteTarget).toEqual({ port: finiteTransfers.getState().port });
+        } catch (error) {
+            await result.stopPeerMediationLoopbackServer();
+            throw error;
+        } finally { vi.unstubAllEnvs(); await finiteTransfers.stop(); }
         expect(admission.allowedFlows).toContain('tcp_tunnel');
         expect((loopbackStartOptions as StartPeerMediationLoopbackServerOptions | null)?.resolveTrustRoots).toBe(resolvePeerMediationTrustRoots);
         expect(admission.resolveTrustRoots?.()).toEqual([]);
@@ -2312,7 +2322,6 @@ describe('bootstrapMachineSyncRuntime', () => {
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
             machineIrohRuntime: loopbackStarts ? machineIrohRuntime : undefined,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
             directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
@@ -2430,7 +2439,6 @@ describe('bootstrapMachineSyncRuntime', () => {
             beforeShutdown: vi.fn(async () => {}),
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
             directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
@@ -2523,7 +2531,6 @@ describe('bootstrapMachineSyncRuntime', () => {
             beforeShutdown: vi.fn(async () => {}),
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
             directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,
@@ -2639,7 +2646,6 @@ describe('bootstrapMachineSyncRuntime', () => {
             beforeShutdown: vi.fn(async () => {}),
             requestShutdown: vi.fn(),
             directPeerServerLifecycle: null,
-            directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
             directTransferRegistryHost: createCliRegistryHostV1(),
             connectedServiceRefreshLoopHandle: null,
             connectedServiceQuotasLoopHandle: null,

@@ -2,8 +2,39 @@ import os from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 
 import { initialMachineMetadata, refreshMachineMetadataForCurrentDaemon } from './metadata';
+import { MachinePublishedMetadataV1Schema, StoredMachinePublishedMetadataV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import { resolveAcpPlatformFitV1 } from '@happier-dev/protocol/acp/catalog/registry/acpPlatformFitV1';
+import { createRegistryHostV1 } from '../../../../../packages/protocol/src/registries/registryHostV1';
+import { BUILT_IN_REGISTRY_SOURCES_V1 } from '../../../../../packages/protocol/src/registries/registrySourcesV1';
+import { ACP_REGISTRY_V1_FIXTURE } from '../../../../../packages/protocol/src/registries/formats/fixtures/acpRegistryV1Fixture';
+import { buildMachineDisplayMetadata } from '../../../../ui/sources/sync/domains/machines/machineDisplayRenderable';
 
 describe('initialMachineMetadata', () => {
+  it('publishes native architecture through the strict Machine reader and the real registry platform-fit consumer', async () => {
+    const published = StoredMachinePublishedMetadataV1Schema.parse(MachinePublishedMetadataV1Schema.parse(initialMachineMetadata));
+    const display = buildMachineDisplayMetadata(published)!;
+    expect(display.arch).toBe(os.arch());
+    const unused = async (): Promise<never> => { throw new Error('Unexpected transport'); };
+    const host = createRegistryHostV1({ host: 'web', readSources: async () => BUILT_IN_REGISTRY_SOURCES_V1,
+      http: { getJson: async () => ({ ok: true, value: ACP_REGISTRY_V1_FIXTURE, fetchedAt: 1 }), getText: unused, getBytes: unused } });
+    const response = await host.fetchRequest({ op: 'read', kind: 'agent', sourceId: 'builtin:acp-registry', itemId: 'junie' });
+    if (response.op !== 'read' || response.item.payload.kind !== 'agent') throw new Error('Missing registry Agent');
+    expect(resolveAcpPlatformFitV1(response.item.payload.agent.distributions, {
+      platform: display.platform ?? null, arch: display.arch ?? null,
+    })).toMatchObject({ kind: 'can_run', via: 'archive', target: `${process.platform}-${process.arch}` });
+    // Retained metadata from a different execution architecture must be republished,
+    // even when no other field changes; a second identical refresh remains inert.
+    const fields = { host: published.host, platform: published.platform, arch: os.arch(),
+      happyCliVersion: published.happyCliVersion, homeDir: published.homeDir,
+      happyHomeDir: published.happyHomeDir, happyLibDir: published.happyLibDir };
+    for (const priorArch of [undefined, 'stale-processor']) {
+      const current = { ...published, arch: priorArch, displayName: 'Build box' };
+      const refreshed = refreshMachineMetadataForCurrentDaemon(current, fields);
+      expect(refreshed).not.toBe(current);
+      expect(MachinePublishedMetadataV1Schema.parse(refreshed)).toMatchObject({ arch: os.arch(), displayName: 'Build box' });
+      expect(refreshMachineMetadataForCurrentDaemon(refreshed, fields)).toBe(refreshed);
+    }
+  });
   it('publishes new install observations even when the other daemon fields are unchanged', () => {
     const current = { ...initialMachineMetadata, displayName: 'Build box' };
     const fields = { host: current.host, platform: current.platform, happyCliVersion: current.happyCliVersion,

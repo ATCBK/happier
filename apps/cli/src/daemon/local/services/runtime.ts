@@ -365,7 +365,11 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
         })
         : null;
 
-    const runInventoryRefresh = async (onNative: (snapshot: NormalizedLocalServiceInventorySnapshot) => void): Promise<NormalizedLocalServiceInventorySnapshot> => {
+    let inventoryPresentationPending = false;
+    const runInventoryRefresh = async (
+        onNative: (snapshot: NormalizedLocalServiceInventorySnapshot) => void,
+        needsPresentation: () => boolean,
+    ): Promise<NormalizedLocalServiceInventorySnapshot> => {
         const previous = inventoryRegistry.getSnapshot();
         // Refresh the server-features snapshot before resolving the gate so a server that toggled
         // the bit takes effect on the next tick (the refresh loop keeps it current).
@@ -460,6 +464,11 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
             diagnostics: [...result.diagnostics, ...workspaceDiagnostics],
         };
         onNative(snapshotWithDiagnostics);
+        if (!needsPresentation()) {
+            inventoryPresentationPending = endpointEnricher !== null || params.pageTitleEnricher !== undefined;
+            inventoryRegistry.replaceSnapshot(snapshotWithDiagnostics);
+            return snapshotWithDiagnostics;
+        }
         if (endpointEnricher) {
             snapshotWithDiagnostics = await endpointEnricher.enrich(snapshotWithDiagnostics);
         }
@@ -469,6 +478,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
                 enricher: params.pageTitleEnricher,
             });
         }
+        inventoryPresentationPending = false;
         inventoryRegistry.replaceSnapshot(snapshotWithDiagnostics);
         return snapshotWithDiagnostics;
     };
@@ -480,6 +490,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
     // second scan on a busy daemon. Mirrors the `runTargetsInFlight` coalescing pattern below.
     type InventoryRefreshFlight = {
         nativePending: boolean;
+        presentationRequested: boolean;
         native: Promise<NormalizedLocalServiceInventorySnapshot>;
         full: Promise<NormalizedLocalServiceInventorySnapshot>;
     };
@@ -491,10 +502,22 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
         }
         return await pending;
     };
-    const refreshInventoryNow: LocalServicesDaemonRuntime['refreshInventoryNow'] = (request) => {
+    const refreshInventory = (
+        request: Parameters<LocalServicesDaemonRuntime['refreshInventoryNow']>[0],
+        presentationRequested: boolean,
+    ): Promise<NormalizedLocalServiceInventorySnapshot> => {
         const signal = request?.stage === 'native' ? request.signal : undefined;
         if (signal?.aborted) return Promise.reject(signal.reason);
         if (currentRefresh) {
+            if (presentationRequested && !currentRefresh.presentationRequested) {
+                if (currentRefresh.nativePending) currentRefresh.presentationRequested = true;
+                else {
+                    // The summary-only native stage has already settled. A presentation reader
+                    // uses the same owner's next refresh, never an unenriched settled snapshot.
+                    const successor = () => refreshInventory(request, presentationRequested);
+                    return observeNative(currentRefresh.full.then(successor, successor), signal);
+                }
+            }
             if (request?.stage !== 'native') return currentRefresh.full;
             if (currentRefresh.nativePending) return observeNative(currentRefresh.native, signal);
             // HTTP presentation is not a fresh socket observation for a later Guard caller.
@@ -512,12 +535,12 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
         });
         // Ordinary inventory callers need not subscribe to the intermediate native stage.
         void native.catch(() => undefined);
-        const flight: InventoryRefreshFlight = { nativePending: true, native, full: Promise.resolve().then(async () => {
+        const flight: InventoryRefreshFlight = { nativePending: true, presentationRequested, native, full: Promise.resolve().then(async () => {
             try {
                 return await runInventoryRefresh(snapshot => {
                     flight.nativePending = false;
                     resolveNative(snapshot);
-                });
+                }, () => flight.presentationRequested);
             } catch (error) {
                 if (flight.nativePending) {
                     flight.nativePending = false;
@@ -540,19 +563,20 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
         void flight.full.catch(params.onError ?? ((error) => logger.debug('[DAEMON RUN] Local-service inventory refresh failed', error)));
         return request?.stage === 'native' ? observeNative(flight.native, signal) : flight.full;
     };
+    const refreshInventoryNow: LocalServicesDaemonRuntime['refreshInventoryNow'] = request => refreshInventory(request, true);
 
     const scanIntervalMs = params.refreshIntervalMs ?? DEFAULT_LOCAL_SERVICE_CAPABILITIES.inventory.refreshIntervalMs;
 
     // The machine-wide listener scan plus its TLS+HTTP-HEAD endpoint probes are the only
     // unconditional cost in this corridor, and before the inventory watch existed they ran for a
     // consumer that never subscribed (tunnels audit §4.6). The scan now follows the watch: a
-    // parked watcher is a live reader, and with none the tick is a no-op. Request paths that read
+    // parked watcher is a live reader, and with none the scheduler is paused. Request paths that read
     // the snapshot without watching stay correct through `ensureFreshInventory`, which reuses the
     // same coalescing single flight rather than adding a second refresh owner.
     let activeInventoryWatchers = 0;
     const ensureFreshInventory = async (): Promise<void> => {
         const snapshot = inventoryRegistry.getSnapshot();
-        if (snapshot.generatedAt > 0 && now() - snapshot.generatedAt < scanIntervalMs) {
+        if (!inventoryPresentationPending && snapshot.generatedAt > 0 && now() - snapshot.generatedAt < scanIntervalMs) {
             return;
         }
         await refreshInventoryNow();
@@ -566,11 +590,17 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
                 if (activeInventoryWatchers === 0 && summarySubscribers.size === 0) {
                     return;
                 }
-                await refreshInventoryNow();
+                // Machine summaries consume listener counts, not HTTP readiness or page titles.
+                await refreshInventory(undefined, activeInventoryWatchers > 0);
             },
             onError: params.onError ?? ((error) => logger.debug('[DAEMON RUN] Local-service inventory refresh failed', error)),
             unref: true,
         });
+    const updateInventoryDemand = (): void => {
+        if (activeInventoryWatchers > 0 || summarySubscribers.size > 0) loop?.resume();
+        else loop?.pause();
+    };
+    updateInventoryDemand();
 
     const inventoryRoutes = createLocalServiceInventoryRoutes({
         registry: inventoryRegistry,
@@ -578,6 +608,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
         ensureFreshSnapshot: ensureFreshInventory,
         onWatcherCountChanged: (count) => {
             activeInventoryWatchers = count;
+            updateInventoryDemand();
         },
     });
     // Workspace-scoped package-script discovery (LSV-6). Reads package.json files only
@@ -698,8 +729,12 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
         getSummary: () => summary,
         subscribeSummary(subscriber) {
             summarySubscribers.add(subscriber);
+            updateInventoryDemand();
             subscriber(summary);
-            return () => { summarySubscribers.delete(subscriber); };
+            return () => {
+                summarySubscribers.delete(subscriber);
+                updateInventoryDemand();
+            };
         },
         syncHostedWebStaticAssets: async (contributions) => {
             if (!hostedWebStaticAssets) {

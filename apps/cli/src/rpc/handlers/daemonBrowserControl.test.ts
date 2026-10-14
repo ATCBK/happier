@@ -1,7 +1,7 @@
 import { FeaturesResponseSchema, type BrowserCommandV1, type BrowserCommandDispatchResultV1, type BrowserEventV1, type BrowserDaemonViewV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { createBrowserDaemonControlBroker } from '@/daemon/browser/control/broker';
 import { createBrowserDaemonControlRoutes } from '@/daemon/browser/control/routes';
@@ -11,9 +11,38 @@ import { createBrowserDaemonFeatureGate } from '@/daemon/browser/featureGate';
 import { registerDaemonBrowserControlHandler } from './daemonBrowserControl';
 
 // Static CLI imports also load Socket.IO; install the canonical external boundary first.
+vi.mock('../../../../ui/sources/dev/reactNativeStub.ts', async () => {
+    const factoryPath = new URL('../../../../ui/sources/dev/testkit/runtime/reactNativeRuntime.ts', import.meta.url).href;
+    const stubPath = new URL('../../../../ui/sources/dev/reactNativeStub.ts', import.meta.url).href;
+    const { createReactNativeWebRuntime } = await import(factoryPath);
+    return createReactNativeWebRuntime(undefined, () => vi.importActual(stubPath));
+});
 vi.mock('socket.io-client', async (importOriginal) => {
     const path = new URL('../../../../ui/sources/dev/testkit/harness/serverAccountConnectionHarness.ts', import.meta.url).href;
     return (await import(path)).createSocketIoClientBoundary(importOriginal);
+});
+// Unistyles is the UI platform boundary; use its canonical testkit runtime.
+vi.mock('../../../../ui/node_modules/react-native-unistyles/lib/module/index.js', async () => {
+    const path = new URL('../../../../ui/sources/dev/testkit/mocks/unistyles.ts', import.meta.url).href;
+    const { createUnistylesMock } = await import(path);
+    return createUnistylesMock();
+});
+vi.mock('../../../../ui/node_modules/expo-updates/build/index.js', async () => {
+    const path = new URL('../../../../ui/sources/dev/testkit/mocks/expoUpdates.ts', import.meta.url).href;
+    const { createExpoUpdatesMock } = await import(path);
+    return createExpoUpdatesMock();
+});
+vi.mock('../../../../ui/node_modules/@shopify/react-native-skia/lib/module/index.js', async () => {
+    const path = new URL('../../../../ui/sources/dev/testkit/mocks/reactNativeSkia.ts', import.meta.url).href;
+    const { createReactNativeSkiaMock } = await import(path);
+    return createReactNativeSkiaMock();
+});
+// No image is rendered in this RPC composition; mirror the testkit Voice harness's native leaf.
+vi.mock('../../../../ui/node_modules/expo-image/src/index.ts', () => ({ Image: 'Image' }));
+vi.mock('../../../../ui/node_modules/expo-file-system/src/index.ts', async () => {
+    const path = new URL('../../../../ui/sources/dev/testkit/mocks/expoFileSystem.ts', import.meta.url).href;
+    const { createExpoFileSystemFileMock } = await import(path);
+    return createExpoFileSystemFileMock().module;
 });
 
 const MACHINE_ID = 'machine_browser_control';
@@ -28,12 +57,16 @@ const { installSessionActionRpcBoundary }: {
 const { serveAccountHomes }: {
     serveAccountHomes(params: { homes: { key: string; serverUrl: string; accountId: string }[];
         route(request: { path: string }): Response | undefined }): Promise<{
-            homes: Record<string, { id: string }>; dispose(): void;
+            homes: Record<string, { id: string }>; dispose(): Promise<void>;
         }>;
 } = await import(uiPath('dev/testkit/harness/actionHomesHttpHarness.ts'));
 const { createPlainMachineRowFixture }: {
     createPlainMachineRowFixture(input: { id: string; accountId: string }): unknown;
 } = await import(uiPath('dev/testkit/fixtures/machineFixtures.ts'));
+const { installLocalStorageMock, installWebLockManagerMock }: {
+    installLocalStorageMock(): { restore(): void };
+    installWebLockManagerMock(): { restore(): void };
+} = await import(uiPath('auth/storage/tokenStorage.web.testHelpers.ts'));
 
 // Compile the cross-package UI graph during collection, outside the behavior deadline.
 // Install the external relay before importing consumers; its delegate reads the current real RPC owner.
@@ -45,7 +78,9 @@ let activeRpc: RpcHandlerManager | undefined;
 installSessionActionRpcBoundary(request => {
     if (!request.method.startsWith(`${MACHINE_ID}:`)) throw new Error('RPC reached the wrong Machine');
     if (!activeRpc) throw new Error('Browser test RPC owner is unavailable');
-    return activeRpc.invokeLocal(request.method.slice(MACHINE_ID.length + 1), request.params);
+    // This external Home relay boundary carries its verified human caller.
+    return activeRpc.invokeLocal(request.method.slice(MACHINE_ID.length + 1), request.params,
+        { verifiedPeerAuthority: 'present_user' });
 });
 await Promise.all([
     import(uiPath('sync/domains/server/serverRuntime.ts')),
@@ -65,6 +100,7 @@ const { serverScopedRpcSocketPool }: { serverScopedRpcSocketPool: { stopAll(): P
 
 function createRuntime() {
     const pageCommands: string[] = [];
+    const browserCommands: string[] = [];
     let notify: BrowserSidecarCdpEventSubscriber | undefined;
     const adapter = createBrowserSidecarCdpControlAdapter({
         browserSessionId: BROWSER_SESSION_ID, sidecarId: 'sidecar_browser_control',
@@ -79,7 +115,11 @@ function createRuntime() {
                     ? { frameTree: { frame: { id: 'frame', loaderId: 'document', url: 'https://browser.example.test/' } } }
                     : {};
             },
-            dispatchBrowserCommand: async () => ({ success: true }),
+            dispatchBrowserCommand: async ({ method, signal }) => {
+                signal?.throwIfAborted();
+                browserCommands.push(method);
+                return { success: true };
+            },
             subscribeCdpEvents: listener => { notify = listener; return () => { notify = undefined; }; },
         },
     });
@@ -94,12 +134,45 @@ function createRuntime() {
     const execute = createBrowserDaemonRuntimeActionExecutor({ control: routes, featureGate });
     const rpc = new RpcHandlerManager({ scopePrefix: MACHINE_ID, encryptionMode: 'plain', logger: () => {} });
     registerDaemonBrowserControlHandler(rpc, { browserControl: routes });
-    return { adapter, rpc, pageCommands, execute, featureGate };
+    return { adapter, rpc, pageCommands, browserCommands, execute, featureGate };
 }
 
-afterEach(() => { activeRpc = undefined; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+let browserStorage: { restore(): void };
+let browserLocks: { restore(): void };
+beforeEach(() => {
+    vi.stubGlobal('__DEV__', true);
+    vi.stubGlobal('self', globalThis);
+    browserStorage = installLocalStorageMock();
+    browserLocks = installWebLockManagerMock();
+});
+afterEach(() => {
+    activeRpc = undefined;
+    browserLocks.restore();
+    browserStorage.restore();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+});
 
 describe('daemon Browser control UI seam', () => {
+    it('cancels human Browser focus before the physical CDP effect', async () => {
+        const runtime = createRuntime();
+        const view = { browserSessionId: BROWSER_SESSION_ID, viewId: VIEW_ID };
+        try {
+            await runtime.rpc.invokeLocal(RPC_METHODS.DAEMON_BROWSER_CONTROL_DISPATCH,
+                { machineId: MACHINE_ID, command: { kind: 'openView', commandId: 'open', ...view, platform: 'web',
+                    target: { kind: 'externalUrl', targetId: 'external', url: 'https://browser.example.test/' } } },
+                { verifiedPeerAuthority: 'present_user' });
+            runtime.browserCommands.length = 0;
+            const controller = new AbortController();
+            controller.abort();
+            expect(await runtime.rpc.invokeLocal(RPC_METHODS.DAEMON_BROWSER_CONTROL_DISPATCH,
+                { machineId: MACHINE_ID, command: { kind: 'focusView', commandId: 'cancelled-focus', ...view } },
+                { verifiedPeerAuthority: 'present_user', signal: controller.signal })).toMatchObject({
+                    result: { status: 'failed', completion: 'known', error: { code: 'adapter_unavailable' } },
+                });
+            expect(runtime.browserCommands).toEqual([]);
+        } finally { runtime.adapter.dispose(); }
+    });
     it('opens and reloads the sidecar through real UI machine RPC, discovers its strict output and reports an unowned view', async () => {
         const runtime = createRuntime();
         activeRpc = runtime.rpc;
@@ -118,10 +191,14 @@ describe('daemon Browser control UI seam', () => {
                 .toMatchObject({ ok: true, result: { status: 'dispatched', adapterKind: 'chromiumSidecar' } });
             expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ viewId: VIEW_ID,
                 currentUrl: 'https://browser.example.test/' })]));
-            expect(await runtime.execute({ actionId: 'browser.navigate', context: { defaultSessionId: BROWSER_SESSION_ID },
-                input: { kind: 'navigate', commandId: 'action_navigate', browserSessionId: BROWSER_SESSION_ID,
-                    viewId: VIEW_ID, url: 'https://browser.example.test/next' } }))
-                .toMatchObject({ commandId: 'action_navigate', status: 'dispatched' });
+            expect(await send({ kind: 'navigate', commandId: 'ui_navigate', browserSessionId: BROWSER_SESSION_ID,
+                viewId: VIEW_ID, url: 'https://browser.example.test/next' }))
+                .toMatchObject({ ok: true, result: { commandId: 'ui_navigate', status: 'dispatched' } });
+            expect(await runtime.execute({ actionId: 'browser.view.focus', context: { defaultSessionId: BROWSER_SESSION_ID,
+                    surface: 'ui', authority: 'present_user' },
+                input: { kind: 'focusView', commandId: 'action_focus', browserSessionId: BROWSER_SESSION_ID,
+                    viewId: VIEW_ID } }))
+                .toMatchObject({ commandId: 'action_focus', status: 'dispatched' });
             expect(await listBrowserDaemonViewsViaMachineRpc({ ...scope, browserSessionId: BROWSER_SESSION_ID }))
                 .toMatchObject({ ok: true, views: [{ browserSessionId: BROWSER_SESSION_ID, viewId: VIEW_ID,
                     adapterKind: 'chromiumSidecar', events: [expect.objectContaining({
@@ -135,7 +212,7 @@ describe('daemon Browser control UI seam', () => {
         } finally {
             try {
                 await serverScopedRpcSocketPool.stopAll();
-            } finally { homes.dispose(); runtime.adapter.dispose(); }
+            } finally { await homes.dispose(); runtime.adapter.dispose(); }
         }
     });
 

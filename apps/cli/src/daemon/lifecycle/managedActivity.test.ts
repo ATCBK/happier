@@ -23,6 +23,64 @@ function producer() {
 }
 
 describe('managed activity inventory', () => {
+    it('publishes fresh Session facts while a retired runner transport remains pending, without accepting its late idle proof', async () => {
+        const retiredRequest = createDeferred();
+        const currentRequest = createDeferred();
+        const retiredResponse = createDeferred<ServerResponse>();
+        const server = createServer((request, response) => {
+            if (request.url === '/retired') {
+                retiredRequest.resolve();
+                retiredResponse.resolve(response);
+                return;
+            }
+            response.setHeader('Content-Type', 'application/json');
+            response.end(JSON.stringify({ session: 'settled', input: 'settled', agents: 'settled', attention: 'settled', settledAt: 200 }));
+            currentRequest.resolve();
+        });
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('HTTP transport address unavailable');
+        const retired = { pid: 1, startedBy: 'daemon' as const, happySessionId: 'retired' };
+        const current = { pid: 2, startedBy: 'daemon' as const, happySessionId: 'current' };
+        let sessions = [retired];
+        let now = 100;
+        const source = createSessionLiveWorkProducer({ readSessions: () => sessions,
+            readActivity: tracked => requestSessionInputLiveWork({ callRpc: async () =>
+                (await fetch(`http://127.0.0.1:${address.port}/${tracked.happySessionId}`)).json() }) });
+        const inventory = createManagedActivityInventory({ producers: [source], now: () => now });
+        const published: unknown[] = [];
+        const unsubscribe = inventory.subscribe(decision => { published.push(decision); });
+        const old = inventory.readDecision();
+        try {
+            await retiredRequest.promise;
+            sessions = [current];
+            now = 200;
+            source.notifyChanged();
+            let fresh: Awaited<ReturnType<typeof inventory.read>> | undefined;
+            const read = inventory.read().then(result => { fresh = result; });
+            await currentRequest.promise;
+            // Only the old network request is withheld. The new production projection
+            // must publish independently; this is a test assertion window, not a product deadline.
+            await vi.waitFor(() => expect(fresh).toMatchObject({ coverage: 'complete', idleSince: 200,
+                items: [{ category: 'session', ownerRef: current, state: 'settled', settledAt: 200 },
+                    { category: 'input', state: 'settled' }, { category: 'agents', state: 'settled' },
+                    { category: 'attention', state: 'settled' }] }), { timeout: 1_000 });
+            await read;
+            const beforeLateReply = [...published];
+            now = 300;
+            const response = await retiredResponse.promise;
+            response.setHeader('Content-Type', 'application/json');
+            response.end(JSON.stringify({ session: 'settled', input: 'settled', agents: 'settled', attention: 'settled', settledAt: 1 }));
+            expect(await old).toMatchObject({ kind: 'unknown' });
+            expect(published).toEqual(beforeLateReply);
+            expect(await inventory.readDecision()).toEqual({ kind: 'idle', since: 200 });
+        } finally {
+            unsubscribe(); inventory.dispose();
+            server.closeAllConnections();
+            await old;
+            await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+        }
+    });
     it('shares concurrent live Session observations and reads again after settlement', async () => {
         // The remote Session transport is the system boundary; inventory, Session
         // projection and RPC response validation below use their real owners.

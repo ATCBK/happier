@@ -32,7 +32,8 @@ export async function createRequesterSessionControlRuntimeFixture(input: Readonl
   startup?: Pick<Parameters<typeof startDaemonSessionControlRuntime>[0],
     'resolveSessionSpawnDirectTargetTransport' | 'resolveCurrentMachineExecutionOriginContext'>
     & Partial<Pick<Parameters<typeof startDaemonSessionControlRuntime>[0],
-      'deviceLocalSecretStorage' | 'onHappySessionWebhook' | 'createRequesterSessionRuntimeContext'>>;
+      'deviceLocalSecretStorage' | 'onHappySessionWebhook' | 'createRequesterSessionRuntimeContext'
+      | 'liveStreamCaptureRegistry' | 'onComputerRoutesReady'>>;
 }>) {
   const previousConfiguration = {
     happyHomeDir: configuration.happyHomeDir,

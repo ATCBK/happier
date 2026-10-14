@@ -7,7 +7,6 @@ import { cleanupAndShutdown } from '../lifecycle/cleanupAndShutdown';
 import type { AutomationWorkerHandle } from '../automation/automationWorker';
 import type { DaemonSessionMutationCustody } from '../connectedServices/usageLimitRecovery/createDaemonUsageLimitRecoveryMutationCustody';
 import type { MemoryWorkerHandle } from '../memory/memoryWorker';
-import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptAssetAdapterRegistry';
 import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import { DEFAULT_MEMORY_SETTINGS } from '@/settings/memorySettings';
 
@@ -205,7 +204,6 @@ describe('startDaemonMachineRegistration', () => {
         beforeShutdown: vi.fn(async () => {}),
         requestShutdown: vi.fn(),
         directPeerServerLifecycle: null,
-        directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
         directTransferRegistryHost: createCliRegistryHostV1(),
         connectedServiceRefreshLoopHandle: null,
         connectedServiceQuotasLoopHandle: null,
@@ -415,7 +413,6 @@ describe('startDaemonMachineRegistration', () => {
         beforeShutdown: vi.fn(async () => {}),
         requestShutdown: vi.fn(),
         directPeerServerLifecycle: null,
-        directTransferPromptAssetAdapterRegistry: createPromptAssetAdapterRegistry(),
         directTransferRegistryHost: createCliRegistryHostV1(),
         connectedServiceRefreshLoopHandle: null,
         connectedServiceQuotasLoopHandle: null,
