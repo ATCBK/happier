@@ -151,6 +151,7 @@ test.describe('ui e2e: new-session formSheet responsiveness', () => {
             const page = await openNewSessionFromSessionsSurface(context, uiBaseUrl);
             const composer = page.getByTestId('new-session-composer-input');
             await composer.focus();
+            const initialInputHeight = await composer.evaluate((input: HTMLTextAreaElement) => input.offsetHeight);
 
             const largePrompt = Array.from(
                 { length: 300 },
@@ -163,6 +164,7 @@ test.describe('ui e2e: new-session formSheet responsiveness', () => {
 
             await expect(composer).toHaveValue(largePrompt);
             expect(trace.inputHeights.length).toBeGreaterThan(30);
+            expect(trace.inputHeights.at(-1)).toBeGreaterThan(initialInputHeight);
             // Pasting is one input event: the composer must reach its final height in the
             // frame after the paste and stay there, not creep toward it over many frames.
             expect(countHeightChanges(trace.inputHeights)).toBeLessThanOrEqual(1);
@@ -183,8 +185,8 @@ async function openNewSessionFromSessionsSurface(context: BrowserContext, uiBase
     await expect(async () => {
         const startNewSession = await waitForVisibleByTestId(page, startNewSessionTestIds, 10_000);
         await startNewSession.click({ timeout: 5_000 });
-        await page.waitForURL((url) => url.pathname.endsWith('/new'), { timeout: 5_000 });
     }).toPass({ timeout: 120_000 });
+    await page.waitForURL((url) => url.pathname.endsWith('/new'), { timeout: 60_000 });
     await expect(page.getByTestId('new-session-composer-input')).toBeVisible({ timeout: 60_000 });
     return page;
 }
