@@ -2907,9 +2907,6 @@ export class AcpBackend implements CatalogAcpBackend {
 
   async cancel(sessionId: SessionId): Promise<void> {
     const cancelledTurnGeneration = this.turnGeneration;
-    if (this.waitingForResponse) {
-      this.failPendingResponseWait(makeAbortError('Cancelled by user'));
-    }
 
     if (this.postPromptCompletionIdleTimeout) {
       clearTimeout(this.postPromptCompletionIdleTimeout);
@@ -2998,6 +2995,12 @@ export class AcpBackend implements CatalogAcpBackend {
         )
       )
     ) {
+      // Publish terminal turn state only after this cancellation has released
+      // its raw prompt ownership. A permission denial otherwise lets the host
+      // admit the next input while that exact prompt is still settling.
+      if (this.waitingForResponse) {
+        this.failPendingResponseWait(makeAbortError('Cancelled by user'));
+      }
       this.emit({ type: 'status', status: 'stopped', detail: 'Cancelled by user' });
     }
   }

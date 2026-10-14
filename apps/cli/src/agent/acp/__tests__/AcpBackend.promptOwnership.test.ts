@@ -93,6 +93,30 @@ describe('AcpBackend raw prompt ownership', () => {
     });
   });
 
+  it('settles the turn wait only after cancellation releases raw prompt custody', async () => {
+    let acknowledge!: () => void;
+    const acknowledged = new Promise<void>(resolve => { acknowledge = resolve; });
+    const { backend, prompt } = createPendingPromptBackend({ cancel: vi.fn(async () => acknowledged) });
+    const sending = backend.sendPrompt('session-1', 'denied tool turn');
+    await Promise.resolve();
+    let settled = false;
+    const waiting = backend.waitForResponseComplete(null).catch(error => { settled = true; return error; });
+    const cancelling = backend.cancel('session-1');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    acknowledge();
+    await cancelling;
+    await sending;
+    expect(await waiting).toMatchObject({ name: 'AbortError' });
+    const successor = backend.sendPrompt('session-1', 'next allowed tool');
+    await Promise.resolve();
+    expect(prompt).toHaveBeenCalledTimes(2);
+    await emitUpdate(backend, 'user_message_chunk', 'next allowed tool');
+    expect(backend.submitCompletionEvidence({ kind: 'completed' })).toBe(true);
+    await expect(successor).resolves.toEqual({ kind: 'accepted_by_correlated_provider_effect' });
+  });
+
   it('fails closed on transport loss while the cancelled raw prompt remains unsettled', async () => {
     const cancel = vi.fn(async () => {
       throw new Error('transport lost');
