@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cp, mkdir, mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { computeSourceDevSharedDepsSignature } from '../../cli/scripts/buildSharedDeps.mjs';
 import { resolveBundledPluginUiArtifactsOutputPath } from './generateBundledPluginUiArtifacts.mjs';
@@ -24,7 +24,8 @@ test('source preparation retains last-green assets while refreshing healthy plug
   await writeFile(cliManifestPath, JSON.stringify({ ...cliManifest, bundledDependencies: ['@happier-dev/plugins-inspector'] }));
   const pluginSource = join(repoRoot, 'packages/plugins/inspector/src/ui/renderSurface.tsx');
   await writeFile(pluginSource, 'export function renderSurface() { return "healthy-plugin-before"; }\n');
-  const { ensureUiWorkspacePackagesBuilt } = await import(pathToFileURL(join(uiPackageDir, 'scripts/ensureWorkspacePackagesBuilt.mjs')));
+  const { ensureUiWorkspacePackagesBuilt, resolveUiWorkspaceStartupOutputs } = await import(pathToFileURL(join(uiPackageDir, 'scripts/ensureWorkspacePackagesBuilt.mjs')));
+  const { hasUsableWorkspaceLastGreen } = await import('../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs');
   const env = { ...process.env,
     HAPPIER_UI_VENDOR_WEB_ASSETS: '0',
     HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS: '1',
@@ -77,6 +78,16 @@ test('source preparation retains last-green assets while refreshing healthy plug
   await assert.rejects(prepare(), error => Array.isArray(error.errors) && error.errors.length > 0);
   assert.equal(await readFile(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY, 'utf8'), completeInventory,
     'a missing asset must not be treated as usable last-green output');
+
+  // Exercise startup admission against the real producer's inventory, rather
+  // than a handwritten require that can drift from its emitted graph format.
+  const startupInputs = () => resolveUiWorkspaceStartupOutputs({ uiPackageDir, env });
+  const startupIsUsable = () => hasUsableWorkspaceLastGreen(uiPackageDir, { requiredFiles: startupInputs() });
+  assert.equal(await startupIsUsable(), true);
+  const pluginEntry = startupInputs().find(path => path.endsWith('entry.cjs.bundle'));
+  assert.ok(pluginEntry, 'the inventory must retain its compiled plugin entry');
+  await rm(pluginEntry);
+  assert.equal(await startupIsUsable(), false, 'an inventory without its consumed asset graph is not last-green');
 });
 
 test('workspace startup admits Metro inputs independently of workspace dist publication', async () => {
@@ -106,15 +117,6 @@ test('workspace startup admits Metro inputs independently of workspace dist publ
     await mkdir(join(outputPath, '..'), { recursive: true });
     await writeFile(outputPath, 'export const BUNDLED_PLUGIN_UI_APP_ARTIFACTS = [];\n');
     assert.equal(await lastGreen(), true);
-    const assetPath = join(root, 'consumer/preparation/entry.cjs.bundle');
-    await writeFile(outputPath, `const asset = require(${JSON.stringify(assetPath)});\nexport const BUNDLED_PLUGIN_UI_APP_ARTIFACTS = [];\n`);
-    assert.equal(await lastGreen(), false, 'an inventory without its consumed asset graph is not last-green');
-    await mkdir(dirname(assetPath), { recursive: true });
-    await writeFile(assetPath, 'module.exports = {};\n');
-    assert.equal(await lastGreen(), true);
-    await rm(assetPath);
-    assert.equal(await lastGreen(), false);
-    await writeFile(outputPath, 'export const BUNDLED_PLUGIN_UI_APP_ARTIFACTS = [];\n');
     await rm(join(sdkDir, 'dist', 'index.js'));
     assert.equal(await lastGreen(), true);
   } finally {
