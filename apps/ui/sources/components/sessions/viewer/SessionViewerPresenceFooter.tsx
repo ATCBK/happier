@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import { BrowserPresenceCapsule } from '@/components/browser/copresence/BrowserPresenceCapsule';
 import { t } from '@/text';
+import { CompanionNoDragRegion } from '@/components/companion/interaction/CompanionNoDragRegion';
 
 import { useSessionViewerPresence } from './SessionViewerController';
 import type { SessionViewerSource } from './sessionViewerPresentation';
@@ -25,6 +26,7 @@ export function SessionViewerPresenceFooter(
   const machine = useSessionViewerMachine(props.sessionId, props.serverId, props.source);
   if (!presence) return null;
   return (
+    <CompanionNoDragRegion>
     <BrowserPresenceCapsule
       {...presence}
       agentTitle={machine.name
@@ -34,5 +36,6 @@ export function SessionViewerPresenceFooter(
       compact={props.compact}
       testID="session-viewer-presence"
     />
+    </CompanionNoDragRegion>
   );
 }

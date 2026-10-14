@@ -26,6 +26,7 @@ import { Popover } from '@/components/ui/popover';
 import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { CORE_CAPSULE_HOST, useCoreCapsuleColors } from '@/components/ui/status/capsuleHost';
 import { StatusDot } from '@/components/ui/status/StatusDot';
+import { CompanionNoDragRegion } from '@/components/companion/interaction/CompanionNoDragRegion';
 import { t } from '@/text';
 
 import { useOptionalSessionViewerController } from './SessionViewerController';
@@ -189,6 +190,7 @@ export function SessionViewerControls(
 
   return (
     <View style={stylesheet.row}>
+      <CompanionNoDragRegion>
       <View ref={sourceAnchorRef}>
         <HappierControlCapsule
           host={CORE_CAPSULE_HOST}
@@ -224,6 +226,7 @@ export function SessionViewerControls(
           />
         </HappierControlCapsule>
       </View>
+      </CompanionNoDragRegion>
       {machineName ? (
         <View style={stylesheet.identity} testID="session-viewer-machine">
           <HappierIdentityCapsule
@@ -244,6 +247,7 @@ export function SessionViewerControls(
         </View>
       ) : null}
       <View style={stylesheet.grow} />
+      <CompanionNoDragRegion>
       <HappierControlCapsule
         host={CORE_CAPSULE_HOST}
         onLayout={measure('buttons')}
@@ -304,6 +308,7 @@ export function SessionViewerControls(
             }}
           />
       </HappierControlCapsule>
+      </CompanionNoDragRegion>
       {picker ? (
         <Popover
           open

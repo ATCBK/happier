@@ -21,7 +21,8 @@ export function resolveFloatingFrameResizeRect(input: Readonly<{
         availableRect: input.availableRect, aspectRatio: aspect, chromeHeight: input.chromeHeight,
     }).rect;
     // Height fitting may shrink the body; preserve the grip's opposite edge after that fit too.
-    return { ...fitted, x: right - fitted.width };
+    return { ...fitted, x: clamp(right - fitted.width, input.availableRect.x,
+        input.availableRect.x + input.availableRect.width - fitted.width) };
 }
 
 export function resolveFloatingFrameCorner(
