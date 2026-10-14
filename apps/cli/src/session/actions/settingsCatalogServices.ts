@@ -23,7 +23,7 @@ import { resolveMachineIdForServerFromSettings } from '@/daemon/resolveMachineId
 import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, isCustomAcpAgentContributionIdentityV1, listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import type { VoiceAgentCatalogEntryV1 } from '@happier-dev/protocol/voice/settings/voiceAgentSelection';
 import type { PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
-import { getAgentCore, isBundledAgentId } from '@happier-dev/agents';
+import { getAgentCore, getAgentStaticModels, isBundledAgentId } from '@happier-dev/agents';
 import { readProviderStateSharingRiskAgentIdsV1, type ProviderStateSharingAgentV1 } from '@happier-dev/protocol/actions/settings/providerStateSharingMutations';
 
 export type CliSettingsCatalogServicesV1 = ScmDiffSummaryCatalogMutationServicesV1<AccountSettings>
@@ -177,6 +177,28 @@ export function createCliSettingsCatalogServices(params: Readonly<{
         },
         readScmDiffSummaryCatalog: async (settings, storedValue) => {
             params.signal?.throwIfAborted();
+            if (!storedValue) {
+                const registry = readCurrentContributionRegistry();
+                const lifetime = getActiveAccountSettingsSnapshotLifetimeToken();
+                const agents = [...registry.agentDefinitionsById.values()];
+                const routingIds = indexAgentRoutingIdsByContributionIdentity(agents);
+                const profiles = agents.flatMap(entry => {
+                    const targets = entry.identity ? listAgentExecutionTargetsV1(entry.identity) : [];
+                    return targets.flatMap(executionTarget => {
+                        const agentId = readAgentRoutingIdForContributionIdentity(routingIds, executionTarget.identity);
+                        if (!agentId) return [];
+                        const target = readBackendTargetRefV2({ kind: 'backend', backendId: agentId, sourceKind: 'built_in' });
+                        if (isBackendTargetDisabledByAccountSettings(settings, target)) return [];
+                        return buildScmDiffSummaryModelProfiles({ backendTarget: target,
+                            models: entry.definition.modelConfig?.staticModels ?? getAgentStaticModels(entry.id, { catalogOnly: true }),
+                            agentFormats: readAgentStructuredOutputCapabilities(entry.richDefinition?.definition)?.formats });
+                    });
+                });
+                return { profiles, isCurrent: current => !params.signal?.aborted
+                    && readCurrentContributionRegistry() === registry
+                    && getActiveAccountSettingsSnapshotLifetimeToken() === lifetime
+                    && JSON.stringify(current.backendEnabledByTargetKey) === JSON.stringify(settings.backendEnabledByTargetKey) };
+            }
             const selector = decodeScmDiffSummaryModelOverride(storedValue);
             if (!selector?.backendTargetKey) return null;
             let target: ReturnType<typeof readBackendTargetRefV2>;
@@ -206,6 +228,7 @@ export function createCliSettingsCatalogServices(params: Readonly<{
             params.signal?.throwIfAborted();
             if (probe.source === 'unavailable') return null;
             const profiles = buildScmDiffSummaryModelProfiles({ backendTarget: target, models: probe.availableModels,
+                catalogModels: parsedKey?.definition.modelConfig?.staticModels ?? getAgentStaticModels(agentId, { catalogOnly: true }),
                 agentFormats: configured ? null : readAgentStructuredOutputCapabilities(parsedKey?.richDefinition?.definition)?.formats });
             return { profiles, isCurrent: current => !params.signal?.aborted
                 && readCurrentContributionRegistry() === registry

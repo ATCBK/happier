@@ -77,6 +77,8 @@ export const AgentModelOptionSchema = z.object({
 export type ProviderModelDescriptorV1 = Readonly<{
   id: string;
   name: string;
+  /** Catalog-owned relative cost class; absence never implies a low-cost model. */
+  costTier?: 'low' | 'standard' | 'premium';
   /** Provider/source-owned request spellings for this exact canonical model. */
   aliases?: readonly string[];
   description?: string;
@@ -93,6 +95,7 @@ export type ProviderModelDescriptorV1 = Readonly<{
 export const ProviderModelDescriptorV1Schema = z.object({
   id: ProviderModelIdSchema,
   name: z.string().trim().min(1).max(256),
+  costTier: z.enum(['low', 'standard', 'premium']).optional(),
   aliases: z.array(ProviderModelIdSchema).max(64).optional(),
   description: z.string().max(1024).optional(),
   contextWindowTokens: z.number().int().positive().max(100_000_000).optional(),

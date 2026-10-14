@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios, { AxiosHeaders } from 'axios';
-import { createActionExecutor, ScmDiffSummaryGenerateOutputSchema, ExecutionRunGetResponseSchema, ProviderBoundModelRefSchema, ReviewCommentsV1Schema, type ActionExecutorContext, type ActionExecutorDeps, type ScmActionExecute } from '@happier-dev/protocol';
+import { createActionExecutor, getActionSpec, ScmDiffSummaryGenerateOutputSchema, ExecutionRunGetResponseSchema, ProviderBoundModelRefSchema, ReviewCommentsV1Schema, type ActionExecutorContext, type ActionExecutorDeps, type ScmActionExecute } from '@happier-dev/protocol';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
 import { executeScmActionOperation as executeScmOperation } from './executeScmActionOperation';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { configuration } from '@/configuration';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 
 const cwd = '/saved/repository';
 beforeEach(() => {
@@ -191,8 +192,7 @@ describe('saved SCM result Action boundary', () => {
     }, workingDirectory: cwd, executeCanonicalAction, actionContext: { surface: 'rpc', authority: 'present_user' } }))
       .toMatchObject({ success: true, runId: operation === 'seedExplain' ? 'seeded' : run.runId });
     if (operation === 'seedExplain') {
-      expect(seededInput?.instructions).not.toContain('HOST-OCCURRENCE-SELECTED');
-      expect(seededInput?.instructions).toContain('"changeRefs":["c1"]');
+      expect(seededInput?.instructions).toBe('Explain finding');
       expect(seededInput?.reviewExplanation).toBeUndefined();
       expect(seededInput?.reviewExplanationInputId).toEqual(expect.any(String));
       const pending = await scmDiffSummaryResultStore.readInput({ cwd, resultId: created.resultId,
@@ -222,25 +222,33 @@ describe('saved SCM result Action boundary', () => {
     }
   });
   it.each([false, true])('starts one labelled seeded generator preserving saved provider selection (original available=%s)', async (originalAvailable) => {
-    const modelSelection = ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:codex', providerConnectionId: 'chosen-provider', modelId: 'chosen-model' });
-    const generator = { backendTarget: { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const }, modelId: 'chosen-model', modelSelection };
-    const created = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output, generator });
+    const backendTarget = { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const };
+    const modelSelection = ProviderBoundModelRefSchema.parse({ agentTargetKey: buildBackendTargetKeyV2(backendTarget), providerConnectionId: 'chosen-provider', modelId: 'chosen-model' });
+    const generator = { backendTarget, modelId: 'chosen-model', modelSelection,
+      investigateSurroundingFiles: true };
+    const comparisonId = 'a'.repeat(64);
+    const seededOutput = ScmDiffSummaryGenerateOutputSchema.parse({ ...output, sourceKey: comparisonId,
+      metadata: { ...output.metadata, sourceKey: comparisonId }, comparison: { ...output.comparison, id: comparisonId } });
+    const created = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output: seededOutput, generator });
     const starts: Array<{ localInputId?: string } & Record<string, unknown>> = [];
+    let startParseIssues: unknown;
     const response = await executeScmActionOperation({ actionId: 'scm.diffSummary.discuss',
       input: { cwd, resultId: created.resultId, expectedRevision: 0, message: 'Why this change?', startNew: true }, workingDirectory: cwd,
       executeCanonicalAction: async (id, input) => {
         if (id === 'execution.run.get') return originalAvailable ? { ok: true, result: { run } } : { ok: false, errorCode: 'execution_run_not_found', error: 'Gone' };
         if (id !== 'execution.run.start') throw new Error('Fallback must admit one canonical generator');
-        starts.push(input as { localInputId?: string } & Record<string, unknown>);
+        const parsed = getActionSpec('execution.run.start').inputSchema.safeParse(input);
+        if (!parsed.success) { startParseIssues = parsed.error.issues; throw parsed.error; }
+        starts.push(parsed.data);
         await scmDiffSummaryResultStore.bindRun({ cwd, resultId: created.resultId, expectedRevision: 0, runId: 'replacement', seededFromRunId: 'saved-generator' });
         return { ok: true, result: { runId: 'replacement', callId: 'call', sidechainId: 'sidechain' } };
       },
     });
-    expect(response).toMatchObject({ success: true, runId: 'replacement', inputId: expect.any(String),
+    expect(response, JSON.stringify({ response, startParseIssues })).toMatchObject({ success: true, runId: 'replacement', inputId: expect.any(String),
       seededFromRunId: 'saved-generator', result: { revision: 1 } });
     expect(starts[0]?.localInputId).toBe((response as { inputId: string }).inputId);
     expect(starts).toEqual([expect.objectContaining({ kind: 'scm_diff_summary.v1', backendTarget: generator.backendTarget, modelId: 'chosen-model', modelSelection,
-      intentInput: expect.objectContaining({ resultId: created.resultId, comparisonId: 'comparison', expectedRevision: 0 }) })]);
+      intentInput: expect.objectContaining({ resultId: created.resultId, comparisonId, expectedRevision: 0, investigateSurroundingFiles: true }) })]);
   });
   it('reads and edits a retained result without a live generator and preserves strict revision failures', async () => {
     const created = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'session', output });

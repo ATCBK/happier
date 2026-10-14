@@ -1,10 +1,12 @@
-import { ScmDiffSummaryModelSelectorSchema, type ScmDiffSummaryModelSelector } from '../../scm/diffSummary.js';
-import { parseBackendTargetKeyV2, readBackendTargetRefV2, type BackendTargetRefV2 } from '../../backends/targets/backendTargetRefV2.js';
+import { ScmDiffSummaryModelSelectorSchema, ScmDiffSummaryOutputLanguageSchema, type ScmDiffSummaryModelSelector } from '../../scm/diffSummary.js';
+import { buildBackendTargetKeyV2, parseBackendTargetKeyV2, readBackendTargetRefV2, type BackendTargetRefV2 } from '../../backends/targets/backendTargetRefV2.js';
+import type { ProviderModelDescriptorV1 } from '../../models/descriptor.js';
 import type { CapabilitySupport } from '../../providers/capabilities/v1.js';
 import { ACCOUNT_SETTING_DEFINITIONS, type AccountSettings } from '../../account/settings/accountSettings.js';
 import type { SettingDomainValueV1 } from './settingsOwnerActions.js';
 
-export type ScmDiffSummarySettingsV1 = Pick<AccountSettings, 'scm.diffSummary.prefetch' | 'scm.diffSummary.modelProfileOverride'>;
+export type ScmDiffSummarySettingsV1 = Pick<AccountSettings, 'scm.diffSummary.prefetch' | 'scm.diffSummary.modelProfileOverride'>
+    & Partial<Pick<AccountSettings, 'scm.diffSummary.outputLanguage' | 'scm.diffSummary.investigateSurroundingFiles'>>;
 export type ScmDiffSummaryCatalogMutationServicesV1<T extends ScmDiffSummarySettingsV1 = ScmDiffSummarySettingsV1> = Readonly<{
     readScmDiffSummaryCatalog?: (settings: T, storedValue: string) => Promise<Readonly<{
         profiles: readonly ScmDiffSummaryCatalogProfile[];
@@ -23,6 +25,8 @@ export const SCM_DIFF_SUMMARY_SETTING_KEYS = {
     enabled: 'scm.diffSummary.enabled',
     prefetch: 'scm.diffSummary.prefetch',
     modelProfileOverride: 'scm.diffSummary.modelProfileOverride',
+    outputLanguage: 'scm.diffSummary.outputLanguage',
+    investigateSurroundingFiles: 'scm.diffSummary.investigateSurroundingFiles',
 } as const;
 
 export type ScmDiffSummaryCatalogProfile = Readonly<{
@@ -30,11 +34,14 @@ export type ScmDiffSummaryCatalogProfile = Readonly<{
     title: string;
     modelSelector?: ScmDiffSummaryModelSelector;
     structuredOutput?: CapabilitySupport;
+    costTier?: ProviderModelDescriptorV1['costTier'];
 }>;
 
 export type ResolvedScmDiffSummarySettings = Readonly<{
     enabled: boolean;
     prefetch: boolean;
+    investigateSurroundingFiles: boolean;
+    outputLanguage: string | null;
     modelOverride: ScmDiffSummaryCatalogProfile | null;
     modelOverrideError?: 'SCM_DIFF_SUMMARY_MODEL_UNSUPPORTED' | 'SCM_DIFF_SUMMARY_MODEL_UNAVAILABLE';
 }>;
@@ -68,6 +75,17 @@ export function decodeScmDiffSummaryModelOverride(value: string): ScmDiffSummary
     catch { return null; }
 }
 
+/** The same admitted catalog decides the unset preference in every consumer. */
+export function resolveScmDiffSummaryDefaultModelProfile(
+    profiles: readonly ScmDiffSummaryCatalogProfile[],
+    defaultBackendTarget?: BackendTargetRefV2 | null,
+): ScmDiffSummaryCatalogProfile | null {
+    const admitted = profiles.filter(profile => profile.costTier === 'low'
+        && profile.structuredOutput === 'supported' && profile.modelSelector?.backendTargetKey && profile.modelSelector.modelId);
+    const targetKey = defaultBackendTarget ? buildBackendTargetKeyV2(defaultBackendTarget) : null;
+    return admitted.find(profile => profile.modelSelector?.backendTargetKey === targetKey) ?? admitted[0] ?? null;
+}
+
 export function resolveScmDiffSummaryModelSelection(params: Readonly<{
     storedValue: string; defaultBackendTarget?: BackendTargetRefV2 | null;
     catalogProfiles?: readonly ScmDiffSummaryCatalogProfile[];
@@ -75,9 +93,11 @@ export function resolveScmDiffSummaryModelSelection(params: Readonly<{
     | Readonly<{ success: false; errorCode: 'SCM_DIFF_SUMMARY_MODEL_UNAVAILABLE' | 'SCM_DIFF_SUMMARY_MODEL_UNSUPPORTED' }> {
     const resolved = resolveScmDiffSummarySettings({ storedSettings: { [SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]: params.storedValue }, catalogProfiles: params.catalogProfiles ?? [] });
     if (resolved.modelOverrideError) return { success: false, errorCode: resolved.modelOverrideError };
-    const override = resolved.modelOverride;
-    const selector = override?.modelSelector ?? (override?.catalogId.startsWith('profile:')
-        ? { profileId: override.catalogId.slice('profile:'.length) } : override ? { backendTargetKey: override.catalogId } : { modelId: 'default' });
+    const override = resolved.modelOverride ?? (!params.storedValue.trim()
+        ? resolveScmDiffSummaryDefaultModelProfile(params.catalogProfiles ?? [], params.defaultBackendTarget) : null);
+    if (!override || override.structuredOutput !== 'supported') return { success: false, errorCode: 'SCM_DIFF_SUMMARY_MODEL_UNAVAILABLE' };
+    const selector = override.modelSelector ?? (override.catalogId.startsWith('profile:')
+        ? { profileId: override.catalogId.slice('profile:'.length) } : { backendTargetKey: override.catalogId });
     try {
         const backendTarget = selector.backendTargetKey ? readBackendTargetRefV2(parseBackendTargetKeyV2(selector.backendTargetKey)) : params.defaultBackendTarget;
         return backendTarget ? { success: true, backendTarget, modelSelector: selector } : { success: false, errorCode: 'SCM_DIFF_SUMMARY_MODEL_UNAVAILABLE' };
@@ -87,6 +107,7 @@ export function resolveScmDiffSummaryModelSelection(params: Readonly<{
 export function resolveScmDiffSummarySettings(params: Readonly<{
     storedSettings: Readonly<Record<string, unknown>>;
     catalogProfiles: readonly ScmDiffSummaryCatalogProfile[];
+    uiLocale?: string;
 }>): ResolvedScmDiffSummarySettings {
     const raw = params.storedSettings[SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride];
     const value = typeof raw === 'string' ? raw.trim() : '';
@@ -94,9 +115,14 @@ export function resolveScmDiffSummarySettings(params: Readonly<{
     const selector = value ? decodeScmDiffSummaryModelOverride(value) : null;
     const override: ScmDiffSummaryCatalogProfile | null = catalogOverride ?? (selector ? { catalogId: value, title: selector.modelId ?? selector.profileId ?? value, modelSelector: selector } : null);
     const unsupported = override?.structuredOutput === 'unsupported' || override?.structuredOutput === 'unknown';
+    const language = [params.storedSettings[SCM_DIFF_SUMMARY_SETTING_KEYS.outputLanguage], params.uiLocale,
+        params.storedSettings.preferredLanguage].map(value => ScmDiffSummaryOutputLanguageSchema.safeParse(value))
+        .find(parsed => parsed.success);
     return {
         enabled: readBooleanSetting(params.storedSettings, SCM_DIFF_SUMMARY_SETTING_KEYS.enabled, true),
         prefetch: readBooleanSetting(params.storedSettings, SCM_DIFF_SUMMARY_SETTING_KEYS.prefetch, false),
+        investigateSurroundingFiles: readBooleanSetting(params.storedSettings, SCM_DIFF_SUMMARY_SETTING_KEYS.investigateSurroundingFiles, false),
+        outputLanguage: language?.success ? language.data : null,
         modelOverride: unsupported ? null : override,
         ...(unsupported ? { modelOverrideError: 'SCM_DIFF_SUMMARY_MODEL_UNSUPPORTED' as const }
             : value && !override ? { modelOverrideError: 'SCM_DIFF_SUMMARY_MODEL_UNAVAILABLE' as const } : {}),
@@ -104,13 +130,15 @@ export function resolveScmDiffSummarySettings(params: Readonly<{
 }
 
 /** Settings UI and Actions admit the same catalog-backed scalar intent at the Account CAS owner. */
-export function scmDiffSummarySettingBinding<T extends ScmDiffSummarySettingsV1 = ScmDiffSummarySettingsV1>(key: typeof SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride | typeof SCM_DIFF_SUMMARY_SETTING_KEYS.prefetch): ScmDiffSummarySettingBindingV1<T> {
+export function scmDiffSummarySettingBinding<T extends ScmDiffSummarySettingsV1 = ScmDiffSummarySettingsV1>(key: typeof SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride | typeof SCM_DIFF_SUMMARY_SETTING_KEYS.prefetch | typeof SCM_DIFF_SUMMARY_SETTING_KEYS.outputLanguage | typeof SCM_DIFF_SUMMARY_SETTING_KEYS.investigateSurroundingFiles): ScmDiffSummarySettingBindingV1<T> {
     return {
         scope: 'account', kind: 'owner', access: 'read_write',
         read: settings => settings[key],
         parse: value => {
             const parsed = ACCOUNT_SETTING_DEFINITIONS[key].parseMutationValue(value);
             if (!parsed.success || (typeof parsed.data !== 'string' && typeof parsed.data !== 'boolean')) return { success: false };
+            if (key === SCM_DIFF_SUMMARY_SETTING_KEYS.outputLanguage && parsed.data !== ''
+                && !ScmDiffSummaryOutputLanguageSchema.safeParse(parsed.data).success) return { success: false };
             return { success: true, value: parsed.data };
         },
         // Support comes from the catalog prepare phase; scalar schema alone never admits a model.
@@ -118,6 +146,13 @@ export function scmDiffSummarySettingBinding<T extends ScmDiffSummarySettingsV1 
         prepare: async (settings, value, services, context) => {
             const parsed = ACCOUNT_SETTING_DEFINITIONS[key].parseMutationValue(value);
             if (!parsed.success || context?.signal?.aborted || context?.isCurrent() === false) return null;
+            if (key === SCM_DIFF_SUMMARY_SETTING_KEYS.investigateSurroundingFiles) {
+                return () => context?.signal?.aborted || context?.isCurrent() === false ? null : { [key]: parsed.data } as Partial<T>;
+            }
+            if (key === SCM_DIFF_SUMMARY_SETTING_KEYS.outputLanguage) {
+                if (typeof parsed.data !== 'string' || (parsed.data !== '' && !ScmDiffSummaryOutputLanguageSchema.safeParse(parsed.data).success)) return null;
+                return () => context?.signal?.aborted || context?.isCurrent() === false ? null : { [key]: parsed.data } as Partial<T>;
+            }
             if (key === SCM_DIFF_SUMMARY_SETTING_KEYS.prefetch && value === false) {
                 return () => context?.signal?.aborted || context?.isCurrent() === false ? null : { [key]: false } as Partial<T>;
             }
@@ -127,7 +162,8 @@ export function scmDiffSummarySettingBinding<T extends ScmDiffSummarySettingsV1 
             const storedValue = key === SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride
                 ? String(value) : settings[SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride];
             const catalog = await services.readScmDiffSummaryCatalog?.(settings, storedValue);
-            const profile = catalog?.profiles.find(candidate => candidate.catalogId === storedValue);
+            const profile = storedValue ? catalog?.profiles.find(candidate => candidate.catalogId === storedValue)
+                : resolveScmDiffSummaryDefaultModelProfile(catalog?.profiles ?? []);
             if (!catalog || profile?.structuredOutput !== 'supported'
                 || !resolveScmDiffSummaryModelSelection({ storedValue, catalogProfiles: catalog.profiles }).success) return null;
             return current => {

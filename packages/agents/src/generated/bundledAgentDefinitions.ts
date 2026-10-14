@@ -1003,11 +1003,13 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
         "name": "Sonnet 4.6"
       },
       {
+        "costTier": "low",
         "description": "Claude Haiku model for lighter tasks and lower-latency replies.",
         "id": "claude-haiku-5-5",
         "name": "Haiku 5.5"
       },
       {
+        "costTier": "low",
         "description": "Fastest Claude option for lighter tasks and lower-latency replies.",
         "id": "claude-haiku-4-5",
         "name": "Haiku 4.5"

@@ -11,7 +11,7 @@ import type { ExecutionRunIntentProfile, ExecutionRunProfileTurnCompleteParams, 
 import { buildDiffSummaryPrompt } from './buildDiffSummaryPrompt';
 import { loadScmDiffSummaryContext } from './loadScmDiffSummaryContext';
 import { parseDiffSummaryModelOutput } from './parseDiffSummaryModelOutput';
-import { presentScmDiffSummaryModelContext } from './presentScmDiffSummaryModelContext';
+import { presentScmDiffSummaryModelContext, scopeScmDiffSummaryComparison } from './presentScmDiffSummaryModelContext';
 import { advanceDiffSummaryAnalysis, hasActiveDiffSummaryAnalysis, planDiffSummaryAnalysis,
   readDiffSummaryPartProgress, admitDiffSummaryPart } from './advanceDiffSummaryAnalysis';
 import { stripTrailingJsonObjectFromText } from '@/agent/executionRuns/profiles/shared/stripTrailingJsonObjectFromText';
@@ -24,6 +24,8 @@ import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSu
 import { buildPendingScmDiffSummaryOutput, publishSavedScmDiffSummaryTurn, readOrCreateSavedScmResult } from './publishSavedScmDiffSummaryTurn';
 import { buildReviewNarrationInputContext, readReviewNarration, readReviewFindingCitationContext } from '@/agent/executionRuns/profiles/review/reviewNarrationContext';
 import { findingCitationInstructions, publishReviewFindingCitations } from '@/agent/executionRuns/profiles/review/reviewFindingCitations';
+import { resolveScmDiffSummarySettings } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
+import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 function readRecord(value: unknown): Readonly<Record<string, unknown>> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -62,6 +64,8 @@ function buildCacheKeyInput(params: Readonly<{
     source: { kind: 'comparison', comparisonId: comparison.data.id },
     summarySchemaVersion: readPositiveVersion(params.intentInput.summarySchemaVersion),
     resolvedSelector: { catalogId: selector }, outputs, scopeKey,
+    ...(typeof params.intentInput.outputLanguage === 'string' ? { outputLanguage: params.intentInput.outputLanguage } : {}),
+    investigateSurroundingFiles: params.intentInput.investigateSurroundingFiles === true,
   };
   return null;
 }
@@ -208,7 +212,11 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
       resultGenerator: _callerGenerator, resultBaseRevision: _callerRevision,
       reviewNarration: _callerReviewNarration,
       reviewExplanation: _callerReviewExplanation,
-      ...input } = ExecutionRunScmDiffSummaryInputV1Schema.parse(request.intentInput ?? {});
+      ...parsedInput } = ExecutionRunScmDiffSummaryInputV1Schema.parse(request.intentInput ?? {});
+    const outputLanguage = parsedInput.outputLanguage ?? resolveScmDiffSummarySettings({
+      storedSettings: getActiveAccountSettingsSnapshot()?.settings ?? {}, catalogProfiles: [],
+    }).outputLanguage;
+    const input = { ...parsedInput, ...(outputLanguage ? { outputLanguage } : {}) };
     const context = await loadScmDiffSummaryContext({
       input,
       workingDirectory: cwd,
@@ -219,6 +227,8 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     const modelSelection = ProviderBoundModelRefSchema.safeParse(request.modelSelection);
     const generator = ScmDiffSummaryGeneratorSelectionSchema.parse({
       backendTarget: readBackendTargetRefV2(request.backendTarget),
+      ...(outputLanguage ? { outputLanguage } : {}),
+      ...(input.investigateSurroundingFiles === true ? { investigateSurroundingFiles: true } : {}),
       ...(readNonEmptyString(request.modelId) ? { modelId: readNonEmptyString(request.modelId) } : {}),
       ...(readNonEmptyString(request.profileId) ? { profileId: readNonEmptyString(request.profileId) } : {}),
       ...(modelSelection.success ? { modelSelection: modelSelection.data } : {}),
@@ -248,9 +258,22 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     const cachedOutput = !isSeededResult && cacheKeyInput && !shouldBypassCache(inputRecord)
       ? scmDiffSummaryCacheStore.get(cacheKeyInput)
       : null;
+    const investigation = input.investigateSurroundingFiles === true
+      ? await scmDiffSummaryResultStore.prepareInvestigation({ ...scope, resultId: saved.resultId }) : null;
+    const executionPolicy = { permissionMode: investigation ? 'read_only' : 'no_tools', workspaceWrites: 'deny' as const,
+      ...(investigation ? { cwd: investigation.afterDirectory } : {}) };
+    const investigationInstructions = investigation ? [
+      'Surrounding-file investigation is enabled for this captured comparison.',
+      `Read-only before endpoint directory: ${JSON.stringify(investigation.beforeDirectory)}.`,
+      `Read-only after endpoint directory (your working directory): ${JSON.stringify(investigation.afterDirectory)}.`,
+      'Use these endpoint directories for surrounding-file context. The live repository is not this comparison.',
+      'Submodule working files are not available; captured Gitlink identities remain comparison evidence.',
+      'Surrounding-file reads do not add change references or establish analysis coverage. Captured references and host coverage remain authoritative.',
+    ].join('\n') : '';
     if (cacheKeyInput && isScmDiffSummaryGenerateOutput(cachedOutput)) {
       return {
-        instructions: '',
+        ...executionPolicy,
+        instructions: investigationInstructions,
         intentInput: {
           ...savedInput,
           sourceKey: context.metadata.sourceKey,
@@ -268,27 +291,48 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
 
     const summarySchemaVersion = cacheKeyInput?.summarySchemaVersion ?? SCM_DIFF_SUMMARY_CACHE_SCHEMA_VERSION;
 
-    const instructions = isSeededResult ? ['Start a new conversation seeded from this saved result and its captured evidence.',
-        'This conversation is a replacement generator, not a continuation of the previous native thread.',
-        findingCitationInstructions,
-        `Saved outputs: ${JSON.stringify(presentScmDiffSummaryModelContext(saved.output, context.comparison, citations))}`,
-        `Captured evidence: ${JSON.stringify(presentScmDiffSummaryModelContext(context.comparison, context.comparison))}`,
-        typeof input.instructions === 'string' ? input.instructions : request.instructions,
-      ].filter(Boolean).join('\n\n') : buildDiffSummaryPrompt({
+    const userInstructions = typeof input.instructions === 'string' ? input.instructions : request.instructions;
+    const selectedStops = input.stopIds ? saved.output.outputs?.walkthrough?.value?.stops.filter(stop => input.stopIds!.includes(stop.id)) : undefined;
+    if (input.stopIds && selectedStops?.length !== input.stopIds.length) throw new Error('Selected stops are unavailable in the saved revision');
+    const promptComparison = scopeScmDiffSummaryComparison(context.comparison, selectedStops ? new Set(selectedStops.flatMap(stop => stop.changeRefs)) : null);
+    const explanationInput = input.reviewExplanationInputId ? await scmDiffSummaryResultStore.readInput({ ...scope,
+      resultId: saved.resultId, inputIds: [input.reviewExplanationInputId] }) : null;
+    if (input.reviewExplanationInputId && !explanationInput?.reviewExplanation) throw new Error('The saved finding explanation request is unavailable');
+    const savedContext = isSeededResult
+      ? `Saved outputs: ${JSON.stringify(presentScmDiffSummaryModelContext(selectedStops
+        ? { comparisonId: promptComparison.id, title: saved.output.outputs?.walkthrough?.value?.title, stops: selectedStops }
+        : saved.output, promptComparison, citations))}` : undefined;
+    const taskInstructions = [investigationInstructions, ...(savedContext ? [
+      'Start a new conversation seeded from this saved result and its captured evidence.',
+      'This conversation is a replacement generator, not a continuation of the previous native thread.',
+      explanationInput?.reviewExplanation
+        ? 'Explain the selected findings, without changing walkthrough prose or giving a verdict. Return only reviewExplanations, one {stopId, markdown} per selected stop.'
+        : 'Publish only the requested structured outputs; retain exact captured change references.',
+      ...(selectedStops && !explanationInput?.reviewExplanation ? [
+        'Return only the selected stops with unchanged stop IDs and exact selected change-ref coverage. Preserve their titles. Set otherChangeRefs to []. Unselected stops are preserved by the saved-result owner.',
+      ] : []),
+      findingCitationInstructions,
+    ] : [])].filter(Boolean).join('\n');
+    const instructions = buildDiffSummaryPrompt({
         metadata: context.metadata,
-        files: context.files,
-        comparison: context.comparison,
+        files: selectedStops ? context.files.filter(file => promptComparison.inventory.files.some(selected => selected.path === file.path)) : context.files,
+        comparison: promptComparison,
         outputs: input.outputs,
-        instructions: typeof request.instructions === 'string' ? request.instructions : undefined,
+        instructions: userInstructions,
+        outputLanguage: input.outputLanguage,
+        ...(explanationInput?.reviewExplanation ? { reviewExplanation: true } : {}),
+        ...(savedContext ? { evidenceContext: savedContext } : {}),
+        ...(taskInstructions ? { taskInstructions } : {}),
       });
-    const analysisInstructions = [isSeededResult ? `Saved outputs: ${JSON.stringify(presentScmDiffSummaryModelContext(saved.output.outputs, context.comparison, citations))}` : '',
-      typeof input.instructions === 'string' ? input.instructions : request.instructions].filter(Boolean).join('\n\n');
+    const analysisInstructions = userInstructions;
     // Saved-result starts can be discussions or scoped refinements. Do not turn
     // them into whole-result generation or bypass their admitted output scope.
     const planned = request.runClass === 'long_lived' && !isSeededResult ? planDiffSummaryAnalysis({ comparison: context.comparison,
       metadata: context.metadata, outputs: input.outputs ?? ['summary'], prompt: instructions, contextWindowTokens,
-      instructions: analysisInstructions }) : null;
+      instructions: analysisInstructions, outputLanguage: input.outputLanguage,
+      ...(taskInstructions ? { taskInstructions } : {}) }) : null;
     return {
+      ...executionPolicy,
       instructions: planned?.instructions ?? instructions,
       intentInput: {
         ...savedInput,
@@ -448,7 +492,9 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     const metadata = ScmDiffSummaryMetadataSchema.parse(input.metadata);
     return buildDiffSummaryPrompt({ metadata, ...(comparison.success ? { comparison: comparison.data } : {}),
       outputs: readRequestedOutputs(input), files: [],
-      instructions: 'The previous result was invalid. Repair only the requested structured output using the retained evidence. Do not run tools.',
+      outputLanguage: typeof input.outputLanguage === 'string' ? input.outputLanguage : undefined,
+      instructions: typeof input.instructions === 'string' ? input.instructions : undefined,
+      taskInstructions: 'The previous result was invalid. Repair only the requested structured output using the retained evidence. Do not run tools.',
     });
   },
 };

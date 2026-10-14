@@ -1541,6 +1541,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
         { path: 'modelSelector.profileId', title: 'Model profile id', widget: 'text' },
         { path: 'modelSelector.modelId', title: 'Model id', widget: 'text' },
         { path: 'modelSelector.backendTargetKey', title: 'Backend target key', widget: 'text' },
+        { path: 'investigateSurroundingFiles', title: 'Read surrounding files at captured endpoints', widget: 'boolean' },
       ],
     },
   }),

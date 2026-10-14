@@ -58,6 +58,11 @@ export const ScmDiffSummaryCachePolicySchema = lazyZodSchema(() => z.object({
 export type ScmDiffSummaryCachePolicy =
   z.infer<typeof ScmDiffSummaryCachePolicySchema>;
 
+/** A language tag controls prose only; it never supplies prompt instructions. */
+export const ScmDiffSummaryOutputLanguageSchema = lazyZodSchema(() => z.string().trim().min(1).refine(value => {
+  try { return Intl.getCanonicalLocales(value).length === 1; } catch { return false; }
+}, 'Expected a language tag'));
+
 // Retain concrete identity for shared Control input JSON Schema references.
 export const ScmDiffSummaryGenerateInputSchema = lazyZodSchema(() => z
   .object({
@@ -71,6 +76,8 @@ export const ScmDiffSummaryGenerateInputSchema = lazyZodSchema(() => z
     turnEvidenceMode: ScmDiffSummaryTurnEvidenceModeSchema.optional(),
     modelSelector: ScmDiffSummaryModelSelectorSchema.optional(),
     cachePolicy: ScmDiffSummaryCachePolicySchema.optional(),
+    investigateSurroundingFiles: z.boolean().optional(),
+    outputLanguage: ScmDiffSummaryOutputLanguageSchema.optional(),
     outputs: z.array(z.enum(['summary', 'walkthrough', 'commitPlan'])).min(1).optional(),
   })
   .strict()
@@ -442,7 +449,9 @@ export const ScmDiffSummaryCacheKeyDescriptorSchema = lazyZodSchema(() => z
     volatileSourceVersion: z.string().trim().min(1).optional(),
     comparisonId: z.string().trim().min(1).optional(),
     outputs: z.array(ScmDiffSummaryOutputKindSchema).min(1).optional(),
+    outputLanguage: ScmDiffSummaryOutputLanguageSchema.optional(),
     turnEvidenceMode: ScmDiffSummaryTurnEvidenceModeSchema.optional(),
+    investigateSurroundingFiles: z.boolean().optional(),
     summarySchemaVersion: z.number().int().positive(),
     resolvedSelector: ScmDiffSummaryResolvedSelectorSchema,
   })
@@ -514,7 +523,9 @@ export type ScmDiffSummaryCacheKeyInput = Readonly<{
   source: ScmDiffSummaryCacheSource; summarySchemaVersion: number;
   resolvedSelector: ScmDiffSummaryResolvedSelectorInput;
   outputs?: readonly ScmDiffSummaryOutputKind[];
+  outputLanguage?: string;
   scopeKey?: string;
+  investigateSurroundingFiles?: boolean;
   volatileDiffDigest?: string;
 }>;
 
@@ -526,7 +537,9 @@ export function buildScmDiffSummaryCacheKey(input: ScmDiffSummaryCacheKeyInput):
   }
   if (!Number.isInteger(input.summarySchemaVersion) || input.summarySchemaVersion <= 0) throw new Error('summarySchemaVersion must be a positive integer');
   const selector = part(input.resolvedSelector.catalogId, 'resolved catalog id');
-  const suffix = `schema:${input.summarySchemaVersion}:selector:${selector}`;
+  const suffix = `schema:${input.summarySchemaVersion}:selector:${selector}`
+    + (input.outputLanguage ? `:language:${part(ScmDiffSummaryOutputLanguageSchema.parse(input.outputLanguage), 'outputLanguage')}` : '')
+    + (input.investigateSurroundingFiles === true ? ':investigation:surrounding-files' : '');
   const outputs = [...new Set(input.outputs ?? ['summary'])].sort();
   if (!outputs.length || outputs.some((output) => !ScmDiffSummaryOutputKindSchema.safeParse(output).success)) throw new Error('Requested output kinds are invalid');
   const outputSuffix = outputs.length === 1 && outputs[0] === 'summary' ? '' : `:outputs:${outputs.join(',')}`;

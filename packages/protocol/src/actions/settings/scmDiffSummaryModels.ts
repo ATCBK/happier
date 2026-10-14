@@ -5,12 +5,15 @@ import { encodeScmDiffSummaryModelOverride, type ScmDiffSummaryCatalogProfile } 
 /** Project the owning catalog's actual model descriptors into the shared Summary preference. */
 export function buildScmDiffSummaryModelProfiles(params: Readonly<{
     backendTarget: BackendTargetRefV2;
-    models: readonly Pick<ProviderModelDescriptorV1, 'id' | 'name' | 'capabilities'>[];
+    models: readonly Pick<ProviderModelDescriptorV1, 'id' | 'name' | 'capabilities' | 'costTier'>[];
+    catalogModels?: readonly Pick<ProviderModelDescriptorV1, 'id' | 'costTier'>[];
     agentFormats?: readonly string[] | null;
 }>): readonly ScmDiffSummaryCatalogProfile[] {
     return params.models.map(model => {
         const modelSelector = { backendTargetKey: buildBackendTargetKeyV2(params.backendTarget), modelId: model.id };
+        const costTier = model.costTier ?? params.catalogModels?.find(candidate => candidate.id === model.id)?.costTier;
         return { catalogId: encodeScmDiffSummaryModelOverride(modelSelector), title: model.name, modelSelector,
+            ...(costTier ? { costTier } : {}),
             structuredOutput: resolveModelStructuredOutputSupport({ model, catalogModel: true, agentFormats: params.agentFormats }) };
     });
 }

@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ExecutionRunScmDiffSummaryInputV1Schema, ProviderBoundModelRefSchema, SCM_DIFF_SUMMARY_CACHE_SCHEMA_VERSION, ScmComparisonSchema, ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol';
+import { ExecutionRunScmDiffSummaryInputV1Schema } from '@happier-dev/protocol/execution/runs/startRequest';
+import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
+import { SCM_DIFF_SUMMARY_CACHE_SCHEMA_VERSION, ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
+import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
 import type { ExecutionRunProfileStartParams } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
-import { captureScmComparison } from '@/scm/comparisons/captureScmComparison';
+import { captureScmComparison, deleteCapturedScmComparison } from '@/scm/comparisons/captureScmComparison';
 import { ScmDiffSummaryProfile } from './ScmDiffSummaryProfile';
 import { scmDiffSummaryCacheStore } from '@/agent/executionRuns/tasks/scmDiffSummary/cache/cacheStore';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
@@ -14,6 +17,11 @@ import { parseDiffSummaryModelOutput } from './parseDiffSummaryModelOutput';
 import { advanceDiffSummaryAnalysis } from './advanceDiffSummaryAnalysis';
 import { prepareSavedReviewWalkthroughInput } from '@/agent/executionRuns/profiles/review/reviewWalkthroughTurn';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { executeScmActionOperation } from '@/scm/actions/executeScmActionOperation';
+import { ScmDiffSummaryResultResponseSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
+import { getActionSpec, type ScmActionExecute } from '@happier-dev/protocol';
 
 const comparison = ScmComparisonSchema.parse({
   id: 'comparison-1', source: { kind: 'workingTree' }, repository: { rootPath: '/repo' }, endpoints: {},
@@ -42,8 +50,161 @@ async function admitInitial(params: ExecutionRunProfileStartParams) {
     previousStructuredMeta: initial?.structuredMeta };
 }
 
+async function exerciseSavedContinuation(operation: 'refine' | 'addOutputs' | 'replacement' | 'explicitChoice',
+  assertContinuation: (observed: { prompt: string; admittedInstructions?: unknown; savedLanguage?: unknown; replacementLanguage?: unknown }) => void) {
+  const previous = getActiveAccountSettingsSnapshot();
+  setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({ 'scm.diffSummary.outputLanguage': 'de' }),
+    settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: 'saved-language-account' });
+  try {
+    await withTempDir('happier-scm-continuation-', async cwd => {
+      execFileSync('git', ['init', '-q'], { cwd });
+      const captured = await captureScmComparison({ cwd, source: { kind: 'workingTree' } });
+      const request = { backendTarget: { kind: 'builtInAgent' as const, agentId: 'claude' }, intent: 'scm_diff_summary' as const,
+        permissionMode: 'read_only', retentionPolicy: 'resumable' as const, runClass: 'long_lived' as const, ioMode: 'streaming' as const,
+        intentInput: { cwd, source: captured.comparison.source, comparisonId: captured.comparison.id, outputs: ['summary'], outputLanguage: 'fr' } };
+      const initial = await ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId: null, request });
+      const params = { ...start(initial?.intentInput), sessionId: null, instructions: initial!.instructions! };
+      const begun = await ScmDiffSummaryProfile.onStarted!({ start: params, rawText: '', finishedAtMs: 1 });
+      const generated = await ScmDiffSummaryProfile.onTurnComplete!({ start: params, rawText: JSON.stringify({ summaryMarkdown: 'UNTRUSTED_PRIOR_OUTPUT_DIRECTIVE' }),
+        turnId: 'initial-turn', inputIds: ['initial:run-1'], previousStructuredMeta: begun?.structuredMeta, finishedAtMs: 2 });
+      const produced = ScmDiffSummaryGenerateOutputSchema.parse(generated?.toolResultOutput);
+      const savedResponse = ScmDiffSummaryResultResponseSchema.parse(await scmDiffSummaryResultStore.read({ cwd, resultId: produced.resultId! }));
+      if (!savedResponse.success) throw new Error(savedResponse.error);
+      const saved = savedResponse.result;
+      let prompt = '';
+      let admittedInstructions: unknown;
+      let replacementLanguage: unknown;
+      // Only Run transport is substituted; profile admission, capture, persistence, Action routing and strict readers are real.
+      const executeCanonicalAction: Parameters<ScmActionExecute>[0]['executeCanonicalAction'] = async (id, input) => {
+        if (id === 'execution.run.get') return operation === 'replacement' || operation === 'explicitChoice'
+          ? { ok: false, errorCode: 'execution_run_not_found', error: 'Gone' }
+          : { ok: true, result: { run: { runId: 'run-1', callId: 'call', sidechainId: 'sidechain', intent: 'scm_diff_summary',
+            backendTarget: request.backendTarget, permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
+            status: 'running', startedAtMs: 1, lifecycle: { v: 1, state: 'current' }, interaction: { kind: 'retained_agent_session.v1',
+              capabilities: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true } } } } };
+        if (id === 'execution.run.send') {
+          const sent = getActionSpec('execution.run.send').inputSchema.parse(input);
+          prompt = sent.message;
+          return { ok: true, result: { ok: true } };
+        }
+        if (id === 'execution.run.start') {
+          const admitted = getActionSpec('execution.run.start').inputSchema.parse(input);
+          admittedInstructions = (admitted.intentInput as { instructions?: unknown }).instructions;
+          replacementLanguage = (admitted.intentInput as { outputLanguage?: unknown }).outputLanguage;
+          const prepared = await ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId: null, request: admitted });
+          prompt = prepared!.instructions!;
+          return { ok: true, result: { runId: 'replacement', callId: 'call', sidechainId: 'sidechain', status: 'running' } };
+        }
+        throw new Error(`Unexpected transport ${id}`);
+      };
+      const result = await executeScmActionOperation({ actionId: operation === 'addOutputs' ? 'scm.diffSummary.addOutputs' : 'scm.diffSummary.refine',
+        input: { cwd, resultId: saved.resultId, expectedRevision: saved.revision,
+          ...(operation === 'addOutputs' ? { outputs: ['walkthrough'] } : { output: 'summary', instructions: 'Explain the causal reason' }),
+          ...(operation === 'explicitChoice' ? { outputLanguage: 'it' } : {}) },
+        workingDirectory: cwd, accessPolicy: { kind: 'restrictedRoots', roots: [cwd] }, executeCanonicalAction,
+        actionContext: { surface: 'rpc', authority: 'present_user', externalActionTarget: { kind: 'machine', machineId: 'machine' } } });
+      expect(result, JSON.stringify(result)).toMatchObject({ success: true });
+      assertContinuation({ prompt, admittedInstructions, replacementLanguage, savedLanguage: (saved.generator as { outputLanguage?: unknown } | undefined)?.outputLanguage });
+    });
+  } finally {
+    if (previous) setActiveAccountSettingsSnapshot(previous); else clearActiveAccountSettingsSnapshot();
+  }
+}
+
 describe('ScmDiffSummaryProfile', () => {
   beforeEach(() => { scmDiffSummaryCacheStore.clear(); });
+
+  it.each(['refine', 'addOutputs', 'replacement'] as const)('keeps saved evidence separate from user instructions through the real %s continuation', async operation => {
+    await exerciseSavedContinuation(operation, ({ prompt, admittedInstructions }) => {
+      const [evidence, user] = prompt.split('User instructions:\n');
+      expect(evidence).toContain('UNTRUSTED_PRIOR_OUTPUT_DIRECTIVE');
+      expect(user ?? '').not.toContain('UNTRUSTED_PRIOR_OUTPUT_DIRECTIVE');
+      expect(user ?? '').not.toContain('Publish only');
+      if (operation !== 'addOutputs') expect(user?.trim()).toBe('Explain the causal reason');
+      if (operation === 'replacement') expect(admittedInstructions).toBe('Explain the causal reason');
+    });
+  });
+
+  it.each(['refine', 'addOutputs', 'replacement', 'explicitChoice'] as const)('retains admitted French over the German Account preference for %s', async operation => {
+    await exerciseSavedContinuation(operation, ({ prompt, savedLanguage, replacementLanguage }) => {
+      expect(savedLanguage).toBe('fr');
+      expect(prompt).toContain(`Prose language: ${operation === 'explicitChoice' ? 'it' : 'fr'}`);
+      if (operation === 'replacement' || operation === 'explicitChoice') expect(replacementLanguage).toBe(operation === 'explicitChoice' ? 'it' : 'fr');
+    });
+  });
+
+  it('uses the shared Account prose preference for direct Run preparation without overriding explicit language', async () => {
+    const previous = getActiveAccountSettingsSnapshot();
+    setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({
+      'scm.diffSummary.outputLanguage': 'fr', preferredLanguage: 'nl',
+    }), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: 'language-account' });
+    try {
+      await withTempDir('happier-scm-language-', async cwd => {
+        execFileSync('git', ['init', '-q'], { cwd });
+        const captured = await captureScmComparison({ cwd, source: { kind: 'workingTree' } });
+        const request = { backendTarget: { kind: 'builtInAgent' as const, agentId: 'claude' }, intent: 'scm_diff_summary' as const,
+          instructions: 'Explain', permissionMode: 'read_only', retentionPolicy: 'resumable' as const,
+          runClass: 'long_lived' as const, ioMode: 'streaming' as const,
+          intentInput: { cwd, source: { kind: 'workingTree' as const }, comparisonId: captured.comparison.id, outputs: ['summary'] } };
+        const preferred = await ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId: null, request });
+        expect(ExecutionRunScmDiffSummaryInputV1Schema.parse(preferred!.intentInput).outputLanguage).toBe('fr');
+        expect(preferred?.instructions).toContain('fr');
+        const explicit = await ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId: null, request: {
+          ...request, intentInput: { ...request.intentInput, outputLanguage: 'it' },
+        } });
+        expect(ExecutionRunScmDiffSummaryInputV1Schema.parse(explicit!.intentInput).outputLanguage).toBe('it');
+      });
+    } finally {
+      if (previous) setActiveAccountSettingsSnapshot(previous); else clearActiveAccountSettingsSnapshot();
+    }
+  });
+
+  it('prepares surrounding files from both captured endpoints, independently of later live changes', async () => {
+    await withTempDir('happier-scm-investigation-', async cwd => {
+      execFileSync('git', ['init', '-q'], { cwd });
+      execFileSync('git', ['config', 'user.name', 'Test'], { cwd });
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
+      writeFileSync(join(cwd, 'surrounding.txt'), 'Before context\n');
+      writeFileSync(join(cwd, 'binary.dat'), Buffer.from([0, 255, 13, 10, 128]));
+      writeFileSync(join(cwd, '.gitattributes'), 'surrounding.txt export-ignore\nsurrounding.txt filter=fixture\n');
+      execFileSync('git', ['config', 'filter.fixture.smudge', 'printf transformed'], { cwd });
+      symlinkSync('surrounding.txt', join(cwd, 'link.txt'));
+      execFileSync('git', ['add', '.'], { cwd });
+      execFileSync('git', ['commit', '-qm', 'initial'], { cwd });
+      writeFileSync(join(cwd, 'surrounding.txt'), 'Captured context\n');
+      const captured = await captureScmComparison({ cwd, source: { kind: 'workingTree' } });
+      const scope = { cwd, comparisonId: captured.comparison.id };
+      const request = { backendTarget: { kind: 'builtInAgent' as const, agentId: 'claude' }, intent: 'scm_diff_summary' as const,
+        instructions: 'Explain', permissionMode: 'yolo', retentionPolicy: 'resumable' as const,
+        runClass: 'long_lived' as const, ioMode: 'streaming' as const,
+        intentInput: { cwd, source: { kind: 'workingTree' as const }, comparisonId: captured.comparison.id,
+          investigateSurroundingFiles: true, outputs: ['summary'] } };
+      writeFileSync(join(cwd, 'surrounding.txt'), 'Later live context\n');
+      const prepared = await ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId: null, request });
+      try {
+        expect(prepared?.cwd).toEqual(expect.any(String));
+        const after = String(prepared!.cwd);
+        expect(after).not.toBe(cwd);
+        expect(readFileSync(join(after, 'surrounding.txt'), 'utf8')).toBe('Captured context\n');
+        expect(readFileSync(join(after, '..', 'before', 'surrounding.txt'), 'utf8')).toBe('Before context\n');
+        expect(readFileSync(join(after, 'link.txt'), 'utf8')).toBe('Captured context\n');
+        expect(readFileSync(join(after, 'binary.dat'))).toEqual(Buffer.from([0, 255, 13, 10, 128]));
+        expect(prepared?.permissionMode).toBe('read_only');
+        expect(prepared?.workspaceWrites).toBe('deny');
+        expect(ExecutionRunScmDiffSummaryInputV1Schema.parse(prepared!.intentInput).comparison).toEqual(captured.comparison);
+        const disabled = await ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId: null, request: { ...request,
+          intentInput: { ...request.intentInput, investigateSurroundingFiles: false } } });
+        expect(disabled?.permissionMode).toBe('no_tools');
+        const savedInput = ExecutionRunScmDiffSummaryInputV1Schema.parse(prepared!.intentInput);
+        const savedScope = { cwd, resultId: savedInput.resultId! };
+        expect(await scmDiffSummaryResultStore.prepareInvestigation(savedScope)).toEqual({
+          beforeDirectory: join(after, '..', 'before'), afterDirectory: after,
+        });
+        expect(await scmDiffSummaryResultStore.delete({ ...savedScope, expectedRevision: 0 })).toMatchObject({ success: true });
+        expect(existsSync(after)).toBe(false);
+      } finally { await deleteCapturedScmComparison(scope); }
+    });
+  });
 
   it('rejects a private retained result from a detached preparation even when its comparison has a workspace copy', async () => {
     await withTempDir('happier-scm-private-preparation-', async directory => {
@@ -65,7 +226,44 @@ describe('ScmDiffSummaryProfile', () => {
     });
   });
 
+  it.each(['missing hosted objects', 'escaping symlink'])('refuses surrounding-file investigation for %s without using live files', async reason => {
+    await withTempDir('happier-scm-unavailable-investigation-', async cwd => {
+      execFileSync('git', ['init', '-q'], { cwd });
+      execFileSync('git', ['config', 'user.name', 'Test'], { cwd });
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
+      writeFileSync(join(cwd, 'context.txt'), 'Live context must not substitute for endpoints\n');
+      if (reason === 'escaping symlink') symlinkSync('../outside.txt', join(cwd, 'escape.txt'));
+      execFileSync('git', ['add', '.'], { cwd });
+      execFileSync('git', ['commit', '-qm', 'initial'], { cwd });
+      const source = reason === 'missing hosted objects' ? { kind: 'pullRequest' as const, locator: {
+        providerId: 'github', repository: 'owner/repository', number: 1,
+        sourceAction: { action: { pluginId: 'test.hosting', localId: 'changed-files' }, input: {} },
+      } } : { kind: 'workingTree' as const };
+      // The hosting page is an external source boundary. Its endpoint identities
+      // are intentionally absent from this local repository.
+      const captured = await captureScmComparison({ cwd, source,
+        ...(reason === 'missing hosted objects' ? { readPullRequestComparisonPage: async () => ({
+          kind: 'changedFiles', rows: [], omittedRowCount: 0, projectionTruncated: false,
+          comparison: { beforeOid: 'a'.repeat(40), baseOid: 'a'.repeat(40), headOid: 'b'.repeat(40),
+            locator: { providerId: 'github', repository: 'owner/repository', number: 1 },
+            totalFileCount: 0, enumeratedFileCount: 0, freshness: 'current', inventory: 'complete', content: 'complete', reasons: [] },
+        }) } : {}) });
+      try {
+        expect(captured.comparison.inventory.state).toBe('complete');
+        await expect(ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId: null, request: {
+          backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, intent: 'scm_diff_summary',
+          instructions: 'Explain', permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
+          intentInput: { cwd, source, comparisonId: captured.comparison.id, investigateSurroundingFiles: true, outputs: ['summary'] },
+        } })).rejects.toMatchObject({ code: 'DIFF_UNAVAILABLE' });
+        expect(readFileSync(join(cwd, 'context.txt'), 'utf8')).toBe('Live context must not substitute for endpoints\n');
+      } finally { await deleteCapturedScmComparison({ cwd, comparisonId: captured.comparison.id }); }
+    });
+  });
+
   it.each([false, true])('plans a known-capacity single hunk before admission with exact fragments and same-run part progress (single line: %s)', async (singleLine) => {
+    // This fixture must fit the canonical instructions and exact fragment headers
+    // (now about 3.6 KB), while still forcing this hunk to arrive in parts.
+    const contextWindowTokens = singleLine ? 6000 : 4500;
     const directory = mkdtempSync(join(tmpdir(), 'happier-scm-capacity-'));
     execFileSync('git', ['init', '-q'], { cwd: directory });
     execFileSync('git', ['config', 'user.name', 'Test'], { cwd: directory });
@@ -77,14 +275,15 @@ describe('ScmDiffSummaryProfile', () => {
       : Array.from({ length: 200 }, (_, i) => `line-${i} 😀`).join('\n') + '\n');
     const captured = await captureScmComparison({ cwd: directory, sessionId: 'sess-1', source: { kind: 'workingTree' } });
     const prepare = await ScmDiffSummaryProfile.prepareStartParams!({ cwd: directory, sessionId: 'sess-1',
-      contextWindowTokens: 2200, request: { backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, intent: 'scm_diff_summary',
+      contextWindowTokens, request: { backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, intent: 'scm_diff_summary',
         instructions: 'Explain carefully', permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
-        intentInput: { cwd: directory, comparisonId: captured.comparison.id, source: { kind: 'workingTree' }, outputs: ['summary'] } } });
+        intentInput: { cwd: directory, comparisonId: captured.comparison.id, source: { kind: 'workingTree' }, outputs: ['summary'],
+          investigateSurroundingFiles: singleLine } } });
     const preparedInput = prepare!.intentInput as Record<string, unknown>;
     expect(preparedInput.scmAnalysis).toMatchObject({ phase: 'evidence', currentFragment: {
       path: 'large.txt', startOffset: expect.any(Number), endOffset: expect.any(Number),
     } });
-    expect(new TextEncoder().encode(String(prepare!.instructions)).byteLength).toBeLessThanOrEqual(2200);
+    expect(new TextEncoder().encode(String(prepare!.instructions)).byteLength).toBeLessThanOrEqual(contextWindowTokens);
     const active = preparedInput.scmAnalysis as { currentDiff: string; currentFragment: { startOffset: number; endOffset: number };
       pending: { diff: string; fragment: { startOffset: number; endOffset: number } }[] };
     expect(active.pending.length).toBeGreaterThan(0);
@@ -105,10 +304,14 @@ describe('ScmDiffSummaryProfile', () => {
       total: active.pending.length + 1, phase: 'evidence' } } });
     expect(completion?.nextInput?.instructions).toContain('Fragment offsets');
     expect(completion?.nextInput?.instructions).toContain('Context before');
+    if (singleLine) {
+      expect(completion?.nextInput?.instructions).toContain(JSON.stringify(String(prepare!.cwd)));
+      expect(completion?.nextInput?.instructions).toContain(JSON.stringify(join(String(prepare!.cwd), '..', 'before')));
+    }
     let next = completion?.nextInput;
     let turn = 0;
     while (next && (next.intentInput as { scmAnalysis: { phase: string } }).scmAnalysis.phase === 'evidence') {
-      expect(new TextEncoder().encode(next.instructions).byteLength).toBeLessThanOrEqual(2200);
+      expect(new TextEncoder().encode(next.instructions).byteLength).toBeLessThanOrEqual(contextWindowTokens);
       const advanced = advanceDiffSummaryAnalysis({ start: start(next.intentInput), turnId: `checked-${turn++}`,
         inputIds: [next.localId], finishedAtMs: 3, rawText: JSON.stringify({ summaryMarkdown: 'Part' }) });
       next = advanced?.nextInput;
@@ -117,9 +320,18 @@ describe('ScmDiffSummaryProfile', () => {
 
   it('retains the original request through unknown-capacity native rejection and final integration', () => {
     const instruction = 'Keep the requested behavioral explanation, not only a file list.';
-    const rejected = advanceDiffSummaryAnalysis({ start: start({ ...input(), instructions: instruction }),
+    const rejected = advanceDiffSummaryAnalysis({ start: start({ ...input(), instructions: instruction, outputLanguage: 'fr',
+      reviewNarration: { phase: 'writing', provenance: {
+        reviewedRuns: [{ runId: 'review-run', callId: 'review-call', backendId: 'review-agent', status: 'succeeded',
+          hasOutput: true, reviewOutcome: 'complete', comparisonId: comparison.id }],
+        narrationMode: 'seeded_narrator', comparisonFreshness: 'unchanged',
+      }, findingsContext: JSON.stringify({ reviewDecision: 'Keep the existing contract' }) },
+    }),
       turnId: 'rejected', finishedAtMs: 2, rawText: '', diagnostic: { code: 'agent_context_window_exceeded' } });
     expect(rejected?.nextInput?.instructions).toContain(instruction);
+    expect(rejected?.nextInput?.instructions).toContain('Prose language: fr');
+    expect(rejected?.nextInput?.instructions).toContain('Additional evidence context:');
+    expect(rejected?.nextInput?.instructions).toContain('Keep the existing contract');
     let next = rejected?.nextInput;
     let index = 0;
     while (next && (next.intentInput as { scmAnalysis: { phase: string } }).scmAnalysis.phase === 'evidence') {
@@ -127,6 +339,8 @@ describe('ScmDiffSummaryProfile', () => {
         turnId: `fallback-${index++}`, finishedAtMs: 3, rawText: JSON.stringify({ summaryMarkdown: 'Part' }) })?.nextInput;
     }
     expect(next?.instructions).toContain(instruction);
+    expect(next?.instructions).toContain('Prose language: fr');
+    expect(next?.instructions).toContain('Keep the existing contract');
   });
 
   it('persists confirmed part admissions once without losing the admitted publication basis', async () => {
@@ -416,6 +630,35 @@ describe('ScmDiffSummaryProfile', () => {
     expect(prompt.includes(`${marker}-0`)).toBe(true);
   });
 
+  it('keeps the language and evidence boundary on a seeded generator and its repair prompt', async () => {
+    await withTempDir('happier-scm-language-', async cwd => {
+      execFileSync('git', ['init', '-q'], { cwd });
+      const captured = await captureScmComparison({ cwd, sessionId: 'sess-1', source: { kind: 'workingTree' } });
+      const saved = await scmDiffSummaryResultStore.create({ cwd, sessionId: 'sess-1', output:
+        ScmDiffSummaryGenerateOutputSchema.parse({ success: true, sourceKey: captured.comparison.id, metadata: captured.metadata,
+          comparison: captured.comparison, runId: 'previous-run', requestedOutputs: ['walkthrough'],
+          analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] },
+          outputs: { walkthrough: { state: 'complete', value: { title: 'Saved prose', intro: '', stops: [], otherChangeRefs: [] } } } }) });
+      const prepared = await ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId: 'sess-1', request: {
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, intent: 'scm_diff_summary',
+        permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
+        intentInput: { cwd, source: captured.comparison.source, comparisonId: captured.comparison.id,
+          resultId: saved.resultId, expectedRevision: saved.revision, outputs: ['walkthrough'], outputLanguage: 'fr',
+          instructions: 'Keep the saved structure' },
+      } });
+      expect(prepared?.instructions).toContain('Editorial guidance:');
+      expect(prepared?.instructions).toContain('Evidence boundary:');
+      expect(prepared?.instructions).toContain('Prose language: fr');
+      expect(prepared?.instructions).toContain('references, identifiers, paths, code and enum values');
+      expect(prepared?.instructions).toContain('Saved prose');
+      expect(prepared?.instructions).toContain('User instructions:\nKeep the saved structure');
+      const repair = await ScmDiffSummaryProfile.buildInvalidOutputRepairPrompt?.({ start: start(prepared?.intentInput),
+        rawText: '' });
+      expect(repair).toContain('Prose language: fr');
+      expect(repair).toContain('Evidence boundary:');
+    });
+  });
+
   it('uses the strict protocol output contract without arbitrary prose length limits', () => {
     expect(parseDiffSummaryModelOutput(JSON.stringify({ summaryMarkdown: 'a'.repeat(80_001) }))?.summaryMarkdown?.length).toBe(80_001);
     expect(parseDiffSummaryModelOutput(JSON.stringify({ summaryMarkdown: 'Valid.', injectedCommand: 'git commit' }))).toBeNull();
@@ -432,6 +675,15 @@ describe('ScmDiffSummaryProfile', () => {
     expect(output.outputs?.walkthrough).toMatchObject({ state: 'complete', value: { stops: [{ changeRefs: ['change-1'] }] } });
     expect(output.outputs).not.toHaveProperty('summary');
     expect(output.analysis).toEqual({ suppliedChangeRefs: ['change-1'], analysedChangeRefs: ['change-1'], remainingChangeRefs: [] });
+    // Read the real saved producer output with the same strict consumer contract.
+    const read = await scmDiffSummaryResultStore.read({ cwd: comparison.repository.rootPath, sessionId: 'sess-1', resultId: output.resultId! });
+    expect(read.success).toBe(true);
+    if (!read.success) throw new Error(read.error);
+    expect(ScmDiffSummaryGenerateOutputSchema.parse(read.result.output)).toEqual(output);
+    expect(ScmDiffSummaryGenerateOutputSchema.safeParse({ ...output, outputs: { ...output.outputs,
+      walkthrough: { ...output.outputs?.walkthrough, value: { ...output.outputs?.walkthrough?.value,
+        stops: [{ ...output.outputs?.walkthrough?.value?.stops[0], changeRefs: ['c1'] }] } },
+    } }).success).toBe(false);
   });
 
   it('publishes a readable saved result identity and revision on retained structured completion', async () => {
@@ -525,6 +777,17 @@ describe('ScmDiffSummaryProfile', () => {
     const cached = await ScmDiffSummaryProfile.prepareStartParams?.({ cwd, sessionId: 'sess-1', request });
     expect(cached?.intentInput).toMatchObject({ cachedOutput: { success: true, summaryMarkdown: 'Cached explanation.' } });
     expect(cached?.instructions).toBe('');
+    const investigated = await ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId: 'sess-1', request: {
+      ...request, intentInput: { ...request.intentInput, investigateSurroundingFiles: true } } });
+    expect(investigated?.intentInput).not.toHaveProperty('cachedOutput');
+    expect(investigated?.cwd).not.toBe(cwd);
+    await ScmDiffSummaryProfile.onBoundedComplete({ start: start(investigated?.intentInput, 'fast-summary'), finishedAtMs: 3,
+      rawText: '{"summaryMarkdown":"Investigated explanation."}' });
+    const investigatedCached = await ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId: 'sess-1', request: {
+      ...request, intentInput: { ...request.intentInput, investigateSurroundingFiles: true } } });
+    expect(investigatedCached?.intentInput).toMatchObject({ cachedOutput: { summaryMarkdown: 'Investigated explanation.' } });
+    expect(investigatedCached?.cwd).toEqual(expect.any(String));
+    expect(investigatedCached?.permissionMode).toBe('read_only');
     const otherConnection = await ScmDiffSummaryProfile.prepareStartParams?.({ cwd, sessionId: 'sess-1', request: {
       ...request, modelSelection: ProviderBoundModelRefSchema.parse({ ...request.modelSelection, providerConnectionId: 'connection-b' }) } });
     expect(otherConnection?.intentInput).not.toHaveProperty('cachedOutput');

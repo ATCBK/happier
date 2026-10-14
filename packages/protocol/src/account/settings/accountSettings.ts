@@ -1154,7 +1154,10 @@ const ACCOUNT_SCM_AND_FILES_CATALOG_DEFINITIONS = {
     scmCommitMessageGeneratorInstructions: accountPreference(accountBoundedString(16 * 1024), '', 'source control', 16 * 1024),
     'scm.diffSummary.enabled': accountPreference(z.boolean(), true, 'source control'),
     'scm.diffSummary.prefetch': accountPreference(z.boolean(), false, 'source control'),
+    'scm.diffSummary.investigateSurroundingFiles': accountPreference(z.boolean(), false, 'source control'),
     'scm.diffSummary.modelProfileOverride': accountPreference(accountBoundedString(256), '', 'source control'),
+    // Reuse the Account language preference's scalar storage boundary; empty follows the UI locale.
+    'scm.diffSummary.outputLanguage': accountPreference(accountBoundedString(256), '', 'source control'),
     filesDiffSyntaxHighlightingMode: accountPreference(z.enum(['off', 'simple', 'advanced']), 'simple', 'file presentation'),
     filesDiffRendererMode: accountPreference(z.enum(['happier', 'pierre']), 'pierre', 'file presentation'),
     filesDiffPresentationStyle: accountPreference(z.enum(['unified', 'split']), 'unified', 'file presentation'),

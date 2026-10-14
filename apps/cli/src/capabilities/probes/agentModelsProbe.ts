@@ -75,6 +75,7 @@ const ProbeDynamicModelInputSchema = z.object({
   extendedContextModelId: ProbeNonEmptyStringSchema.optional(),
   modelOptions: z.array(z.unknown()).optional(),
   capabilities: ProviderModelDescriptorV1Schema.shape.capabilities,
+  costTier: ProviderModelDescriptorV1Schema.shape.costTier,
 });
 const ProbeConfigOptionCandidateSchema = z.object({
   id: z.string().optional(),
@@ -129,6 +130,7 @@ function buildStatic(
           : {}),
         ...(Array.isArray(model.modelOptions) && model.modelOptions.length > 0 ? { modelOptions: model.modelOptions } : {}),
         ...(model.capabilities ? { capabilities: model.capabilities } : {}),
+        ...(model.costTier ? { costTier: model.costTier } : {}),
       })) : [];
   const availableModels = [
     staticModels.find(model => model.id === 'default') ?? buildDefaultModelPlaceholder(),
@@ -204,6 +206,7 @@ function normalizeProbeModel(modelRaw: unknown): ProbedAgentModel | null {
       : { extendedContextModelId: parsed.data.extendedContextModelId }),
     ...(normalizedOptions && normalizedOptions.length > 0 ? { modelOptions: normalizedOptions } : {}),
     ...(parsed.data.capabilities ? { capabilities: parsed.data.capabilities } : {}),
+    ...(parsed.data.costTier ? { costTier: parsed.data.costTier } : {}),
   };
 }
 

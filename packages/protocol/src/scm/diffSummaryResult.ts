@@ -8,9 +8,12 @@ import {
   ScmDiffSummaryWalkthroughSchema, ScmDiffSummaryCommitPlanSchema, ScmDiffSummarySummarySchema,
   ScmDiffSummarySourceSchema,
   ScmReviewExplanationTargetsSchema,
+  ScmDiffSummaryOutputLanguageSchema,
 } from './diffSummary.js';
 
 export const ScmDiffSummaryGeneratorSelectionSchema = lazyZodSchema(() => z.object({ backendTarget: BackendTargetRefV2Schema,
+  investigateSurroundingFiles: z.boolean().optional(),
+  outputLanguage: ScmDiffSummaryOutputLanguageSchema.optional(),
   modelId: z.string().min(1).optional(), profileId: z.string().min(1).optional(),
   modelSelection: ProviderBoundModelRefSchema.optional(),
 }).strict());
@@ -75,6 +78,7 @@ export type ScmDiffSummaryResultEdit = z.infer<typeof ScmDiffSummaryResultEditSc
 export const ScmDiffSummaryResultEditInputSchema = lazyZodSchema(() => ScmDiffSummaryResultRevisionInputSchema.extend({ edit: ScmDiffSummaryResultEditSchema }).strict());
 export type ScmDiffSummaryResultEditInput = z.infer<typeof ScmDiffSummaryResultEditInputSchema>;
 export const ScmDiffSummaryRefineInputSchema = lazyZodSchema(() => ScmDiffSummaryResultRevisionInputSchema.extend({
+  outputLanguage: ScmDiffSummaryOutputLanguageSchema.optional(),
   output: ScmDiffSummaryOutputKindSchema, instructions: z.string().trim().min(1), stopIds: ids.optional(),
   reviewExplanation: z.object({ targets: ScmReviewExplanationTargetsSchema }).strict().optional(),
 }).strict().refine((value) => !value.stopIds || value.output === 'walkthrough', 'Stop targeting requires walkthrough output')
@@ -84,11 +88,13 @@ export const ScmDiffSummaryRefineInputSchema = lazyZodSchema(() => ScmDiffSummar
   'Finding explanations require exactly their selected walkthrough stops'));
 export type ScmDiffSummaryRefineInput = z.infer<typeof ScmDiffSummaryRefineInputSchema>;
 export const ScmDiffSummaryAddOutputsInputSchema = lazyZodSchema(() => ScmDiffSummaryResultRevisionInputSchema.extend({
+  outputLanguage: ScmDiffSummaryOutputLanguageSchema.optional(),
   outputs: z.array(ScmDiffSummaryOutputKindSchema).min(1)
     .refine((values) => new Set(values).size === values.length, 'Outputs must be unique'),
 }).strict());
 export type ScmDiffSummaryAddOutputsInput = z.infer<typeof ScmDiffSummaryAddOutputsInputSchema>;
 export const ScmDiffSummaryDiscussInputSchema = lazyZodSchema(() => ScmDiffSummaryResultRevisionInputSchema.extend({
+  outputLanguage: ScmDiffSummaryOutputLanguageSchema.optional(),
   message: z.string().trim().min(1), stopIds: ids.optional(), startNew: z.boolean().optional(),
 }).strict());
 export type ScmDiffSummaryDiscussInput = z.infer<typeof ScmDiffSummaryDiscussInputSchema>;

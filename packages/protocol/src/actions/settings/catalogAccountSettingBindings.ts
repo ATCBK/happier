@@ -35,6 +35,8 @@ export function readPortableCatalogAccountSettingBindingV1<T extends CatalogAcco
     const argument = storage.options?.[0];
     if (storage.owner === 'scmDiffSummarySettingBinding') {
         return argument === SCM_DIFF_SUMMARY_SETTING_KEYS.prefetch || argument === SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride
+            || argument === SCM_DIFF_SUMMARY_SETTING_KEYS.outputLanguage
+            || argument === SCM_DIFF_SUMMARY_SETTING_KEYS.investigateSurroundingFiles
             ? { ...scmDiffSummarySettingBinding<T>(argument), access: storage.access } : null;
     }
     if (!voiceContext) return null;

@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import type { ScmComparisonSource } from '@happier-dev/protocol';
+import { ExecutionRunStartRequestSchema, ExecutionRunScmDiffSummaryInputV1Schema, accountSettingsParse, type ScmComparisonSource } from '@happier-dev/protocol';
+import { getAgentStaticModels } from '@happier-dev/agents';
 
 import { createLocalScmRepositoryFixture } from '@/scm/contracts/scmBackendContractFixtures';
 import { gitCheckpointAdapter, resolveGitCheckpointBackendContext } from '@/scm/checkpoints/gitCheckpointAdapter';
@@ -11,6 +12,7 @@ import { retainRepositoryCheckpointTurnEvidence } from '@/scm/checkpoints/sessio
 import { executeScmDiffSummaryAction } from './executeScmDiffSummaryAction';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
 import { captureScmComparison } from '@/scm/comparisons/captureScmComparison';
+import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 const BACKEND_TARGET = { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const };
 
@@ -26,9 +28,52 @@ describe('executeScmDiffSummaryAction', () => {
         return fixture;
     }
 
+    it('uses the shared Account prose preference for headless admission while preserving explicit language selection', async () => {
+        const previous = getActiveAccountSettingsSnapshot();
+        const fixture = await changedRepository();
+        const captured = await captureScmComparison({ cwd: fixture.rootPath, source: { kind: 'workingTree' } });
+        const languages: (string | undefined)[] = [];
+        const executeCanonicalAction = async (_actionId: string, input: unknown) => {
+            const start = ExecutionRunStartRequestSchema.parse(input);
+            languages.push(ExecutionRunScmDiffSummaryInputV1Schema.parse(start.intentInput).outputLanguage);
+            return { ok: true as const, result: { runId: `language-run-${languages.length}`, callId: 'call', sidechainId: 'sidechain' } };
+        };
+        const request = { cwd: fixture.rootPath, source: { kind: 'workingTree' as const }, comparisonId: captured.comparison.id,
+            modelSelector: { modelId: 'explicit-model' } };
+        let settingsVersion = 0;
+        const selectLanguage = (language: string) => setActiveAccountSettingsSnapshot({ source: 'network',
+            settings: accountSettingsParse({ 'scm.diffSummary.outputLanguage': language, preferredLanguage: 'nl' }),
+            settingsVersion: ++settingsVersion, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: 'language-account' });
+        try {
+            selectLanguage('fr');
+            const french = await executeScmDiffSummaryAction({ request, machineId: 'machine', backendTarget: BACKEND_TARGET, executeCanonicalAction });
+            expect(languages).toEqual(['fr']);
+            selectLanguage('de');
+            const german = await executeScmDiffSummaryAction({ request, machineId: 'machine', backendTarget: BACKEND_TARGET, executeCanonicalAction });
+            expect(german.resultId).not.toBe(french.resultId);
+            await executeScmDiffSummaryAction({ request: { ...request, outputLanguage: 'it' }, machineId: 'machine', backendTarget: BACKEND_TARGET, executeCanonicalAction });
+            expect(languages).toEqual(['fr', 'de', 'it']);
+        } finally {
+            if (previous) setActiveAccountSettingsSnapshot(previous); else clearActiveAccountSettingsSnapshot();
+        }
+    });
+
+    it('preserves typed unavailable investigation admission and captured inventory when no Run was created', async () => {
+        const fixture = await changedRepository();
+        const output = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath,
+            source: { kind: 'workingTree' }, modelSelector: { modelId: 'explicit' }, investigateSurroundingFiles: true },
+            machineId: 'machine', backendTarget: BACKEND_TARGET,
+            executeCanonicalAction: async () => ({ ok: false, errorCode: 'DIFF_UNAVAILABLE', error: 'Captured endpoint objects unavailable',
+                details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } }),
+        });
+        expect(output).toMatchObject({ success: false, errorCode: 'DIFF_UNAVAILABLE', resultId: expect.any(String),
+            comparison: { inventory: { state: 'complete', files: [expect.objectContaining({ path: fixture.trackedPath })] } },
+            outputs: { summary: { state: 'failed' } } });
+    });
+
     it('generates a workspace-native saved result through the existing detached Run without a Session', async () => {
         const fixture = await changedRepository();
-        const executeCanonicalAction = vi.fn(async () => ({ ok: true as const,
+        const executeCanonicalAction = vi.fn(async (_actionId: string, _input: unknown) => ({ ok: true as const,
             result: { runId: 'detached-summary', callId: 'call', sidechainId: 'sidechain' } }));
         const captured = await captureScmComparison({ cwd: fixture.rootPath, source: { kind: 'workingTree' } });
         const generated = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath,
@@ -41,6 +86,11 @@ describe('executeScmDiffSummaryAction', () => {
             localInputId: generated.success ? generated.inputId : undefined,
             intentInput: expect.objectContaining({ resultId: generated.resultId, comparisonId: captured.comparison.id }),
         }));
+        const admitted = ExecutionRunStartRequestSchema.parse(executeCanonicalAction.mock.calls[0]?.[1]);
+        expect(admitted.modelId).toEqual(expect.any(String));
+        expect(admitted.modelId).not.toBe('default');
+        expect(getAgentStaticModels(admitted.backendTarget?.backendId ?? '', { catalogOnly: true })
+            .find(model => model.id === admitted.modelId)?.costTier).toBe('low');
         expect(await scmDiffSummaryResultStore.readStoredScope({ cwd: fixture.rootPath, resultId: generated.resultId! }))
             .toEqual({ cwd: fixture.rootPath });
         expect(await scmDiffSummaryResultStore.read({ cwd: fixture.rootPath, resultId: generated.resultId! }))
@@ -112,13 +162,24 @@ describe('executeScmDiffSummaryAction', () => {
         const fixture = await changedRepository();
         const executeCanonicalAction = vi.fn();
         await expect(executeScmDiffSummaryAction({
-            request: { cwd: fixture.rootPath, source: { kind: 'workingTree' } },
+            request: { cwd: fixture.rootPath, source: { kind: 'workingTree' }, modelSelector: { modelId: 'explicit' } },
             sessionId: 'session-1', backendTarget: null, executeCanonicalAction,
         })).resolves.toMatchObject({
             success: true,
             comparison: { inventory: { state: 'complete', files: [expect.objectContaining({ path: fixture.trackedPath })] } },
             outputs: { summary: { state: 'failed', reason: expect.any(String) } },
         });
+        expect(executeCanonicalAction).not.toHaveBeenCalled();
+    });
+
+    it('refuses an explicit route without an admitted low-cost model while retaining its captured inventory', async () => {
+        const fixture = await changedRepository();
+        const executeCanonicalAction = vi.fn();
+        const output = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath, source: { kind: 'workingTree' },
+            modelSelector: { backendTargetKey: 'agent:happier.agent.codex/codex' } },
+            sessionId: 'session-low-tier-unavailable', backendTarget: BACKEND_TARGET, executeCanonicalAction });
+        expect(output).toMatchObject({ success: false, errorCode: 'MODEL_UNAVAILABLE',
+            comparison: { inventory: { files: [expect.objectContaining({ path: fixture.trackedPath })] } } });
         expect(executeCanonicalAction).not.toHaveBeenCalled();
     });
 

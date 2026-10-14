@@ -2,7 +2,17 @@ import type { core } from 'zod';
 import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 import { SessionRunStreamReadEnvelopeSchema } from '../sessions/control/contract.js';
 import { describe, expect, it } from 'vitest';
-import { ScmDiffSummaryResultEditSchema } from './diffSummaryResult.js';
+import { ScmDiffSummaryResultEditSchema, ScmDiffSummaryGeneratorSelectionSchema } from './diffSummaryResult.js';
+
+describe('saved generator language admission', () => {
+  it('reads earlier generator records without language and retains a validated prose selection on new records', () => {
+    const previous = { backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } };
+    expect(ScmDiffSummaryGeneratorSelectionSchema.parse(previous)).toEqual(previous);
+    expect(ScmDiffSummaryGeneratorSelectionSchema.parse({ ...previous, outputLanguage: 'fr' })).toEqual({ ...previous, outputLanguage: 'fr' });
+    expect(ScmDiffSummaryGeneratorSelectionSchema.safeParse({ ...previous, outputLanguage: 'not a language tag' }).success).toBe(false);
+    expect(ScmDiffSummaryGeneratorSelectionSchema.safeParse({ ...previous, instructions: 'untrusted' }).success).toBe(false);
+  });
+});
 
 describe('saved commit-plan edit admission', () => {
   it('admits explicit group edits and closes every mutation envelope', () => {
