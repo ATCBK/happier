@@ -34,7 +34,8 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
   const shared = original.parsed.fileNames.filter(sharedDeclaration);
   const sharedSet = new Set(shared);
   const testConfig = readProject(resolve(packageDir, `tsconfig.${testProject}.json`));
-  const existingTests = new Set(testConfig.parsed.fileNames.filter(file => existsSync(file)));
+  const existingTests = new Set(testConfig.parsed.fileNames.filter(file => existsSync(file)
+    && !basename(file).includes('.composed.')));
   const testRoots = new Set([...existingTests, ...originalRoots].filter(file => !sharedSet.has(file)
     && (existingTests.has(file) || /\.(?:test|spec)\.tsx?$/.test(file)
       || file.replaceAll('\\', '/').includes('/__tests__/'))));
@@ -43,7 +44,10 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
   const path = file => relative(packageDir, file).replaceAll('\\', '/');
   const moduleCache = ts.createModuleResolutionCache(packageDir, file => file, original.parsed.options);
   const imports = new Map();
-  const authored = file => /\.(?:json|[cm]?tsx?)$/.test(file);
+  const authored = resolved => /\.(?:json|[cm]?tsx?)$/.test(resolved.resolvedFileName)
+    || (original.parsed.options.allowJs && !resolved.isExternalLibraryImport
+      && !/[\\/]node_modules[\\/]/.test(resolved.resolvedFileName)
+      && /\.(?:[cm]?js|jsx)$/.test(resolved.resolvedFileName));
   const importClosure = seeds => {
     const found = new Set();
     const pending = [...seeds];
@@ -55,7 +59,7 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
         const info = ts.preProcessFile(readFileSync(file, 'utf8'), true, true);
         const dependencies = info.importedFiles.flatMap(({ fileName }) => {
           const resolved = ts.resolveModuleName(fileName, file, original.parsed.options, ts.sys, moduleCache).resolvedModule;
-          return resolved && authored(resolved.resolvedFileName) ? [resolve(resolved.resolvedFileName)] : [];
+          return resolved && authored(resolved) ? [resolve(resolved.resolvedFileName)] : [];
         });
         dependencies.push(...info.referencedFiles.map(({ fileName }) => resolve(dirname(file), fileName)));
         dependencies.push(...info.typeReferenceDirectives.flatMap(({ fileName }) => {

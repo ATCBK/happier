@@ -7,7 +7,6 @@ import { selectSharedPackageTestCommands } from './runSharedPackageTests.ts';
 import { resolveGatePackageForWorkspaceDirectory } from '../ci/selectAffectedGatePackages.mjs';
 import { discoverWorkspaceManifests } from './lib/workspaceManifests.ts';
 import { discoverPluginWorkspaceTestPackageReport } from './lib/pluginWorkspaceTestPackages.ts';
-import { runWorkspaceUnitProjects } from './runWorkspaceUnitProjects.ts';
 
 export const ROOT_TEST_COMMANDS = {
   unit: [
@@ -40,7 +39,7 @@ export async function runRootTests(lane: string, args: readonly string[] = [], r
     if (filters.some((filter) => !filter)) throw new Error('Gate unit file filters must not be empty.');
     if (packages.length === 0) throw new Error('Gate unit requires selected package labels.');
     const manifests = await discoverWorkspaceManifests(rootDir);
-    const available = new Set(manifests.map((workspace) => resolveGatePackageForWorkspaceDirectory(workspace.workspaceDirectory)).filter((label) => label && label !== 'ui'));
+    const available = new Set<string>(manifests.map((workspace) => resolveGatePackageForWorkspaceDirectory(workspace.workspaceDirectory)).filter((label) => label !== null && label !== 'ui'));
     for (const label of packages) {
       if (!available.has(label)) throw new Error(`Unsupported Gate unit package ${label}.`);
     }
@@ -49,6 +48,7 @@ export async function runRootTests(lane: string, args: readonly string[] = [], r
       if (report.issues.length > 0) throw new Error(`Plugin workspace test selection failed:\n${report.issues.join('\n')}`);
     }
     const selected = new Set(packages);
+    const { runWorkspaceUnitProjects } = await import('./runWorkspaceUnitProjects.ts');
     await runWorkspaceUnitProjects({ rootDir, filters, workspaces: manifests.filter((workspace) => {
       const label = resolveGatePackageForWorkspaceDirectory(workspace.workspaceDirectory);
       return label !== null && selected.has(label);

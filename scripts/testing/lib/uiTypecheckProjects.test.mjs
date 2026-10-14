@@ -612,11 +612,18 @@ test('native test-package checker keeps source, suite and configuration semantic
   }
 });
 
-test('native CLI source project includes the workspace resolver imported by UI configuration', () => {
+test('native UI configuration resolver compiles outside the derived CLI runtime partitions', async () => {
   const packageDir = resolve('apps/cli');
   const actual = ts.readConfigFile(join(packageDir, 'tsconfig.source.json'), ts.sys.readFile).config;
-  assert.ok(readProject('tsconfig.source.json', packageDir).fileNames.includes(resolve('scripts/testing/vitestWorkspacePackageResolution.ts')),
-    'the composite CLI source project must explicitly own the shared resolver import');
+  const { deriveCliTypecheckProjects } = await import('../../../apps/cli/scripts/deriveTypecheckProjects.mjs');
+  const inventory = await deriveCliTypecheckProjects(packageDir);
+  const resolverPath = resolve('scripts/testing/vitestWorkspacePackageResolution.ts');
+  const sourceProjects = inventory.filter(({ project }) => project !== 'test');
+  const owners = sourceProjects.filter(({ configPath }) =>
+    JSON.parse(readFileSync(configPath, 'utf8')).files.includes(resolverPath));
+  assert.equal(readProject('tsconfig.json', packageDir).fileNames.includes(resolve('apps/ui/vitest.config.ts')), false,
+    'UI test configuration is outside the CLI editor/runtime roots');
+  assert.equal(owners.length, 0, 'the derived runtime graph must not gain a test-configuration root');
   const cacheDir = resolve('node_modules/.cache');
   mkdirSync(cacheDir, { recursive: true });
   const fixtureDir = mkdtempSync(join(cacheDir, 'happier-cli-config-closure-'));
@@ -635,17 +642,50 @@ test('native CLI source project includes the workspace resolver imported by UI c
     for (const file of ['scripts/testing/vitestWorkspacePackageResolution.ts', 'apps/cli/scripts/build-owned/bundledPluginMembership.ts']) {
       write(file, readFileSync(resolve(file), 'utf8'));
     }
-    const closureFiles = new Set(['../ui/vitest.config.ts', '../../scripts/testing/vitestWorkspacePackageResolution.ts',
-      'scripts/build-owned/bundledPluginMembership.ts']);
+    const closureFiles = ['../ui/vitest.config.ts', '../../scripts/testing/vitestWorkspacePackageResolution.ts',
+      'scripts/build-owned/bundledPluginMembership.ts'];
     write('apps/cli/tsconfig.source.json', JSON.stringify({
       ...actual, extends: join(packageDir, 'tsconfig.json'),
       compilerOptions: { ...actual.compilerOptions, rootDir: '../..',
         outDir: '../../cache/source', tsBuildInfoFile: '../../cache/source.tsbuildinfo' },
-      files: actual.files.filter((file) => closureFiles.has(file)),
+      files: closureFiles,
+      references: [],
     }));
-    const result = spawnSync(process.execPath, [resolve('scripts/workspaces/runTypeScriptCli.mjs'),
-      '--singleThreaded', '--project', join(fixtureDir, 'apps/cli/tsconfig.source.json'), '--pretty', 'false'],
-    { encoding: 'utf8', cwd: fixtureDir });
+    const { launcher } = await installNativeAdmissionFixture({ root: fixtureDir });
+    const args = ['--singleThreaded', '--project', join(fixtureDir, 'apps/cli/tsconfig.source.json'), '--pretty', 'false'];
+    const invocation = resolveTypeScriptCliInvocation({ repoRoot: resolve('.'), args });
+    const result = spawnSync(invocation.command.endsWith('/apps/stack/bin/hstack-exec') ? launcher : invocation.command,
+      [...invocation.argsPrefix, ...args], { encoding: 'utf8', cwd: fixtureDir });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  } finally {
+    rmSync(fixtureDir, { recursive: true, force: true });
+  }
+});
+
+test('RNW source consumers compile module JSX with the Plugin UI producer contract', async () => {
+  // Keep ordinary package dependency resolution: React types are owned by
+  // this UI consumer, not by the repository's non-UI tooling package.
+  const cacheDir = resolve('packages/plugins/channels/node_modules/.cache');
+  mkdirSync(cacheDir, { recursive: true });
+  const fixtureDir = mkdtempSync(join(cacheDir, 'happier-rnw-source-consumer-'));
+  try {
+    // Reproduce the imported presentation source: JSX in an ES module has no
+    // global React binding. Use the consumer's actual compiler configuration.
+    writeFileSync(join(fixtureDir, 'presentation.tsx'), 'export const panel = <div />;\n');
+    writeFileSync(join(fixtureDir, 'consumer.ts'), "export { panel } from './presentation.js';\n");
+    writeFileSync(join(fixtureDir, 'tsconfig.json'), JSON.stringify({
+      extends: resolve('packages/plugins/channels/tsconfig.tests.json'),
+      compilerOptions: { rootDir: resolve('.'), types: ['node', 'react'] },
+      files: ['consumer.ts', resolve('scripts/testing/vitestWorkspacePackageResolution.ts')],
+      include: [], exclude: [],
+    }));
+    // Isolate only OS admission state using the same canonical boundary
+    // fixture as neighboring native compiler tests; semantic checks stay real.
+    const { launcher } = await installNativeAdmissionFixture({ root: fixtureDir });
+    const args = ['--noEmit', '--project', join(fixtureDir, 'tsconfig.json'), '--pretty', 'false'];
+    const invocation = resolveTypeScriptCliInvocation({ repoRoot: resolve('.'), args });
+    const result = spawnSync(invocation.command.endsWith('/apps/stack/bin/hstack-exec') ? launcher : invocation.command,
+      [...invocation.argsPrefix, ...args], { encoding: 'utf8' });
     assert.equal(result.status, 0, result.stdout + result.stderr);
   } finally {
     rmSync(fixtureDir, { recursive: true, force: true });

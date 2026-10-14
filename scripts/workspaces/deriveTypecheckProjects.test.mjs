@@ -92,3 +92,62 @@ test('dependency partitions keep cycles whole and prerequisites before their con
   await writeFile(join(root, 'src/new-entry.ts'), 'import "./entry";');
   await assert.rejects(deriveTypecheckProjects(root, { sourceNames: names.slice(0, -1), testNames: ['test'], check: true }), /need regeneration/);
 });
+
+test('explicit legacy test membership cannot re-add excluded cross-app composition', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-compiler-composition-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'src'), { recursive: true });
+  await mkdir(join(root, 'fixtures'), { recursive: true });
+  await writeFile(join(root, 'src/entry.ts'), 'export const entry = true;');
+  await writeFile(join(root, 'src/bridge.composed.test.ts'), 'import "../foreign/peer";');
+  await writeFile(join(root, 'fixtures/ordinary.test.ts'), 'import "../src/entry";');
+  await writeFile(join(root, 'tsconfig.json'), JSON.stringify({ include: ['src/**/*.ts'], exclude: ['**/*.composed.*'] }));
+  const names = ['foundation', 'core', 'source', 'test'];
+  for (const name of names) await writeFile(join(root, `tsconfig.${name}.json`), JSON.stringify({
+    extends: './tsconfig.json', include: [], files: name === 'test'
+      ? ['fixtures/ordinary.test.ts', 'src/bridge.composed.test.ts'] : ['src/entry.ts'],
+  }));
+  const inventory = await deriveTypecheckProjects(root, { sourceNames: names.slice(0, -1), testNames: ['test'] });
+  const files = (await Promise.all(inventory.map(async ({ configPath }) => JSON.parse(await readFile(configPath, 'utf8')).files))).flat();
+  assert.ok(!files.includes(join(root, 'src/bridge.composed.test.ts')), 'legacy explicit files must not bypass composition isolation');
+  assert.equal(files.filter(file => file === join(root, 'fixtures/ordinary.test.ts')).length, 1,
+    'ordinary explicit tests outside editor include globs must remain checked');
+});
+
+for (const allowJs of [false, true]) test(`imported JavaScript joins compiler ownership only when allowJs is ${allowJs}`, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-compiler-javascript-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'src'), { recursive: true });
+  await writeFile(join(root, 'src/entry.ts'), 'import "./leaf.mjs"; import "./legacy.cjs"; import "./plain.js"; import "untyped-dependency"; import "typed-dependency";');
+  for (const name of ['leaf.mjs', 'legacy.cjs', 'plain.js']) await writeFile(join(root, 'src', name),
+    name.endsWith('.cjs') ? 'module.exports = { value: 1 };' : 'export const value = 1;');
+  const dependencyDir = join(root, 'node_modules/untyped-dependency');
+  await mkdir(dependencyDir, { recursive: true });
+  await writeFile(join(dependencyDir, 'package.json'), JSON.stringify({ name: 'untyped-dependency', main: './index.js' }));
+  await writeFile(join(dependencyDir, 'index.js'), 'module.exports = { dependency: true };');
+  const typedDependencyDir = join(root, 'node_modules/typed-dependency');
+  await mkdir(typedDependencyDir, { recursive: true });
+  await writeFile(join(typedDependencyDir, 'package.json'), JSON.stringify({ name: 'typed-dependency', types: './index.d.ts',
+    exports: { '.': './index.d.ts', './runtime.js': './runtime.js' },
+  }));
+  // RN's ambient declarations self-reference runtime subpaths. Module
+  // resolution marks those as internal even though their bytes are vendor JS.
+  await writeFile(join(typedDependencyDir, 'index.d.ts'), 'declare module "typed-dependency/runtime.js" { export interface Runtime {} } '
+    + 'declare module "typed-dependency/facade" { import { Runtime } from "typed-dependency/runtime.js"; export const value: Runtime; }');
+  await writeFile(join(typedDependencyDir, 'runtime.js'), 'module.exports = { dependency: true };');
+  await writeFile(join(root, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { allowJs, moduleResolution: 'bundler', module: 'esnext' }, include: ['src/**/*.ts'],
+  }));
+  const names = ['foundation', 'core', 'source', 'test'];
+  for (const name of names) await writeFile(join(root, `tsconfig.${name}.json`), JSON.stringify({
+    extends: './tsconfig.json', files: name === 'test' ? [] : ['src/entry.ts'], include: [],
+  }));
+  const inventory = await deriveTypecheckProjects(root, { sourceNames: names.slice(0, -1), testNames: ['test'] });
+  const files = (await Promise.all(inventory.map(async ({ configPath }) => JSON.parse(await readFile(configPath, 'utf8')).files))).flat();
+  assert.ok(files.includes(join(root, 'src/entry.ts')));
+  for (const name of ['leaf.mjs', 'legacy.cjs', 'plain.js']) assert.equal(files.filter(file => file === join(root, 'src', name)).length,
+    allowJs ? 1 : 0, `${name} must follow the owning project's JavaScript contract`);
+  assert.ok(!files.includes(join(dependencyDir, 'index.js')), 'dependency JavaScript must not become authored emission roots');
+  assert.ok(!files.includes(join(typedDependencyDir, 'runtime.js')),
+    'self-referenced dependency JavaScript must not become authored emission roots');
+});

@@ -64,7 +64,7 @@ export async function selectAffectedGatePackages({ rootDir = process.cwd(), chan
   return [...selected].sort();
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+async function main() {
   let input = '';
   for await (const chunk of process.stdin) input += chunk;
   const changedPaths = input.split('\0').filter(Boolean);
@@ -84,4 +84,11 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
       `packages=${JSON.stringify(packages)}\nunit_matrix=${JSON.stringify(unitMatrix)}\nserver_db_contract=${serverDbContract}\n`);
   }
   process.stdout.write(`${JSON.stringify(packages)}\n`);
+}
+
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+  void main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
 }

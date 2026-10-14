@@ -1,10 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
+import type { Alias } from 'vite';
 
 import {
     pluginPackageNameToPackageId,
     readBundledPluginPackageNames,
-} from '../../apps/cli/scripts/build-owned/bundledPluginMembership.ts';
+} from '../../apps/cli/scripts/build-owned/bundledPluginMembership.js';
 
 export type WorkspacePackageSpec = Readonly<{
     packageName: string;
@@ -39,6 +40,28 @@ function isRelativeImport(id: string): boolean {
 function isPathInsideDirectory(filePath: string, directoryPath: string): boolean {
     const relativePath = relative(directoryPath, filePath);
     return relativePath === '' || (!relativePath.startsWith('..') && relativePath !== '..');
+}
+
+/** Compose real host sources while retaining each importer's package-local @ alias. */
+export function createWorkspaceHostSourceAlias(repoRoot: string, defaultSourceRoot: string): Alias {
+    const hostSourceRoots = [
+        resolve(repoRoot, 'apps/ui/sources'),
+        resolve(repoRoot, 'apps/cli/src'),
+        resolve(repoRoot, 'apps/server/sources'),
+    ];
+    return {
+        find: '@',
+        replacement: '@',
+        async customResolver(id, importer, options) {
+            const importerPath = importer ? stripQueryAndHash(importer) : null;
+            const root = importerPath
+                ? hostSourceRoots.find((sourceRoot) => isPathInsideDirectory(importerPath, sourceRoot)) ?? defaultSourceRoot
+                : defaultSourceRoot;
+            const target = resolve(root, id.slice('@/'.length));
+            const resolved = await this.resolve(target, importer, { ...options, skipSelf: true });
+            return resolved ?? { id: target };
+        },
+    };
 }
 
 type PackageExportsRecord = Record<string, unknown>;

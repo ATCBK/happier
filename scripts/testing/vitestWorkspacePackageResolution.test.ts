@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { createServer, loadConfigFromFile } from 'vite';
 
 import {
     createWorkspacePackageSourcesPlugin,
@@ -225,24 +226,51 @@ function firstPartyAliases(config: { resolve?: { alias?: unknown } }): readonly 
     return [];
 }
 
+test('host source aliases follow the importing host through the ordinary UI loader', async (t) => {
+    const server = await createServer({
+        configFile: resolve('apps/ui/vitest.config.ts'),
+        server: { middlewareMode: true, watch: null },
+        optimizeDeps: { noDiscovery: true },
+        logLevel: 'silent',
+    });
+    t.after(async () => { await server.close(); });
+    const cliImporter = `${resolve('apps/cli/src/daemon/actionOperations/actionOperationStore.ts')}?import`;
+    const cliSource = await server.pluginContainer.resolveId('@/daemon/lifecycle/requesterWorkAttribution', cliImporter);
+    assert.equal(cliSource?.id, resolve('apps/cli/src/daemon/lifecycle/requesterWorkAttribution.ts'));
+    const uiSource = resolve('apps/ui/sources/sync/domains/browser/actions/runtimeActionExecutor.ts');
+    for (const importer of [
+        resolve('apps/ui/sources/components/browser/surfaces/BrowserSurfaceHost.tsx'),
+        resolve('apps/cli/src-other/consumer.ts'),
+        undefined,
+    ]) {
+        const resolved = await server.pluginContainer.resolveId('@/sync/domains/browser/actions/runtimeActionExecutor', importer);
+        assert.equal(resolved?.id, uiSource);
+    }
+});
+
 test('ordinary workspace-source Vitest configs use the canonical resolver instead of package aliases', async () => {
     const [
-        { default: uiArtifactCacheConfig },
-        { default: pluginSdkFacadeCurrentConfig },
-        { default: pluginSdkSourceConfig },
-        { default: piRealOwnersConfig },
-        { default: piSpawnedRealOwnersConfig },
-        { default: qaFixturesConfig },
-        { default: voiceModelpacksDirectSourceConfig },
+        uiArtifactCacheConfig,
+        pluginSdkFacadeCurrentConfig,
+        pluginSdkSourceConfig,
+        piRealOwnersConfig,
+        piSpawnedRealOwnersConfig,
+        qaFixturesConfig,
+        voiceModelpacksDirectSourceConfig,
     ] = await Promise.all([
-        import('../../apps/ui/vitest.artifact-cache.config.ts'),
-        import('../../packages/plugin-sdk/vitest.facade-current.config.ts'),
-        import('../../packages/plugin-sdk/vitest.source.config.ts'),
-        import('../../packages/plugins/pi/vitest.realOwners.config.ts'),
-        import('../../packages/plugins/pi/vitest.spawnedRealOwners.config.ts'),
-        import('../../packages/tests/vitest.qa-fixtures.config.ts'),
-        import('../../packages/voice-modelpacks/vitest.direct-source.config.ts'),
-    ]);
+        'apps/ui/vitest.artifact-cache.config.ts',
+        'packages/plugin-sdk/vitest.facade-current.config.ts',
+        'packages/plugin-sdk/vitest.source.config.ts',
+        'packages/plugins/pi/vitest.realOwners.config.ts',
+        'packages/plugins/pi/vitest.spawnedRealOwners.config.ts',
+        'packages/tests/vitest.qa-fixtures.config.ts',
+        'packages/voice-modelpacks/vitest.direct-source.config.ts',
+    ].map(async (path) => {
+        // Vite owns source transforms, module format and configuration globals.
+        const loaded = await loadConfigFromFile({ command: 'serve', mode: 'test' }, resolve(path));
+        assert.ok(loaded, `Missing Vitest configuration: ${path}`);
+        return loaded.config;
+    }));
     for (const { config, pluginName, importId, expectedSourcePath, additionalImports = [] } of [
         {
             config: uiArtifactCacheConfig,
