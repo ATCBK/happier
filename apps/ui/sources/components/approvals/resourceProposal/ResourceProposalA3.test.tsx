@@ -2,6 +2,7 @@ import * as React from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { t } from '@/text';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { measureMountedCollections } from '@/dev/testkit/render/renderInCollectionLayout';
 import {
@@ -85,12 +86,12 @@ describe('A3 · what is using memory', () => {
     expect(meters[0]!.props.value).toBeCloseTo(3.8 * GB);
   });
 
-  it('frames a proposal still being written at its final width, with reserved rows and no approval', async () => {
+  it.each(['machines.storage.trash.move', 'machines.storage.deleteNow'] as const)('frames %s still being written as storage, with reserved rows and no approval', async (actionId) => {
     const screen = await renderScreen(
       <MachineResourcesToolBody
         call={{
           kind: 'proposing',
-          actionId: 'machines.storage.trash.move',
+          actionId,
           proposal: null,
         }}
       />,
@@ -99,5 +100,6 @@ describe('A3 · what is using memory', () => {
       screen.findByTestId('machine-resources-tool-analysing'),
     ).toBeTruthy();
     expect(screen.findByTestId('approval-prompt-approve')).toBeNull();
+    expect(screen.getTextContent()).toContain(t('resourceProposal.title.storage'));
   });
 });
