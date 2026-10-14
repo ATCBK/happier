@@ -225,7 +225,7 @@ describe('declarative node vocabulary v2', () => {
       kind: 'action', hostAction: 'session.spawn_new', label: 'New session',
     }).success).toBe(true);
     expect(PluginDeclarativeNodeV2Schema.safeParse({
-      kind: 'action', hostAction: 'session.permission_mode.set', label: 'Change mode',
+      kind: 'action', hostAction: 'session.handoff.commit', label: 'Commit handoff',
     }).success).toBe(false);
   });
 
