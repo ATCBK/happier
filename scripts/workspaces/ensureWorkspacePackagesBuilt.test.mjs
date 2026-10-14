@@ -67,37 +67,8 @@ import { ensureUiWorkspacePackagesBuilt } from '../../apps/ui/scripts/ensureWork
 import { readStackInfoSnapshot } from '../../apps/stack/scripts/stack/stack_info_snapshot.mjs';
 import { withPatchedProcessEnv } from '../../apps/stack/scripts/testkit/core/env_scope.mjs';
 import { bundleWorkspacePackageWithRuntimeDependencies } from '../../packages/cli-common/dist/workspaces/index.js';
-import { installNativeAdmissionFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
+import { installNativeAdmissionFixture, installWorkspaceAdmissionProcessFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
 import { writeFakeBin } from '../../apps/stack/scripts/testkit/core/fake_bin_harness.mjs';
-
-async function installWorkspaceAdmissionProcessFixture(t, root) {
-  if (process.platform !== 'linux') return { env: { ...process.env }, launcher: null };
-  const { launcher } = await installNativeAdmissionFixture({ root });
-  const { binDir } = writeFakeBin({ root, binDirName: 'native-owner/node_modules/.bin', name: 'awk', content: `#!/bin/sh
-case "$*" in
-  */proc/meminfo*) printf '73400320 73400320\\n' ;;
-  */proc/pressure/memory*) printf '0\\n' ;;
-  *) exec /usr/bin/awk "$@" ;;
-esac
-` });
-  // Substitute only the OS spawn boundary. The native owner, class policy,
-  // authenticated leases and complete package publication worker remain real.
-  const childProcess = createRequire(import.meta.url)('node:child_process');
-  const originalSpawn = childProcess.spawn;
-  const canonicalLauncher = fileURLToPath(new URL('../../apps/stack/bin/hstack-exec', import.meta.url));
-  childProcess.spawn = (command, args, options) => originalSpawn(
-    command === canonicalLauncher ? launcher : command,
-    args?.map(value => value === canonicalLauncher ? launcher : value), options,
-  );
-  syncBuiltinESMExports();
-  t.after(() => { childProcess.spawn = originalSpawn; syncBuiltinESMExports(); });
-  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}`, HAPPIER_DEV_TARGET_EXECUTION: '1' };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith('HAPPIER_HEAVYWEIGHT_ADMISSION_')
-      || key.startsWith('HAPPIER_WORKSPACE_DIST_BUILD_LOCK_')) delete env[key];
-  }
-  return { env, launcher };
-}
 
 for (const preparation of ['named', 'remote-validation']) test(`${preparation} workspace preparation releases dependency and dist custody while compiler capacity is unavailable`, { skip: process.platform !== 'linux', timeout: 30_000 }, async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'happier-workspace-capacity-order-'));
