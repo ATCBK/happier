@@ -50,6 +50,9 @@ export type HomeSetupTranslation = Readonly<{
     getTheApp: string;
     connectServicesTitle: (params: Readonly<{ first: string; second: string | null }>) => string;
     connectServicesSubtitle: string;
+    addNameSubtitle: string;
+    addNameAction: string;
+    notNow: string;
 }>;
 
 
@@ -103,4 +106,7 @@ export const homeSetupTranslationsEnglish = { en: {
         getTheApp: 'Get the app',
         connectServicesTitle: ({ first, second }) => (second ? `Connect ${first} or ${second}` : `Connect ${first}`),
         connectServicesSubtitle: 'Use the plan you already pay for, on every machine, and see what’s left.',
+        addNameSubtitle: 'So people you work with see your name.',
+        addNameAction: 'Add name',
+        notNow: 'Not now',
     } } satisfies Pick<Readonly<Record<string, HomeSetupTranslation>>, "en">;

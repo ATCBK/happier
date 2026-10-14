@@ -32,6 +32,7 @@ import { homeHasMachine } from '@/components/machines/add/machineAddPaths';
 import { AddMachinePanel } from './setup/AddMachinePanel';
 import { useSetupDevice } from './setup/useSetupDevice';
 import { usePersonalizeSetupItem } from '@/components/onboarding/personalize/usePersonalizeSetupItem';
+import { useAddNameSetupItem } from '@/components/account/useAddNameSetupItem';
 import { useAskHappierSetupItem } from '@/components/sessions/bots/useAskHappierSetupItem';
 import { ConnectComputerPanel } from './setup/ConnectComputerPanel';
 import { SetupBlockGrid, type SetupBlockItem } from '@/components/ui/setupBlocks/SetupBlockGrid';
@@ -254,6 +255,9 @@ function HubSetupTiles(props: HubSectionProps) {
     const personalizeItem = usePersonalizeSetupItem({ hidden, onDismiss: dismiss });
     // "Ask Happier" (lab b-rail G, D33): an opt-in guide that sets the rest up with the person.
     const askHappierItem = useAskHappierSetupItem({ layout: tileLayout });
+    // "Add your name" (no lab scene; a direct sign-up is never asked otherwise): the Account name
+    // owner decides; null once the Account has a name or the step is hidden.
+    const addNameItem = useAddNameSetupItem({ layout: tileLayout, hidden, onDismiss: dismiss });
     const visible = entries.filter((entry) => !hidden.has(entry.id));
 
     const items: SetupBlockItem[] = visible.map((entry) => ({
@@ -285,6 +289,7 @@ function HubSetupTiles(props: HubSectionProps) {
         ...(personalizeItem && phone ? [personalizeItem] : []),
         ...(firstAgentItem ? [firstAgentItem] : []),
         ...journeyItems.filter((item) => !hidden.has(item.id)),
+        ...(addNameItem ? [addNameItem] : []),
         ...(voiceItem ? [voiceItem] : []),
         ...items,
         ...(personalizeItem && !phone ? [personalizeItem] : []),

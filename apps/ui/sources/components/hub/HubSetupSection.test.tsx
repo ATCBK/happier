@@ -41,9 +41,13 @@ const state = vi.hoisted(() => ({
     params: {} as { setupStep?: string },
     layout: { order: [], hidden: [] } as Pick<HomeHubLayoutValue, 'order' | 'hidden'> & Partial<Pick<HomeHubLayoutValue, 'sections' | 'items'>>,
     authenticated: true,
+    /** The active Account's synced name; `undefined` leaves the profile unknown (not yet in sync). */
+    profileName: 'Alex Morgan' as undefined | string | null,
     featureSnapshot: vi.fn<typeof getServerFeaturesSnapshot>(async () => ({ status: 'error', reason: 'network' })),
     request: vi.fn<(path: string, init?: RequestInit) => Promise<Response>>(),
 }));
+// The section's static graph reaches the transport owner, so the Socket.IO boundary is hoisted above it.
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 let artifact = createHomeHubArtifactHttpBoundary('account-setup');
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
@@ -123,6 +127,7 @@ afterEach(async () => {
     artifact = createHomeHubArtifactHttpBoundary('account-setup');
     discardMachineAddFlowDraft();
     state.authenticated = true;
+    state.profileName = 'Alex Morgan';
     state.machines = [];
     state.machineListSettled = true;
     state.dismissed = false;
@@ -156,7 +161,7 @@ async function renderSection(presentation?: 'tiles' | 'checklist', children?: Re
                 const features = await state.featureSnapshot({});
                 return features.status === 'ready' ? Response.json(features.features) : Response.json({ error: 'unavailable' }, { status: 503 });
             }
-            if (path.startsWith('/v1/auth/pairing/') || path === '/v1/auth/account/response') return state.request(`${path}${new URL(String(url)).search}`, init);
+            if (path.startsWith('/v1/auth/pairing/') || path === '/v1/auth/account/response' || path === '/v1/account/profile') return state.request(`${path}${new URL(String(url)).search}`, init);
             if (path === '/v1/machines') return Response.json(state.machines.map(machine => ({
                 ...machine, metadata: encodePlainMachineStoredContent(machine.metadata), daemonState: encodePlainMachineStoredContent(machine.daemonState),
                 dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
@@ -165,7 +170,8 @@ async function renderSection(presentation?: 'tiles' | 'checklist', children?: Re
         } });
     }
     const scope = { serverId: resolveServerProfileScopeIdForIdentifier(connection.home.id), accountId: 'account-setup' };
-    storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope, machines: Object.fromEntries(state.machines.map(machine => [machine.id, machine])),
+    const profile = { ...storage.getState().profile, ...(state.profileName === undefined ? { id: '', name: null } : { id: 'account-setup', name: state.profileName }) };
+    storage.setState({ isDataReady: true, profile, profileScope: scope, settingsScope: scope, machines: Object.fromEntries(state.machines.map(machine => [machine.id, machine])),
         machineListByServerId: { [scope.serverId]: state.machines }, machineListStatusByServerId: { [scope.serverId]: state.machineListSettled ? 'idle' : 'loading' } });
     // Both hubs are pages: the checklist's progress lives in the page section header.
     const screen = await renderScreen(
@@ -216,6 +222,50 @@ describe('HubSetupSection on Home (tiles)', () => {
         await flushHookEffects({ cycles: 3 });
         expect(current().hidden.has('askHappier')).toBe(true);
         expect(artifact.writes).not.toHaveLength(0);
+    });
+    it('asks an unnamed Account for its name, and never a named or not-yet-known one', async () => {
+        state.dismissed = true;
+        state.profileName = undefined;
+        expect((await renderSection()).findByTestId('hub-setup.addName')).toBeNull();
+        state.profileName = 'Maya Chen';
+        expect((await renderSection()).findByTestId('hub-setup.addName')).toBeNull();
+        state.profileName = '  ';
+        expect((await renderSection()).findByTestId('hub-setup.addName')).toBeTruthy();
+    });
+    it('saves the name in place through the Account writer, and the block leaves once the name is set', async () => {
+        state.dismissed = true;
+        state.profileName = null;
+        const saved: unknown[] = [];
+        state.request.mockImplementation(async (path, init) => {
+            if (path !== '/v1/account/profile') throw new Error(`Unexpected request: ${path}`);
+            const body = JSON.parse(String(init?.body)) as { name: string };
+            saved.push(body);
+            return Response.json({ name: body.name, firstName: body.name, lastName: null, timestamp: Date.now() });
+        });
+        const screen = await renderSection();
+        await act(async () => { screen.pressByTestId('hub-setup.addName.action'); });
+        await flushHookEffects({ cycles: 3 });
+        await act(async () => screen.changeTextByTestId('hub-setup.addName-panel.field', 'Priya Raman'));
+        await screen.pressByTestIdAsync('hub-setup.addName-panel.save');
+        await flushHookEffects({ cycles: 3 });
+
+        expect(saved).toEqual([{ name: 'Priya Raman' }]);
+        expect(storage.getState().profile.name).toBe('Priya Raman');
+        expect(screen.findByTestId('hub-setup.addName')).toBeNull();
+        expect(artifact.layout().hidden).not.toContain('setup:addName');
+    });
+    it('Not now hides the name ask for good on the Account layout', async () => {
+        state.dismissed = true;
+        state.profileName = null;
+        const screen = await renderSection();
+        await act(async () => { screen.pressByTestId('hub-setup.addName.action'); });
+        await flushHookEffects({ cycles: 3 });
+        await act(async () => { screen.pressByTestId('hub-setup.addName-panel.not-now'); });
+        await flushHookEffects({ cycles: 3 });
+
+        expect(artifact.layout().hidden).toContain('setup:addName');
+        expect(screen.findByTestId('hub-setup.addName')).toBeNull();
+        expect((await renderSection()).findByTestId('hub-setup.addName')).toBeNull();
     });
     it('does not invent a recovery key for a plaintext Account', async () => {
         const screen = await renderSection();
