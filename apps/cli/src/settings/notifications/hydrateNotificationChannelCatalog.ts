@@ -5,6 +5,28 @@ import { beginActiveNotificationChannelCatalogRefresh, commitActiveNotificationC
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { createCliNotificationChannelStore } from './notificationChannelStore';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+
+/** The invocation holder, not the process-global Account, owns runner delivery. */
+export async function hydrateNotificationChannelCatalogForOperation(input: Readonly<{
+  operationContext: SavedSecretOperationContextV1; signal?: AbortSignal; assertCurrent?(): Promise<void>;
+}>): Promise<NotificationChannelCatalogSnapshotV1> {
+  const operation = input.operationContext;
+  const commit = async (catalog: NotificationChannelCatalogSnapshotV1) => {
+    input.signal?.throwIfAborted();
+    await input.assertCurrent?.();
+    const snapshot = operation.readSnapshot();
+    if (!snapshot || !await operation.isCurrent()
+      || !await operation.commitNotificationChannelCatalog({ expectedSettingsVersion: snapshot.settingsVersion, catalog })) {
+      throw Object.assign(new Error('Notification Account retired'), { code: 'scope-retired' });
+    }
+  };
+  const catalog = await createCliNotificationChannelStore({ credentials: operation.credentials,
+    operationContext: operation, signal: input.signal }).readNotificationChannelCatalog(commit);
+  try { await commit(catalog); }
+  catch { return { status: 'unavailable', reason: input.signal?.aborted ? 'cancelled' : 'scope-retired' }; }
+  return catalog;
+}
 
 /** A real daemon/bootstrap demand, admitted to the captured Account lifetime. */
 export async function hydrateNotificationChannelCatalogForActiveAccount(input: Readonly<{

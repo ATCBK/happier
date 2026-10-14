@@ -35,6 +35,10 @@ import { readCarrierMutation } from '@/api/artifacts/accountArtifactStore.testki
 import { notificationSettingsFixture as accountSettingsParse, notificationCatalogFixture } from './activityNotification.testkit';
 import { clearActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot,
   resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
 
 function dispatchActivityNotificationAsync(params: Parameters<typeof dispatchActivityNotification>[0]) {
   return dispatchActivityNotification({ ...(!params.notificationChannelCatalog && params.settings
@@ -55,6 +59,52 @@ vi.mock('@/ui/logger', () => ({
 }));
 
 describe('dispatchActivityNotificationAsync', () => {
+  it.each(['current', 'retired'] as const)('prepares the captured runner Account catalog before acknowledging an idle-stop warning (%s)', async lifetime => {
+    const home = 'https://runner-guard-notification.example';
+    const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'runner-guard-account' })).toString('base64url')}.signature`, encryption: null };
+    const snapshot = { source: 'network' as const, settings: accountSettingsParse({}), rawSettings: {},
+      settingsVersion: 7, loadedAtMs: 1, settingsSecretsReadKeys: [],
+      scopeKey: runWithServerHttpBaseUrl(home, () => resolveAccountSettingsScopeKey(credentials)) };
+    let current = true;
+    const operationContext = createInvocationSavedSecretOperationContextV1({ credentials, snapshot,
+      serverHttpBaseUrl: home, isCurrent: async () => current });
+    const channel = NotificationChannelRecordV1Schema.parse({ v: 1, id: 'runner-guard-push', kind: 'expo_push', topics: { machines: true } });
+    const delivered: unknown[][] = [];
+    // Home HTTP and push delivery are the only substituted system boundaries.
+    const get = vi.spyOn(axios, 'get').mockImplementation(async input => {
+      const url = new URL(String(input));
+      expect(url.origin).toBe(home);
+      if (url.pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
+        mode: 'plain', version: 1, settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (url.pathname === '/v1/account/entity-rows/notification-channels') {
+        if (lifetime === 'retired') current = false;
+        return { status: 200, data: { status: 'present', revision: 1,
+          content: { t: 'plain', v: { v: 1, channels: [channel] } } } };
+      }
+      if (url.pathname === '/v2/account/settings') return { status: 200, data: { version: 7, content: { t: 'plain', v: {} } } };
+      if (url.pathname === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+      if (url.pathname === '/v1/account/saved-secrets/resources/materials') return { status: 200, data: { resources: [] } };
+      const empty = emptyAccountSettingsHistoryCaptureResponse(url.pathname);
+      if (empty) return empty;
+      throw new Error(`Unexpected notification HTTP boundary: ${url.pathname}`);
+    });
+    try {
+      const request = { settings: snapshot.settings, operationContext, pluginNotifications: null,
+        event: { topic: 'guard_stop_warning' as const, machineId: 'runner-machine', sessionId: 'runner-session',
+          stopAt: 360_000, rule: 'idle_sessions' as const },
+        expoPushSender: { sendToAllDevicesAsync: async (...args: unknown[]) => { delivered.push(args); return true; } } };
+      if (lifetime === 'retired') {
+        await expect(dispatchActivityNotification(request)).rejects.toMatchObject({
+          code: 'notification_channel_catalog_unavailable', reason: 'scope-retired' });
+        expect(delivered).toEqual([]);
+      } else {
+        await expect(dispatchActivityNotification(request)).resolves.toMatchObject({ deliveredChannels: 1 });
+        expect(delivered[0]![2]).toMatchObject({ topic: 'guard_stop_warning', sessionId: 'runner-session',
+          actions: { keepRunning: { input: { sessionId: 'runner-session' } } } });
+        expect(operationContext.readSnapshot()?.notificationChannelCatalog?.status).toBe('ready');
+      }
+    } finally { get.mockRestore(); }
+  });
   it('delivers terminal guard warnings without a Session and keeps exact-target action inputs', async () => {
     const delivered: unknown[][] = [];
     const event = { topic: 'guard_stop_warning' as const, machineId: 'terminal-warning-machine',

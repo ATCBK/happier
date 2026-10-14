@@ -18,6 +18,8 @@ import type { ActivityNotificationEvent } from './activityNotificationEvent';
 import type { StablePluginNotificationsOwner } from '@/plugins/runtime/invocation/services/notifications';
 import { buildActivityNotificationContent } from './buildActivityNotificationContent';
 import { createHostPluginNotificationChannels } from './pluginNotificationChannels';
+import { hydrateNotificationChannelCatalogForOperation } from '@/settings/notifications/hydrateNotificationChannelCatalog';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { isSessionActivityNotificationEligible, type SessionNotificationContextReader } from './sessionActivityNotificationEligibility';
 import { buildLiveActivityRemoteUpdateRequest } from './liveActivity/buildLiveActivityRemoteUpdateRequest';
 import {
@@ -200,12 +202,31 @@ export class NotificationChannelCatalogUnavailableError extends Error {
   }
 }
 
-function readRuntimeNotificationCatalog(params: Readonly<{
+async function readRuntimeNotificationCatalog(params: Readonly<{
   settings: AccountSettings | null | undefined;
+  operationContext?: SavedSecretOperationContextV1;
   notificationChannelCatalog?: NotificationChannelCatalogSnapshotV1;
   savedSecretMaterializer?: SavedSecretMaterializerV1;
   isCurrent?: () => boolean | Promise<boolean>;
 }>) {
+  const operation = params.operationContext;
+  if (operation) {
+    if (!await operation.isCurrent()) throw new NotificationChannelCatalogUnavailableError('scope-retired');
+    const existing = operation.readSnapshot()?.notificationChannelCatalog;
+    if (!existing || existing.status === 'loading') await hydrateNotificationChannelCatalogForOperation({ operationContext: operation });
+    const snapshot = operation.readSnapshot();
+    if (!snapshot || !await operation.isCurrent()) throw new NotificationChannelCatalogUnavailableError('scope-retired');
+    const catalog = snapshot.notificationChannelCatalog;
+    if (catalog?.status !== 'ready') throw new NotificationChannelCatalogUnavailableError(
+      catalog?.status === 'unavailable' ? catalog.reason : catalog?.status === 'partial' ? 'catalog-incomplete' : 'loading');
+    return { settings: snapshot.settings, channels: catalog.channels,
+      assertCurrent: async () => {
+        if (!await operation.isCurrent() || operation.readSnapshot() !== snapshot || params.isCurrent && !await params.isCurrent()) {
+          throw new NotificationChannelCatalogUnavailableError('scope-retired');
+        }
+      }, savedSecretMaterializer: createSavedSecretMaterializerFromSnapshotV1(snapshot,
+        { isCurrent: () => operation.readSnapshot() === snapshot }) };
+  }
   const active = getActiveAccountSettingsSnapshot();
   const captured = active?.settings === params.settings ? active : null;
   const catalog = params.notificationChannelCatalog ?? captured?.notificationChannelCatalog ?? { status: 'loading' as const };
@@ -214,7 +235,7 @@ function readRuntimeNotificationCatalog(params: Readonly<{
   const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
   const incumbent = !params.notificationChannelCatalog && captured?.scopeKey ? { scopeKey: captured.scopeKey, lifetimeToken } : null;
   const isCurrent = params.isCurrent ?? (incumbent ? () => isActiveAccountSettingsSnapshotLifetimeCurrent(incumbent) : undefined);
-  return { channels: catalog.channels, assertCurrent: async () => {
+  return { settings: params.settings, channels: catalog.channels, assertCurrent: async () => {
     if (isCurrent && !await isCurrent()) throw new NotificationChannelCatalogUnavailableError('scope-retired');
   },
     savedSecretMaterializer: params.savedSecretMaterializer ?? (!params.notificationChannelCatalog && captured
@@ -224,14 +245,16 @@ function readRuntimeNotificationCatalog(params: Readonly<{
 /** Discovery projects the same configured delivery set the Activity owner dispatches. */
 export async function listActivityNotificationChannels(params: Readonly<{
   settings: AccountSettings | null | undefined;
+  operationContext?: SavedSecretOperationContextV1;
   notificationChannelCatalog?: NotificationChannelCatalogSnapshotV1;
   savedSecretMaterializer?: SavedSecretMaterializerV1;
   isCurrent?: () => boolean | Promise<boolean>;
   pluginNotifications?: Pick<StablePluginNotificationsOwner, 'availableHostChannels'> | null;
   pushTokenReader?: Pick<PushNotificationClient, 'fetchPushTokens'>;
 }>): Promise<readonly Readonly<{ value: string; label: string; disabled: boolean }>[]> {
-  const settings = accountSettingsParse(params.settings ?? {});
-  const { channels, savedSecretMaterializer, assertCurrent } = readRuntimeNotificationCatalog(params);
+  const runtime = await readRuntimeNotificationCatalog(params);
+  const settings = accountSettingsParse(runtime.settings ?? {});
+  const { channels, savedSecretMaterializer, assertCurrent } = runtime;
   await assertCurrent();
   const pluginNotifications = params.pluginNotifications === undefined
     ? createHostPluginNotificationChannels()
@@ -260,6 +283,7 @@ export async function listActivityNotificationChannels(params: Readonly<{
 
 export async function dispatchActivityNotificationAsync(params: Readonly<{
   settings: AccountSettings | null | undefined;
+  operationContext?: SavedSecretOperationContextV1;
   notificationChannelCatalog?: NotificationChannelCatalogSnapshotV1;
   savedSecretMaterializer?: SavedSecretMaterializerV1;
   isCurrent?: () => boolean | Promise<boolean>;
@@ -278,12 +302,14 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
   if (!await isSessionActivityNotificationEligible(params)) {
     return { attemptedChannels: 0, deliveredChannels: 0 };
   }
-  const settings = accountSettingsParse(params.settings ?? {});
   if (params.event.topic === 'connected_service_usage'
-    && !isUsageQuotaNotificationEnabled(settings.usageQuotaNotificationsV1, params.event.kind)) {
+    && !isUsageQuotaNotificationEnabled(accountSettingsParse(params.operationContext?.readSnapshot()?.settings
+      ?? params.settings ?? {}).usageQuotaNotificationsV1, params.event.kind)) {
     return { attemptedChannels: 0, deliveredChannels: 0 };
   }
-  const { channels, savedSecretMaterializer, assertCurrent } = readRuntimeNotificationCatalog(params);
+  const runtime = await readRuntimeNotificationCatalog(params);
+  const settings = accountSettingsParse(runtime.settings ?? {});
+  const { channels, savedSecretMaterializer, assertCurrent } = runtime;
   await assertCurrent();
   const nowMs = params.nowMs?.() ?? Date.now();
   const dedupeWindowMs = params.dedupeWindowMs ?? 60_000;
