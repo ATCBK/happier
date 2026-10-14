@@ -21,6 +21,7 @@ import { buildSessionCompanionMenuActions } from './sessionCompanionMenu';
 import { SessionCompanionAddControl } from './picker/SessionCompanionAddControl';
 import { useSessionCompanionBoardAdd } from './picker/useSessionCompanionBoardAdd';
 import type { SessionCompanionItemRefV1 } from './state/sessionCompanionPreference';
+import { resolveSessionCompanionItemCount } from './state/sessionCompanionPreference';
 import { useSessionCompanionController } from './state/useSessionCompanionController';
 import type { SessionSummaryDestinationHandlers } from './summary/SessionSummaryCard';
 
@@ -125,7 +126,8 @@ export const SessionCompanionScreen = React.memo(function SessionCompanionScreen
 
     // The cockpit's large title is the one heading (session-tabs lab Cp). The Companion tells it where
     // it lives and how much it holds, and hands it the one menu (side, size, Hide).
-    const itemCount = controller.preference.items.length;
+    const itemCount = resolveSessionCompanionItemCount({ visible: controller.preference.visible,
+        itemCount: controller.preference.items.length });
     // Phone (lab CAp): + in the navigation bar opens the same picker as the rail's
     // "Add to Companion" row, beside the one options menu.
     const headerAction = React.useMemo(() => (controller.availability === 'ready' ? (

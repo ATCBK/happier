@@ -11,6 +11,7 @@ import {
     shouldOpenFullCompanionAfterShow,
 } from './sessionCompanionHeaderIntent';
 import { normalizeSessionCompanionPreference } from './state/sessionCompanionPreference';
+import { resolveSessionCompanionPlacement, type SessionCompanionPlacementInput } from './layout/resolveSessionCompanionPlacement';
 
 describe('resolveSessionCompanionHeaderIntent', () => {
     it.each([
@@ -82,7 +83,7 @@ describe('resolveSessionCompanionHeaderIntent', () => {
     ])('$name', ({ input, expected }) => {
         expect(resolveSessionCompanionHeaderIntent(input)).toEqual({
             ...expected,
-            itemCount: input.itemCount,
+            itemCount: input.visible ? input.itemCount : Math.max(1, input.itemCount),
         });
     });
 });
@@ -119,6 +120,27 @@ describe('shouldOpenFullCompanionAfterShow', () => {
             applied,
             resolvePlacement: () => ({ kind: 'reserved_rail', edge: 'trailing', widthPx: 280 }),
         })).toBe(false);
+    });
+
+    it('lets a fitting cold rail measure in place before choosing the full destination', () => {
+        const geometry: Omit<SessionCompanionPlacementInput, 'preference'> = {
+            paneLayout: { containerWidthPx: 1920, containerHeightPx: 900, mainRegionHeightPx: 800,
+                mainRegionWidthPx: 1330, multiPaneEnabled: true, deviceType: 'tablet',
+                layout: { kind: 'single', right: 'hidden', details: 'hidden' }, bottomPresentation: 'docked' },
+            hostHeightPx: 800, bottomObstructionPx: 0, mainVisible: true,
+            accessibilityModalPaneActive: false, fontScale: 1, cardBounds: null,
+        };
+        const resolvePlacement = (preference: typeof applied) => resolveSessionCompanionPlacement({ ...geometry, preference });
+        const cold = resolvePlacement(applied);
+        expect(cold.kind).toBe('measuring_rail');
+        expect(shouldOpenFullCompanionAfterShow({
+            applied,
+            resolvePlacement,
+        })).toBe(false);
+        expect(resolveSessionCompanionHeaderIntent({ visible: true, itemCount: applied.items.length, placement: cold }).operation).toBe('expand');
+        expect(shouldOpenFullCompanionAfterShow({ applied, resolvePlacement: preference => resolveSessionCompanionPlacement({
+            ...geometry, preference, cardBounds: { widthPx: 280, heightPx: 168 },
+        }) })).toBe(false);
     });
 
     it('opens the full destination when placement is not proven', () => {
