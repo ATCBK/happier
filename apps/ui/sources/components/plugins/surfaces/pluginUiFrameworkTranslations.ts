@@ -18,6 +18,9 @@ export function resolvePluginUiFrameworkTranslations(): Readonly<Record<string, 
         'happier.plugin-ui.action.open': t('common.open'),
         'happier.plugin-ui.action.copied': t('common.copied'),
         'happier.plugin-ui.action.refresh': t('common.refresh'),
+        // The public `ApprovalPendingNotice`: the same words as Happier's own waiting notices.
+        'happier.plugin-ui.approvalPending.title': t('settingsProvidersCollection.approvalPendingTitle'),
+        'happier.plugin-ui.approvalPending.open': t('settingsProvidersCollection.openApproval'),
         // What a refused Action means, for a page that shows `useExecutePluginAction`'s message.
         'happier.plugin-ui.action.error.failed': t('ui.pluginUi.actionFailed'),
         'happier.plugin-ui.action.error.unavailable': t('ui.pluginUi.actionUnavailable'),

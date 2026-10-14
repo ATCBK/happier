@@ -537,6 +537,7 @@ function resolvePluginSurfaceCallerBinding(
         contributionLocalId: facts.contributionId,
         occurrenceId,
         ...(materializationRef === undefined ? {} : { materializationRef }),
+        ...(sourceRef === undefined ? {} : { sourceCustody: sourceRef.sourceCustody }),
     });
 }
 

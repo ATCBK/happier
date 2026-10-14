@@ -239,7 +239,10 @@ describe('plugin surface execution requirement', () => {
             }, binding: { executeContributedAction: execute, isExecutionOriginCurrent: mounted.isExecutionOriginCurrent } });
             await expect(controller.dispatchAction({ pluginId, localId: 'refresh' })).resolves.toEqual({ refreshed: true });
             expect(execute).toHaveBeenCalledWith(machineId, expect.objectContaining({ serverId: connection.home.id,
-                expectedContributorOccurrenceId: 'occurrence-a', qualifiedActionId: `${pluginId}/refresh`, isCurrent: expect.any(Function) }));
+                expectedContributorOccurrenceId: 'occurrence-a', qualifiedActionId: `${pluginId}/refresh`, isCurrent: expect.any(Function),
+                invocation: { kind: 'mountedPluginSurface', mountedBinding: {
+                    pluginId, contributionLocalId: 'home', occurrenceId: 'occurrence-a', sourceCustody,
+                } } }));
             execute.mockClear();
             committedProjection = project('occurrence-b', 2);
             await hook.rerender();

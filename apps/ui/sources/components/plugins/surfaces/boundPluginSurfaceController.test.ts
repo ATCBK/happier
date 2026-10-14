@@ -1036,6 +1036,23 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         );
     });
 
+    it('preserves exact source custody in mounted host Action provenance', async () => {
+        const sourceCustody = { kind: 'development' as const, registeredRootId: 'source-root' };
+        const executeHostAction = vi.fn(async () => ({ ok: true as const, result: { items: [] } }));
+        const controller = createBoundPluginSurfaceController({
+            facts: { ...FACTS, sessionId: 'session-mounted', executionOrigin: { serverIdentityId: 'server-1', sourceRef: {
+                machineId: 'machine_1', pluginId: FACTS.pluginId, sourceCustody,
+            } } },
+            binding: { executeHostAction },
+        });
+        await expect(controller.dispatchAction('session.board.get', {})).resolves.toEqual({ items: [] });
+        expect(executeHostAction).toHaveBeenCalledWith('session.board.get', {}, expect.objectContaining({
+            actionCaller: { kind: 'plugin', pluginId: FACTS.pluginId, contributionLocalId: FACTS.contributionId,
+                occurrenceId: FACTS.occurrenceId, sourceCustody },
+        }));
+        controller.dispose();
+    });
+
     it('dispatches an originless bundled self-check by its exact mounted occurrence', async () => {
         const executeContributedAction = vi.fn(async () => ({
             supported: true as const,

@@ -741,20 +741,22 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
                 byMachine.push(projection);
                 continue;
             }
-            // Consume Administration's existing admission facts for plugins
-            // with an execution origin; pending reports cannot invent a conflict.
-            const descriptors = projection.descriptors.filter((descriptor) => {
-                if (!descriptor.pluginId || !executionOriginPluginIds.includes(descriptor.pluginId)) return true;
+            // Keep static service identity independent from execution. The
+            // descriptor union consumes Administration's existing admission
+            // facts to prefer admitted variants and block descriptive-only ones.
+            const executionUnavailablePluginIds = projection.descriptors.flatMap((descriptor) => {
+                if (!descriptor.pluginId || !executionOriginPluginIds.includes(descriptor.pluginId)) return [];
                 const report = reportedOriginsByPluginId.get(descriptor.pluginId);
                 if (!report || report.accountLifetime !== accountLifetime || !isCurrentAccountLifetime(report.accountLifetime)) {
                     byMachine.push({ kind: 'loading' });
-                    return false;
+                    return [descriptor.pluginId];
                 }
-                return (selectableOriginsByMachineId.get(machineId) ?? []).some((origin) => (
+                const selectable = (selectableOriginsByMachineId.get(machineId) ?? []).some((origin) => (
                     getPluginMachineExecutionOriginRef(origin).pluginId === descriptor.pluginId
                 ));
+                return selectable ? [] : [descriptor.pluginId];
             });
-            byMachine.push({ kind: 'ready', descriptors });
+            byMachine.push({ kind: 'ready', descriptors: projection.descriptors, executionUnavailablePluginIds });
         }
         commitConnectedAccountProjection(
             accountLifetime,
