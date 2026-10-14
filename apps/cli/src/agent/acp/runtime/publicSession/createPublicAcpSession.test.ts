@@ -161,6 +161,7 @@ function writePublicComposerAgent(dir: string): string {
       let selectedModelRequest = null;
       let initialModelSelected = false;
       let historyPromptCount = 0;
+      let recoveryPromptCount = 0;
       let permissionAfterSteerPromptCount = 0;
       let grokInterjectPromptCount = 0;
       let historyForkedOnThisConnection = false;
@@ -698,6 +699,21 @@ function writePublicComposerAgent(dir: string): string {
                       data: { service: 'session', errorName: 'APIError', secret: 'private-error-data' } }
                   : { code: -32602, message: 'prompt rejected before effect' },
               });
+            } else if (scenario.startsWith('prompt-recovery-')) {
+              recoveryPromptCount += 1;
+              if (recoveryPromptCount === 1) {
+                if (scenario === 'prompt-recovery-refused') {
+                  ok(request.id, { stopReason: 'refusal' });
+                } else {
+                  if (scenario === 'prompt-recovery-after-output') update(sessionId, 'output before provider failure');
+                  send({ jsonrpc: '2.0', id: request.id, error: { code: -32603, message: 'provider unavailable' } });
+                }
+              } else {
+                // ACP does not require a user-message echo. Stream the entire reply
+                // before returning the successor prompt's request-scoped response.
+                update(sessionId, 'recovered reply');
+                ok(request.id, { stopReason: 'end_turn' });
+              }
             } else if (scenario === 'prompt-rejected-after-update') {
               update(sessionId, 'provider output before rejected response');
               send({
@@ -3582,6 +3598,38 @@ describe('createPublicAcpSession', () => {
         for (const event of events) await project(event);
         expect(history).toContainEqual({ type: 'message', message: expect.stringContaining('prompt response lost after output') });
         expect(history).toContainEqual({ type: 'turn_failed', id: 'turn-prompt-ambiguous' });
+      } finally {
+        subscription.dispose();
+        await session.dispose();
+      }
+    });
+  });
+
+  it.each(['after-output', 'before-effect', 'refused'] as const)('streams a successor reply after a settled prompt failure (%s)', async failurePhase => {
+    await withTempDir('happier-public-acp-recovery-', async dir => {
+      const fixture = createFixture(dir, `prompt-recovery-${failurePhase}`);
+      const sessionId = 'host-prompt-recovery';
+      const session = await createPublicAcpSession({ kind: 'create', sessionId, cwd: dir }, fixture.options, fixture.dependencies);
+      const events: AgentSessionRuntimeEvent[] = [];
+      const invariant = createAgentSessionTurnInvariant({ sessionId });
+      const subscription = session.watch(event => {
+        events.push(event);
+        expect(invariant.observe(event).status).toBe('accepted');
+      });
+      try {
+        await session.send({ inputIds: ['failed-input'], input: { text: 'first prompt' },
+          delivery: { kind: 'newTurn', turnId: 'failed-turn' } });
+        await collectUntil(events, failurePhase === 'before-effect' ? 'input-rejected' : 'turn-failed');
+        await session.send({ inputIds: ['resend-input'], input: { text: 'resend after recovery' },
+          delivery: { kind: 'newTurn', turnId: 'recovered-turn' } });
+        await collectUntil(events, 'turn-complete');
+        expect(events).toContainEqual(expect.objectContaining({ kind: 'message-delta', turnId: 'recovered-turn', text: 'recovered reply' }));
+        expect(events).toContainEqual(expect.objectContaining({ kind: 'input-accepted', inputIds: ['resend-input'],
+          delivery: { kind: 'newTurn', turnId: 'recovered-turn' } }));
+        expect(events.filter(event => event.kind === 'input-custody-unknown')).toEqual([]);
+        expect(events.filter(event => event.kind === 'turn-complete')).toEqual([
+          expect.objectContaining({ turnId: 'recovered-turn' }),
+        ]);
       } finally {
         subscription.dispose();
         await session.dispose();

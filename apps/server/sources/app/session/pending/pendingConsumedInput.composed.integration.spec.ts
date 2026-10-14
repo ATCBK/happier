@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { AgentSessionRuntimeEventV1Schema, type AgentSessionRuntimeEvent } from '@happier-dev/protocol';
 
 import { db } from '@/storage/db';
@@ -24,7 +26,7 @@ describe('consumed ACP input → host turn → Pending', () => {
     beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-consumed-input-', initAuth: true }); }, 120_000);
     afterAll(async () => { await harness.close(); });
 
-    it.each(['failed', 'lost', 'blocked', 'historical'] as const)('settles only witnessed consumption (%s)', async scenario => {
+    it.each(['failed', 'lost', 'blocked', 'historical', 'recovered', 'recovery-lost'] as const)('settles only witnessed consumption (%s)', async scenario => {
         harness.resetEnv();
         const authentication = createPresentUserSessionAccessAuthentication();
         const owner = await db.account.create({ data: createSignedAccountContentBinding() });
@@ -38,6 +40,8 @@ describe('consumed ACP input → host turn → Pending', () => {
         if (registered.status !== 'registered') throw new Error(`publisher ${registered.status}`);
         const publisherAuthority = { ...binding, socket, presence, committedFence: registered.committedFence };
         const localId = `consumed-${randomUUID()}`;
+        const retryLocalId = `${localId}-retry`;
+        const responseReleasePath = join(harness.baseDir, `recovery-response-${session.id}`);
         const request = { actorUserId: owner.id, sessionId: session.id, localId, authentication };
         expect(await enqueuePendingMessage({ ...request, ciphertext: 'original-input', requestedAction: { v: 1, kind: 'send_now' } })).toMatchObject({ ok: true });
         expect(await materializeNextPendingMessage({ ...request, publisherAuthority, deliveryState: 'provider',
@@ -69,13 +73,29 @@ describe('consumed ACP input → host turn → Pending', () => {
         // error pass through the real transport, producer and host lifecycle.
         const script = writeAcpTestAgentScript({ dir: harness.baseDir, fileName: `consumed-${scenario}.mjs`, source: `
             import { createInterface } from 'node:readline';
+            import { existsSync } from 'node:fs';
             const send = value => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...value }) + '\\n');
+            let promptCount = 0;
             for await (const line of createInterface({ input: process.stdin })) {
                 const request = JSON.parse(line);
                 if (request.method === 'initialize') send({ id: request.id, result: { protocolVersion: 1, agentCapabilities: {} } });
                 else if (request.method === 'session/new') send({ id: request.id, result: { sessionId: 'provider-consumed' } });
                 else if (request.method === 'session/prompt') {
+                    promptCount += 1;
                     if (${JSON.stringify(scenario)} === 'lost') process.exit(17);
+                    if (promptCount > 1) {
+                        if (${JSON.stringify(scenario)} === 'recovery-lost') process.exit(17);
+                        send({ method: 'session/update', params: { sessionId: request.params.sessionId,
+                            update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'recovered provider reply' } } } });
+                        // Hold the external response until the host proves it has
+                        // delivered the reply and settled exact successor custody.
+                        const release = setInterval(() => {
+                            if (!existsSync(${JSON.stringify(responseReleasePath)})) return;
+                            clearInterval(release);
+                            send({ id: request.id, result: { stopReason: 'end_turn' } });
+                        }, 10);
+                        continue;
+                    }
                     send({ method: 'session/update', params: { sessionId: request.params.sessionId,
                         update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial provider reply' } } } });
                     send({ id: request.id, error: { code: -32603, message: 'Cannot connect to API after output' } });
@@ -104,18 +124,18 @@ describe('consumed ACP input → host turn → Pending', () => {
             },
         } });
         const observe = createSessionProviderInputOutcomeNormalizer({ getTarget: () => ({
-            sessionId: session.id, hasPendingProviderInput: inputId => inputId === localId,
+            sessionId: session.id, hasPendingProviderInput: inputId => inputId === localId || inputId === retryLocalId,
             observeProviderInputSettlement: outcome => {
                 if (outcome.kind === 'accepted') {
                     SessionMessageAcceptedDeliveryFactsV1Schema.parse({ v: 1, acceptedAtMs: outcome.acceptedAtMs,
                         delivery: { kind: outcome.providerDeliveryKind, turnId: outcome.providerTurnId } });
                     // E2EE sealing is a transport boundary; Server cannot decrypt it.
-                    writes.push(resolveAcceptedPendingDelivery({ ...request, publisherAuthority,
+                    writes.push(resolveAcceptedPendingDelivery({ ...request, localId: outcome.localId, publisherAuthority,
                         acceptedDelivery: { t: 'encrypted', c: 'sealed-exact-acceptance' } }).then(result => {
                         expect(result).toMatchObject({ ok: true, didResolve: true });
                     }));
                 } else if (outcome.kind === 'effect_may_have_occurred') {
-                    writes.push(blockPendingDelivery({ ...request, reason: 'delivery_outcome_uncertain' }));
+                    writes.push(blockPendingDelivery({ ...request, localId: outcome.localId, reason: 'delivery_outcome_uncertain' }));
                 }
             },
         }) });
@@ -147,8 +167,43 @@ describe('consumed ACP input → host turn → Pending', () => {
                 expect(await deletePendingMessage({ ...request, withdraw: true })).toMatchObject({ outcome: 'already_delivered', pendingCount: 0 });
                 expect(await db.sessionMessage.count({ where: { sessionId: session.id, localId } })).toBe(1);
                 expect(await db.sessionPendingMessage.count({ where: { sessionId: session.id, localId } })).toBe(0);
-                expect(await enqueuePendingMessage({ ...request, localId: `${localId}-retry`, ciphertext: 'new-user-retry',
+                expect(await enqueuePendingMessage({ ...request, localId: retryLocalId, ciphertext: 'new-user-retry',
                     requestedAction: { v: 1, kind: 'send_now' } })).toMatchObject({ ok: true, pendingCount: 1, pendingBlockedCount: 0 });
+                if (scenario === 'recovered' || scenario === 'recovery-lost') {
+                    const retryRequest = { ...request, localId: retryLocalId };
+                    expect(await materializeNextPendingMessage({ ...retryRequest, publisherAuthority, deliveryState: 'provider',
+                        deliveryTiming: 'after_foreground_ready', foregroundState: 'ready',
+                        expectedRuntimeActivityRevision: registered.activity.projection.runtimeActivityRevision })).toMatchObject({ ok: true });
+                    await runtime.send({ inputIds: [retryLocalId], input: { text: 'resend' },
+                        delivery: { kind: 'newTurn', turnId: `turn-${retryLocalId}` } });
+                    if (scenario === 'recovered') {
+                        await waitForCondition(() => events.some(event => event.kind === 'message-delta' && event.turnId === `turn-${retryLocalId}`),
+                            { timeoutMs: 5_000, intervalMs: 10, label: 'successor reply before prompt response' });
+                        await Promise.all(writes);
+                        await turn.drainAcceptedLifecycle();
+                        expect(await db.session.findUniqueOrThrow({ where: { id: session.id } })).toMatchObject({ pendingCount: 0, pendingBlockedCount: 0 });
+                        expect(events.some(event => event.kind === 'turn-complete' && event.turnId === `turn-${retryLocalId}`)).toBe(false);
+                        await writeFile(responseReleasePath, 'release');
+                    }
+                    await waitForCondition(() => events.some(event => event.kind === (scenario === 'recovered' ? 'turn-complete' : 'runtime-ended')),
+                        { timeoutMs: 5_000, intervalMs: 10, label: `ACP ${scenario} successor` });
+                    await Promise.all(writes);
+                    await turn.drainAcceptedLifecycle();
+                    const recovered = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+                    if (scenario === 'recovered') {
+                        expect(events).toContainEqual(expect.objectContaining({ kind: 'message-delta', turnId: `turn-${retryLocalId}`,
+                            text: 'recovered provider reply' }));
+                        expect(recovered).toMatchObject({ latestTurnStatus: 'completed', pendingCount: 0, pendingBlockedCount: 0 });
+                        expect(await db.sessionPendingMessage.count({ where: { sessionId: session.id, localId: retryLocalId } })).toBe(0);
+                        expect(await db.sessionMessage.count({ where: { sessionId: session.id, localId: retryLocalId } })).toBe(1);
+                        expect(await deletePendingMessage({ ...retryRequest, withdraw: true })).toMatchObject({ outcome: 'already_delivered', pendingCount: 0 });
+                    } else {
+                        expect(recovered).toMatchObject({ pendingCount: 1, pendingBlockedCount: 1 });
+                        expect(events).toContainEqual(expect.objectContaining({ kind: 'input-custody-unknown', inputIds: [retryLocalId] }));
+                        expect(events.some(event => event.kind === 'input-accepted' && event.inputIds.includes(retryLocalId))).toBe(false);
+                        expect(await deletePendingMessage({ ...retryRequest, withdraw: true })).toMatchObject({ outcome: 'delivery_unknown', pendingCount: 1 });
+                    }
+                }
             }
         } finally {
             subscription.dispose();
