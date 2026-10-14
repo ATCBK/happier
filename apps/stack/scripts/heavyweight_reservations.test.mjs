@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { createTempFixture } from './testkit/core/temp_fixture.mjs';
 import { writeFakeBin } from './testkit/core/fake_bin_harness.mjs';
-import { installNativeAdmissionFixture } from './testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from './testkit/core/native_admission_fixture.mjs';
 import { readLinuxWorkerProcesses } from './utils/proc/service_memory.mjs';
 import { resolveHeavyweightMemoryFloorKiB } from './utils/dev_targets/remote_commands.mjs';
 
@@ -20,7 +20,7 @@ async function waitForAdmissionDecision(child, readStderr) {
 
 test('local heavyweight admission protects the browser memory floor without raising worker envelopes', { skip: process.platform !== 'linux' }, async t => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-local-memory-floor-' });
-  const { launcher } = await installNativeAdmissionFixture({ root: fixture.root });
+  const { launcher } = await installNativeAdmissionFixture({ root: fixture.root, prepareDependencies: true });
   const memory = fixture.path('memory');
   writeFakeBin({ root: fixture.root, name: 'awk', content: `#!/bin/sh
 case "$*" in
@@ -30,7 +30,7 @@ case "$*" in
 esac
 ` });
   writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
-  const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, CI: '',
+  const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, CI: '',
     FIXTURE_MEMORY: memory, HAPPIER_DEV_TARGET_EXECUTION: '',
     HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' };
   const run = (machine, check = false, extraEnv = {}) => spawnSync('/bin/sh', [launcher,
@@ -59,13 +59,9 @@ esac
   // Explicit local execution shares the same gate, waits without starting
   // its payload, and resumes when the observed memory floor is available.
   writeFakeBin({ root: fixture.root, name: 'vitest', content: '#!/bin/sh\nprintf started\n' });
-  // This memory fixture has no package graph. Preparation executables are
-  // genuine child-process boundaries; the native admission path remains real.
+  // Preparation consumes the canonical ready, dependency-free worker tree.
   writeFakeBin({ root: fixture.root, name: 'node', content: `#!/bin/sh
-case "$*" in
-  *remote_dependency_bootstrap.mjs*|*remote_validation_preparation.mjs*) exit 0 ;;
-  *) exec '${process.execPath}' "$@" ;;
-esac
+exec '${process.execPath}' "$@"
 ` });
   await writeFile(memory, '8388607 73400320\n');
   const child = spawn('/bin/sh', [launcher, '--local', '--', 'vitest', 'run'], { env });
@@ -106,25 +102,15 @@ esac
 ` });
   writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
   const env = {
-    ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
+    ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
     HOME: fixture.root, HAPPIER_HOME_DIR: fixture.root, HAPPIER_STACK_CLI_HOME_DIR: fixture.root,
     FIXTURE_MEMORY: memory, HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '',
     HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '',
   };
-  const runSmall = async (check = false) => {
-    for (let attempt = 0; attempt < 250; attempt++) {
-      const result = spawnSync('/bin/sh', [launcher,
+  const runSmall = (check = false, wait = false) => spawnSync('/bin/sh', [launcher,
         check ? '--heavyweight-admission-check' : '--heavyweight-admission',
-        '--class=validation', '--machine=fixture', ...(check ? [] : ['--no-wait', '--', '/bin/sh', '-c', 'printf small']),
+        '--class=validation', '--machine=fixture', ...(check ? [] : [...(wait ? [] : ['--no-wait']), '--', '/bin/sh', '-c', 'printf small']),
       ], { env, encoding: 'utf8' });
-      // Registration now wakes the head immediately. A nonblocking kernel
-      // mutex denial is not a capacity/fairness decision; retry only that
-      // pre-dispatch outcome, never a head-priority or envelope denial.
-      if (!/admission busy|admission decision in progress/.test(result.stderr)) return result;
-      await new Promise(resolve => setTimeout(resolve, 20));
-    }
-    assert.fail('backfill fixture could not observe a quiescent admission decision');
-  };
   let head, headExited, stderr;
   const startHead = async () => {
     stderr = '';
@@ -132,9 +118,17 @@ esac
     head.stderr.on('data', chunk => { stderr += chunk; });
     headExited = new Promise(resolveExit => head.once('exit', resolveExit));
     await waitForAdmissionDecision(head, () => stderr);
+    // The waiting diagnostic follows release of the real admission mutex and
+    // workspace attempt. Pause only this fixture's live head to control OS
+    // scheduling while nonblocking candidates exercise resource decisions.
+    head.kill('SIGSTOP');
+    while (!/\) T /.test(await readFile(`/proc/${head.pid}/stat`, 'utf8'))) {
+      t.signal.throwIfAborted();
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
   };
   t.after(async () => {
-    if (head && head.exitCode === null && head.signalCode === null) head.kill('SIGTERM');
+    if (head && head.exitCode === null && head.signalCode === null) { head.kill('SIGCONT'); head.kill('SIGTERM'); }
     await headExited;
   });
   await startHead();
@@ -143,9 +137,10 @@ esac
     const unavailable = await runSmall();
     assert.equal(unavailable.status, 75, unavailable.stderr);
     assert.equal(unavailable.stdout, '');
+    assert.match(unavailable.stderr, /memory-available=/);
   }
   await setMemory(availableKiB);
-  const firstSmall = await runSmall();
+  const firstSmall = await runSmall(false, true);
   assert.equal(firstSmall.status, 0, firstSmall.stderr);
   assert.equal(firstSmall.stdout, 'small');
   // Read-only probing must never spend a head's backfill envelope.
@@ -161,8 +156,10 @@ esac
   const exhausted = await runSmall();
   assert.equal(exhausted.status, 75, exhausted.stderr);
   assert.equal(exhausted.stdout, '');
+  assert.match(exhausted.stderr, /head-backfill-envelope-exhausted/);
   await assert.rejects(readFile(marker), { code: 'ENOENT' });
   await setMemory(headKiB);
+  head.kill('SIGCONT');
   assert.equal(await headExited, 0, stderr);
   await readFile(marker);
   const afterHead = await runSmall();
@@ -174,7 +171,9 @@ esac
   const approaching = await runSmall();
   assert.equal(approaching.status, 75, approaching.stderr);
   assert.equal(approaching.stdout, '');
+  assert.match(approaching.stderr, /head-capacity-priority/);
   await setMemory(headKiB);
+  head.kill('SIGCONT');
   assert.equal(await headExited, 0, stderr);
 });
 
@@ -197,7 +196,7 @@ case "$*" in
 esac
 ` });
   writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
-  const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_MEMORY: memory,
+  const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_MEMORY: memory,
     HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' };
   const args = ['--admission-root=' + admission, '--class=compilation', '--machine=fixture'];
   const owner = spawn('/bin/sh', [launcher, '--heavyweight-admission', ...args, '--', '/bin/sh', '-c', 'touch "$1"; while [ ! -e "$2" ]; do sleep 0.02; done', 'hold', marker, release], { env });
@@ -302,7 +301,7 @@ case "$*" in
   *) exec /usr/bin/awk "$@" ;;
 esac
 ` });
-  const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
+  const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
     HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' };
   const probe = () => spawnSync('/bin/sh', [launcher, '--heavyweight-admission-check',
     '--class=validation', '--machine=fixture'], { env, encoding: 'utf8' });

@@ -26,19 +26,24 @@ import {
   bootstrapRemoteDependencies as bootstrapDependencies,
 } from './remote_dependency_bootstrap.mjs';
 
-test('remote dev startup checks a stale installed tree without bootstrapping dependencies', async t => {
-  const fixture = await createTempFixture(t, { prefix: 'hstack-remote-dev-read-only-' });
+test('remote dev startup refreshes a stale installed tree before publishing readiness', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-remote-dev-refresh-' });
   await mkdir(fixture.path('apps', 'stack'), { recursive: true });
   await writeFile(fixture.path('package.json'), '{"private":true}');
   await writeFile(fixture.path('apps', 'stack', 'package.json'), '{"name":"fixture-stack"}');
   await writeFile(fixture.path('yarn.lock'), '# stale fixture\n');
   const installer = fixture.path('yarn.cjs');
-  const installed = fixture.path('implicit-install');
+  const installed = fixture.path('install-attempt');
   await writeFile(installer, `require('node:fs').writeFileSync(${JSON.stringify(installed)}, 'called'); process.exit(43);`);
-  await bootstrapDependencies({ repoDir: fixture.root, executionPlacement: 'remote', toolsOnly: true,
-    env: { ...process.env, npm_execpath: installer, HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES: '1',
-      HAPPIER_STACK_HOME_DIR: fixture.root, HAPPIER_STACK_ENV_FILE: '' } });
-  await assert.rejects(readFile(installed), { code: 'ENOENT' });
+  const binDir = fixture.path('bin');
+  await mkdir(binDir);
+  await writeFile(join(binDir, 'corepack'), `#!${process.execPath}\nrequire(${JSON.stringify(installer)});\n`);
+  await chmod(join(binDir, 'corepack'), 0o755);
+  await writeFile(join(binDir, 'corepack.cmd'), `@"${process.execPath}" "${installer}" %*\r\n`);
+  await assert.rejects(bootstrapDependencies({ repoDir: fixture.root, executionPlacement: 'remote', toolsOnly: true,
+    env: { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`, npm_execpath: installer,
+      HAPPIER_STACK_HOME_DIR: fixture.root, HAPPIER_STACK_ENV_FILE: '' } }), error => error.status === 43);
+  assert.equal(await readFile(installed, 'utf8'), 'called');
   await assert.rejects(readFile(fixture.path('node_modules/.happier-stack-dependencies-ready')), { code: 'ENOENT' });
 });
 
@@ -812,19 +817,19 @@ test('remote dependency bootstrap builds the dependency-owner closure before loa
   assert.deepEqual(calls, [
     ['initial', {
       repoDir: '/remote/happier',
-      env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
+      env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict', HAPPIER_WORKSPACE_CAPTURE_INPUTS: '1' },
     }],
     ['build-owner', '/remote/happier', ['@happier-dev/cli-common'], {
-      env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
+      env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict', HAPPIER_WORKSPACE_CAPTURE_INPUTS: '1' },
       includeDevDependencies: false,
     }],
     ['load-owner'],
     ['ensure', '/remote/happier/apps/stack', 'remote Happier workspace', {
-      env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
+      env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict', HAPPIER_WORKSPACE_CAPTURE_INPUTS: '1' },
       hasDependencyReadyAction: false,
     }],
     ['workspace', '/remote/happier/apps/stack', {
-      env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
+      env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict', HAPPIER_WORKSPACE_CAPTURE_INPUTS: '1' },
     }],
   ]);
 });
@@ -856,10 +861,10 @@ test('remote dependency bootstrap leaves unrelated workspace publication to comp
   assert.deepEqual(calls, [
     ['initial', {
       repoDir: '/remote/happier',
-      env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
+      env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict', HAPPIER_WORKSPACE_CAPTURE_INPUTS: '1' },
     }],
     ['build-owner', '/remote/happier', ['@happier-dev/cli-common'], {
-      env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
+      env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict', HAPPIER_WORKSPACE_CAPTURE_INPUTS: '1' },
       includeDevDependencies: false,
     }],
     ['ensure:begin'],
@@ -955,7 +960,7 @@ test('remote dependency bootstrap refreshes the Stack component workspace closur
   assert.deepEqual(calls, [
     'dependencies',
     ['workspace', '/remote/happier/apps/stack', {
-      env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
+      env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict', HAPPIER_WORKSPACE_CAPTURE_INPUTS: '1' },
     }],
   ]);
 });
@@ -984,7 +989,7 @@ test('remote dependency bootstrap repairs a scriptless install whose dependency 
 
   assert.deepEqual(calls, [
     ['build-owner', '/remote/happier', ['@happier-dev/cli-common'], {
-      env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
+      env: { HAPPIER_STACK_PM_CACHE_BASE_DIR: '/remote/cache', HAPPIER_WORKSPACE_BUILD_MODE: 'strict', HAPPIER_WORKSPACE_CAPTURE_INPUTS: '1' },
       includeDevDependencies: false,
     }],
     ['ensure'],

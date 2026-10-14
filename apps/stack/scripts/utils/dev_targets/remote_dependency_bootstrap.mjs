@@ -80,11 +80,6 @@ export async function bootstrapRemoteDependencies({
   const componentDir = join(repoDir, 'apps', 'stack');
   const componentPath = posix.normalize(String(componentRelativeDir).replaceAll('\\', '/'));
   const sourceToolsOnly = toolsOnly || validationKind === 'source-test' || validationKind === 'typecheck';
-  if (String(env.HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES ?? '').trim() === '1') {
-    const { ensureDepsInstalled } = await loadDependencyOwner();
-    await ensureDepsInstalled(componentDir, 'remote Happier workspace', { env });
-    return;
-  }
   // Only an affirmative worker placement permits dependency mutation.
   if (executionPlacement !== 'remote') {
     await assertDependenciesReady({ installDir: repoDir, componentDir, env,

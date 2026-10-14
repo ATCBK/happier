@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { access, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
+import { installNativeAdmissionFixture } from '../../testkit/core/native_admission_fixture.mjs';
 
 import { buildNodeTestArgs, runNodeTestFiles } from './test_process.mjs';
 
@@ -35,8 +36,26 @@ test('managed native test execution preserves the test runner result', async t =
   assert.equal(result.code, 1);
 });
 
-test('managed test lane cancellation stops children before deleting their isolated cache root', { skip: process.platform === 'win32' }, async t => {
+test('managed native test execution admits the finite payload after coordinator preparation', { skip: process.platform !== 'linux' }, async t => {
+  const fixture = await createTempFixture(t);
+  const admission = await installNativeAdmissionFixture({ root: fixture.root });
+  const file = fixture.path('admitted.test.mjs');
+  await writeFile(file, "import test from 'node:test'; import assert from 'node:assert/strict'; test('admitted payload', () => { assert.ok(process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN); });");
+  const result = await runNodeTestFiles([file], {
+    env: { ...process.env, CI: '1', NODE_TEST_CONTEXT: undefined,
+      HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: '',
+      HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: '[]',
+      HAPPIER_BUILD_DEPENDENCY_CUSTODY: '' },
+    admission: { launcherPath: admission.launcher, admissionClass: 'validation' },
+    serial: true, stdio: 'ignore',
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.code, 0, 'the real native payload must execute under its own admission');
+});
+
+for (const admitted of [false, true]) test(`managed ${admitted ? 'admitted ' : ''}test lane cancellation stops children before deleting their isolated cache root`, { skip: process.platform === 'win32' || (admitted && process.platform !== 'linux') }, async t => {
   const { root } = await createTempFixture(t);
+  const admission = admitted ? await installNativeAdmissionFixture({ root }) : null;
   const file = join(root, 'pending.test.mjs');
   await writeFile(file, `
     import test from 'node:test';
@@ -54,10 +73,16 @@ test('managed test lane cancellation stops children before deleting their isolat
     const fixture = createTestTempDirectory('happier-stack-unit-', ${JSON.stringify(root)});
     console.log(fixture.root);
     try {
-      const result = await runNodeTestFiles([${JSON.stringify(file)}], { env: { ...process.env, HAPPIER_STACK_TEST_ISOLATED_ROOT: fixture.root }, stdio: 'ignore' });
+      const result = await runNodeTestFiles([${JSON.stringify(file)}], {
+        admission: ${admission ? JSON.stringify({ launcherPath: admission.launcher, admissionClass: 'validation' }) : 'undefined'},
+        env: { ...process.env, HAPPIER_STACK_TEST_ISOLATED_ROOT: fixture.root }, stdio: 'ignore' });
       process.exitCode = result.ok ? result.code ?? 143 : 1;
     } finally { fixture.cleanup(); }
-  `], { env: { ...process.env, NODE_TEST_CONTEXT: undefined }, stdio: ['ignore', 'pipe', 'pipe'] });
+  `], { env: { ...process.env, NODE_TEST_CONTEXT: undefined,
+    ...(admitted ? { HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '',
+      HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: '',
+      HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: '[]', HAPPIER_BUILD_DEPENDENCY_CUSTODY: '' } : {}) },
+    stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(() => controller.kill('SIGKILL'));
   let output = '', error = '';
   controller.stdout.on('data', chunk => { output += chunk; });

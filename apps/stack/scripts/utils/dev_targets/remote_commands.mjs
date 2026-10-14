@@ -128,8 +128,11 @@ const COMMAND_RULES = [
     'apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.test.mjs',
     'apps/stack/scripts/utils/dev_targets/remote_validation_preparation.test.mjs',
     'apps/stack/scripts/utils/proc/workspace_build_admission.test.mjs',
+    'apps/stack/scripts/utils/test/test_process.test.mjs',
     'apps/stack/scripts/utils/dev_targets/remote_commands.test.mjs',
     'apps/stack/scripts/build/build_source_runtime.test.mjs',
+    'apps/stack/scripts/runtime/shared/pending_source_start.test.mjs',
+    'apps/stack/scripts/runtime/launch/resolveLaunchSpecs.test.mjs',
   ] }, set: { kind: 'source-test' } },
   // These lifecycle/transport fixtures use authored exports only when the
   // caller explicitly selects the existing Happier source runtime contract.
@@ -151,6 +154,16 @@ const COMMAND_RULES = [
   // first makes ordinary foreign-lease contention an admission-order refusal.
   { when: { command: ['node', 'nodejs'], nativeTest: ['0'], entryRepositoryPath: ['apps/stack/scripts/runtime/launch/prepareSourceRuntimeReload.mjs'] },
     set: { ...validation, kind: 'source-test', componentOverride: 'apps/stack', heavyClass: 'source-bundle', selfPublisher: '1' } },
+  // Content checking prepares Protocol's reference renderer through the
+  // finite workspace publisher. Fit that producer's existing envelope for
+  // placement, but leave its capacity/lease admission to the publisher.
+  { when: { command: ['node', 'nodejs'], nativeTest: ['0'], entryRepositoryPath: ['apps/docs/scripts/checkContent.mjs'] },
+    set: { ...validation, componentOverride: 'apps/docs', heavyClass: 'runtime-build', selfPublisher: '1' } },
+  // Unit coordination publishes dependencies first, then the managed native
+  // runner acquires its finite test envelope. Never reserve that envelope
+  // across the coordinator's foreign-publication wait.
+  { when: { command: ['node', 'nodejs'], nativeTest: ['0'], entryRepositoryPath: ['apps/stack/scripts/test_ci.mjs'] },
+    set: { ...validation, componentOverride: 'apps/stack', selfPublisher: '1' } },
   { when: { command: ['node'], stripTypes: ['1'], entryPath: ['apps/cli/scripts/build-owned/generateBundledPluginEntries.ts', 'scripts/build-owned/generateBundledPluginEntries.ts'] }, set: { generator: '1', workerTool: 'bundled-plugin-generator', heavyClass: 'validation', placement: 'primary-only' } },
   { when: { command: ['node'], stripTypes: ['1'], entryPath: ['apps/cli/scripts/build-owned/generateBundledPluginEntries.ts', 'scripts/build-owned/generateBundledPluginEntries.ts'], mode: ['check'] }, set: { ...validation, placement: 'worker-eligible', generatorCheck: '1', componentOverride: 'apps/cli' } },
   { when: { command: ['node'], stripTypes: ['1'], sourceCondition: ['1'], entryPath: ['apps/cli/scripts/build-owned/generateBundledPluginEntries.ts', 'scripts/build-owned/generateBundledPluginEntries.ts'], mode: ['check'] }, set: { kind: 'source-test' } },
@@ -1072,6 +1085,8 @@ export function buildRemoteDoctorCommand(target) {
 }
 
 export function buildRemoteInstallCredentialCommand(target, { stagedPath, finalPath }) {
+  // Startup seeds an unpaired target. Its enrolled credential is target-owned;
+  // replacing it belongs to the explicit auth flow, not controller startup.
   if (target.platform === 'windows') {
     return wrapRemoteScript(
       target,
@@ -1079,7 +1094,11 @@ export function buildRemoteInstallCredentialCommand(target, { stagedPath, finalP
         '$ErrorActionPreference = "Stop"',
         `$destination = ${powershellQuote(finalPath)}`,
         'New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null',
+        'if (!(Test-Path -LiteralPath $destination) -or (Get-Item -LiteralPath $destination).Length -eq 0) {',
         `Move-Item -Force -LiteralPath ${powershellQuote(stagedPath)} -Destination $destination`,
+        '} else {',
+        `Remove-Item -LiteralPath ${powershellQuote(stagedPath)}`,
+        '}',
       ].join('; '),
     );
   }
@@ -1088,7 +1107,7 @@ export function buildRemoteInstallCredentialCommand(target, { stagedPath, finalP
     [
       'set -euo pipefail',
       `install -d -m 700 -- ${posixQuote(finalPath.slice(0, finalPath.lastIndexOf('/')))}`,
-      `install -m 600 -- ${posixQuote(stagedPath)} ${posixQuote(finalPath)}`,
+      `if [ ! -s ${posixQuote(finalPath)} ]; then install -m 600 -- ${posixQuote(stagedPath)} ${posixQuote(finalPath)}; fi`,
       `rm -f -- ${posixQuote(stagedPath)}`,
     ].join('; '),
   );
@@ -1104,6 +1123,8 @@ function requireServicePort(value, label, { optional = false } = {}) {
 }
 
 const REMOTE_SERVER_LIGHT_SEMANTIC_ENV_KEYS = new Set([
+  // Preserve an explicit host allocator choice; never impose an arena limit here.
+  'MALLOC_ARENA_MAX',
   'HAPPIER_STACK_SHARED_DB_SOURCE_STACK',
   'HAPPIER_STACK_SHARED_DB_SOURCE_ENV_FILE',
   'HAPPIER_SQLITE_AUTO_MIGRATE',

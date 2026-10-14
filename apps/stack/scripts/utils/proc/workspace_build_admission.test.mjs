@@ -8,6 +8,47 @@ import { withWorkspaceBundleLock, WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE } from '
 import { runWorkspaceBuildAdmission, withWorkspaceBuildResources } from './workspace_build_admission.mjs';
 import { resolveDependencyRefreshLockPath, withDependencyConsumption, withDependencyRefreshLock } from './dependency_refresh.mjs';
 import { spawnTestProcess } from '../../testkit/core/spawn_test_process.mjs';
+import { installNativeAdmissionFixture } from '../../testkit/core/native_admission_fixture.mjs';
+import { writeFakeBin } from '../../testkit/core/fake_bin_harness.mjs';
+import { join } from 'node:path';
+
+test('development startup production runs locally without joining validation capacity admission including nested compilers', { skip: process.platform !== 'linux', timeout: 10000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-dev-startup-admission-' });
+  const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: fixture.root });
+  writeFakeBin({ root: fixture.root, name: 'awk', content: '#!/bin/sh\ncase "$*" in */proc/meminfo*) printf "1 73400320\\n" ;; *) exec /usr/bin/awk "$@" ;; esac\n' });
+  const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, HAPPIER_DEV_TARGET_EXECUTION: '',
+    HAPPIER_HSTACK_EXECUTION: '1', HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '',
+    HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: '[]' };
+  const cancellation = new AbortController();
+  const compiler = fixture.path('compiler.cjs');
+  await writeFile(compiler, 'process.stdout.write("started");');
+  const compilerOwner = new URL('../../../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs', import.meta.url).href;
+  const compile = `import {spawnSync} from 'node:child_process';
+    import {resolveTypeScriptCliInvocation} from ${JSON.stringify(compilerOwner)};
+    const invocation = resolveTypeScriptCliInvocation({args:[],env:process.env,
+      requireResolve:()=>${JSON.stringify(fixture.path('compiler-package.json'))},
+      readFileSyncImpl:()=>JSON.stringify({bin:{tsc:'./compiler.cjs'}})});
+    const command = invocation.command.endsWith('/apps/stack/bin/hstack-exec') ? ${JSON.stringify(launcher)} : invocation.command;
+    const result = spawnSync(command,invocation.argsPrefix,{env:process.env,encoding:'utf8'});
+    process.stdout.write(result.stdout??''); process.stderr.write(result.stderr??''); process.exit(result.status??1);`;
+  let queued;
+  const waiting = new Promise(resolve => { queued = resolve; });
+  const run = runWorkspaceBuildAdmission({ command: process.execPath, args: ['--input-type=module', '-e', compile],
+    locks: [{ path: fixture.path('producer.lock') }], launcherPath: launcher, cwd: fixture.root, env,
+    devStartup: true, stdio: ['ignore', 'pipe', 'pipe'], signal: cancellation.signal,
+    onStderr: value => { if (String(value).includes('waiting for heavyweight admission')) queued('queued'); } });
+  try {
+    const outcome = await Promise.race([run, waiting]);
+    assert.notEqual(outcome, 'queued', 'Stack startup must not wait behind the validation capacity queue');
+    assert.equal(outcome.status, 0, outcome.stderr);
+    assert.equal(outcome.stdout, 'started');
+    assert.deepEqual(await readdir(join(admissionRoot, 'waiters')).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error)), []);
+    await assert.rejects(lstat(fixture.path('producer.lock')), { code: 'ENOENT' });
+  } finally {
+    cancellation.abort();
+    await run;
+  }
+});
 
 for (const legacy of [false, true]) test(`fresh event admission readers cannot overtake a live ${legacy ? 'legacy' : 'typed'} dependency writer ticket`, { timeout: 10000 }, async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-dependency-admission-fairness-' });
