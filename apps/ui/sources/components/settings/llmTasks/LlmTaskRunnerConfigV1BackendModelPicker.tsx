@@ -5,47 +5,28 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
-import { convertBackendTargetRefV2ToV1, readBackendTargetRefV2, type BackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import type { LlmTaskRunnerConfigV1 } from '@happier-dev/protocol/llm/tasks/llmTaskRunnerConfigV1';
+import { LlmTaskRunnerConfigV1WriteSchema, type LlmTaskRunnerConfigV1 } from '@happier-dev/protocol/llm/tasks/llmTaskRunnerConfigV1';
 
-import {
-  getResolvedBackendCatalogEntries,
-  type ResolvedBackendCatalogEntry,
-} from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
-import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { getAgentCore } from '@/agents/catalog/catalog';
-import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
-import { getModelDropdownMenuItems, REFRESH_MODELS_DROPDOWN_ITEM_ID } from '@/components/settings/pickers/modelDropdownItems';
 import { resolvePreferredMachineId } from '@/components/settings/pickers/resolvePreferredMachineId';
-import { useNewSessionPreflightModelsState } from '@/components/sessions/new/hooks/screenModel/useNewSessionPreflightModelsState';
+import { useAgentModelChoices } from '@/components/settings/pickers/useAgentModelChoices';
+import { encodeScmDiffSummaryModelOverride } from '@/settings/scmDiffSummary/settings';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Text } from '@/components/ui/text/Text';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { FieldItem } from '@/components/ui/forms/FieldItem';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { useActiveServerAccountScope, useSetting } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useAllMachines } from '@/sync/store/hooks';
-import { useAcpCatalogForServer } from '@/sync/store/useAcpCatalog';
 import { t } from '@/text';
-import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import { Icon } from '@/components/ui/icons/Icon';
 
 function normalizeNonEmptyString(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-function resolveTaskRunnerBackendTarget(entry: ResolvedBackendCatalogEntry): BackendTargetRefV2 {
-  if (entry.backendTarget.kind === 'backend') return entry.backendTarget;
-  if (entry.backendTarget.definitionId) return readBackendTargetRefV2(entry.backendTarget);
-  return entry.compatibilityBackendTargets?.[0] ?? {
-    kind: 'backend',
-    backendId: entry.backendId,
-  };
 }
 
 export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
@@ -58,10 +39,6 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
 }>): React.ReactElement {
   const { theme } = useUnistyles();
   const showLabels = props.showLabels !== false;
-  const enabledAgentIds = useEnabledAgentIds();
-  const { snapshot: acpCatalog } = useAcpCatalogForServer(String(getActiveServerSnapshot().serverId ?? '').trim() || null);
-  const catalogReady = acpCatalog?.catalog.status === 'ready' && !acpCatalog.stale;
-  const backendEnabledByTargetKey = useSetting('backendEnabledByTargetKey') as Record<string, boolean> | undefined;
   const machines = useAllMachines();
   const scope = useActiveServerAccountScope();
   const reachabilityRevision = useMachineReachabilityRevision();
@@ -69,7 +46,7 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
   const [openMenu, setOpenMenu] = React.useState<null | 'backend' | 'model'>(null);
   const [customModelDraft, setCustomModelDraft] = React.useState<string | null>(null);
 
-  const modelId = normalizeNonEmptyString(props.value?.modelId) ?? 'default';
+  const modelId = normalizeNonEmptyString(props.value?.modelSelection.modelId) ?? 'default';
   const preflightMachineId = React.useMemo(() => {
     return resolvePreferredMachineId({
       machines,
@@ -77,50 +54,16 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
       recentMachinePaths: Array.isArray(recentMachinePaths) ? recentMachinePaths : [],
     });
   }, [machines, recentMachinePaths, scope, reachabilityRevision]);
-  const daemonMergedProjection = useDaemonMergedProjectionInputs({
-    machineId: preflightMachineId,
-    serverId: String(getActiveServerSnapshot().serverId ?? '').trim() || null,
-    enabled: Boolean(preflightMachineId),
-    staleMs: 60_000,
-  });
-  const backendEntries = React.useMemo(() => {
-    return getResolvedBackendCatalogEntries({
-      enabledAgentIds,
-      acpCatalogSnapshot: acpCatalog?.catalog,
-      backendEnabledByTargetKey,
-      discoveredBackendIds: daemonMergedProjection.inputs?.discoveredBackendIds ?? undefined,
-      mergedProviderProjectionById: daemonMergedProjection.inputs?.mergedProviderProjectionById ?? null,
-      mergedBackendProjectionById: daemonMergedProjection.inputs?.mergedBackendProjectionById ?? null,
-    });
-  }, [
-    acpCatalog,
-    catalogReady,
-    backendEnabledByTargetKey,
-    daemonMergedProjection.inputs?.discoveredBackendIds,
-    daemonMergedProjection.inputs?.mergedBackendProjectionById,
-    daemonMergedProjection.inputs?.mergedProviderProjectionById,
-    enabledAgentIds,
-  ]);
-  const selectedBackendEntry = React.useMemo(() => {
-    const target = props.value?.backendTarget;
-    if (!target) return null;
-    const targetKey = resolveBackendTargetKeyV2(target);
-    return backendEntries.find((entry) => entry.backendTargetKey === targetKey) ?? null;
-  }, [backendEntries, props.value?.backendTarget]);
-
-  const selectedBackendTargetForModelOptions = React.useMemo(() => {
-    return selectedBackendEntry
-      ? resolveTaskRunnerBackendTarget(selectedBackendEntry)
-      : props.value ? readBackendTargetRefV2(props.value.backendTarget) : null;
-  }, [selectedBackendEntry, props.value?.backendTarget]);
-
-  const preflightModels = useNewSessionPreflightModelsState({
-    backendTarget: selectedBackendTargetForModelOptions,
-    selectedMachineId: preflightMachineId,
-    capabilityServerId: String(getActiveServerSnapshot().serverId ?? '').trim(),
-    enabled: selectedBackendEntry !== null
-      && (selectedBackendEntry.kind !== 'configuredBackend' || catalogReady),
-  });
+  const choices = useAgentModelChoices({ purpose: 'runner',
+    value: props.value ? encodeScmDiffSummaryModelOverride({ backendTargetKey: props.value.modelSelection.agentTargetKey, modelId }) : '',
+    machineId: preflightMachineId, serverId: scope?.serverId });
+  const backendEntries = choices.groups.map(group => group.entry);
+  const selectedGroup = choices.groups.find(group => group.targetKey === props.value?.modelSelection.agentTargetKey) ?? null;
+  const selectedBackendEntry = selectedGroup?.entry ?? null;
+  React.useEffect(() => choices.setOpen(openMenu !== null), [openMenu, choices.setOpen]);
+  const writeModel = (targetKey: string, nextModelId: string) => props.onChange(LlmTaskRunnerConfigV1WriteSchema.parse({
+    v: 1, modelSelection: { agentTargetKey: targetKey, providerConnectionId: null, modelId: nextModelId }, permissionMode: 'no_tools',
+  }));
 
   const backendMenuItems = React.useMemo(() => {
     return backendEntries.map((entry) => {
@@ -135,28 +78,15 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
     });
   }, [backendEntries, theme.colors.text.secondary]);
 
-  const selectableModelMenuItems = React.useMemo(() => {
-    return getModelDropdownMenuItems({
-      modelOptions: preflightModels.modelOptions,
-      iconColor: theme.colors.text.secondary,
-      probe: {
-        phase: preflightModels.probe.phase,
-        onRefresh: preflightModels.probe.onRefresh,
-      },
-    });
-  }, [preflightModels.modelOptions, preflightModels.probe.onRefresh, preflightModels.probe.phase, theme.colors.text.secondary]);
+  const selectableModelMenuItems = selectedGroup ? choices.items.flatMap(item => {
+    const selection = choices.selections.get(item.id);
+    if (selection?.modelSelection.agentTargetKey === selectedGroup.targetKey)
+      return [{ ...item, id: selection.modelSelection.modelId }];
+    if (choices.customModelTargets.get(item.id) === selectedGroup.targetKey) return [{ ...item, id: '__custom__' }];
+    return choices.discoveryTargets.get(item.id) === selectedGroup.targetKey ? [item] : [];
+  }) : [];
 
-  const modelMenuItems = React.useMemo(() => {
-    return [
-      ...selectableModelMenuItems,
-      {
-        id: '__custom__',
-        title: t('settingsSession.replayResume.summaryRunner.customTitle'),
-        subtitle: t('settingsSession.replayResume.summaryRunner.customModelIdSubtitle'),
-        icon: <Icon name="pencil-simple" size={20} color={theme.colors.text.secondary} />,
-      },
-    ];
-  }, [selectableModelMenuItems, theme.colors.text.secondary]);
+  const modelMenuItems = selectableModelMenuItems;
 
   const selectedBackendLabel = React.useMemo(() => {
     return selectedBackendEntry?.title ?? t('settingsSession.replayResume.summaryRunner.notSet');
@@ -170,17 +100,12 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
   }, [modelId, selectableModelMenuItems]);
 
   // A different backend/model retires an unfinished custom id instead of applying it to another agent.
-  const selectedBackendKey = props.value?.backendTarget ? resolveBackendTargetKeyV2(props.value.backendTarget) : null;
-  React.useEffect(() => setCustomModelDraft(null), [selectedBackendKey, props.value?.modelId]);
+  const selectedBackendKey = props.value?.modelSelection.agentTargetKey ?? null;
+  React.useEffect(() => setCustomModelDraft(null), [selectedBackendKey, props.value?.modelSelection.modelId]);
   const customModelTestID = `${props.modelTestID ?? 'llm-task-runner-model'}.custom`;
   const saveCustomModel = () => {
     if (customModelDraft === null || !selectedBackendEntry) return;
-    props.onChange({
-      v: 1,
-      backendTarget: convertBackendTargetRefV2ToV1(resolveTaskRunnerBackendTarget(selectedBackendEntry)),
-      modelId: customModelDraft.trim() || 'default',
-      permissionMode: 'no_tools',
-    });
+    writeModel(selectedGroup!.targetKey, customModelDraft.trim() || 'default');
     setCustomModelDraft(null);
   };
 
@@ -226,12 +151,7 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
             setOpenMenu(null);
             return;
           }
-          props.onChange({
-            v: 1,
-            backendTarget: convertBackendTargetRefV2ToV1(resolveTaskRunnerBackendTarget(nextBackendEntry)),
-            modelId: 'default',
-            permissionMode: 'no_tools',
-          });
+          writeModel(nextBackendEntry.backendTargetKey, 'default');
           setOpenMenu(null);
         }}
       />
@@ -266,9 +186,10 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
             setOpenMenu(null);
             return;
           }
-          if (id === REFRESH_MODELS_DROPDOWN_ITEM_ID) {
-            preflightModels.probe.onRefresh?.();
-            setOpenMenu(null);
+          const discoveryTarget = choices.discoveryTargets.get(id);
+          if (discoveryTarget) {
+            choices.setDiscoveryTargetKey(discoveryTarget);
+            if (discoveryTarget === choices.discoveryTargetKey) choices.onRefresh?.();
             return;
           }
           if (id === '__custom__') {
@@ -279,12 +200,7 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
 
           const nextModelId = String(id ?? '').trim();
           if (!nextModelId) return;
-          props.onChange({
-            v: 1,
-            backendTarget: convertBackendTargetRefV2ToV1(resolveTaskRunnerBackendTarget(selectedBackendEntry)),
-            modelId: nextModelId,
-            permissionMode: 'no_tools',
-          });
+          writeModel(selectedGroup!.targetKey, nextModelId);
           setOpenMenu(null);
         }}
       />

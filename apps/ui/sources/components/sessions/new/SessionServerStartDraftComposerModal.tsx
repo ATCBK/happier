@@ -5,6 +5,7 @@ import { useAcpCatalogForServer } from '@/sync/store/useAcpCatalog';
 import { ScrollView, View } from 'react-native';
 
 import type { SessionServerStartSpawnDraftV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 
 import type { CustomModalInjectedProps } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
@@ -19,6 +20,7 @@ import { machineMetadataPlatformToTarget } from '@/utils/path/machinePlatform';
 import {
     buildNewSessionAuthoringDraftFromResolvedInputs,
     buildSessionServerStartSpawnDraftV1FromAuthoringDraft,
+    applySessionServerStartSpawnDraftEdits,
 } from '@/components/sessions/authoring/draft/sessionAuthoringDraftAdapters';
 import { PathSelectionList } from '@/components/sessions/new/components/PathSelectionList';
 import { Item } from '@/components/ui/lists/Item';
@@ -55,7 +57,11 @@ type ResolvedAgentCandidate = Readonly<{
 function resolveInitialAgentKey(params: Readonly<{
     candidates: readonly ResolvedAgentCandidate[];
     seedAgentId?: string;
+    seedAgentTarget?: SessionServerStartSpawnDraftV1['agentTarget'];
 }>): string | null {
+    const seeded = params.candidates.find((candidate) => params.seedAgentTarget
+        && buildBackendTargetKeyV2(candidate.agentTarget) === buildBackendTargetKeyV2(params.seedAgentTarget))?.backendTargetKey;
+    if (params.seedAgentTarget) return seeded ?? null;
     return params.candidates.find((candidate) => candidate.agentId === params.seedAgentId)?.backendTargetKey
         ?? params.candidates.find((candidate) => candidate.agentId === DEFAULT_AGENT_ID)?.backendTargetKey
         ?? params.candidates[0]?.backendTargetKey
@@ -69,6 +75,8 @@ function resolveInitialAgentKey(params: Readonly<{
  * server-start draft for the caller that already owns the eventual effect.
  */
 export function SessionServerStartDraftComposerModal(props: Props): React.ReactElement {
+    const existingDraft = props.seed.existingDraft;
+    const seededDirectory = props.seed.directory ?? (existingDraft?.directory.kind === 'path' ? existingDraft.directory.path : undefined);
     const machines = useAllMachines();
     const machineListByServerId = useMachineListByServerId();
     const machineListStatusByServerId = useMachineListStatusByServerId();
@@ -77,12 +85,12 @@ export function SessionServerStartDraftComposerModal(props: Props): React.ReactE
         backendEnabledByTargetKey: settings.backendEnabledByTargetKey,
     }));
     const enabledAgentIds = useEnabledAgentIds();
-    const initialCandidateIndex = props.seed.directory === undefined
+    const initialCandidateIndex = seededDirectory === undefined
         ? -1
         : props.seed.candidates?.findIndex((candidate) => (
             candidate.serverId === props.target.serverId
             && candidate.machineId === props.target.machineId
-            && candidate.rootPath === props.seed.directory
+            && candidate.rootPath === seededDirectory
         )) ?? -1;
     const [selectedCandidateIndex, setSelectedCandidateIndex] = React.useState(initialCandidateIndex);
     const selectedPlacementCandidate = selectedCandidateIndex < 0
@@ -143,25 +151,27 @@ export function SessionServerStartDraftComposerModal(props: Props): React.ReactE
         settings.backendEnabledByTargetKey,
     ]);
     const [selectedAgentKey, setSelectedAgentKey] = React.useState<string | null>(() => (
-        resolveInitialAgentKey({ candidates, seedAgentId: props.seed.agentId })
+        resolveInitialAgentKey({ candidates, seedAgentId: props.seed.agentId, seedAgentTarget: existingDraft?.agentTarget })
     ));
     const selectedAgent = candidates.find((candidate) => candidate.backendTargetKey === selectedAgentKey)
         ?? candidates.find((candidate) => candidate.backendTargetKey === resolveInitialAgentKey({
             candidates,
             seedAgentId: props.seed.agentId,
+            seedAgentTarget: existingDraft?.agentTarget,
         }))
         ?? null;
     const [directory, setDirectory] = React.useState(() => (
-        props.seed.directory ?? selectedPlacement.directory ?? machine?.metadata?.homeDir ?? ''
+        seededDirectory ?? selectedPlacement.directory ?? machine?.metadata?.homeDir ?? ''
     ));
+    const [directoryEdited, setDirectoryEdited] = React.useState(false);
     const [error, setError] = React.useState(false);
 
     React.useEffect(() => {
         if (!acpCatalog || acpCatalog.stale || acpCatalog.catalog.status !== 'ready' || daemonMergedProjection.phase !== 'ready') return;
         if (!selectedAgent) {
-            setSelectedAgentKey(resolveInitialAgentKey({ candidates, seedAgentId: props.seed.agentId }));
+            setSelectedAgentKey(resolveInitialAgentKey({ candidates, seedAgentId: props.seed.agentId, seedAgentTarget: existingDraft?.agentTarget }));
         }
-    }, [acpCatalog, candidates, daemonMergedProjection.phase, props.seed.agentId, selectedAgent]);
+    }, [acpCatalog, candidates, daemonMergedProjection.phase, props.seed.agentId, selectedAgent, existingDraft?.agentTarget]);
 
     React.useEffect(() => {
         if (!directory.trim() && (props.seed.directory ?? machine?.metadata?.homeDir)) {
@@ -172,7 +182,7 @@ export function SessionServerStartDraftComposerModal(props: Props): React.ReactE
     const canSubmit = selectedPlacement.machineReady
         && daemonMergedProjection.phase === 'ready'
         && selectedAgent !== null
-        && directory.trim().length > 0;
+        && (directory.trim().length > 0 || (!directoryEdited && existingDraft?.directory.kind === 'managed'));
     const dismiss = React.useCallback(() => {
         props.onResolve(null);
         props.onClose();
@@ -181,8 +191,8 @@ export function SessionServerStartDraftComposerModal(props: Props): React.ReactE
         if (!selectedAgent || !canSubmit) return;
         try {
             const now = Date.now();
-            const permissionMode = props.seed.permissionMode ?? 'default';
-            const authoringDraft = buildNewSessionAuthoringDraftFromResolvedInputs({
+            const permissionMode = props.seed.permissionMode ?? existingDraft?.permissionMode ?? 'default';
+            const authoringDraft = existingDraft ? null : buildNewSessionAuthoringDraftFromResolvedInputs({
                 executionTarget: { kind: 'machine', target: selectedTarget },
                 directory: directory.trim(),
                 checkoutCreationDraft: null,
@@ -190,7 +200,7 @@ export function SessionServerStartDraftComposerModal(props: Props): React.ReactE
                 displayText: '',
                 agentTarget: selectedAgent.agentTarget,
                 transcriptStorage: null,
-                profileId: null,
+                profileId: props.seed.profileId ?? null,
                 environmentVariables: null,
                 resumeSessionId: null,
                 permissionMode,
@@ -207,16 +217,26 @@ export function SessionServerStartDraftComposerModal(props: Props): React.ReactE
                 sessionConfigOptionOverrides: null,
                 automation: null,
             });
-            props.onResolve(buildSessionServerStartSpawnDraftV1FromAuthoringDraft({
-                draft: authoringDraft,
+            const draft = existingDraft ?? buildSessionServerStartSpawnDraftV1FromAuthoringDraft({
+                draft: authoringDraft!,
                 permissionMode,
+                configurationUpdatedAtMs: now,
+            });
+            props.onResolve(applySessionServerStartSpawnDraftEdits({
+                draft,
+                edits: {
+                    executionTarget: selectedTarget,
+                    agentTarget: selectedAgent.agentTarget,
+                    ...(directoryEdited || !existingDraft ? { directory: { kind: 'path', path: directory.trim() } } : {}),
+                    ...(props.seed.permissionMode ? { permissionMode: props.seed.permissionMode } : {}),
+                },
                 configurationUpdatedAtMs: now,
             }));
             props.onClose();
         } catch {
             setError(true);
         }
-    }, [canSubmit, directory, props, selectedAgent, selectedTarget]);
+    }, [canSubmit, directory, directoryEdited, existingDraft, props, selectedAgent, selectedTarget]);
     const footer = React.useMemo(() => (
         <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 8 }}>
             <RoundButton title={t('common.cancel')} display="inverted" onPress={dismiss} />
@@ -253,6 +273,7 @@ export function SessionServerStartDraftComposerModal(props: Props): React.ReactE
                             setError(false);
                             setSelectedCandidateIndex(index);
                             setDirectory(candidate.rootPath);
+                            setDirectoryEdited(true);
                         }}
                         showChevron={false}
                         showDivider={true}
@@ -269,10 +290,12 @@ export function SessionServerStartDraftComposerModal(props: Props): React.ReactE
                     onCommit={(value) => {
                         setError(false);
                         setDirectory(value);
+                        setDirectoryEdited(true);
                     }}
                     onChangeDraftPath={(value) => {
                         setError(false);
                         setDirectory(value);
+                        setDirectoryEdited(true);
                     }}
                     onRequestClose={() => undefined}
                     maxHeight={300}

@@ -1062,6 +1062,44 @@ export function buildSessionServerStartSpawnDraftV1FromAuthoringDraft(
     });
 }
 
+/** Explicit no-effect edits preserve every other field in the strict source recipe. */
+export type SessionServerStartSpawnDraftEdits = Readonly<Partial<Pick<
+    SessionServerStartSpawnDraftV1,
+    | 'executionTarget' | 'directory' | 'agentTarget' | 'permissionMode'
+    | 'allowedTools' | 'unlistedTools' | 'organizationPlacement'
+    | 'profileId' | 'modelSelection' | 'capabilitySelection' | 'connectedServices'
+    | 'agentModeId' | 'configuration'
+>>>;
+
+export function applySessionServerStartSpawnDraftEdits(params: Readonly<{
+    draft: SessionServerStartSpawnDraftV1;
+    edits: SessionServerStartSpawnDraftEdits;
+    configurationUpdatedAtMs: number;
+}>): SessionServerStartSpawnDraftV1 {
+    const draft = SessionServerStartSpawnDraftV1Schema.parse(params.draft);
+    const next = { ...draft, ...params.edits };
+    if (params.edits.agentTarget && next.modelSelection) {
+        next.modelSelection = {
+            ...next.modelSelection,
+            ref: { ...next.modelSelection.ref, agentTargetKey: buildBackendTargetKeyV2(params.edits.agentTarget) },
+        };
+    }
+    if (next.configuration) {
+        const updatedAtMs = Math.max(0, Math.floor(params.configurationUpdatedAtMs));
+        next.configuration = {
+            ...next.configuration,
+            ...(params.edits.permissionMode !== undefined && params.edits.permissionMode !== draft.permissionMode
+                ? { permissionIntent: { value: params.edits.permissionMode, updatedAtMs } } : {}),
+            ...('agentModeId' in params.edits && params.edits.agentModeId !== draft.agentModeId
+                ? { mode: { value: params.edits.agentModeId ?? null, updatedAtMs } } : {}),
+            ...('modelSelection' in params.edits && params.edits.modelSelection !== draft.modelSelection
+                ? { model: { value: params.edits.modelSelection?.ref.modelId ?? null,
+                    updatedAtMs: params.edits.modelSelection?.updatedAt ?? updatedAtMs } } : {}),
+        };
+    }
+    return SessionServerStartSpawnDraftV1Schema.parse(next);
+}
+
 /** The ordinary start and managed continuation share every target-independent authored field. */
 function resolveSessionAuthoringSpawnInput(params: SessionServerStartSpawnDraftFromAuthoringParams) {
     const fields = resolveSharedSessionAuthoringSpawnFields(params.draft);

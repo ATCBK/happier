@@ -9,6 +9,7 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { applyAcpCatalogSnapshot, resetAcpCatalogSnapshotsForTests } from '@/sync/store/settings/acpCatalogSnapshot';
 import { resetAcpCatalogEngineForTests } from '@/sync/engine/settings/acpCatalogEngine';
 import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { LlmTaskRunnerConfigV1Schema } from '@happier-dev/protocol/llm/tasks/llmTaskRunnerConfigV1';
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 
 installSettingsViewCommonModuleMocks({ storage: 'real' });
@@ -44,21 +45,21 @@ describe('task runner model options', () => {
     const key = 'agent:happier.agent.custom-acp/custom-acp:definition:claude';
     expect(backendMenu?.props.items).toContainEqual(expect.objectContaining({ id: key }));
     act(() => backendMenu?.props.onSelect(key));
-    expect(onChange).toHaveBeenCalledWith({ v: 1, backendTarget: { kind: 'configuredAcpBackend', backendId: 'claude' },
-      modelId: 'default', permissionMode: 'no_tools' });
+    expect(onChange).toHaveBeenCalledWith({ v: 1, modelSelection: { agentTargetKey: key,
+      providerConnectionId: null, modelId: 'default' }, permissionMode: 'no_tools' });
   });
-  it('keeps the selected Agent model choices when its backend is absent from the selectable catalog', async () => {
+  it('retains an unavailable Agent selection without offering another Agent model as its substitute', async () => {
     const screen = await renderScreen(
       <LlmTaskRunnerConfigV1BackendModelPicker
-        value={{
+        value={LlmTaskRunnerConfigV1Schema.parse({
           v: 1, backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
           modelId: 'default', permissionMode: 'no_tools',
-        }}
+        })}
         onChange={() => {}}
       />,
     );
     const [backendMenu, modelMenu] = screen.findAllByType(DropdownMenu);
     expect(backendMenu?.props.selectedId).toBe('');
-    expect(modelMenu?.props.items).toContainEqual(expect.objectContaining({ id: 'default' }));
+    expect(modelMenu?.props.items.some((item: { id: string }) => item.id === 'default')).toBe(false);
   });
 });

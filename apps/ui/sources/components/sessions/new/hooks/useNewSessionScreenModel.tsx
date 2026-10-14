@@ -1860,6 +1860,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         getCompatibleProfileBackendEntries,
         profileAvailabilityById,
         selectedMachineIsWindows,
+        selectedMachineOnline,
         selectedMachineSpawnReadiness,
         windowsTerminalAvailable,
     } = useNewSessionAvailabilityState({
@@ -2296,6 +2297,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             setSelection: setCapabilitySelection,
         },
         machineName: selectedMachineDisplayName ?? '',
+        machineOnline: selectedMachineOnline,
     });
 
     const {

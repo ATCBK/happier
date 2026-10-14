@@ -306,6 +306,7 @@ export function useNewSessionAvailabilityState(params: Readonly<{
 
     return {
         cliAvailability,
+        selectedMachineOnline,
         selectedMachineCapabilities,
         selectedMachineCapabilitiesSnapshot,
         selectedMachineSpawnReadiness,

@@ -43,6 +43,7 @@ import { resolveProviderBindingCompatibilityWithFingerprintV1 } from '@happier-d
 import { ProviderContributionV1Schema } from '@happier-dev/protocol/providers/contributions';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { LMSTUDIO_PROVIDER_CONTRIBUTION } from '../../../../../../../packages/plugins/lmstudio/src/provider/contribution';
+import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
 
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -510,11 +511,13 @@ describe('New Session ACP catalog authority and retained authoring', () => {
         name: string;
         target: PersistedBackendTargetRefV2;
         profile?: 'configured-only' | 'bundled-only';
+        seedDraft?: boolean;
     }>) {
         await prepareSessionDraftPersistenceStorage();
         mountedBridge = await loadSyncSingletonForTests();
         const accountId = `catalog-authoring-${input.name}`;
         const http = createHomeHubArtifactHttpBoundary(accountId);
+        const authoringMemory = createAuthoringMemoryHttpBoundary();
         const acpRead = createDeferred<void>();
         let acpPhase: AcpPhase = 'ready';
         let pendingAcpRefresh: Promise<void> | null = null;
@@ -547,6 +550,8 @@ describe('New Session ACP catalog authority and retained authoring', () => {
         });
         const connection = await restoreServerAccountForTest({ serverUrl: `https://${accountId}.test`, accountId,
             request: async (request, init) => {
+                const memoryResponse = await authoringMemory.handle(request, init);
+                if (memoryResponse) return memoryResponse;
                 const path = new URL(String(request)).pathname;
                 if (path === '/v1/features') return Response.json(buildServerFeaturesResponse());
                 if (path === '/v2/account/settings') return Response.json({ version: 1,
@@ -602,7 +607,7 @@ describe('New Session ACP catalog authority and retained authoring', () => {
             discoveredBackendIds: inputs.inputs.discoveredBackendIds,
         }).map(entry => entry.backendTargetKey)).toContain(configuredKey);
         const draftId = `catalog-draft-${input.name}`;
-        writeNewSessionDraftToRepository({ scope, draftId, draft: { input: 'hello', selectedMachineId: machine.id,
+        if (input.seedDraft !== false) writeNewSessionDraftToRepository({ scope, draftId, draft: { input: 'hello', selectedMachineId: machine.id,
             selectedPath: '/repo', targetServerId: scope.serverId, backendTarget: input.target,
             selectedProfileId: input.profile ? profileId : null, selectedSecretId: null,
             permissionMode: 'default', updatedAt: 1 } });
@@ -625,6 +630,66 @@ describe('New Session ACP catalog authority and retained authoring', () => {
             },
         };
     }
+
+    it.each(['fresh', 'late'] as const)('settles Agent picker updates on a %s scoped draft', async (phase) => {
+        const fixture = await restoreCatalogAuthoringFixture({ name: `picker-depth-${phase}`, target: bundledTarget, seedDraft: false });
+        const { AgentInputChipPickerPanel } = await import('@/components/sessions/agentInput/components/AgentInputChipPickerPanel');
+        const { NewSessionEngineOptionDetail } = await import('../components/NewSessionEngineOptionDetail');
+        let renders = 0;
+        let current!: ReturnType<typeof useNewSessionScreenModel>;
+        const close = () => {};
+        function PickerHarness() {
+            // Stop a regression before React's asynchronous loop floods the runner.
+            if (++renders > 100) throw new Error('New Session Agent selection did not settle within 100 renders');
+            current = useNewSessionScreenModel({ draftId: fixture.draftId });
+            if (current.variant !== 'simple') throw new Error('Expected simple launcher');
+            const onSelect = current.simpleProps.onAgentPickerSelect;
+            if (!onSelect) throw new Error('Expected Agent picker selection');
+            return <AgentInputChipPickerPanel title="Agent" options={current.simpleProps.agentPickerOptions ?? []}
+                selectedOptionId={current.simpleProps.agentPickerSelectedOptionId}
+                onSelect={onSelect} onRequestClose={close} />;
+        }
+        const screen = await renderScreen(<PickerHarness />);
+        const hook = { getCurrent: () => current, unmount: () => screen.unmount() };
+        try {
+            const opening = hook.getCurrent();
+            if (opening.variant !== 'simple') throw new Error('Expected simple launcher');
+            await act(async () => { opening.simpleProps.onAgentPickerVisibilityChange?.(true); });
+            await vi.waitFor(() => expect(screen.findAllByType(NewSessionEngineOptionDetail)).toHaveLength(1));
+            if (phase === 'late') {
+                await act(async () => { writeNewSessionDraftToRepository({ ...fixture, draft: {
+                    input: 'restored prompt', selectedMachineId: 'credential-devbox', selectedPath: '/repo/late',
+                    targetServerId: fixture.scope.serverId, backendTarget: bundledTarget,
+                    selectedProfileId: null, selectedSecretId: null, agentType: 'claude', acpSessionModeId: null,
+                    permissionMode: 'default', modelSelection: { v: 1, updatedAt: 1,
+                        ref: { agentTargetKey: bundledKey, providerConnectionId: null, modelId: 'haiku' } },
+                    backendNewSessionOptionStateByTargetKey: { [pluginKey]: { reasoningEffort: 'low' } }, updatedAt: 1,
+                } }); });
+                await flushHookEffects();
+                const hydrated = hook.getCurrent();
+                if (hydrated.variant !== 'simple') throw new Error('Expected simple launcher');
+                expect(hydrated.simpleProps.modelMode).toBe('haiku');
+            }
+            for (const key of [configuredKey, pluginKey, bundledKey]) {
+                const model = hook.getCurrent();
+                if (model.variant !== 'simple') throw new Error('Expected simple launcher');
+                expect(model.simpleProps.agentPickerOptions?.some(option => option.id === key)).toBe(true);
+                const before = renders;
+                await screen.pressByTestIdAsync(`agent-input-chip-picker.option:${key}`);
+                await flushHookEffects();
+                const selected = hook.getCurrent();
+                if (selected.variant !== 'simple') throw new Error('Expected selected simple launcher');
+                expect(selected.simpleProps.agentPickerSelectedOptionId).toBe(key);
+                expect(renders - before).toBeLessThan(30);
+            }
+            await vi.waitFor(() => expect(screen.findAllByType(NewSessionEngineOptionDetail)).toHaveLength(1));
+            vi.useFakeTimers();
+            await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+            if (phase === 'late') expect(readNewSessionDraftFromRepository(fixture)?.backendTarget).toMatchObject(bundledTarget);
+            if (phase === 'late') expect(readNewSessionDraftFromRepository(fixture)?.backendNewSessionOptionStateByTargetKey)
+                .toMatchObject({ [pluginKey]: { reasoningEffort: 'low' } });
+        } finally { vi.useRealTimers(); await hook.unmount(); }
+    });
 
     it.each(['loading', 'unavailable'] as const)('retains the configured target and configured-only Profile while ACP is %s', async (phase) => {
         const fixture = await restoreCatalogAuthoringFixture({ name: `configured-${phase}`, target: configuredTarget, profile: 'configured-only' });

@@ -11,7 +11,7 @@ import type {
 } from '@happier-dev/protocol/teams';
 
 import { ProviderErrorItems } from '@/components/settings/providers/ProviderErrorItems';
-import { ProviderApprovalPendingBanner } from '@/components/settings/providers/ProviderPageParts';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import type { ProviderPendingApproval } from '@/providers/actions/useProviderActionClient';
 import { useProviderModelProjection } from '@/providers/hooks/useProviderModelProjection';
@@ -588,11 +588,13 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
                         />
                     ))}
                     {experimentalApproval ? (
-                        <ProviderApprovalPendingBanner
+                        <ActionApprovalPendingNotice
                             testID="model-picker-experimental-approval"
                             presentation="line"
-                            modelName={experimentalApproval.modelName}
-                            onOpen={experimentalApproval.onOpen}
+                            summary={experimentalApproval.modelName}
+                            message={t('settingsProvidersCollection.approvalPendingTitle')}
+                            openLabel={t('settingsProvidersCollection.openApproval')}
+                            onOpenApproval={experimentalApproval.onOpen}
                         />
                     ) : null}
                     {props.experimentalConfirmation?.error ? (

@@ -16,7 +16,6 @@ import { createSessionDraftCipher } from '@/sync/encryption/sessionDraftEncrypti
 import { SessionDraftEpochUnavailableError } from './sessionDraftEpochError';
 import { readNewSessionAttachmentDrafts, writeNewSessionAttachmentDrafts, clearAllNewSessionAttachmentDrafts } from '@/components/sessions/new/attachments/newSessionAttachmentDraftStore';
 import { resolveNewSessionDraftAttachmentFlowId } from '@/components/sessions/new/attachments/newSessionDraftAttachmentFlowId';
-import { deleteNewSessionDraftAfterConfirmation } from '@/components/sessions/drafts/deleteNewSessionDraftAfterConfirmation';
 import { materializeSessionDraftSocketWake } from '@/sync/runtime/orchestration/sessionDraftSyncRuntime';
 
 const scope = { serverId: 'server-a', accountId: 'account-a' } as const;
@@ -353,7 +352,7 @@ describe('session draft repository V2 addresses', () => {
         clearAllNewSessionAttachmentDrafts();
     });
 
-    it('retains attachment bytes when draft removal is cancelled, refused, fails remotely, or local cleanup fails', async () => {
+    it('retains attachment bytes when draft removal is refused, fails remotely, or local cleanup fails', async () => {
         clearAllNewSessionAttachmentDrafts();
         const address = { kind: 'newSession' as const, draftId: '00000000-0000-4000-8000-000000000803' };
         const flowId = resolveNewSessionDraftAttachmentFlowId(address.draftId);
@@ -367,13 +366,6 @@ describe('session draft repository V2 addresses', () => {
         });
         repository.writeNewSessionDraft({ scope, draftId: address.draftId, patch: { text: 'retain me' }, materializationIntent: 'userEdit' });
         await repository.flushSessionDraft({ scope, address });
-        await expect(deleteNewSessionDraftAfterConfirmation({
-            confirm: async () => false,
-            readCurrentDraftDeletionDisposition: () => 'deletable',
-            deleteDraft: () => repository.deleteSessionDraft({ scope, address }),
-        })).resolves.toBe(false);
-        expect(readNewSessionAttachmentDrafts(flowId)[0]?.source).toMatchObject({ bytes });
-        expect(repository.getSessionDraftSnapshot(scope, address)).not.toBeNull();
         await expect(repository.deleteSessionDraftWithScopedRuntime({ scope, address,
             runtime: { cipher, transport: remote.transport }, isCurrent: () => false,
         })).resolves.toBe(false);

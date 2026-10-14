@@ -12,10 +12,12 @@ import {
     type PluginUiSessionPlacementCandidateV1,
 } from '@happier-dev/protocol/plugins/ui';
 import { z } from 'zod';
+import { z as mini } from 'zod/mini';
 
 import { isPermissionMode, type PermissionMode } from '@/sync/domains/permissions/permissionTypes';
 
 const SessionServerStartDraftSeedSchema = z.object({
+    existingDraft: mini.optional(SessionServerStartSpawnDraftV1Schema),
     directory: z.string().trim().min(1).max(4_096).optional(),
     // Host Agent routing id: qualified `<pluginId>/<localId>` for an installed
     // Agent, so the seed bound is that contract rather than a bare local id.
@@ -26,11 +28,12 @@ const SessionServerStartDraftSeedSchema = z.object({
         serverId: z.string().trim().min(1),
         machineId: z.string().trim().min(1),
     }).strict().optional(),
-    checkoutIntent: PluginUiSessionCheckoutIntentV1Schema.optional(),
+    checkoutIntent: mini.optional(PluginUiSessionCheckoutIntentV1Schema),
     candidates: z.array(PluginUiSessionPlacementCandidateV1Schema).optional(),
 }).strict();
 
 export type SessionServerStartDraftSeed = Readonly<{
+    existingDraft?: SessionServerStartSpawnDraftV1;
     directory?: string;
     agentId?: string;
     permissionMode?: PermissionMode;
@@ -89,6 +92,7 @@ function readSeed(draft: PluginUiJsonObjectV1 | undefined): ReadSeed | null {
 
     return {
         seed: {
+            ...(parsed.data.existingDraft ? { existingDraft: parsed.data.existingDraft } : {}),
             ...(parsed.data.directory ? { directory: parsed.data.directory } : {}),
             ...(parsed.data.agentId ? { agentId: parsed.data.agentId } : {}),
             ...(parsed.data.permissionMode ? { permissionMode: parsed.data.permissionMode as PermissionMode } : {}),
@@ -96,7 +100,9 @@ function readSeed(draft: PluginUiJsonObjectV1 | undefined): ReadSeed | null {
             ...(parsed.data.checkoutIntent ? { checkoutIntent: parsed.data.checkoutIntent } : {}),
             ...(parsed.data.candidates ? { candidates: parsed.data.candidates } : {}),
         },
-        ...(parsed.data.executionTarget ? { executionTarget: parsed.data.executionTarget } : {}),
+        ...((parsed.data.executionTarget ?? parsed.data.existingDraft?.executionTarget)
+            ? { executionTarget: parsed.data.executionTarget ?? parsed.data.existingDraft!.executionTarget }
+            : {}),
     };
 }
 
