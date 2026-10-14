@@ -138,7 +138,13 @@ function summaryStatus(ref: PromptDocArtifactRefV1, revision: { headerVersion: n
 }
 
 async function seedDocument(body: MemoryDocBodyV1): Promise<PromptDocArtifactRefV1> {
+    const signal = caseSignal;
+    const reportSeedWait = () => console.info('SDK-D seed still pending before rendering', homes.requests.map(({ path }) => path).slice(-12));
+    signal.addEventListener('abort', reportSeedWait, { once: true });
+    console.info('SDK-D seed starts before rendering');
     const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'memory_doc.v1', title: 'Account memory' }, JSON.stringify(body));
+    signal.removeEventListener('abort', reportSeedWait);
+    console.info('SDK-D seed finished before rendering');
     homes.answer(serverId, '/v1/public-shares?' + new URLSearchParams({ subjectKind: 'artifact', subjectId: artifactId }), { body: { publicShares: [] } });
     return { kind: 'doc', serverId, artifactId };
 }
