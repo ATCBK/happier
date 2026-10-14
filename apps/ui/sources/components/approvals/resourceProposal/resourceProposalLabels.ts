@@ -33,8 +33,8 @@ export function resolveResourceProposalLabels(
     approve: model.storageMode === 'delete'
       ? t('machineStorage.review.deleteForGood', { count: selectedCount })
       : model.emptyAfter
-      ? t('resourceProposal.approve.emptyAndRetry')
-      : t('resourceProposal.approve.trash', { count: selectedCount }),
+        ? t('resourceProposal.approve.emptyAndRetry')
+        : t('resourceProposal.approve.trash', { count: selectedCount }),
     reject: t('resourceProposal.notNow'),
   };
 }

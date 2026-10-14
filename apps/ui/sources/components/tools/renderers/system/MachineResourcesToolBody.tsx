@@ -123,7 +123,7 @@ function ProposalAnalysing(
     Math.max(0, RESERVED_ROWS - items.length) +
     (items.length > 0 ? 1 : RESERVED_ROWS);
   const title =
-    props.call.actionId !== 'machines.storage.trash.move'
+    props.call.actionId !== 'machines.storage.trash.move' && props.call.actionId !== 'machines.storage.deleteNow'
       ? t('resourceProposal.title.processes')
       : t('resourceProposal.title.storage');
   return (
