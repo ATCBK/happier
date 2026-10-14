@@ -1,6 +1,6 @@
 import { serializeSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import type { OpenProjectOptions } from '@/components/projects/useOpenProject';
-import type { FileFindSeed as FindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
+import type { ChatFindSeed, FileFindSeed as FindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
 
 import type { UniversalSearchTarget } from './universalSearchResult';
 import { memoryDocumentSearchHitHref } from '@/components/memory/memoryDocumentRoutes';
@@ -33,6 +33,8 @@ export type UniversalSearchActivationOwners = Readonly<{
         options?: Readonly<{
             serverId?: string;
             query?: Readonly<Record<string, string | number | boolean | null | undefined>>;
+            /** Private launch input; the navigation adapter stages it in pane memory. */
+            find?: ChatFindSeed;
         }>,
     ) => void | Promise<void>;
     /** Canonical router push for non-session destinations. */
@@ -69,6 +71,7 @@ export async function activateUniversalSearchResult(
                 if (!sessionId) return { ok: false, reason: 'unavailable' };
                 await owners.navigateToSession(sessionId, {
                     ...(target.serverId ? { serverId: target.serverId } : {}),
+                    ...(target.find ? { find: target.find } : {}),
                     // A transcript hit is message-granular: the sequence is part
                     // of the identity the user selected, not a nicety.
                     ...(typeof target.seq === 'number' && Number.isFinite(target.seq)

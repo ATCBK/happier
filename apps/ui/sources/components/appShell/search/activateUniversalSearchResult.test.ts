@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { activateUniversalSearchResult } from './activateUniversalSearchResult';
 import type { UniversalSearchTarget } from './universalSearchResult';
 import { parseSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
-import { createFileFindSeedHandoff } from '@/components/appShell/panes/fileFindSeedHandoff';
+import { createFileFindSeedHandoff, openChatWithFindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { makeExternalSessionHistoricalImportLocalId } from '@happier-dev/protocol/sessions/external/historicalImportIdentity';
 
@@ -30,6 +30,33 @@ async function expectSavedWorkspaceResourceOpensInProject(
 }
 
 describe('activateUniversalSearchResult', () => {
+    it('carries a Messages query in destination memory and discards it on failed navigation', async () => {
+        const handoff = createFileFindSeedHandoff();
+        const authority = captureActiveServerAccountScopeLifetime();
+        if (!authority) throw new Error('Expected real Account lifetime');
+        const destination = { sessionId: 'session-a', serverId: 'home-a' };
+        const find = { query: 'secret needle', options: { matchCase: false, regex: false },
+            target: { kind: 'seq' as const, seq: 7 } };
+        const target = { kind: 'session' as const, accountId: 'account-a', ...destination, seq: 7, find };
+        let failed = false;
+        const routes: unknown[] = [];
+        const owners = { push: () => {}, openProject: async () => true,
+            navigateToSession: async (sessionId: string, options?: { serverId?: string; query?: unknown; find?: typeof find }) => {
+                await openChatWithFindSeed({ handoff, destination: { sessionId, serverId: options?.serverId ?? '' },
+                    seed: options?.find, authority, open: () => {
+                        routes.push(options?.query);
+                        if (failed) throw new Error('Navigation failed');
+                    } });
+            } };
+        expect(await activateUniversalSearchResult(target, owners)).toEqual({ ok: true });
+        expect(handoff.takeChatCurrent(destination)?.seed).toEqual(find);
+        expect(routes).toEqual([{ jumpSeq: 7 }]);
+        expect(JSON.stringify(routes)).not.toContain(find.query);
+        failed = true;
+        expect(await activateUniversalSearchResult(target, owners)).toEqual({ ok: false, reason: 'failed' });
+        expect(handoff.takeChatCurrent(destination)).toBeNull();
+        handoff.dispose();
+    });
     it('opens an external conversation through the existing candidate opener with a message Find seed', async () => {
         const { openExternalSessionCandidate } = await import('@/components/sessions/external/browse/openExternalSessionCandidate');
         const openSession = vi.fn();

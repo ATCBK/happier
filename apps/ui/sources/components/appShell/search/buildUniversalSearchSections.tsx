@@ -307,7 +307,7 @@ function FileContentDetail({ match: hit, scope }: Readonly<{ match: FileContentL
             <FileIcon fileName={name} size={ICON_SIZE.sm} appearance="line" />
             <Text numberOfLines={1} style={[Typography.variant('label', 'semiBold'), { flexShrink: 1, color: theme.colors.text.primary }]}>
                 <Text style={Typography.default('medium')}>{name}</Text>
-                <Text style={[Typography.default(), Typography.tabular(), { color: theme.colors.text.tertiary }]}>{`  ${match.line}`}</Text>
+                <Text style={[Typography.default(), Typography.tabular(), { color: theme.colors.text.tertiary }]}>{`  · ${t('universalSearch.content.atLine', { line: match.line })}`}</Text>
             </Text>
         </View>
         {/* The column has room to show whole lines (lab G1s wraps them). */}

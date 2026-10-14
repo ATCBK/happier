@@ -195,7 +195,7 @@ function settingsPageNodesById(nodes: readonly ResolvedSettingsPageNode[]): Read
     return result;
 }
 
-function memoryHitResult(hit: MemorySearchHitV1, serverId: string, accountId: string, title: string): UniversalSearchResult {
+function memoryHitResult(hit: MemorySearchHitV1, serverId: string, accountId: string, title: string, query: string): UniversalSearchResult {
     const sessionId = normalizeMemorySearchSessionId(hit.sessionId);
     return {
         id: `${sessionId}:${hit.seqFrom}:${hit.seqTo}`,
@@ -204,7 +204,8 @@ function memoryHitResult(hit: MemorySearchHitV1, serverId: string, accountId: st
         kind: 'message',
         title,
         subtitle: hit.summary,
-        target: { kind: 'session', serverId, accountId, sessionId, seq: hit.seqFrom },
+        target: { kind: 'session', serverId, accountId, sessionId, seq: hit.seqFrom,
+            find: { query, options: { matchCase: false, regex: false }, target: { kind: 'seq', seq: hit.seqFrom } } },
     };
 }
 
@@ -498,7 +499,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                     const title = (freshRow ? getSessionName(freshRow, canonicalScopeServerId) : '')
                         || sessionNameByTarget.get(buildUniversalSearchSessionTitleKey(lifetime.accountId, canonicalScopeServerId, hit.sessionId));
                     return [{ ...memoryHitResult(hit, canonicalScopeServerId, lifetime.accountId,
-                        title && title !== hit.summary ? title : t('sessionsList.sessionFallbackLabel')),
+                        title && title !== hit.summary ? title : t('sessionsList.sessionFallbackLabel'), value),
                         conversation: { snippet: hit.summary, query: value, atMs: hit.createdAtToMs } }];
                 });
                 // Which machines were not fully covered, by name and reason. A machine whose index is off
@@ -972,7 +973,15 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                                 }),
                             });
                         },
-                        navigateToSession,
+                        navigateToSession: (sessionId, options) => {
+                            const { find, ...destination } = options ?? {};
+                            return openChatWithFindSeed({
+                                handoff: paneContext?.fileFindSeedHandoff,
+                                destination: { sessionId, serverId: destination.serverId ?? '' }, seed: find,
+                                authority: credentialBindings.get(resolveServerProfileScopeIdForIdentifier(destination.serverId)),
+                                open: () => navigateToSession(sessionId, destination),
+                            });
+                        },
                         push: (path) => { router.push(path as never); },
                         openProject,
                         stageFileFindSeed: (target, seed) => {

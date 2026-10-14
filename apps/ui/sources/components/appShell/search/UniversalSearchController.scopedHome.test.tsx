@@ -62,6 +62,9 @@ const { parseToken } = await import('@/utils/auth/parseToken');
 const { AppShellPluginUiProjectionValueProvider, useAppShellPluginUiProjection } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
 const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
 const { readCurrentAppShellPluginUiProjection } = await import('@/components/appShell/plugins/committedPluginUiProjection');
+const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+const { ChatFindSeedHost } = await import('@/components/appShell/panes/fileFindSeedHost');
+const { createTranscriptFindModel } = await import('@/components/sessions/transcript/find/useTranscriptFind');
 
 const fixture = {
     homeSearch: vi.fn<(request: Record<string, unknown>) => Promise<unknown>>(),
@@ -229,7 +232,7 @@ function AmbientPluginProjectionProbe() {
     fixture.observedAmbientProjection = useAppShellPluginUiProjection().pluginUiProjection;
     return null;
 }
-async function renderScreen(element: React.ReactElement<UniversalSearchControllerProps>) {
+async function renderScreen(element: React.ReactElement<UniversalSearchControllerProps>, destination?: React.ReactNode) {
     await prepareControllerFixture();
     // A local profile seed is resolved only after its real Home profile exists.
     if (fixture.portableIdentity) {
@@ -248,6 +251,7 @@ async function renderScreen(element: React.ReactElement<UniversalSearchControlle
             reloadConnectedAccountProjection: vi.fn(), reloadClientExecutables: vi.fn(),
         }}><AmbientPluginProjectionProbe />{element}</AppShellPluginUiProjectionValueProvider>;
     }
+    if (destination) content = <AppPaneProvider>{content}{destination}</AppPaneProvider>;
     mountedSearch = await renderScreenWithTestkit(<InjectedAuthProvider credentials={{ token: createAccountTokenForTests('account-a') }}>{content}</InjectedAuthProvider>);
     await flushHookEffects({ cycles: 4, turns: 2 });
     return mountedSearch;
@@ -707,6 +711,24 @@ describe('UniversalSearchController exact Home scope', () => {
     });
 
     it('keeps a contextual Home B seed through query, result identity, and canonical scoped activation while Home A is focused', async () => {
+        const model = createTranscriptFindModel({
+            readCorpus: () => ({ messages: [{ kind: 'user-text', id: 'matched-message', localId: null,
+                seq: 7, createdAt: 1, text: 'Needle in Home B' }],
+                history: { isLoaded: true, hasOlder: false, isLoadingOlder: false } }),
+            loadPage: null,
+            jumpToTarget: async target => ({ status: 'scrolled', target }),
+            reveal: async () => {},
+        });
+        function Destination() {
+            return <ChatFindSeedHost sessionId="session-b" serverId={HOME_B} active>{input =>
+                <ApplySeed {...input} />}</ChatFindSeedHost>;
+        }
+        function ApplySeed(input: import('@/components/appShell/panes/fileFindSeedHost').ChatFindSeedHostInput) {
+            React.useEffect(() => {
+                if (input.findSeed) void model.applySeed(input.findSeed).then(input.consumeFindSeed);
+            }, [input.findSeed, input.consumeFindSeed]);
+            return null;
+        }
         fixture.homeSearch.mockResolvedValue({
             v: 1,
             ok: true,
@@ -730,7 +752,7 @@ describe('UniversalSearchController exact Home scope', () => {
                 activeSessionId="ambient-session-a"
                 presentation="modal"
                 onRequestClose={vi.fn()}
-            />,
+            />, <Destination />,
         );
 
         const rootStep = selectionListProps()?.rootStep;
@@ -755,6 +777,11 @@ describe('UniversalSearchController exact Home scope', () => {
                 expect(harness.routerNavigate).toHaveBeenCalledWith('/session/session-b?serverId=srv_fsp_controller_b&jumpSeq=7', expect.objectContaining({ dangerouslySingular: expect.any(Function) }));
             });
         });
+        await flushHookEffects();
+        await model.settled();
+        expect(model.getSnapshot()).toMatchObject({ open: true, query: 'needle',
+            status: { kind: 'results', current: 1, total: 1 } });
+        model.dispose();
     });
 
     it('uses Home B plugin providers from the selected scope while Home A is focused', async () => {
