@@ -904,7 +904,7 @@ function WidgetAreaAddPopover(props: Readonly<{
         () => write({ actionId: 'widgets.item.add', instance, ...(area ? { area } : {}), ...(size ? { size } : {}),
             ...(props.groupId ? { groupId: props.groupId } : {}) }), t('widgetAdd.addFailed'),
     ), [area, props.groupId, write]);
-    const sections = useAccountWidgetAddSections({ scope: props.surface, instances, addInstance, labels, context: props.context,
+    const { sections, loading } = useAccountWidgetAddSections({ scope: props.surface, instances, addInstance, labels, context: props.context,
         ...(area ? { area } : {}), testID: props.testID });
     const destination = props.areaChoice && area ? (
         <SegmentedTabBar
@@ -928,6 +928,7 @@ function WidgetAreaAddPopover(props: Readonly<{
             searchPlaceholder={t('widgetAdd.searchWidgets')}
             addLabel={labels.submit}
             sections={sections}
+            loading={loading}
             serverId={props.surface.serverId}
             testID={props.testID}
         />

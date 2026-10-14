@@ -85,6 +85,8 @@ export type WidgetAddPanelProps = Readonly<{
     hint?: string;
     searchPlaceholder: string;
     sections: readonly WidgetAddSection[];
+    /** Your widgets and saved groups are still being read: a search that finds nothing yet says so quietly. */
+    loading?: boolean;
     ask?: WidgetAddAsk;
     /** Where an entry without its own setup goes ("Add to Home"). */
     addLabel: string;
@@ -435,7 +437,9 @@ function WidgetAddList(props: WidgetAddPanelProps & Readonly<{
                     </View>
                 ))}
                 {props.askEntry ? <View style={styles.section}>{row(props.askEntry)}</View> : null}
-                {nothing ? (
+                {nothing && props.loading ? (
+                    <Text style={styles.empty} testID={`${props.testID}.loading`}>{t('common.loading')}</Text>
+                ) : nothing ? (
                     <Text style={styles.empty} testID={`${props.testID}.noMatch`}>{t('widgetAdd.noMatch', { query: props.query.trim() })}</Text>
                 ) : null}
             </ScrollView>

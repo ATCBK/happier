@@ -104,6 +104,7 @@ async function renderPanel(props: Readonly<{
     composition?: 'split' | 'push';
     ask?: WidgetAddAsk;
     initialEntryId?: string;
+    loading?: boolean;
     onRequestClose?: () => void;
 }>) {
     const screen = await renderScreen(
@@ -115,6 +116,7 @@ async function renderPanel(props: Readonly<{
             addLabel="Add to Home"
             composition={props.composition ?? 'split'}
             sections={props.sections}
+            {...(props.loading ? { loading: true } : {})}
             {...(props.ask ? { ask: props.ask } : {})}
             {...(props.initialEntryId ? { initialEntryId: props.initialEntryId } : {})}
             {...(props.serverId ? { serverId: props.serverId } : {})}
@@ -342,6 +344,18 @@ describe('WidgetAddSurface', () => {
         await screen.pressByTestIdAsync('add.detail.submit');
         expect(note).toHaveBeenCalledTimes(1);
         expect(close).toHaveBeenCalledTimes(1);
+    });
+
+    it('says Loading, not "No widgets match", while Your widgets are still being read', async () => {
+        const rec = recorder();
+        const screen = await renderPanel({
+            sections: [{ id: 'all', title: 'All', entries: [widgetEntry(SIGNUPS, rec)] }],
+            loading: true,
+        });
+        screen.changeTextByTestId('add.search', 'copy');
+        await flushHookEffects({ cycles: 2 });
+        expect(screen.findAllByTestId('add.noMatch')).toHaveLength(0);
+        expect(screen.findAllByTestId('add.loading').length).toBeGreaterThan(0);
     });
 
     it('narrows by search and offers the ask entry, which drafts and closes', async () => {

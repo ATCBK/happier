@@ -380,7 +380,7 @@ describe('widget definition flows', () => {
         function Gallery() {
             const [demand, setDemand] = React.useState(false);
             demandPreview = setDemand;
-            const sections = useAccountWidgetAddSections({ scope: { ...account, owner: { kind: 'home' } }, instances: [],
+            const { sections } = useAccountWidgetAddSections({ scope: { ...account, owner: { kind: 'home' } }, instances: [],
                 addInstance: async () => {}, labels: { count: String, submit: 'Add' }, testID: 'gallery' });
             const setup = demand ? sections.find(section => section.id === 'yours')?.entries[0]?.setup?.() : undefined;
             return React.createElement(View, {}, setup ? setup.renderPreview?.({ input: {}, draft: setup.initial }) : null);
