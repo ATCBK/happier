@@ -195,11 +195,12 @@ describe('Channels chunk producer to registered native-handler fixture seam', ()
   // admission, covered separately by firstPartyProviderComposition.test.ts.
   // Native setup/delivery/adapters and the SDK executor stay real.
   it.each([
-    { kind: 'telegram', handlerRole: 'deliver' },
-    { kind: 'discord', handlerRole: 'deliver' },
-    { kind: 'telegram', handlerRole: 'inspect' },
-    { kind: 'discord', handlerRole: 'inspect' },
-  ] as const)('routes structured 70k content to registered $kind $handlerRole and retains only real native receipts', async ({ kind, handlerRole }) => {
+    { kind: 'telegram', handlerRole: 'deliver', rateLimited: false },
+    { kind: 'discord', handlerRole: 'deliver', rateLimited: false },
+    { kind: 'telegram', handlerRole: 'inspect', rateLimited: false },
+    { kind: 'discord', handlerRole: 'inspect', rateLimited: false },
+    { kind: 'telegram', handlerRole: 'deliver', rateLimited: true },
+  ] as const)('routes structured 70k content to registered $kind $handlerRole (rate limited: $rateLimited) and retains only real native receipts', async ({ kind, handlerRole, rateLimited }) => {
     const telegram = kind === 'telegram';
     const pluginId = `happier.channel.${kind}`;
     const credentialRef = {
@@ -225,6 +226,8 @@ describe('Channels chunk producer to registered native-handler fixture seam', ()
             const payload = fixtureJsonSchema.parse(JSON.parse(new TextDecoder().decode(request.body)));
             if (payload === null || Array.isArray(payload) || typeof payload !== 'object') throw new Error('Expected Telegram native message');
             nativeMessages.push(payload);
+            if (rateLimited) return response({ ok: false, error_code: 429,
+              description: 'Too Many Requests', parameters: { retry_after: 90_000 } }, url);
             return response({ ok: true, result: { message_id: nativeMessages.length + 70 } }, url);
           }
         } else {
@@ -365,6 +368,15 @@ describe('Channels chunk producer to registered native-handler fixture seam', ()
         expect(nativeMessages).toEqual([]);
         expect(nativeResults).toEqual([]);
         expect(deliveries.writes.at(-1)?.payload).toMatchObject({ state: 'outcomeUnknown', providerMessageIds: [] });
+        return;
+      }
+      if (rateLimited) {
+        const retryNotBefore = 1_700_000_000_000 + 90_000_000;
+        expect(nativeResults).toEqual([{ kind: 'notDelivered', retry: 'after', retryAfterMs: 90_000_000 }]);
+        expect(result).toMatchObject({ kind: 'settled', custody: { state: 'retryDue', retryNotBefore } });
+        expect(deliveries.writes.at(-1)?.payload).toMatchObject({ state: 'retryDue', retryNotBefore });
+        expect(nativeMessages).toHaveLength(1);
+        expect(consumerRefusals).toEqual([]);
         return;
       }
       expect(result).toMatchObject({ kind: 'settled', custody: { state: 'delivered' } });

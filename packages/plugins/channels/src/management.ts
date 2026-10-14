@@ -17,6 +17,7 @@ import type {
 } from '@happier-dev/plugin-sdk/actions';
 import {
   ConversationBindingReadResultV1Schema,
+  DEFAULT_CONVERSATION_OBSERVATION_AGE_MS,
   ConversationSessionProjectionBaselineAcceptResultV1Schema,
   isConversationConnectionCreateSelectableTransportV1,
   conversationConnectionWebhookSourceInstanceIdV1,
@@ -29,7 +30,6 @@ import {
   ConversationProviderSetupOutcomeV1Schema,
   ConversationPrincipalResolveInputV1Schema,
   ConversationPrincipalResolveResultV1Schema,
-  MAX_CONVERSATION_OBSERVATION_AGE_MS,
   SessionPullRequestBindingInputV1Schema,
   resolveSessionPullRequestLinksV1,
   type SessionPullRequestBindingResultV1,
@@ -4774,7 +4774,7 @@ export async function manageSessionPullRequestBindingForInvocation(input: JsonVa
   const nativeSetup = await context.services.actions.executeAdmittedTargetedOperationWithExecutionOrigin(provider.setup, { repository: request.pullRequest.repository }, { signal: context.signal });
   const setup = ConversationProviderSetupOutcomeV1Schema.parse(nativeSetup.result);
   if ('kind' in setup) throw pluginError('channels_pr_link_provider_not_ready', 'The selected native SCM account is not ready to attach this PR.', true);
-  const connectionResult = await createConversationConnectionForInvocation({ providerSelection, providerSetupInput: { repository: request.pullRequest.repository, credentialRef: setup.credentialRef }, credentialRef: setup.credentialRef, selectedTransport: 'checkpointedPull', maximumObservationAgeMs: MAX_CONVERSATION_OBSERVATION_AGE_MS }, context);
+  const connectionResult = await createConversationConnectionForInvocation({ providerSelection, providerSetupInput: { repository: request.pullRequest.repository, credentialRef: setup.credentialRef }, credentialRef: setup.credentialRef, selectedTransport: 'checkpointedPull', maximumObservationAgeMs: setup.recommendedMaximumObservationAgeMs ?? DEFAULT_CONVERSATION_OBSERVATION_AGE_MS }, context);
   if (connectionResult.kind !== 'created' && connectionResult.kind !== 'rejoined') throw pluginError('channels_pr_link_connection_not_ready', 'The PR conversation connection is not ready.', true);
   const connectionId = connectionResult.connectionId;
   const row = await collection.get(connectionId, { signal: context.signal });

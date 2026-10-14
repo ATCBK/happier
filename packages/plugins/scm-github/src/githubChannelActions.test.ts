@@ -1,6 +1,6 @@
 import { PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type { ConnectedAccountRef } from '@happier-dev/plugin-sdk/connected-accounts';
-import { ConversationProviderSetupOutcomeV1Schema, MAX_CONVERSATION_RETRY_AFTER_MS } from '@happier-dev/channels-protocol/v1';
+import { ConversationProviderSetupOutcomeV1Schema } from '@happier-dev/channels-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
 
 // Exercise the canonical retained-fact consumer, not a reconstruction of its reader.
@@ -895,7 +895,7 @@ describe('GitHub Channel Actions', () => {
     });
   });
 
-  it('clamps an over-24-hour Retry-After before projecting a connection result', async () => {
+  it('preserves an over-24-hour Retry-After in a connection result', async () => {
     const connectedAccounts = {
       materialize: vi.fn(async () => ({
         kind: 'httpHeaders' as const,
@@ -912,11 +912,12 @@ describe('GitHub Channel Actions', () => {
     }, coreContext({ connectedAccounts, http }))).resolves.toEqual({
       kind: 'notReady',
       reason: 'rateLimited',
-      retryAfterMs: MAX_CONVERSATION_RETRY_AFTER_MS,
+      retryAfterMs: 86_401_000,
     });
   });
 
-  it('clamps an over-24-hour reset hint before projecting a poll result', async () => {
+  it('preserves an over-24-hour reset hint in a poll result', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
     const connectedAccounts = {
       materialize: vi.fn(async () => ({
         kind: 'httpHeaders' as const,
@@ -925,7 +926,7 @@ describe('GitHub Channel Actions', () => {
     };
     const http = {
       request: vi.fn(async (_request: GithubHttpRequestInput) => jsonResponse([], 429, {
-        'x-ratelimit-reset': String(Math.ceil((Date.now() + MAX_CONVERSATION_RETRY_AFTER_MS + 3_600_000) / 1_000)),
+        'x-ratelimit-reset': String(Math.ceil((Date.now() + 90_000_000) / 1_000)),
       })),
     };
 
@@ -942,8 +943,9 @@ describe('GitHub Channel Actions', () => {
     }, coreContext({ connectedAccounts, http }))).resolves.toEqual({
       kind: 'notReady',
       reason: 'rateLimited',
-      retryAfterMs: MAX_CONVERSATION_RETRY_AFTER_MS,
+      retryAfterMs: 90_000_000,
     });
+    now.mockRestore();
   });
 
   it('maps a GitHub secondary rate-limit poll response without rate headers to a bounded backoff', async () => {
@@ -1524,7 +1526,7 @@ describe('GitHub Channel Actions', () => {
     expect(http.request).toHaveBeenCalledOnce();
   });
 
-  it('clamps an over-24-hour Retry-After before returning a pre-send delivery retry', async () => {
+  it('preserves an over-24-hour Retry-After in a pre-send delivery retry', async () => {
     const connectedAccounts = {
       materialize: vi.fn(async () => ({
         kind: 'httpHeaders' as const,
@@ -1541,7 +1543,7 @@ describe('GitHub Channel Actions', () => {
     )).resolves.toEqual({
       kind: 'notDelivered',
       retry: 'after',
-      retryAfterMs: MAX_CONVERSATION_RETRY_AFTER_MS,
+      retryAfterMs: 86_401_000,
     });
     expect(http.request).toHaveBeenCalledOnce();
   });

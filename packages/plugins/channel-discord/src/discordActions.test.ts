@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
-import { MAX_CONVERSATION_RETRY_AFTER_MS } from '@happier-dev/channels-protocol/v1';
 
 import {
   deliverDiscordMessage,
@@ -483,11 +482,11 @@ describe('Discord Channels provider Actions', () => {
       },
       {
         name: 'rate limit beyond the protocol bound',
-        response: jsonResponse({ retry_after: (MAX_CONVERSATION_RETRY_AFTER_MS / 1_000) + 1 }, 429),
+        response: jsonResponse({ retry_after: 86_401 }, 429),
         expected: {
           kind: 'notDelivered' as const,
           retry: 'after' as const,
-          retryAfterMs: MAX_CONVERSATION_RETRY_AFTER_MS,
+          retryAfterMs: 86_401_000,
         },
       },
     ]) {

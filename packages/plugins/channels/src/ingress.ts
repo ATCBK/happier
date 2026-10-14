@@ -540,7 +540,7 @@ function isPositiveSafeInteger(value: unknown): value is number {
 }
 
 function isValidMaximumObservationAge(value: unknown): value is number {
-  return isPositiveSafeInteger(value)
+  return isNonNegativeSafeInteger(value)
     && value >= MIN_CONVERSATION_OBSERVATION_AGE_MS
     && value <= MAX_CONVERSATION_OBSERVATION_AGE_MS;
 }
@@ -4760,6 +4760,7 @@ async function dispatchIngressObligation(input: Readonly<{
     const prepared = attachments.length ? await prepareChannelFileSessionInput({
       text: fullText.message.text,
       attachments,
+      sessionId: target.sessionId,
     }, input.context) : { text: fullText.message.text };
     const result = await session.send({
       kind: 'userText',
@@ -7395,7 +7396,7 @@ export async function acceptConversationStreamBaselineForInvocation(
       checkpointId,
       checkpoint,
       checkpointAfter: result.checkpointAfterBatch,
-      nextPollNotBeforeMs: result.retryHint === undefined ? null : Date.now() + result.retryHint.retryAfterMs,
+      nextPollNotBeforeMs: result.retryHint === undefined ? null : Math.min(Number.MAX_SAFE_INTEGER, Date.now() + result.retryHint.retryAfterMs),
     });
     const covered = await stageCheckpointedBaselineIngressCoverage({
       context,
@@ -8103,7 +8104,7 @@ export async function runConversationCheckpointedPollForInvocation(input: Readon
           ? null
           : ingressShell(result.observations.at(-1)!.observation).occurrenceId)
         : null,
-      nextPollNotBeforeMs: result.retryHint === undefined ? null : Date.now() + result.retryHint.retryAfterMs,
+      nextPollNotBeforeMs: result.retryHint === undefined ? null : Math.min(Number.MAX_SAFE_INTEGER, Date.now() + result.retryHint.retryAfterMs),
       censusSettlements,
     });
   } catch (cause) {

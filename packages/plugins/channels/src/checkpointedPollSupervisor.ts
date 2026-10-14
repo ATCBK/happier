@@ -321,7 +321,7 @@ export function createIngressSupervisor(
                 const result = await runPoll({ connectionId, waitMs: MAX_CONVERSATION_RECEIVE_WAIT_MS }, workerContext);
                 if (pollDeadlines.has(connectionId)) {
                   pollDeadlines.set(connectionId, result.kind === 'retry' || result.kind === 'committed'
-                    ? clock.now() + (result.retryAfterMs ?? reconciliationIntervalMs)
+                    ? Math.min(Number.MAX_SAFE_INTEGER, clock.now() + (result.retryAfterMs ?? reconciliationIntervalMs))
                     : Number.POSITIVE_INFINITY);
                 }
               } catch (error) {

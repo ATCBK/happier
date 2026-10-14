@@ -959,6 +959,15 @@ describe('Conversation connection lifecycle', () => {
     }
   });
 
+  it('preserves an owner-selected freshness policy beyond thirty days', () => {
+    const current = connection();
+    const maximumObservationAgeMs = 31 * 86_400_000;
+    expect(transitionConversationConnection({
+      current,
+      requested: { enabled: current.enabled, maximumObservationAgeMs },
+    })).toMatchObject({ kind: 'updated', connection: { maximumObservationAgeMs } });
+  });
+
   it('records one current history gap and never lets a stale or changed report rewrite first evidence', () => {
     const current = connection({ authorityEpoch: 4 });
     const recorded = recordConversationConnectionHistoryGap({

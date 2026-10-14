@@ -4,7 +4,6 @@ import type {
   ConversationObservationV1,
   ConversationPollResultV1,
 } from '@happier-dev/channels-protocol/v1';
-import { MAX_CONVERSATION_RETRY_AFTER_MS } from '@happier-dev/channels-protocol/v1';
 
 import type { GithubApiClientV1, GithubApiResponseV1 } from './githubApiClient.js';
 import {
@@ -353,7 +352,7 @@ describe('GitHub issue-comment Channel polling', () => {
     });
   });
 
-  it('clamps an over-24-hour GitHub poll interval before returning the strict retry hint', async () => {
+  it('preserves an over-24-hour GitHub poll interval in the strict retry hint', async () => {
     const client: GithubApiClientV1 = {
     requestWithoutFollowingRedirects: refuseManualRedirectRead,
       async request() {
@@ -378,7 +377,7 @@ describe('GitHub issue-comment Channel polling', () => {
     })));
 
     expect(result).toMatchObject({
-      retryHint: { retryAfterMs: MAX_CONVERSATION_RETRY_AFTER_MS },
+      retryHint: { retryAfterMs: 86_401_000 },
     });
   });
 

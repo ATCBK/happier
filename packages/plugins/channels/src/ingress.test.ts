@@ -1586,6 +1586,17 @@ function measurementFor(
 }
 
 describe('Conversation provider observation ingress', () => {
+  it.each([0, 59_999, 31 * 86_400_000])('admits a current observation with representable freshness %s', async maximumObservationAgeMs => {
+    const now = 1_700_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      const harness = createIngressHarness();
+      replaceConnectionPayload(harness.rows, { maximumObservationAgeMs });
+      await ingestConversationProviderObservationForInvocation(observation({ messageRevision: 'freshness:1', occurredAt: now }), harness.context);
+      expect(harness.send).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
   it('includes attachment descriptors in compacted occurrence replay identity', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -10163,11 +10174,11 @@ describe('Conversation history baseline acceptance', () => {
     });
   });
 
-  it('accepts a checkpoint-only baseline without fabricating an occurrence', async () => {
+  it.each([2_000, Number.MAX_SAFE_INTEGER])('accepts a checkpoint-only baseline and preserves representable retry time (%s)', async retryAfterMs => {
     const pollResult = {
       kind: 'checkpointOnly',
       checkpointAfterBatch: { cursor: 'checkpoint-only' },
-      retryHint: { retryAfterMs: 2_000 },
+      retryHint: { retryAfterMs },
     } as const;
     const harness = createIngressHarness({ pollResult });
     const gapConnection = setConnectionHistoryGap(harness.rows);
@@ -10182,7 +10193,7 @@ describe('Conversation history baseline acceptance', () => {
       opaqueToken: pollResult.checkpointAfterBatch,
       lastOccurrenceId: null,
       revision: 1,
-      nextPollNotBeforeMs: expect.any(Number),
+      nextPollNotBeforeMs: retryAfterMs === Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : expect.any(Number),
     });
     expect(harness.executeAdmittedTargetedOperationWithExecutionOrigin).toHaveBeenCalledWith(
       telegramPollAction,
