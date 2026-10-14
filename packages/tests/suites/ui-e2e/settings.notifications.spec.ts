@@ -96,7 +96,7 @@ test.describe('ui e2e: settings notifications', () => {
                 EXPO_PUBLIC_DEBUG: '1',
                 EXPO_PUBLIC_HAPPY_SERVER_URL: server.baseUrl,
                 EXPO_PUBLIC_HAPPY_STORAGE_SCOPE: `e2e-settings-notifications-${run.runId}`,
-                HAPPIER_E2E_UI_WEB_MODE: 'export',
+                HAPPIER_E2E_UI_WEB_MODE: process.env.HAPPIER_E2E_UI_WEB_MODE ?? 'export',
                 HAPPIER_E2E_UI_WEB_EXPORT_FALLBACK_TO_METRO: '0',
                 HAPPIER_E2E_UI_WEB_EXPORT_TIMEOUT_MS: '900000',
                 HAPPIER_E2E_UI_WEB_EXPORT_STARTUP_STALL_TIMEOUT_MS: '300000',
@@ -110,6 +110,48 @@ test.describe('ui e2e: settings notifications', () => {
         test.setTimeout(60_000);
         await ui?.stop().catch(() => {});
         await server?.stop().catch(() => {});
+    });
+
+    test('keeps shared prompt text and actions usable at the largest supported text size', async ({ page }) => {
+        test.setTimeout(900_000);
+        if (!uiBaseUrl) throw new Error('missing ui base url');
+
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.addInitScript(() => {
+            window.localStorage.setItem('mmkv.default\\local-settings', JSON.stringify({ uiFontScale: 2.5 }));
+        });
+        await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
+        await waitForInitialAppUi({ page, timeoutMs: 180_000 });
+        await createAccountIfNeeded(page);
+        await gotoNotifications(page, uiBaseUrl);
+        await clickRowByTestId(page, 'settings-notifications-add-webhook');
+        const input = page.getByTestId('web-prompt-input');
+        await input.fill('lorem ipsum dolor sit amet');
+        await expect.poll(() => input.evaluate((element) => {
+            const style = getComputedStyle(element);
+            const fontSize = Number.parseFloat(style.fontSize);
+            const availableHeight = element.clientHeight
+                - Number.parseFloat(style.paddingTop)
+                - Number.parseFloat(style.paddingBottom);
+            const context = document.createElement('canvas').getContext('2d');
+            if (!context) throw new Error('missing font measurement context');
+            context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+            const metrics = context.measureText('lorem ipsum dolor sit amet');
+            return {
+                scaled: fontSize > 30,
+                fits: availableHeight >= metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent,
+                fontSize,
+                availableHeight,
+                fontHeight: metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent,
+            };
+        })).toMatchObject({ scaled: true, fits: true });
+        await page.screenshot({ path: test.info().outputPath('shared-prompt-large-text-wide.png') });
+        await page.setViewportSize({ width: 390, height: 844 });
+        await input.scrollIntoViewIfNeeded();
+        await expect(page.getByTestId('web-prompt-confirm')).toBeInViewport();
+        await page.screenshot({ path: test.info().outputPath('shared-prompt-large-text-phone.png') });
+        await confirmPrompt(page, 'https://hooks.example.test/notify');
+        await expect(page.locator('[data-testid^="settings-notifications-webhook-"]')).toHaveCount(1);
     });
 
     test('renders the notifications settings route and adds a webhook channel', async ({ page }) => {
