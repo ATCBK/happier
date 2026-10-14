@@ -933,7 +933,7 @@ describe('SessionsList (native virtualization)', () => {
         expect(readTargets().get('server_a:sess_a').tags).toEqual(['updated-while-closed']);
     });
 
-    it('expands the header search input and collapses it on blur when empty', async () => {
+    it('keeps explicitly opened search mounted on blur until it is dismissed', async () => {
         mockVisibleSessionListViewData = [
             {
                 type: 'header',
@@ -982,6 +982,10 @@ describe('SessionsList (native virtualization)', () => {
             await new Promise((resolve) => setTimeout(resolve, 60));
         });
 
+        expect(screen.findByTestId('session-list-search-input')).toBe(input);
+        await act(async () => {
+            screen.findByTestId('session-list-search-clear')?.props.onPress?.({ stopPropagation: vi.fn() });
+        });
         expect(screen.findAllByTestId('session-list-search-input')).toHaveLength(0);
     });
 
@@ -1099,6 +1103,21 @@ describe('SessionsList (native virtualization)', () => {
         expect(screen.findAllByTestId('session-list-session:sess_a')).toHaveLength(0);
         expect(screen.findAllByTestId('session-list-header:active')).toHaveLength(1);
         expect(screen.findAllByTestId('session-list-session:sess_b')).toHaveLength(1);
+
+        // A live session update can remove the section that originally owned search.
+        mockVisibleSessionListViewData = mockVisibleSessionListViewData.map((item) => item.groupKey === 'active'
+            ? item.type === 'header'
+                ? { ...item, title: 'Inactive', headerKind: 'inactive', groupKey: 'inactive' }
+                : { ...item, groupKey: 'inactive', groupKind: 'date' }
+            : item);
+        const { SessionsList } = await import('./SessionsList');
+        await screen.update(<SessionsList />);
+        expect(screen.findByTestId('session-list-search-input')?.props.value).toBe('other-repo');
+        await act(async () => {
+            screen.findByTestId('session-list-search-clear')?.props.onPress?.({ stopPropagation: vi.fn() });
+        });
+        expect(screen.findAllByTestId('session-list-search-input')).toHaveLength(0);
+        expect(screen.findAllByTestId('session-list-search-trigger').length).toBeGreaterThan(0);
     });
 
     it('keeps focused search open when clearing the last character after no results', async () => {
@@ -1425,19 +1444,20 @@ describe('SessionsList (native virtualization)', () => {
         expect(list.props.getItemType?.(visibleSessionListViewData[2], 2)).toBe('session:default:tail');
     });
 
-    it('disables web FlatList virtualization for first-page-sized lists', async () => {
+    it('uses the shared virtualized surface for first-page-sized web lists', async () => {
         platformOs = 'web';
 
         const screen = await renderSessionsList();
         const list = expectPresent(
-            screen.root.findAll((node) => String(node.type) === 'FlatList')[0],
-            'expected web FlatList',
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected shared virtualized surface',
         );
 
-        expect(list.props.disableVirtualization).toBe(true);
+        expect(screen.root.findAll((node) => String(node.type) === 'FlatList')).toHaveLength(0);
+        expect(list.props.getItemType).toBeTypeOf('function');
     });
 
-    it('disables web FlatList virtualization for medium sidebar lists', async () => {
+    it('uses the shared virtualized surface for medium web lists', async () => {
         platformOs = 'web';
         const header = expectPresent(
             mockVisibleSessionListViewData?.find((item) => item.type === 'header'),
@@ -1461,11 +1481,12 @@ describe('SessionsList (native virtualization)', () => {
 
         const screen = await renderSessionsList();
         const list = expectPresent(
-            screen.root.findAll((node) => String(node.type) === 'FlatList')[0],
-            'expected web FlatList',
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected shared virtualized surface',
         );
 
-        expect(list.props.disableVirtualization).toBe(true);
+        expect(screen.root.findAll((node) => String(node.type) === 'FlatList')).toHaveLength(0);
+        expect(list.props.getItemType).toBeTypeOf('function');
     });
 
     it('uses FlashListCompat for large web lists instead of relying on React Native Web FlatList virtualization', async () => {
