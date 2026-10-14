@@ -83,9 +83,20 @@ export function createCapabilityRulesActionSpecV1<TId extends ActionId, TInput e
     surfaces: { ui: true, cli: true, agent: true, mcp: true, voice: false, rpc: true },
     bindings: { rpcMethod: input.id, mcpToolName: input.id.replaceAll('.', '_') },
     inputSchema: input.inputSchema, outputSchema: input.outputSchema,
-    inputHints: { fields: [{ path: 'items', title: 'Items', widget: 'json', required: true },
-      { path: 'change', title: 'Rules change', widget: 'json', required: true }] },
     projectObservationInput: projectObservation, projectObservationOutput: projectObservation,
+    // The deciding person reviews the complete rule intent; shared observations
+    // retain only identity and receipt fields.
+    approvalPresentation: { summary: () => null, projectInput: raw => input.inputSchema.parse(raw), retainInputOnSettlement: true },
+    inputHints: { fields: [
+      { path: `items.[].${input.idField}`, title: input.itemKind === 'skills' ? 'Skill' : 'MCP server', widget: 'text' },
+      { path: 'items.[].name', title: input.itemKind === 'skills' ? 'Skill' : 'MCP server', widget: 'text' },
+      { path: 'change.write.place', title: 'Where', widget: 'json' },
+      { path: 'change.write.state', title: 'Change', widget: 'select', options: [
+        { value: 'on', label: 'Turn on' }, { value: 'off', label: 'Turn off' }, { value: 'inherit', label: 'Use inherited rules' },
+      ] },
+      { path: 'change.write.agentId', title: 'Agent', widget: 'text' },
+      { path: 'change.rules', title: 'Replacement rules', widget: 'json' },
+    ] },
     cli: { acceptsServerId: true, commands, inputSchema: rulesCliInput,
       bindInput: (value, context) => bindRulesCliInput(value, context, input.idField),
       flagAliases: [{ path: 'everywhere', aliases: ['--all-machines'] }, ...(input.itemKind === 'mcp' ? [{ path: 'names', aliases: ['--mcp-server'] }] : []),

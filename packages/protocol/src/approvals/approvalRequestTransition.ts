@@ -1,7 +1,7 @@
 import { ActionIdSchema } from '../actions/actionIds.js';
 import { getActionSpec } from '../actions/actionSpecs.js';
 import { projectNativeJsonValueForTransport, sameStrictJsonValue } from '../json/strictJsonValue.js';
-import type { ApprovalRequest } from './approvalRequestV1.js';
+import { ApprovalRequestV2Schema, type ApprovalRequest } from './approvalRequestV1.js';
 
 /**
  * The one approval subject/transition contract for built-in approval Artifacts.
@@ -9,7 +9,7 @@ import type { ApprovalRequest } from './approvalRequestV1.js';
  * Every Artifact adapter (the CLI/daemon store and the UI writer) asks this
  * owner whether a proposed body may replace the stored one, then commits it with
  * the revision it read (Artifact CAS). The immutable subject is everything except
- * the lifecycle fields; the lifecycle is
+ * the lifecycle fields and validated append-only Storage retry receipts; the lifecycle is
  *
  *   open -> approved -> executing -> executed | failed
  *   open -> rejected | canceled
@@ -18,9 +18,11 @@ import type { ApprovalRequest } from './approvalRequestV1.js';
  * The signed admitted operands (`actionArgs`) stay immutable during replay.
  * A person's spec-admitted choice lives separately on the decision. Execution
  * validates that choice against the original operands after origin verification.
- * Settlement replaces both inputs with the Action's observation
+ * Settlement replaces both inputs with the Action's private review or observation
  * projection (`settleApprovalRequestActionArgs`), never with caller-authored
  * arguments, so no durable history keeps write-only secrets after replay.
+ * A new UI Storage retry may append only its settled result; it never changes
+ * the original terminal execution or grants replay authority.
  */
 
 type ApprovalRequestStatus = ApprovalRequest['status'];
@@ -38,7 +40,10 @@ function isSettled(status: ApprovalRequestStatus): boolean {
 
 /**
  * The operands a settled approval durably keeps: the Action's declared
- * `projectObservationInput` of the admitted input. A request that is already
+ * private `approvalPresentation.projectInput` when its spec declares
+ * `retainInputOnSettlement`, or otherwise `projectObservationInput`,
+ * of the admitted input. Review history keeps exactly the declared operands people approved,
+ * without widening what shared Action observations disclose. A request that is already
  * settled, an Action with live-only input custody (its record already holds that
  * projection since creation), a historical Action id with no current spec, and
  * an Action without a projection keep their stored operands unchanged, so the
@@ -49,7 +54,12 @@ export function settleApprovalRequestActionArgs(request: ApprovalRequest): unkno
   const actionId = ActionIdSchema.safeParse(request.actionId);
   if (!actionId.success) return request.actionArgs;
   const spec = getActionSpec(actionId.data);
-  if (spec.approvalInputCustody === 'live_only' || !spec.projectObservationInput) return request.actionArgs;
+  if (spec.approvalInputCustody === 'live_only') return request.actionArgs;
+  if (spec.approvalPresentation?.retainInputOnSettlement && spec.approvalPresentation.projectInput
+    && spec.inputSchema.safeParse(request.actionArgs).success) {
+    return spec.approvalPresentation.projectInput(request.actionArgs);
+  }
+  if (!spec.projectObservationInput) return request.actionArgs;
   return spec.projectObservationInput(request.actionArgs);
 }
 
@@ -89,6 +99,7 @@ function immutableSubject(request: ApprovalRequest, actionArgs: unknown): Readon
     decision: _decision,
     execution: _execution,
     actionArgs: _actionArgs,
+    storageRetryResults: _storageRetryResults,
     ...subject
   } = request;
   return { ...subject, actionArgs };
@@ -132,6 +143,13 @@ export function decideApprovalRequestTransition(
   } else if (!durablyEqual(settling ? settleApprovalRequestDecision(existing) : existing.decision, next.decision)) {
     return SUBJECT_MISMATCH;
   }
+  const isStorageRetryReceipt = existing.v === 2 && next.v === 2
+    && existing.status === 'executed' && next.status === 'executed'
+    && durablyEqual(existing.execution, next.execution)
+    && ApprovalRequestV2Schema.safeParse(next).success
+    && (next.storageRetryResults?.length ?? 0) > (existing.storageRetryResults?.length ?? 0)
+    && durablyEqual(existing.storageRetryResults ?? [], next.storageRetryResults?.slice(0, existing.storageRetryResults?.length ?? 0));
+  if (!durablyEqual(existing.storageRetryResults, next.storageRetryResults) && !isStorageRetryReceipt) return SUBJECT_MISMATCH;
   if (durablyEqual(existing, next)) {
     return existing.status === 'executing' ? INVALID_TRANSITION : { ok: true, changed: false };
   }
@@ -174,7 +192,8 @@ export function decideApprovalRequestTransition(
       && !isApprovedExecution
       && !isApprovedPreExecutionFailure
       && !isLegacyApprovedStaleFailure
-      && !isExecutingTerminal)
+      && !isExecutingTerminal
+      && !isStorageRetryReceipt)
     || next.updatedAtMs < existing.updatedAtMs
   ) {
     return INVALID_TRANSITION;

@@ -20,13 +20,27 @@ function registrySpec<TId extends RegistryActionIdV1>(id:TId,title:string,option
   return {id,title,safety:options.danger?'danger':'safe',approval:{result:options.danger?'required':'none'},
     approvalPolicy:options.confirm?{uiConfirmation:'policy'}:{},sideEffectClass:options.write?'write':'read',
     requiredAuthority:'account_automation',executionPlacement:'account',placements:[],
+    // Account-owned registries also execute on the captured Account's daemon.
+    originalExecution:{accountRoot:'allowed'},
     surfaces:{ui:true,cli:true,agent:true,mcp:true,voice:false,rpc:true},bindings:{rpcMethod:id,mcpToolName:id.replaceAll('.','_')},
-    inputSchema:inputs[id],outputSchema:outputs[id],inputHints:{fields:[]},projectObservationInput:observation,projectObservationOutput:observation,
+    inputSchema:inputs[id],outputSchema:outputs[id],inputHints:{fields:id.startsWith('registries.sources.') ? [
+      {path:'sourceId',title:'Registry',widget:'text'},
+      {path:'title',title:'Name',widget:'text'},
+      {path:'url',title:'Address',widget:'url',required:id==='registries.sources.create' || id==='registries.sources.detect'},
+      {path:'kinds',title:'Contains',widget:'multiselect',options:[
+        {value:'skill',label:'Skills'},{value:'mcpServer',label:'MCP servers'},{value:'agent',label:'Agents'},{value:'plugin',label:'Plugins'},
+      ]},
+      {path:'enabled',title:'Enabled',widget:'boolean'},
+      {path:'token',title:'Saved Secret',widget:'json'},
+      {path:'npmRegistryProfileId',title:'npm profile',widget:'text'},
+    ]:[]},projectObservationInput:observation,projectObservationOutput:observation,
+    approvalPresentation:{summary:()=>null,projectInput:raw=>inputs[id].parse(raw),retainInputOnSettlement:true},
     cli:{acceptsServerId:true,commands:[{path:id.split('.'),visibility:'canonical'}]},
   };
 }
 export const REGISTRY_ACTION_SPECS_V1=[
   {...registrySpec('registries.updates.check','Check registry updates',{write:true}),cli:{acceptsServerId:true,
+    inputSchema:inputs['registries.updates.check'],
     bindInput:(raw:unknown,ctx)=>{const value=readRecord(raw);const kind=ctx.commandPath?.[0]==='skills'?'skill':ctx.commandPath?.[0]==='mcp'?'mcpServer':ctx.commandPath?.[0]==='agents'?'agent':undefined;
       return kind?{...value,kind}:value;},commands:[
     {path:['registries','updates','check'],variadicPositional:'keys',visibility:'canonical' as const},
@@ -34,6 +48,7 @@ export const REGISTRY_ACTION_SPECS_V1=[
     {path:['mcp','servers','updates','check'],variadicPositional:'keys',visibility:'alias' as const},
     {path:['agents','updates','check'],variadicPositional:'keys',visibility:'alias' as const}]}},
   {...registrySpec('registries.sources.list','List registry sources'),cli:{acceptsServerId:true,
+    inputSchema:inputs['registries.sources.list'],
     bindInput:(raw:unknown,ctx)=>{const value=readRecord(raw);return ctx.commandPath?.[0]==='plugins'?{...value,kind:value.kind??'plugin'}:value;},
     commands:[
     {path:['registries','sources','list'],visibility:'canonical' as const},{path:['registries','list'],visibility:'alias' as const},
