@@ -2,7 +2,7 @@ import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import type { UsageHowYouWorkDetailInput } from '../usage/resolveUsageHowYouWork.js';
 import { SessionPermissionAnsweringClientCategoryV1Schema } from '../sessions/permissions/respondRpcParamsV1.js';
 import { SessionActionConfirmationsV1Schema } from '../sessions/metadata/sessionActionConfirmationsV1.js';
-import { TranscriptRawAgentRecordV1Schema } from '../sessions/messages/transcriptRawRecordV1.js';
+import { TranscriptRawAgentEventV1Schema, TranscriptRawAgentRecordV1Schema } from '../sessions/messages/transcriptRawRecordV1.js';
 import { UsageCoachModelRequestSchema, type UsagePromptComposition, type UsageCoachModelRequest } from '../usage/coach/usagePromptComposition.js';
 import type { UsageCoachCompactionFact } from '../usage/coach/coachFinding.js';
 import type { UsageMcpBindingUsage } from '../usage/coach/usageMcpBindingUsage.js';
@@ -147,6 +147,7 @@ export function projectSessionUsageWorkEvidence(
     const compactions = new Map<string, UsageCoachCompactionFact>();
     const mcpUsage = new Map<string, UsageMcpBindingUsage>();
     const phaseEvents = new Map<string, NonNullable<UsageHowYouWorkDetailInput['phaseEvents']>[number]>();
+    const storedEventSchema = createStoredReadSchema(TranscriptRawAgentEventV1Schema);
     for (const message of messages ?? []) {
         const content = message.content;
         if (content && typeof content === 'object' && !Array.isArray(content) && 'role' in content
@@ -177,24 +178,29 @@ export function projectSessionUsageWorkEvidence(
                         kind, method: 'tool_classification' });
                 }
             }
-            if (record.success && record.data.type === 'event' && record.data.data.type === 'mcp-binding-usage'
-                && record.data.data.usage.sessionId === session.id) {
-                const usage = record.data.data.usage;
+            const event = record.success && record.data.type === 'event'
+                ? { success: true as const, data: record.data.data }
+                : record.success && record.data.type === 'acp' && record.data.data.type === 'event'
+                    ? storedEventSchema.safeParse(record.data.data.data) : null;
+            if (event?.success && event.data.type === 'mcp-binding-usage'
+                && event.data.usage.sessionId === session.id) {
+                const usage = event.data.usage;
                 mcpUsage.set(usage.evidenceId, usage);
             }
-            if (record.success && record.data.type === 'event' && record.data.data.type === 'prompt-composition'
-                && record.data.data.composition.sessionId === session.id) {
-                const evidence = record.data.data.composition;
+            if (event?.success && event.data.type === 'prompt-composition'
+                && event.data.composition.sessionId === session.id) {
+                const evidence = event.data.composition;
                 composition.set(evidence.evidenceId, evidence);
             }
-            if (record.success && record.data.type === 'event' && record.data.data.type === 'context-compaction') {
-                const event = record.data.data;
+            if (event?.success && event.data.type === 'context-compaction') {
+                const compaction = event.data;
                 const observedAtMs = timestamp(message.createdAt);
-                if (event.phase === 'completed' && observedAtMs !== null
-                    && event.source !== undefined && event.source !== 'transcript-inference' && event.source !== 'user-command') {
-                    const evidenceId = JSON.stringify([session.id, event.lifecycleId ?? event.agentEventId ?? record.data.id]);
+                if (compaction.phase === 'completed' && observedAtMs !== null
+                    && compaction.source !== undefined && compaction.source !== 'transcript-inference' && compaction.source !== 'user-command') {
+                    const evidenceId = JSON.stringify([session.id, compaction.lifecycleId ?? compaction.agentEventId
+                        ?? (record.success && record.data.type === 'event' ? record.data.id : message.localId ?? message.id)]);
                     compactions.set(evidenceId, { evidenceId, observedAtMs, sessionId: session.id,
-                        turnId: event.turnId ?? null });
+                        turnId: compaction.turnId ?? null });
                 }
             }
         }
