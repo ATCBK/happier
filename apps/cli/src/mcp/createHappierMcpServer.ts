@@ -348,6 +348,11 @@ export function createHappierMcpServer(
       token: sessionCredentials?.token ?? '',
       ...(credentials ? { credentials } : {}),
       sessionId: client.sessionId,
+      invokeBoundSessionRpc: async (method, input, signal) => await sessionScopedRpc(
+        method,
+        input,
+        signal ? { signal } : undefined,
+      ),
       ...(client.enqueueSessionEventCommitted ? {
         publishWorkerReport: (report: SessionWorkerPublishInputV1) => client.enqueueSessionEventCommitted!({ type: 'worker-report', ...report }),
       } : {}),

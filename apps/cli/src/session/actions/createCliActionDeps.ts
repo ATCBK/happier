@@ -820,6 +820,8 @@ export function createCliActionDeps(params: Readonly<{
   stageSessionStateMutation?: (mutation: import('@/api/session/client/transport/mutations/sessionClientDurableMutationTypes').RegisteredSessionStateFieldMutationV1) => Promise<void>;
   publishWorkerReport?: (report: SessionWorkerPublishInputV1) => Promise<Readonly<{ persisted: boolean; localId?: string }>>;
   sessionId: string;
+  /** Exact live RPC owner for this bound Session; absent on Account/daemon action hosts. */
+  invokeBoundSessionRpc?: (method: string, input: unknown, signal?: AbortSignal) => Promise<unknown>;
   rawSession?: Readonly<{
     metadata?: unknown;
     metadataLayoutVersion?: unknown;
@@ -2548,6 +2550,32 @@ export function createCliActionDeps(params: Readonly<{
         { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' },
         { sessionId },
       );
+    }
+
+    const invokeBoundSessionRpc = params.invokeBoundSessionRpc;
+    if (sessionId === params.sessionId && invokeBoundSessionRpc) {
+      const metadata = params.getCurrentSessionMetadata?.() ?? null;
+      return await routeSessionGoalControl({
+        token: params.credentials.token,
+        credentials: params.credentials,
+        sessionId,
+        rawSession: { ...(params.rawSession ?? {}), active: true },
+        metadata,
+        currentMachineId: normalizeStringValue(params.rawSession?.machineId)
+          ?? normalizeStringValue(metadata?.machineId),
+        operation,
+        ...(operation === 'set' ? { request } : {}),
+        mode: params.mode,
+        ctx: params.ctx,
+        callLiveSessionRpc: async () => await invokeBoundSessionRpc(
+          operation === 'get'
+            ? SESSION_RPC_METHODS.SESSION_GOAL_GET
+            : operation === 'clear'
+              ? SESSION_RPC_METHODS.SESSION_GOAL_CLEAR
+              : SESSION_RPC_METHODS.SESSION_GOAL_SET,
+          request,
+        ),
+      });
     }
 
     const transport = await resolveTransportForSession(sessionId);
