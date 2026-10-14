@@ -18,6 +18,8 @@ import { GITHUB_API_VERSION } from './githubProviderContracts.js';
 
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
+const HEADER_OWNER = 'observations/githubRequestHeaders.ts';
+
 const PRODUCTION_REQUEST_OWNERS = [
   'auth/connectedAccountRuntime.ts',
   'pullRequests/restAdapter.ts',
@@ -27,10 +29,13 @@ const PRODUCTION_REQUEST_OWNERS = [
 
 describe('GitHub API version ownership', () => {
   it('sends the canonical API version from every production request owner', async () => {
+    const headerOwner = await readFile(resolve(sourceRoot, HEADER_OWNER), 'utf8');
+    expect(headerOwner).toContain("'X-GitHub-Api-Version': GITHUB_API_VERSION");
+
     for (const relativePath of PRODUCTION_REQUEST_OWNERS) {
       const source = await readFile(resolve(sourceRoot, relativePath), 'utf8');
 
-      expect(source, relativePath).toContain('GITHUB_API_VERSION');
+      expect(source, relativePath).toContain('createGithubRequestHeaders(');
       expect(source.match(/'\d{4}-\d{2}-\d{2}'/gu) ?? [], relativePath).toEqual([]);
     }
   });
