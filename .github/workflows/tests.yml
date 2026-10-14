@@ -640,7 +640,7 @@ jobs:
   gate:
     name: Gate
     if: ${{ always() && !inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')) }}
-    needs: [gate-prepare, gate-compiler, gate-unit, gate-build-artifacts, server-db-contract]
+    needs: [gate-prepare, gate-compiler, gate-unit, gate-build-artifacts, server-db-contract, installers-smoke-windows]
     runs-on: ubuntu-latest
     # Normally terminating aggregate: 6s; twice that sample rounded up.
     timeout-minutes: 1
@@ -2113,7 +2113,7 @@ jobs:
             --release-channel "${INSTALLERS_RELEASE_CHANNEL}"
 
   installers-smoke-windows:
-    if: ${{ (!(!inputs.select_jobs_explicitly && ((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')))) && (!inputs.select_jobs_explicitly || inputs.run_installers_smoke) }}
+    if: ${{ !inputs.select_jobs_explicitly || inputs.run_installers_smoke }}
     name: Installer Smoke (Windows)
     runs-on: windows-latest
     timeout-minutes: 45
@@ -2150,11 +2150,18 @@ jobs:
         with:
           args: --frozen-lockfile --ignore-engines
 
+      - name: Verify Windows scheduled task contracts
+        shell: pwsh
+        working-directory: packages/cli-common
+        run: node ../../node_modules/vitest/vitest.mjs run --config vitest.config.ts src/service/windows.test.ts
+
       - name: Prepare release validation workspaces
+        if: ${{ inputs.select_jobs_explicitly || !((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')) }}
         shell: pwsh
         run: node scripts/workspaces/ensureWorkspacePackagesBuiltCli.mjs @happier-dev/cli-common @happier-dev/release-runtime
 
       - name: Run unified installer smoke
+        if: ${{ inputs.select_jobs_explicitly || !((github.event_name == 'push' && github.ref_name == 'v0.3') || (github.event_name == 'pull_request' && github.base_ref == 'v0.3')) }}
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}

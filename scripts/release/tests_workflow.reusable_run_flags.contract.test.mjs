@@ -223,3 +223,19 @@ test('the existing Home Iroh real lane runs native, Chromium, and Docker relay j
     'the real lane must run the Machine contract test before both completion verticals',
   );
 });
+
+
+test('native Windows service tests run on ordinary source CI while installer certification keeps its release selection', async () => {
+  const workflow = YAML.parse(await readWorkflow('.github/workflows/tests.yml'));
+  const job = workflow.jobs['installers-smoke-windows'];
+  assert.equal(job.if, '${{ !inputs.select_jobs_explicitly || inputs.run_installers_smoke }}');
+  assert.ok(workflow.jobs.gate.needs.includes('installers-smoke-windows'), 'Gate must fail if the native Windows service contracts fail');
+  const nativeTests = job.steps.find((step) => step.run?.includes('src/service/windows.test.ts'));
+  assert.ok(nativeTests, 'native PowerShell tests must execute on a Windows runner');
+  assert.equal(nativeTests['working-directory'], 'packages/cli-common');
+  assert.equal(nativeTests.if, undefined);
+  for (const step of job.steps.filter((step) => ['Prepare release validation workspaces', 'Run unified installer smoke'].includes(step.name))) {
+    assert.match(step.if, /github\.base_ref == 'v0\.3'/);
+    assert.match(step.if, /inputs\.select_jobs_explicitly/);
+  }
+});
