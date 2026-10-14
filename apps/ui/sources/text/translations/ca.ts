@@ -9755,7 +9755,10 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
                 refused: 'La màquina ha rebutjat aquesta acció. Comprova els permisos de serveis locals d’aquesta màquina i torna-ho a provar.',
                 unavailable: 'Aquesta acció no està disponible per a aquest servei en aquesta màquina.',
                 incomplete: 'L’acció no ha acabat. Pots tornar-ho a provar.',
-                docker: {
+      portInUse: ({ port }: { port: number }) => `El port ${port} ja està en ús. Atura el servei existent o tria un altre port.`,
+      portInUseSameProject: ({ port }: { port: number }) => `Aquest projecte ja utilitza el port ${port}. Utilitza el servei en execució o tria un altre port.`,
+      processExit: ({ code }: { code: string }) => `El servei ha finalitzat amb el codi ${code}. Consulta els detalls abans de tornar-ho a provar.`,
+      docker: {
                   not_installed: ({ machine }: { machine: string }) => `Docker no està instal·lat a ${machine}. Instal·la’l abans d’iniciar aquest servei.`,
                   not_running: ({ machine }: { machine: string }) => `Docker no s’executa o no és accessible a ${machine}. Inicia’l i comprova la connexió.`,
                   permission_denied: ({ machine }: { machine: string }) => `Happier no té permís per utilitzar Docker a ${machine}. Demana accés al propietari de la màquina.`,

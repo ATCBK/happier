@@ -10456,7 +10456,10 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
                 refused: 'Maszyna odrzuciła tę akcję. Sprawdź uprawnienia usług lokalnych na tej maszynie i spróbuj ponownie.',
                 unavailable: 'Ta akcja jest niedostępna dla tej usługi na tej maszynie.',
                 incomplete: 'Akcja nie dobiegła końca. Możesz spróbować ponownie.',
-                docker: {
+      portInUse: ({ port }: { port: number }) => `Port ${port} jest już używany. Zatrzymaj istniejącą usługę lub wybierz inny port.`,
+      portInUseSameProject: ({ port }: { port: number }) => `Port ${port} jest już używany przez ten projekt. Użyj działającej usługi lub wybierz inny port.`,
+      processExit: ({ code }: { code: string }) => `Usługa zakończyła się z kodem ${code}. Przed ponowną próbą sprawdź szczegóły.`,
+      docker: {
                   not_installed: ({ machine }: { machine: string }) => `Docker nie jest zainstalowany na ${machine}. Zainstaluj go przed uruchomieniem tej usługi.`,
                   not_running: ({ machine }: { machine: string }) => `Docker nie działa lub jest niedostępny na ${machine}. Uruchom go i sprawdź połączenie.`,
                   permission_denied: ({ machine }: { machine: string }) => `Happier nie ma uprawnień do używania Dockera na ${machine}. Poproś właściciela maszyny o dostęp.`,
