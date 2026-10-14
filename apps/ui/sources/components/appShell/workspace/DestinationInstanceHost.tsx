@@ -26,10 +26,13 @@ export type DestinationNavigation = Pick<ReturnType<typeof useRouter>, 'push' | 
     & Partial<ReturnType<typeof useRouter>> & {
         /** Open another destination without retiring the caller's mounted draft. */
         pushRetainingCurrent?: ReturnType<typeof useRouter>['push'];
+        /** Retain this pane before acquiring work that outlives its preview. */
+        retainCurrent?: () => void;
     };
 
 type DestinationRouter = ReturnType<typeof useRouter> & {
     pushRetainingCurrent: ReturnType<typeof useRouter>['push'];
+    retainCurrent: () => void;
 };
 
 type DestinationInstanceContextValue = Readonly<{
@@ -279,6 +282,7 @@ export function useDestinationRouter(): DestinationRouter {
             prefetch: () => {},
             ...navigation,
             pushRetainingCurrent: navigation.pushRetainingCurrent ?? unsupported,
+            retainCurrent: navigation.retainCurrent ?? unsupported,
         };
     }, [instance.navigation]);
 }
@@ -287,7 +291,7 @@ function useWorkspaceOrExpoRouter() {
     const workspace = useOptionalWorkspaceNavigation();
     const router = useRouter();
     return React.useMemo(() => {
-        if (!workspace) return { ...router, pushRetainingCurrent: router.push };
+        if (!workspace) return { ...router, pushRetainingCurrent: router.push, retainCurrent: () => {} };
         const navigate: typeof router.push = (href, options) => {
             if (!workspace.openHref(resolveHref(href))) router.push(href, options);
         };
@@ -301,7 +305,14 @@ function useWorkspaceOrExpoRouter() {
             if (!navigation.pushRetainingCurrent) throw new Error('The workspace navigation owner did not supply draft retention');
             navigation.pushRetainingCurrent(href, options);
         };
-        return { ...router, push: navigate, navigate, replace, pushRetainingCurrent,
+        const retainCurrent = () => {
+            if (!workspace.active) return;
+            const group = workspace.state.groups[workspace.state.focusedGroupId];
+            const navigation = workspace.navigationForTab(group.activeTabId);
+            if (!navigation.retainCurrent) throw new Error('The workspace navigation owner did not supply pane retention');
+            navigation.retainCurrent();
+        };
+        return { ...router, push: navigate, navigate, replace, pushRetainingCurrent, retainCurrent,
             back: workspace.active ? workspace.back : router.back,
             canGoBack: workspace.active ? () => workspace.canGoBack : router.canGoBack };
     }, [router, workspace]);

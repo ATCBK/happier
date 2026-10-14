@@ -377,7 +377,12 @@ export function WorkspaceProvider(props: Readonly<{
                 runUiNavigation(() => replace ? latest.current.router.replace(href) : latest.current.router.push(href));
             }
         };
+        const retainCurrent = () => {
+            if (!isCurrentUiOwner() || !latest.current.owner.getState().tabs[tabId]?.preview) return;
+            runtime.adapter.dispatch({ type: 'promoteTab', tabId });
+        };
         const navigation: DestinationNavigation = {
+            retainCurrent,
             push: (href) => navigate(href, false),
             pushRetainingCurrent: (href) => {
                 if (!isCurrentUiOwner()) return;
@@ -388,7 +393,7 @@ export function WorkspaceProvider(props: Readonly<{
                 if (!group) return;
                 // No departure guard: the editor keeps its identity, local state and dirty baseline.
                 // Promotion prevents a later preview open from retiring that retained draft.
-                runtime.adapter.dispatch({ type: 'promoteTab', tabId });
+                retainCurrent();
                 runtime.adapter.openHref(resolved, { mode: 'newTab', groupId: group.id });
             },
             replace: (href) => navigate(href, true),

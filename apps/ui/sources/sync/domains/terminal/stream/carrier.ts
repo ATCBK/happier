@@ -5,6 +5,10 @@ import Constants from 'expo-constants';
 import uiPackage from '../../../../../package.json';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { TerminalStreamReadResponseSchema } from '@happier-dev/protocol/terminal/stream';
+import { TerminalStreamInputResponseSchema } from '@happier-dev/protocol/terminal/input';
+import type { FrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import {
     machineTerminalInput,
@@ -182,6 +186,28 @@ export function createMachineRpcTerminalStreamCarrier(
     options: MachineTerminalStreamCarrierOptions,
 ): TerminalStreamCarrier {
     const rpcOptions = { serverId: options.serverId, accountId: options.accountId, timeoutMs: options.timeoutMs };
+    // Admission supplies this Account binding. The Action owner selects own
+    // Machine RPC or the signed requester carrier; the stream never guesses
+    // custody or borrows the custodian's private Project/Session catalog.
+    const accountBound = Boolean(options.accountId);
+    let execute: FrontDoorActionExecute | null = null;
+    const executeStreamAction = async (actionId: 'machines.terminal.read' | 'machines.terminal.write', input: unknown) => {
+        if (!options.accountId || !options.serverId) throw Object.assign(new Error('terminal_access_denied'), { code: 'terminal_access_denied' });
+        if (!execute) {
+            const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+            execute ??= createFrontDoorActionExecute();
+        }
+        const response = await execute(actionId, input, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+            serverId: options.serverId, expectedAccountId: options.accountId });
+        if (!response.ok) throw Object.assign(new Error(response.error), { code: response.errorCode ?? response.error });
+        const approval = ActionApprovalRequestCreatedResultSchema.safeParse(response.result);
+        if (approval.success) throw new TerminalStreamInputError(approval.data.kind);
+        return response.result;
+    };
+    const readMachineBytes = async (request: Parameters<typeof machineTerminalStreamReadBytes>[1]) => accountBound
+        ? TerminalStreamReadResponseSchema.parse(await executeStreamAction('machines.terminal.read', {
+            ...request, serverId: options.serverId, machineId: options.machineId,
+        })) : machineTerminalStreamReadBytes(options.machineId, request, rpcOptions);
     let inputSendTail: Promise<void> = Promise.resolve();
     let controlCursorTerminalId: string | null = null;
     let controlCursor = 0;
@@ -238,7 +264,10 @@ export function createMachineRpcTerminalStreamCarrier(
         const protocolEvent = toProtocolTerminalInputEvent(event);
         let response: Awaited<ReturnType<typeof machineTerminalStreamSendInput>> | null;
         try {
-            response = await machineTerminalStreamSendInput(
+            response = accountBound
+                ? TerminalStreamInputResponseSchema.parse(await executeStreamAction('machines.terminal.write', {
+                    serverId: options.serverId, machineId: options.machineId, terminalId, event: protocolEvent,
+                })) : await machineTerminalStreamSendInput(
                 options.machineId,
                 {
                     terminalId,
@@ -285,20 +314,18 @@ export function createMachineRpcTerminalStreamCarrier(
                 controlCursorTerminalId = request.terminalId;
                 controlCursor = 0;
             }
-            const readBytes = (includeControlCursor: boolean) => machineTerminalStreamReadBytes(
-                options.machineId,
+            const readBytes = (includeControlCursor: boolean) => readMachineBytes(
                 {
                     terminalId: request.terminalId,
                     byteOffset: request.cursor.value,
                     ...(includeControlCursor ? { controlCursor } : {}),
-                    ackedByteOffset: request.ackedByteOffset,
-                    creditBytes: request.creditBytes,
-                    maxBytes: request.maxBytes,
-                    maxFrames: request.maxFrames,
-                    rendererId: request.rendererId,
-                    surfaceEpoch: request.surfaceEpoch,
+                    ...(request.ackedByteOffset === undefined ? {} : { ackedByteOffset: request.ackedByteOffset }),
+                    ...(request.creditBytes === undefined ? {} : { creditBytes: request.creditBytes }),
+                    ...(request.maxBytes === undefined ? {} : { maxBytes: request.maxBytes }),
+                    ...(request.maxFrames === undefined ? {} : { maxFrames: request.maxFrames }),
+                    ...(request.rendererId === undefined ? {} : { rendererId: request.rendererId }),
+                    ...(request.surfaceEpoch === undefined ? {} : { surfaceEpoch: request.surfaceEpoch }),
                 },
-                rpcOptions,
             );
             try {
                 response = await readBytes(controlCursorCapability !== 'predecessor');
@@ -332,6 +359,14 @@ export function createMachineRpcTerminalStreamCarrier(
             return mapTerminalByteStreamReadResponse(response);
         },
         acknowledge: async (ack: TerminalRendererAck) => {
+            if (accountBound) {
+                // The canonical read request already applies renderer credit.
+                // Its returned frames do not advance this carrier's cursor;
+                // the next read still delivers every unconsumed byte/control.
+                const response = await readMachineBytes({ ...ack, byteOffset: ack.ackedByteOffset });
+                if (!response.ok) throw new TerminalStreamCarrierError('acknowledge', response.code, response.message);
+                return;
+            }
             const response = await machineTerminalStreamAcknowledge(
                 options.machineId,
                 {
