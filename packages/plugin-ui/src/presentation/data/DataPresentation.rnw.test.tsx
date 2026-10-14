@@ -138,6 +138,20 @@ describe('public data nodes through React Native Web', () => {
     }
   });
 
+  it('draws one series in one ink: the public chart has no "latest" bucket to single out', () => {
+    const context = createSurfaceContext();
+    const mount = mountThroughReactNativeWeb(
+      <HappierDataChart testID="orders" theme={context.theme} label="Orders" style="bar" points={[{ x: 'Mon', y: 17 }, { x: 'Tue', y: 23 }]} />,
+    );
+    try {
+      const bars = [...mount.container.querySelectorAll<HTMLElement>('[data-testid^="orders-bar-"]')];
+      expect(bars).toHaveLength(2);
+      expect(new Set(bars.map(bar => `${bar.style.backgroundColor}|${bar.style.opacity}`)).size).toBe(1);
+    } finally {
+      mount.unmount();
+    }
+  });
+
   it('keeps the metric node identity when its value changes', async () => {
     const context = createSurfaceContext();
     const element = (value: number) => (

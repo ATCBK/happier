@@ -1,4 +1,5 @@
 import { HAPPIER_RADIUS_V1 } from '../../environment/radius.js';
+import type { HappierCollectionLayoutMode } from '../collection/collectionLayout.js';
 
 /**
  * Geometry of the configuration-page anatomy, for Happier core and plugin pages.
@@ -13,6 +14,8 @@ import { HAPPIER_RADIUS_V1 } from '../../environment/radius.js';
  */
 export const HAPPIER_PAGE_METRICS = Object.freeze({
   columnMaxWidthPx: Object.freeze({ reading: 704, wide: 944 }),
+  /** Centred task dialogs: narrow confirmation, standard task, and a wider form. */
+  dialogWidthPx: Object.freeze({ narrow: 360, default: 464, wide: 560 }),
   /** Inside a card or a free-standing group: the row inset, so a card's text lines up with a sheet's rows. */
   cardPaddingPx: 16,
   /** Between cards or tiles in a grid. */
@@ -146,15 +149,19 @@ export function resolveHappierPageBackPlacement(input: Readonly<{
 
 /**
  * Whether a header still measuring its pane reserves the line above its title. A detail beside a
- * collection's list is narrow by construction and almost always lands there, so it reserves the line
- * and never grows when the measurement arrives; any other page assumes the gutter, where wide panes land.
+ * collection's list is narrow by construction and almost always lands there, so where the split has
+ * not published the detail's width it reserves the line and never grows when the measurement arrives.
+ * Where the width is known the placement is decided from it on the first paint, so nothing is reserved
+ * that a wide window then takes back; any other page assumes the gutter, where wide panes land.
  */
 export function resolveHappierPageBackMeasuringLine(input: Readonly<{
   /** Whether a back control will render; a page whose back is hidden reserves nothing. */
   backShown: boolean;
-  collectionMode: 'measuring' | 'split' | 'stacked' | null;
+  collectionMode: HappierCollectionLayoutMode | null;
+  /** The split's published detail width, when it knows it. */
+  detailWidthPx: number | null;
 }>): boolean {
-  return input.backShown && input.collectionMode === 'split';
+  return input.backShown && input.collectionMode === 'split' && input.detailWidthPx === null;
 }
 
 /**

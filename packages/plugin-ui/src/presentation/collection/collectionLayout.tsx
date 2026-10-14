@@ -40,6 +40,21 @@ export function resolveHappierCollectionLayoutState(
 }
 
 /**
+ * The detail pane's width in a `split` whose own pane holds the detail, so a page inside it decides what
+ * depends on its own width (where its back control goes) on the first paint, not after its own
+ * measurement. It is a context of its own: a resize that keeps the mode re-renders only its readers,
+ * never the layout mode's.
+ *
+ * @internal Provided only by the split geometry owners (`HappierListDetailLayout`, `Collection`).
+ */
+export const HappierCollectionDetailWidthContext = createContext<number | null>(null);
+
+/** @internal */
+export function useHappierCollectionDetailWidth(): number | null {
+  return useContext(HappierCollectionDetailWidthContext);
+}
+
+/**
  * The Collection's layout, or `null` outside a Collection (a page rendered on its own route, not as a
  * Collection's detail).
  */

@@ -186,7 +186,7 @@ export function pluginUiResourceReferenceKey(
 }
 
 /** The author-readable name of a Resource; the entry key is a NUL-joined map key. */
-function resourceLabel(reference: PluginUiResourceReference): string {
+export function pluginUiResourceReferenceLabel(reference: PluginUiResourceReference): string {
   return typeof reference === 'string'
     ? reference
     : 'hostRead' in reference ? reference.hostRead : `${reference.pluginId}/${reference.localId}`;
@@ -530,7 +530,7 @@ export function createPluginUiResourceStore(input: Readonly<{
           // the one fact only this entry knows.
           reportDiagnostic({
             ...admission.refusal,
-            details: { ...admission.refusal.details, resource: resourceLabel(entry.resource) },
+            details: { ...admission.refusal.details, resource: pluginUiResourceReferenceLabel(entry.resource) },
           });
         }
       }

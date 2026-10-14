@@ -362,7 +362,7 @@ const renderDeclarativeData: DeclarativeNodeRenderer = (value, context) => {
                     entry.points.push({ id: JSON.stringify(x), x, y: Number(readPluginDeclarativeDataFieldV1(row, node.value)) });
                 }
                 return <StackedSeriesChart key={key} testID={testID} theme={theme} label={context.localize(node.label)} variant={node.style}
-                    size="full" viewportHeight={context.widgetPresentation?.geometry?.height} series={[...series.values()]} />;
+                    size="full" barEmphasis="none" viewportHeight={context.widgetPresentation?.geometry?.height} series={[...series.values()]} />;
             }
             return <HappierDataChart key={key} testID={testID} theme={theme} label={context.localize(node.label)} style={node.style}
                 viewportHeight={context.widgetPresentation?.geometry?.height}

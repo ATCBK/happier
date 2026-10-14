@@ -59,6 +59,7 @@ export {
   createPluginUiHostApiResourceClient,
   createPluginUiResourceStore,
   pluginUiResourceReferenceKey,
+  pluginUiResourceReferenceLabel,
   isPluginUiResourceReadAuthorityLost,
   type PluginUiResourceAccountLifetime,
   type PluginUiResourceClient,

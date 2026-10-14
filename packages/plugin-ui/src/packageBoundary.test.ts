@@ -293,7 +293,7 @@ describe('author package boundary', () => {
     expect(packageJson.scripts?.['test:local']).toContain('test:external-authoring');
   });
 
-  it('keeps declared barrels thin and the framework-free type-scale export at its canonical leaf', () => {
+  it('keeps declared barrels thin and framework-free scale and geometry exports at their canonical leaves', () => {
     const packageRoot = resolve(new URL('.', import.meta.url).pathname, '..');
     const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as {
       exports: Record<string, Readonly<{ 'happier-source': string; types: string; default: string }>>;
@@ -309,6 +309,22 @@ describe('author package boundary', () => {
         });
         const source = readFileSync(join(packageRoot, packageJson.exports[specifier]['happier-source']), 'utf8');
         expect(importedSpecifiers(source)).toEqual([]);
+        continue;
+      }
+      if (specifier === './presentation/pageMetrics') {
+        expect(packageJson.exports[specifier]).toEqual({
+          'happier-source': './src/presentation/layout/pageMetrics.ts',
+          types: './dist/presentation/layout/pageMetrics.d.ts',
+          default: './dist/presentation/layout/pageMetrics.js',
+        });
+        const source = readFileSync(join(packageRoot, packageJson.exports[specifier]['happier-source']), 'utf8');
+        const syntax = ts.createSourceFile('pageMetrics.ts', source, ts.ScriptTarget.Latest, true);
+        const runtimeImports = syntax.statements
+          .filter((statement): statement is ts.ImportDeclaration => ts.isImportDeclaration(statement)
+            && !statement.importClause?.isTypeOnly && ts.isStringLiteral(statement.moduleSpecifier))
+          .map(statement => (statement.moduleSpecifier as ts.StringLiteral).text);
+        expect(runtimeImports).toEqual(['../../environment/radius.js']);
+        expect(importedSpecifiers(readFileSync(join(packageRoot, 'src/environment/radius.ts'), 'utf8'))).toEqual([]);
         continue;
       }
       const directory = specifier === '.' ? '' : specifier.slice(2);

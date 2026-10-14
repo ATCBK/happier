@@ -1,5 +1,6 @@
 export type HappierListDetailLayoutState =
-  | Readonly<{ mode: 'split'; listRatio: number }>
+  /** `detailWidthPx` is the detail pane's width, known as soon as the split is, for what renders inside it. */
+  | Readonly<{ mode: 'split'; listRatio: number; detailWidthPx: number }>
   | Readonly<{ mode: 'stacked' }>;
 
 /** Pane minima and the ratio preference belong to the content's owner. */
@@ -16,11 +17,9 @@ export function resolveHappierListDetailGeometry(input: Readonly<{
     return { mode: 'stacked' };
   }
 
-  return {
-    mode: 'split',
-    listRatio: Math.min(
-      Math.max(input.preferredListRatio, input.minListWidth / paneWidth),
-      1 - input.minDetailWidth / paneWidth,
-    ),
-  };
+  const listWidth = Math.min(
+    Math.max(input.preferredListRatio * paneWidth, input.minListWidth),
+    paneWidth - input.minDetailWidth,
+  );
+  return { mode: 'split', listRatio: listWidth / paneWidth, detailWidthPx: paneWidth - listWidth };
 }

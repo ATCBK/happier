@@ -56,19 +56,24 @@ describe('resolveHappierPageBackPlacement', () => {
 });
 
 describe('resolveHappierPageBackMeasuringLine', () => {
-  it('reserves the line above the title while measuring a detail beside a collection list', () => {
+  it('reserves the line above the title while measuring a detail beside a list of unknown width', () => {
     // Beside a list the pane is narrow by construction: reserve the line, so the header never grows.
-    expect(resolveHappierPageBackMeasuringLine({ backShown: true, collectionMode: 'split' })).toBe(true);
+    expect(resolveHappierPageBackMeasuringLine({ backShown: true, collectionMode: 'split', detailWidthPx: null })).toBe(true);
+  });
+
+  it('reserves nothing when the split already published the detail pane width: placement is decided from it', () => {
+    // A wide window would reserve the line and then drop it one frame later, shifting the header up.
+    expect(resolveHappierPageBackMeasuringLine({ backShown: true, collectionMode: 'split', detailWidthPx: 2200 })).toBe(false);
   });
 
   it('keeps the gutter assumption on a page that is not beside a list', () => {
-    expect(resolveHappierPageBackMeasuringLine({ backShown: true, collectionMode: null })).toBe(false);
-    expect(resolveHappierPageBackMeasuringLine({ backShown: true, collectionMode: 'stacked' })).toBe(false);
-    expect(resolveHappierPageBackMeasuringLine({ backShown: true, collectionMode: 'measuring' })).toBe(false);
+    expect(resolveHappierPageBackMeasuringLine({ backShown: true, collectionMode: null, detailWidthPx: null })).toBe(false);
+    expect(resolveHappierPageBackMeasuringLine({ backShown: true, collectionMode: 'stacked', detailWidthPx: null })).toBe(false);
+    expect(resolveHappierPageBackMeasuringLine({ backShown: true, collectionMode: 'measuring', detailWidthPx: null })).toBe(false);
   });
 
   it('reserves nothing for a page whose back is hidden (a collection-root detail beside its list)', () => {
-    expect(resolveHappierPageBackMeasuringLine({ backShown: false, collectionMode: 'split' })).toBe(false);
+    expect(resolveHappierPageBackMeasuringLine({ backShown: false, collectionMode: 'split', detailWidthPx: null })).toBe(false);
   });
 });
 

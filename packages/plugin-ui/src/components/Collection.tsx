@@ -31,7 +31,7 @@ import { PluginUiIconGlyph, type IconName } from './Icon.js';
 import { HAPPIER_TONE_COLOR_TOKEN, type HappierTone } from '../presentation/semantics.js';
 import type { HappierTypeRole } from '../environment/types.js';
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
-import { HappierCollectionLayoutContext, resolveHappierCollectionLayoutState } from '../presentation/collection/collectionLayout.js';
+import { HappierCollectionDetailWidthContext, HappierCollectionLayoutContext, resolveHappierCollectionLayoutState } from '../presentation/collection/collectionLayout.js';
 import { HappierCollectionTableRowContext, HappierCollectionTreeRowContext, type HappierCollectionTreeRowFacts } from '../presentation/collection/CollectionList.js';
 import {
   HAPPIER_COLLECTION_INSTANT_MOTION,
@@ -1408,6 +1408,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   const layoutMode = resolveHappierCollectionLayoutState(geometry).mode;
   const publishedComposition: HappierCollectionComposition = rowGeometry === 'table' ? 'table' : composition === 'table' ? 'list' : composition;
   const layoutState = useMemo(() => ({ mode: layoutMode, composition: publishedComposition }), [layoutMode, publishedComposition]);
+
   const wrapTitles = composition === 'list' && transition === null && !besideDetail;
   // Peeks exist in the resting table; while the table fades out (reduced motion) they stay and fade with it.
   const expandable = rowGeometry === 'table'
@@ -2045,7 +2046,9 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
                 detailVisible ? null : hiddenStyle,
               ]}
             >
-              {pane ? null : detailNode}
+              <HappierCollectionDetailWidthContext.Provider value={composition === 'split' && !overlayDetail && geometry?.mode === 'split' ? geometry.detailWidthPx : null}>
+                {pane ? null : detailNode}
+              </HappierCollectionDetailWidthContext.Provider>
             </driver.AnimatedView>
           </driver.AnimatedView>
         </View>
