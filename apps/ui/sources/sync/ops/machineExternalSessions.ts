@@ -103,6 +103,8 @@ async function callExternalSessionMachineRpc<Request, Response>(params: Readonly
     accountId?: string;
     routeTarget?: ReplacementAwareMachineRpcTarget | null;
     onIssued?: () => void;
+    preparePayload?: (payload: Request, remainingTimeoutMs: number) => Request;
+    operationTimeoutMs?: null;
 }>): Promise<Response> {
     const payload = params.requestSchema.parse(params.input);
     const routeTarget = params.routeTarget === undefined
@@ -125,6 +127,8 @@ async function callExternalSessionMachineRpc<Request, Response>(params: Readonly
             ...(params.opts?.signal ? { signal: params.opts.signal } : {}),
             method: params.method,
             payload,
+            ...(params.preparePayload ? { preparePayload: (budgetMs: number) => params.preparePayload!(payload, budgetMs) } : {}),
+            ...(params.operationTimeoutMs === null ? { operationTimeoutMs: null } : {}),
         });
     } catch (error) {
         // cli-v0.2.1 and cli-v0.2.2-preview.1775586717.26498 expose only
@@ -281,15 +285,25 @@ export async function machineExternalSessionsCandidatesList(
     input: ExternalSessionsCandidatesListRequest,
     opts?: MachineExternalSessionsOpts,
 ): Promise<ExternalSessionsCandidatesListResponse> {
+    const { budgetMs: _budgetMs, ...releasedInput } = input;
     return callExternalSessionMachineRpc({
         machineId: input.machineId,
         method: RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST,
         input,
         requestSchema: ExternalSessionsCandidatesListRequestSchema,
         responseSchema: ExternalSessionsCandidatesListResponseSchema,
+        ...(input.searchTarget === 'content' ? {
+            // The remaining budget bounds scanning. Cancellation owns the
+            // terminal wait so useful pages survive transit and finalization.
+            preparePayload: (payload: ExternalSessionsCandidatesListRequest, budgetMs: number) => ({
+                ...payload,
+                budgetMs: Math.min(payload.budgetMs ?? budgetMs, budgetMs),
+            }),
+            operationTimeoutMs: null,
+        } : {}),
         legacy: {
             method: RPC_METHODS.DAEMON_DIRECT_SESSIONS_CANDIDATES_LIST_LEGACY,
-            input: mapCanonicalAgentIdentityToReleasedProviderIdentity(input),
+            input: mapCanonicalAgentIdentityToReleasedProviderIdentity(releasedInput),
             beforeCall: () => assertReleasedDaemonAcceptsCandidateCursor(input),
             fallbackOnRelayMethodUnavailable: true,
         },
