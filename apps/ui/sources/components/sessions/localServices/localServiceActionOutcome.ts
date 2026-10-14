@@ -107,9 +107,34 @@ export function readLocalServiceActionOutcome(result: unknown): LocalServiceActi
 }
 
 /**
- * Show the failure. Title comes from the caller because only the caller knows which service and
- * which verb; the body comes from the canonical reason-code mapper, with the typed cause in
- * a deliberate Details action. Private transport messages are never displayed.
+ * The words of a failure, drawn once for the dialog and the inline notice: a person-facing `body`
+ * first, and `details` for support (the exit, the last output line, then the code). `refusal` marks a
+ * failure that needs the person (a port, Docker, a permission) rather than a process that died.
+ */
+export function describeLocalServiceActionFailure(input: Readonly<{
+    reasonCode: string | null;
+    prerequisite?: LocalServiceNativePrerequisiteV1;
+    establishmentFailure?: LocalServiceEstablishmentFailureV1;
+}>): Readonly<{ body: string; details: readonly string[]; refusal: boolean }> {
+    const copy = resolveReasonCopy({ reasonCode: input.reasonCode, kind: 'localServiceAction', prerequisite: input.prerequisite,
+        establishmentFailure: input.establishmentFailure });
+    const failure = input.establishmentFailure;
+    return {
+        body: copy.body,
+        details: [
+            ...(failure?.exitCode !== undefined ? [t('localServices.actions.failure.exitCode', { code: String(failure.exitCode) })] : []),
+            ...(failure?.signal ? [failure.signal] : []),
+            ...(failure?.lastStderrLine ? [failure.lastStderrLine] : []),
+            ...(input.reasonCode ? [input.reasonCode] : []),
+        ],
+        refusal: input.prerequisite !== undefined || failure?.cause === 'port_in_use' || failure === undefined,
+    };
+}
+
+/**
+ * Show the failure in a dialog. Title comes from the caller because only the caller knows which
+ * service and which verb; the body comes from the canonical reason-code mapper, with the typed cause
+ * in a deliberate Details action. Private transport messages are never displayed.
  */
 export function presentLocalServiceActionFailure(input: Readonly<{
     title: string;
@@ -117,23 +142,31 @@ export function presentLocalServiceActionFailure(input: Readonly<{
     prerequisite?: LocalServiceNativePrerequisiteV1;
     establishmentFailure?: LocalServiceEstablishmentFailureV1;
 }>): void {
-    const copy = resolveReasonCopy({ reasonCode: input.reasonCode, kind: 'localServiceAction', prerequisite: input.prerequisite,
-        establishmentFailure: input.establishmentFailure });
-    const reasonCode = input.reasonCode;
-    Modal.alert(input.title, copy.body, reasonCode ? [
+    const { body, details } = describeLocalServiceActionFailure(input);
+    Modal.alert(input.title, body, details.length > 0 ? [
         { text: t('common.ok'), style: 'cancel' },
-        { text: t('common.details'), onPress: () => {
-            const failure = input.establishmentFailure;
-            const details = [copy.body,
-                ...(failure?.cause === 'port_in_use' && failure.exitCode !== undefined
-                    ? [t('localServices.actions.failure.processExit', { code: String(failure.exitCode) })] : []),
-                ...(failure?.signal ? [failure.signal] : []),
-                ...(failure?.lastStderrLine ? [failure.lastStderrLine] : []),
-            ].join('\n');
-            Modal.alert(input.title, t('errors.errorWithCode', { message: details, code: reasonCode }));
-        } },
+        { text: t('common.details'), onPress: () => Modal.alert(input.title, details.join('\n')) },
     ] : undefined);
 }
+
+/** A failed run kept for the owner to draw in place (see `LocalServiceActionFailureNotice`). */
+export type LocalServiceActionFailure = Readonly<{
+    title: string;
+    reasonCode: string | null;
+    body: string;
+    details: readonly string[];
+    refusal: boolean;
+    prerequisite?: LocalServiceNativePrerequisiteV1;
+    establishmentFailure?: LocalServiceEstablishmentFailureV1;
+    /** Runs the same action again. */
+    retry: () => void;
+}>;
+
+type LocalServiceActionRunInput = Readonly<{
+    id: string;
+    failureTitle: string;
+    action: () => Promise<unknown>;
+}>;
 
 export type LocalServiceActionRunner = Readonly<{
     /** The row currently awaiting a dispatch, so exactly one row shows the in-flight treatment. */
@@ -142,11 +175,10 @@ export type LocalServiceActionRunner = Readonly<{
      * Dispatch one action and own its whole visible outcome. Resolves `true` when the action
      * succeeded, so a caller can chain its own success affordance (a `CopiedPill`, a reveal).
      */
-    run: (input: Readonly<{
-        id: string;
-        failureTitle: string;
-        action: () => Promise<unknown>;
-    }>) => Promise<boolean>;
+    run: (input: LocalServiceActionRunInput) => Promise<boolean>;
+    /** `inline` runners keep the latest refusal here, until the next run or `dismissFailure`. */
+    failure: LocalServiceActionFailure | null;
+    dismissFailure: () => void;
 }>;
 
 /**
@@ -154,9 +186,14 @@ export type LocalServiceActionRunner = Readonly<{
  *
  * `pendingId` is a single id rather than a set: these actions all mutate the same machine and the
  * surface never dispatches two at once, so a set would model a state that cannot happen.
+ *
+ * A failure opens a dialog, unless the owner has a place to read it in (`presentation: 'inline'`, a
+ * row): then the runner keeps it as `failure` and the owner draws it where the action was taken.
  */
-export function useLocalServiceActionRunner(): LocalServiceActionRunner {
+export function useLocalServiceActionRunner(options?: Readonly<{ presentation?: 'dialog' | 'inline' }>): LocalServiceActionRunner {
+    const inline = options?.presentation === 'inline';
     const [pendingId, setPendingId] = React.useState<string | null>(null);
+    const [failure, setFailure] = React.useState<LocalServiceActionFailure | null>(null);
     const mountedRef = React.useRef(true);
     // Re-arm on mount, not only disarm on cleanup. React replays effects in development, so a
     // guard that is only ever set to `false` never recovers — and the row it belongs to would
@@ -166,12 +203,9 @@ export function useLocalServiceActionRunner(): LocalServiceActionRunner {
         return () => { mountedRef.current = false; };
     }, []);
 
-    const run = React.useCallback(async (input: Readonly<{
-        id: string;
-        failureTitle: string;
-        action: () => Promise<unknown>;
-    }>): Promise<boolean> => {
+    const run = React.useCallback(async (input: LocalServiceActionRunInput): Promise<boolean> => {
         setPendingId(input.id);
+        if (inline) setFailure(null);
         let outcome: LocalServiceActionOutcome;
         try {
             outcome = readLocalServiceActionOutcome(await input.action());
@@ -183,16 +217,21 @@ export function useLocalServiceActionRunner(): LocalServiceActionRunner {
             }
         }
         if (outcome.kind === 'failed') {
-            presentLocalServiceActionFailure({
-                title: input.failureTitle,
+            const cause = {
                 reasonCode: outcome.reasonCode,
                 ...(outcome.prerequisite ? { prerequisite: outcome.prerequisite } : {}),
                 ...(outcome.establishmentFailure ? { establishmentFailure: outcome.establishmentFailure } : {}),
-            });
+            };
+            if (!inline) presentLocalServiceActionFailure({ title: input.failureTitle, ...cause });
+            else if (mountedRef.current) {
+                setFailure({ title: input.failureTitle, ...describeLocalServiceActionFailure(cause), ...cause,
+                    retry: () => { void run(input); } });
+            }
             return false;
         }
         return outcome.kind === 'succeeded';
-    }, []);
+    }, [inline]);
 
-    return { pendingId, run };
+    const dismissFailure = React.useCallback(() => setFailure(null), []);
+    return { pendingId, run, failure, dismissFailure };
 }

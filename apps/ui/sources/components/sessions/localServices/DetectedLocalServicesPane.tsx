@@ -28,6 +28,7 @@ import type { LocalServiceInventoryState } from '@/sync/domains/local/services/i
 import {
     createLocalServiceLauncherState,
     selectLocalServiceLaunchTargets,
+    type LocalServiceLaunchTarget,
     type LocalServiceLauncherState,
 } from '@/sync/domains/local/services/launch';
 import { readLocalServiceDiagnostics } from '@/sync/domains/local/services/presentation';
@@ -35,6 +36,7 @@ import {
     buildLocalServiceRows,
     groupLocalServiceRowsBySection,
     selectLocalServiceRunningCount,
+    selectRunningOpenTargetOnPort,
     type ServiceRow,
     type ServiceRowSection,
 } from '@/sync/domains/local/services/serviceRow';
@@ -372,6 +374,10 @@ export function DetectedLocalServicesPane(props: Readonly<{
     );
 
     const sections = React.useMemo(() => groupLocalServiceRowsBySection(rows), [rows]);
+    const findRunningOpenTarget = React.useCallback(
+        (port: number, failedTarget: LocalServiceLaunchTarget) => selectRunningOpenTargetOnPort(rows, port, failedTarget),
+        [rows],
+    );
     const runningCount = React.useMemo(() => selectLocalServiceRunningCount(rows), [rows]);
     const machineName = props.machine?.name ?? null;
     // Only a machine we know about and cannot reach is offline; an unknown one (a shared Session)
@@ -451,6 +457,7 @@ export function DetectedLocalServicesPane(props: Readonly<{
             row={row}
             onOpenServiceInBrowser={props.onOpenServiceInBrowser}
             onStartLauncherTarget={props.onStartLauncherTarget}
+            findRunningOpenTarget={findRunningOpenTarget}
             onTerminateDetectedService={props.onTerminateDetectedService}
             onForgetDetectedService={props.onForgetDetectedService}
             onStopManagedService={props.onStopManagedService}
@@ -482,6 +489,7 @@ export function DetectedLocalServicesPane(props: Readonly<{
     ), [
         animationEnabled,
         expandedId,
+        findRunningOpenTarget,
         props.sourceMachineId,
         props.serverId,
         props.machine,
@@ -682,6 +690,7 @@ export function DetectedLocalServicesPane(props: Readonly<{
                         presentation="detail"
                         onOpenServiceInBrowser={props.onOpenServiceInBrowser}
                         onStartLauncherTarget={props.onStartLauncherTarget}
+                        findRunningOpenTarget={findRunningOpenTarget}
                         onTerminateDetectedService={props.onTerminateDetectedService}
                         onForgetDetectedService={props.onForgetDetectedService}
                         onStopManagedService={props.onStopManagedService}

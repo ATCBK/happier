@@ -109,11 +109,14 @@ const openableTarget = {
 
 describe('DetectedLocalServicesPane', () => {
     it('uses the actual worker Machine for row facts and Last known independently of the Source', async () => {
+        const { createPlainArtifactHomeFixture } = await import('@/dev/testkit/harness/artifactStoreBoundary');
+        const home = await createPlainArtifactHomeFixture('https://worker-services-presence.test');
+        const serverId = home.home.id;
         const { storage } = await import('@/sync/domains/state/storageStore');
         const previous = storage.getState();
         const source = createMachineFixture({ id: 'machine-a', active: false, activeAt: 0 });
         const worker = createMachineFixture({ id: 'worker', activeAt: Date.now(), metadata: { ...source.metadata!, displayName: 'Build worker' } });
-        storage.setState({ machines: { 'machine-a': source, worker }, machineListByServerId: { home: [source, worker] } });
+        storage.setState({ machines: { 'machine-a': source, worker }, machineListByServerId: { [serverId]: [source, worker] } });
         const target = { id: 'worker-jobs', source: 'managed_service' as const,
             sourceClass: { kind: 'managed_service' as const, managedServiceId: 'worker-jobs' },
             machineId: 'worker', title: 'Jobs', confidence: 'high' as const, state: 'available' as const,
@@ -122,17 +125,17 @@ describe('DetectedLocalServicesPane', () => {
             const screen = await renderScreen(<DetectedLocalServicesPane
                 inventoryState={buildLocalServiceInventoryState({ rows: [] })}
                 launcherState={launcherStateWith([target])} machine={MACBOOK_OFFLINE}
-                sourceMachineId="machine-a" serverId="home" renderServicePlacement={() => <PlacementProbe />}
+                sourceMachineId="machine-a" serverId={serverId} renderServicePlacement={() => <PlacementProbe />}
                 testID="worker-pane" />);
             expect(collectText(screen.findByTestId('worker-pane-row:worker-jobs')!)).toContain('on Build worker');
             expect(collectText(screen.findByTestId('worker-pane-row:worker-jobs')!)).not.toContain('Last known');
             await act(async () => {
                 const offlineWorker = { ...worker, active: false, activeAt: 0 };
-                storage.setState({ machines: { 'machine-a': source, worker: offlineWorker }, machineListByServerId: { home: [source, offlineWorker] } });
+                storage.setState({ machines: { 'machine-a': source, worker: offlineWorker }, machineListByServerId: { [serverId]: [source, offlineWorker] } });
             });
-            expect(collectText(screen.findByTestId('worker-pane-row:worker-jobs')!)).toContain('Last known');
+            await vi.waitFor(() => expect(collectText(screen.findByTestId('worker-pane-row:worker-jobs')!)).toContain('Last known'));
             await screen.unmount();
-        } finally { storage.setState(previous); }
+        } finally { storage.setState(previous); await home.dispose(); }
     });
 
     it('observes worker public policy and create/revoke snapshots without inheriting Source exposures', async () => {

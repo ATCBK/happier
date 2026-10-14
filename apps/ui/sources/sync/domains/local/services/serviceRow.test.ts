@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { LocalServiceLaunchTargetV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 
 import type { LocalServiceInventoryRow } from '@/sync/domains/local/services/inventory/store';
 import type { LocalServiceLaunchTarget } from '@/sync/domains/local/services/launch';
 
-import { buildLocalServiceRows, groupLocalServiceRowsBySection, selectLocalServiceRunningCount } from './serviceRow';
+import { buildLocalServiceRows, groupLocalServiceRowsBySection, selectLocalServiceRunningCount, selectRunningOpenTargetOnPort } from './serviceRow';
 
 function inventoryRow(overrides: Partial<LocalServiceInventoryRow> = {}): LocalServiceInventoryRow {
     return {
@@ -95,6 +96,45 @@ describe('buildLocalServiceRows', () => {
         expect(selectLocalServiceRunningCount(rows)).toBe(0);
     });
 
+    it('keeps a pending binding distinct from an unavailable declaration and offers no Start', () => {
+        const target = LocalServiceLaunchTargetV1Schema.parse(packageTarget({ source: 'managed_service',
+            workspace: { serverId: 'home', machineId: 'machine-a', workspaceId: 'checkout', rootPath: '/repo' },
+            declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'web' } },
+            unavailableReason: 'project_service_binding_pending' }));
+        const [row] = buildLocalServiceRows({ inventoryRows: [], launchTargets: [target], sessionId: null, scope: 'workspace' });
+        expect(row).toMatchObject({ status: 'loading', primaryAction: null });
+        expect(groupLocalServiceRowsBySection([row!])[0]?.section).toBe('ready');
+        expect(selectLocalServiceRunningCount([row!])).toBe(0);
+    });
+
+    it('finds only the openable instance on the failed target\'s actual Machine and qualified checkout', () => {
+        const workspace = { serverId: 'home-a', machineId: 'machine-a', workspaceId: 'accepted', rootPath: '/repo' };
+        const declared = LocalServiceLaunchTargetV1Schema.parse(packageTarget({ id: 'declared:web', source: 'managed_service',
+            sourceClass: { kind: 'managed_service', managedServiceId: 'project-service:web' }, workspace,
+            declaration: { workspaceRefId: workspace.workspaceId, selection: { kind: 'manifest', name: 'web' } } }));
+        const listening = LocalServiceLaunchTargetV1Schema.parse(openableTarget({ workspace }));
+        const unrelatedMachine = LocalServiceLaunchTargetV1Schema.parse(openableTarget({ id: 'source-listener', machineId: 'source-machine',
+            workspace: { ...workspace, machineId: 'source-machine' } }));
+        const unrelatedCheckout = LocalServiceLaunchTargetV1Schema.parse(openableTarget({ id: 'other-checkout',
+            workspace: { ...workspace, workspaceId: 'other' } }));
+        const unrelatedHome = LocalServiceLaunchTargetV1Schema.parse(openableTarget({ id: 'other-home',
+            workspace: { ...workspace, serverId: 'home-other' } }));
+        const unrelatedRoot = LocalServiceLaunchTargetV1Schema.parse(openableTarget({ id: 'other-root',
+            workspace: { ...workspace, rootPath: '/other' } }));
+        const mismatchedMachine = LocalServiceLaunchTargetV1Schema.parse(openableTarget({ id: 'inconsistent-machine',
+            workspace: { ...workspace, machineId: 'other-machine' } }));
+        const rows = buildLocalServiceRows({ inventoryRows: [], launchTargets: [unrelatedMachine, unrelatedCheckout, unrelatedHome,
+            unrelatedRoot, mismatchedMachine, listening, declared], sessionId: null, scope: 'workspace' });
+        expect(selectRunningOpenTargetOnPort(rows, 5173, declared)).toEqual(listening);
+        expect(selectRunningOpenTargetOnPort(rows, 3005, declared)).toBeNull();
+        expect(selectRunningOpenTargetOnPort(rows.filter((row) => row.id !== listening.id), 5173, declared)).toBeNull();
+        expect(selectRunningOpenTargetOnPort(rows, 5173, LocalServiceLaunchTargetV1Schema.parse({ ...declared, workspace: undefined }))).toBeNull();
+        expect(selectRunningOpenTargetOnPort(rows, 5173, LocalServiceLaunchTargetV1Schema.parse({ ...declared, machineId: 'other-machine' }))).toBeNull();
+        expect(selectRunningOpenTargetOnPort(buildLocalServiceRows({ inventoryRows: [], launchTargets: [
+            LocalServiceLaunchTargetV1Schema.parse({ ...listening, workspace: undefined }), declared,
+        ], sessionId: null, scope: 'workspace' }), 5173, declared)).toBeNull();
+        expect(selectRunningOpenTargetOnPort(rows, 5173, listening)).toBeNull();
+    });
     it('carries the detected service identity and address instead of exposing its raw process command', () => {
         const rows = buildLocalServiceRows({ inventoryRows: [inventoryRow()], launchTargets: [openableTarget()], sessionId: 'session-a', scope: 'workspace' });
         expect(rows[0]?.serviceLabel).toBe('Vite');

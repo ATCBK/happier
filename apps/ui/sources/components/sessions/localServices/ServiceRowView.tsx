@@ -6,7 +6,7 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SURFACE_CARD_PADDING_PX, SURFACE_CARD_RADIUS_PX } from '@/components/ui/cards/SurfaceCard';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
-import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { Item, type ItemProps } from '@/components/ui/lists/Item';
@@ -26,6 +26,7 @@ import { t } from '@/text';
 import type { TranslationKey } from '@/text/i18n';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 
+import { LocalServiceActionFailureNotice } from './LocalServiceActionFailureNotice';
 import { useLocalServiceActionRunner } from './localServiceActionOutcome';
 import {
     copyLocalServiceAddress,
@@ -141,6 +142,7 @@ const stylesheet = StyleSheet.create((theme) => ({
 }));
 
 const STATUS_LABEL_KEYS: Readonly<Record<ServiceRowStatus, TranslationKey>> = {
+    loading: 'common.loading',
     running: 'localServices.rowStatus.running',
     starting: 'localServices.rowStatus.starting',
     stopping: 'localServices.rowStatus.stopping',
@@ -208,7 +210,7 @@ function resolveRowFacts(row: ServiceRow, machineName: string | null, startedByN
     /** The declaring file is already part of `lead`: the facts line draws no source chip. */
     sourceInline?: boolean;
 }> {
-    const reason = row.reasonCode
+    const reason = row.status !== 'loading' && row.reasonCode
         ? resolveReasonCopy({ reasonCode: row.reasonCode, kind: 'localServiceLauncher' })
         : null;
     // Someone else's service names who started it (lab STATES 12); the viewer's own needs no byline.
@@ -318,7 +320,7 @@ function CopyAddressButton(props: Readonly<{
     onCopyServiceUrl?: ServiceRowCopyUrlHandler;
     testID: string;
 }>): React.ReactElement {
-    const copyFeedback = useTemporaryCopyFeedback();
+    const copyFeedback = useHappierCopyFeedback();
     const { addressValue, onCopyServiceUrl, target } = props;
     const copyAddress = React.useCallback(() => {
         void (async () => {
@@ -354,6 +356,11 @@ export function ServiceRowView(props: Readonly<{
     onStopManagedService?: ServiceRowManagedControlHandler;
     onRestartManagedService?: ServiceRowManagedControlHandler;
     onCopyServiceUrl?: ServiceRowCopyUrlHandler;
+    /**
+     * The openable instance already running on a port, other than this row. A start that collided
+     * with this project's own listener offers it ("Open running web") instead of Retry.
+     */
+    findRunningOpenTarget?: (port: number, failedTarget: LocalServiceLaunchTarget) => LocalServiceLaunchTarget | null;
     /** The occurrence's actual Machine, independent of the pane's Source. */
     machineName?: string | null;
     /** The machine is unreachable: every fact on the row is last known. */
@@ -388,7 +395,8 @@ export function ServiceRowView(props: Readonly<{
 }>): React.ReactElement {
     const styles = stylesheet;
     const { row } = props;
-    const runner = useLocalServiceActionRunner();
+    // A refused action reads in place under its own row, never in a dialog over the page.
+    const runner = useLocalServiceActionRunner({ presentation: 'inline' });
     const primary = row.primaryAction;
     // The one decision of what this entry offers, shared with the Processes port menu (plan 30 RU-3).
     const offered = resolveLocalServiceEntryActions(row, props);
@@ -471,6 +479,29 @@ export function ServiceRowView(props: Readonly<{
         })();
     }, [menuPendingId, props, row.target, row.title, runner]);
 
+    // A start that collided with this project's own running instance points at it instead of repeating itself.
+    const failure = runner.failure;
+    const collision = failure?.establishmentFailure;
+    const runningTarget = collision?.cause === 'port_in_use' && collision.sameProject && collision.port !== undefined
+        ? props.findRunningOpenTarget?.(collision.port, row.target) ?? null : null;
+    const failureNotice = failure ? (
+        <LocalServiceActionFailureNotice
+            testID={`${props.testID}-failure`}
+            failure={failure}
+            nextAction={runningTarget ? {
+                label: t('localServices.actions.failure.openRunning', { service: row.title }),
+                onPress: () => {
+                    void runner.run({
+                        id: inlinePendingId,
+                        failureTitle: t('localServices.actions.failureTitle.open', { service: row.title }),
+                        action: async () => props.onOpenServiceInBrowser?.(runningTarget),
+                    });
+                },
+            } : null}
+            onDismiss={runner.dismissFailure}
+        />
+    ) : null;
+
     /**
      * Destructive and secondary actions live in the expansion's overflow (U-11): naming the
      * consequence in a menu is safer and calmer than two red glyphs side by side, and
@@ -535,8 +566,10 @@ export function ServiceRowView(props: Readonly<{
 
     const offline = props.offline === true;
     const machineName = props.machineName ?? null;
-    const title = <ServiceRowTitle row={row} offline={offline} animationEnabled={props.animationEnabled} testID={props.testID} />;
-    const subtitle = <ServiceRowFacts row={row} machineName={machineName} startedByName={props.startedByName ?? null} testID={props.testID} />;
+    // While its own Start is in flight the row reads as Starting (lab STATES 1), then returns to what the feed says.
+    const shown = runner.pendingId === inlinePendingId && primary?.kind === 'start' ? { ...row, status: 'starting' as const } : row;
+    const title = <ServiceRowTitle row={shown} offline={offline} animationEnabled={props.animationEnabled} testID={props.testID} />;
+    const subtitle = <ServiceRowFacts row={shown} machineName={machineName} startedByName={props.startedByName ?? null} testID={props.testID} />;
     const identity = <ServiceMark row={row} testID={`${props.testID}-identity`} />;
     // One tap: a running row's signature action sits on the row itself, like ▶ on a row that can be
     // started (services lab O, H-UX F-8). Pressing the row still grows it into what you do less often.
@@ -643,6 +676,7 @@ export function ServiceRowView(props: Readonly<{
                     loading={pending}
                     rightElement={rowControl}
                 />
+                {failureNotice}
                 {/* The pushed page is a page: its detail sits on the shared sheet (lab PAGEp), not on the
                     selection tint that marks an open row inside a list. */}
                 <ItemGroup header="none">{body}</ItemGroup>
@@ -668,6 +702,7 @@ export function ServiceRowView(props: Readonly<{
                     // Open, ▶ and a worker's overflow are their own buttons: never nest them in the row's press.
                     rightElementOutsidePressable={rowControl !== null}
                 />
+                {failureNotice}
             </View>
         );
     }
@@ -687,6 +722,7 @@ export function ServiceRowView(props: Readonly<{
                     loading={pending}
                     rightElement={openControl ?? startControl ?? overflowControl}
                 />
+                {failureNotice}
             </View>
         );
     }
@@ -715,6 +751,7 @@ export function ServiceRowView(props: Readonly<{
                 {/* The disclosure mounts this only while open (and through its collapse). */}
                 {body}
             </ExpandableItem>
+            {failureNotice}
         </View>
     );
 }

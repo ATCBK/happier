@@ -4,7 +4,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { readCurrentProjectAccountRows } from '@/sync/store/domains/projectAccountRows';
 import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { getLocalServiceLauncherState, invalidateLocalServiceLauncherStore, subscribeLocalServiceLauncherStore,
+import { getLocalServiceLauncherState, readLocalServiceLauncherStore, invalidateLocalServiceLauncherStore, subscribeLocalServiceLauncherStore,
     type LocalServiceLauncherStoreKeyInput } from '@/sync/domains/local/services/launch/sharedStore';
 import { getLocalServiceInventoryState, subscribeLocalServiceInventoryStore } from '@/sync/domains/local/services/inventory/sharedStore';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
@@ -141,6 +141,8 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
     const enabled = input.launcherState === undefined && input.scope === 'workspace' && Boolean(input.workspaceRefId && input.serverId);
     const { binding } = useServerCredentialAccountScopeBinding(input.serverId ?? '');
     const rows = storage(state => enabled ? readCurrentProjectAccountRows(state) : null);
+    const canObserve = enabled && binding?.isCurrent() === true && rows?.status === 'ready' && rows.coverage === 'complete'
+        && rows.scope.accountId === binding.accountId && areServerProfileIdentifiersEquivalent(rows.scope.serverId, input.serverId ?? '');
     const sourceTargets = React.useMemo(() => sourceState ? selectLocalServiceLaunchTargets(sourceState) : [], [sourceState?.targetsById]);
     const declarations = React.useMemo(() => sourceTargets.filter(target => target.declaration && target.declaration.workspaceRefId === input.workspaceRefId
         && target.declaration.selection.kind === 'manifest'), [input.workspaceRefId, sourceTargets]);
@@ -151,8 +153,7 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
     const [observation, setObservation] = React.useState<Readonly<{ subscriptions: typeof subscriptions; declarations: typeof declarations; values: ReadonlyMap<string, ServiceActual> }> | null>(null);
     React.useEffect(() => {
         let current = true;
-        if (!enabled || !binding?.isCurrent() || !rows || rows.status !== 'ready' || rows.coverage !== 'complete'
-            || rows.scope.accountId !== binding.accountId || !areServerProfileIdentifiersEquivalent(rows.scope.serverId, input.serverId ?? '')) return;
+        if (!canObserve || !binding || !rows) return;
         const isCurrent = () => current && binding.isCurrent() && readCurrentProjectAccountRows(storage.getState()) === rows;
         const abort = new AbortController();
         void (async () => {
@@ -172,7 +173,17 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
                         accountId: binding.accountId, scope: 'workspace', workspaceRoot: request.workspaceRoot, projection: 'managed_bindings' };
                     const id = JSON.stringify(key);
                     if (!subscriptions.has(id)) {
-                        const disposeLauncher = subscribeLocalServiceLauncherStore(key, observeAgain,
+                        let previous = getLocalServiceLauncherState(key);
+                        const disposeLauncher = subscribeLocalServiceLauncherStore(key, () => {
+                            const next = getLocalServiceLauncherState(key);
+                            const observed = previous.updatedAt !== null || previous.refreshStatus === 'error';
+                            const changed = next.updatedAt !== previous.updatedAt || next.targetsById !== previous.targetsById
+                                || next.refreshError !== previous.refreshError;
+                            previous = next;
+                            // This observation awaits initial hydration below. Restarting it on
+                            // that same read would discard its admitted Machine census and result.
+                            if (observed && changed) observeAgain();
+                        },
                             input.launcherSnapshotClient ? { snapshotClient: input.launcherSnapshotClient } : undefined);
                         const inventoryKey = { machineId: key.machineId, serverId: key.serverId };
                         let generatedAt = getLocalServiceInventoryState(inventoryKey).generatedAt;
@@ -185,6 +196,7 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
                         }, input.inventorySnapshotClient ? { snapshotClient: input.inventorySnapshotClient } : undefined);
                         subscriptions.set(id, { key, dispose: () => { disposeLauncher(); disposeInventory(); } });
                     }
+                    await readLocalServiceLauncherStore(key);
                     const state = getLocalServiceLauncherState(key);
                     const snapshot = snapshotFromLocalServiceLauncherState(state);
                     if (!snapshot || state.refreshStatus === 'error') throw new Error('Service binding is unavailable');
@@ -198,22 +210,24 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
             .catch(() => { if (isCurrent()) setObservation({ subscriptions, declarations,
                 values: new Map(declarations.map(target => [target.id, { status: 'unavailable' as const }])) }); });
         return () => { current = false; abort.abort(); };
-    }, [binding, change, declarations, enabled, input.serverId, input.workspaceRefId, input.launcherSnapshotClient, input.inventorySnapshotClient, rows, subscriptions]);
+    }, [binding, canObserve, change, declarations, enabled, input.serverId, input.workspaceRefId, input.launcherSnapshotClient, input.inventorySnapshotClient, rows, subscriptions]);
     const state = React.useMemo(() => {
         if (!enabled || !sourceState || !declarations.length) return sourceState;
-        const values = observation?.subscriptions === subscriptions && observation.declarations === declarations ? observation.values : null;
+        const values = canObserve && observation?.subscriptions === subscriptions && observation.declarations === declarations ? observation.values : null;
         const targets = sourceTargets.flatMap(target => {
             if (!declarations.includes(target)) return [target];
             const actual = values?.get(target.id);
             if (actual?.status === 'present') return [actual.target];
             if (actual?.status === 'ambiguous') return [...actual.targets];
             if (actual?.status === 'absent') return [target];
-            // An unavailable binding is not a stopped suggestion or executable Start authority.
-            return [{ ...target, state: 'unavailable' as const, unavailableReason: 'project_service_binding_unavailable', actions: [] }];
+            // A pending read offers no Start authority, but is not a failed observation.
+            return [{ ...target, state: 'unavailable' as const,
+                unavailableReason: !actual && canObserve ? 'project_service_binding_pending' : 'project_service_binding_unavailable', actions: [] }];
         });
-        return applyLocalServiceLauncherSnapshot(sourceState, { v: 1, machineId: sourceState.machineId!,
+        const projected = applyLocalServiceLauncherSnapshot(sourceState, { v: 1, machineId: sourceState.machineId!,
             ...(sourceState.sessionId ? { sessionId: sourceState.sessionId } : {}), updatedAt: sourceState.updatedAt!, targets });
-    }, [declarations, enabled, observation, sourceState, sourceTargets, subscriptions]);
+        return !values && canObserve && sourceState.refreshStatus !== 'error' ? { ...projected, refreshStatus: 'refreshing' as const } : projected;
+    }, [canObserve, declarations, enabled, observation, sourceState, sourceTargets, subscriptions]);
     const refresh = React.useCallback(async (sourceMachineId: string, sourceRefreshed: boolean) => {
         const refreshed = new Map<string, boolean>([[sourceMachineId, sourceRefreshed]]);
         for (const { key } of subscriptions.values()) {

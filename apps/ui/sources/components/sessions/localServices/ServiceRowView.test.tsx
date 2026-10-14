@@ -1,12 +1,13 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { LocalServiceLaunchTargetV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import { Text } from '@/components/ui/text/Text';
 import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import type { IModal } from '@/modal/types';
-import { buildLocalServiceRows, type ServiceRow } from '@/sync/domains/local/services/serviceRow';
+import { buildLocalServiceRows, selectRunningOpenTargetOnPort, type ServiceRow } from '@/sync/domains/local/services/serviceRow';
 import type { LocalServiceLaunchTarget } from '@/sync/domains/local/services/launch';
 import {
     applyLocalServicePublicPreviewSnapshot,
@@ -15,6 +16,7 @@ import {
 
 const modalSpies = vi.hoisted(() => ({
     confirm: vi.fn<IModal['confirm']>(async () => true),
+    alert: vi.fn<IModal['alert']>(),
 }));
 
 const clipboardSpies = vi.hoisted(() => ({
@@ -23,7 +25,7 @@ const clipboardSpies = vi.hoisted(() => ({
 
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ spies: { confirm: modalSpies.confirm } }).module;
+    return createModalModuleMock({ spies: { confirm: modalSpies.confirm, alert: modalSpies.alert } }).module;
 });
 
 vi.mock('@/utils/ui/clipboard', () => ({
@@ -82,6 +84,19 @@ function flattenStyle(style: unknown): Record<string, unknown> {
 }
 
 describe('ServiceRowView', () => {
+    it('shows pending binding discovery as loading without an unavailable reason or Start', async () => {
+        const target = LocalServiceLaunchTargetV1Schema.parse(launchTarget({ source: 'managed_service',
+            workspace: { serverId: 'home-a', machineId: 'machine-a', workspaceId: 'accepted', rootPath: '/accepted' },
+            declaration: { workspaceRefId: 'accepted', selection: { kind: 'manifest', name: 'web' } },
+            unavailableReason: 'project_service_binding_pending' }));
+        const [row] = buildLocalServiceRows({ inventoryRows: [], launchTargets: [target], sessionId: null, scope: 'workspace' });
+        const screen = await renderScreen(<ServiceRowView row={row!} onStartLauncherTarget={vi.fn()} testID="row" />);
+        expect(screen.findByTestId('row-status-loading')).not.toBeNull();
+        expect(screen.findByTestId('row-start')).toBeNull();
+        expect(screen.findByTestId('row-reason')).toBeNull();
+        expect(screen.findByTestId('row-dot-halo')).toBeNull();
+    });
+
     it('dispatches a qualified declaration Start from the actual row model without fabricating an executable feed action', async () => {
         const target = launchTarget({ source: 'managed_service', sourceClass: { kind: 'managed_service', managedServiceId: 'project-service:selected' },
             workspace: { serverId: 'home-a', machineId: 'machine-a', workspaceId: 'accepted', rootPath: '/accepted' },
@@ -97,6 +112,78 @@ describe('ServiceRowView', () => {
         expect(target.actions).toEqual([]);
     });
 
+    function declaredStartRow(title = 'web') {
+        const target = launchTarget({ source: 'managed_service', title, sourceClass: { kind: 'managed_service', managedServiceId: 'project-service:selected' },
+            workspace: { serverId: 'home-a', machineId: 'machine-a', workspaceId: 'accepted', rootPath: '/accepted' },
+            declaration: { workspaceRefId: 'accepted', selection: { kind: 'manifest', name: title } }, commandPreview: 'vite' });
+        const [row] = buildLocalServiceRows({ inventoryRows: [], launchTargets: [target], sessionId: null, scope: 'workspace' });
+        return { row: row!, target };
+    }
+    const portInUse = { status: 'denied', reasonCode: 'plugin_managed_service_establishment_failed',
+        establishmentFailure: { cause: 'port_in_use', port: 5173, exitCode: 1, sameProject: true, lastStderrLine: 'Error: listen EADDRINUSE :::5173' } };
+
+    it('reads a refused Start in place on its own row, with the codes behind Details and no dialog', async () => {
+        const { row } = declaredStartRow();
+        const screen = await renderScreen(<ServiceRowView row={row} onStartLauncherTarget={vi.fn(async () => portInUse)} testID="row" />);
+        await pressTestInstanceAsync(screen.findByTestId('row-start'), 'row-start');
+        expect(modalSpies.alert).not.toHaveBeenCalled();
+        const text = screen.getTextContent();
+        expect(text).toContain('Could not start web');
+        expect(text).toContain('Port 5173 is already in use by this project');
+        expect(text).not.toContain('plugin_managed_service_establishment_failed');
+        expect(text).not.toContain('EADDRINUSE');
+        await pressTestInstanceAsync(screen.findByTestId('row-failure.details'), 'row-failure.details');
+        const details = screen.getTextContent();
+        expect(details).toContain('EADDRINUSE');
+        expect(details).toContain('plugin_managed_service_establishment_failed');
+        expect(details).toContain('1');
+    });
+
+    it('reads as Starting on its machine while its own Start is in flight, then returns to Ready to start', async () => {
+        const { row } = declaredStartRow();
+        let settle!: (result: unknown) => void;
+        const start = vi.fn(() => new Promise<unknown>((resolve) => { settle = resolve; }));
+        const screen = await renderScreen(<ServiceRowView row={row} machineName="devbox" onStartLauncherTarget={start} testID="row" />);
+        expect(screen.getTextContent()).not.toContain('Starting');
+        await act(async () => { void pressTestInstanceAsync(screen.findByTestId('row-start'), 'row-start'); });
+        expect(screen.getTextContent()).toContain('Starting');
+        expect(screen.getTextContent()).toContain('Starting on devbox');
+        await act(async () => { settle({ status: 'succeeded' }); await Promise.resolve(); });
+        expect(screen.getTextContent()).not.toContain('Starting');
+    });
+
+    it('offers the same project\'s running instance instead of Retry, and Retry otherwise', async () => {
+        const { row, target } = declaredStartRow();
+        const running = LocalServiceLaunchTargetV1Schema.parse(launchTarget({ id: 'inventory:5173', source: 'inventory_entry', title: 'Lumen Studio :5173',
+            workspace: target.workspace, state: 'available', unavailableReason: undefined, subtitle: 'localhost:5173', actions: ['open'],
+            browserTarget: { kind: 'externalUrl', targetId: 'running:5173', url: 'http://localhost:5173/' } }));
+        const unrelated = LocalServiceLaunchTargetV1Schema.parse({ ...running, id: 'source-listener', machineId: 'source-machine',
+            workspace: { ...target.workspace!, machineId: 'source-machine', workspaceId: 'source-checkout', rootPath: '/source' } });
+        const rows = buildLocalServiceRows({ inventoryRows: [], launchTargets: [unrelated, running, target], sessionId: null, scope: 'workspace' });
+        const onOpen = vi.fn(async (_target: LocalServiceLaunchTarget) => ({ status: 'succeeded' as const }));
+        const start = vi.fn(async (_target: LocalServiceLaunchTarget) => portInUse);
+        const screen = await renderScreen(<ServiceRowView row={row} onStartLauncherTarget={start} onOpenServiceInBrowser={onOpen}
+            findRunningOpenTarget={(port, failedTarget) => selectRunningOpenTargetOnPort(rows, port, failedTarget)} testID="row" />);
+        await pressTestInstanceAsync(screen.findByTestId('row-start'), 'row-start');
+        expect(screen.getTextContent()).toContain('Open running web');
+        expect(screen.getTextContent()).not.toContain('Retry');
+        await pressTestInstanceAsync(screen.findByTestId('row-failure.action'), 'row-failure.action');
+        expect(onOpen).toHaveBeenCalledExactlyOnceWith(running);
+        expect(start).toHaveBeenCalledTimes(1);
+        expect(screen.findAllByTestId('row-failure')).toHaveLength(0);
+
+        // No running instance to point at: the next action is Retry, and it re-runs the same Start.
+        const unrelatedRows = rows.filter((candidate) => candidate.id !== running.id);
+        const lone = await renderScreen(<ServiceRowView row={row} onStartLauncherTarget={start}
+            findRunningOpenTarget={(port, failedTarget) => selectRunningOpenTargetOnPort(unrelatedRows, port, failedTarget)} testID="row" />);
+        await pressTestInstanceAsync(lone.findByTestId('row-start'), 'row-start');
+        expect(lone.getTextContent()).toContain('Retry');
+        expect(lone.getTextContent()).not.toContain('Open running');
+        await pressTestInstanceAsync(lone.findByTestId('row-failure.action'), 'row-failure.action');
+        expect(start).toHaveBeenCalledTimes(3);
+        expect(start).toHaveBeenLastCalledWith(target);
+    });
+
     it('does not copy a managed address through the renderer when its canonical Action port is absent', async () => {
         const target = launchTarget({ source: 'managed_service', sourceClass: { kind: 'managed_service', managedServiceId: 'actual-instance' },
             state: 'available', serviceState: 'running', actions: ['manage'], endpointUrl: 'http://localhost:5173/' });
@@ -107,6 +194,7 @@ describe('ServiceRowView', () => {
     });
 
     beforeEach(() => {
+        modalSpies.alert.mockReset();
         modalSpies.confirm.mockReset();
         modalSpies.confirm.mockResolvedValue(true);
         clipboardSpies.setClipboardStringSafe.mockClear();

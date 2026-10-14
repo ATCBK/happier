@@ -112,6 +112,26 @@ describe('useLocalServiceActionRunner', () => {
         expect(modalSpies.alert.mock.calls[1]?.[1]).toContain('native_tool_unavailable');
     });
 
+    it('keeps an inline failure for the owner to render instead of opening a dialog, until the next run or a dismissal', async () => {
+        const value: { current: ReturnType<typeof useLocalServiceActionRunner> | null } = { current: null };
+        function Harness() { value.current = useLocalServiceActionRunner({ presentation: 'inline' }); return React.createElement('View'); }
+        await renderScreen(<Harness />);
+        const action = vi.fn(async () => ({ status: 'denied', reasonCode: 'native_tool_unavailable',
+            prerequisite: LocalServiceNativePrerequisiteV1Schema.parse({ tool: 'docker', machineName: 'nl1', cause: 'permission_denied' }) }));
+        await act(async () => { await value.current?.run({ id: 'row:inline', failureTitle: 'Could not start api', action }); });
+        expect(modalSpies.alert).not.toHaveBeenCalled();
+        expect(value.current?.failure).toMatchObject({ title: 'Could not start api', reasonCode: 'native_tool_unavailable' });
+        expect(value.current?.failure?.body).toContain('Docker');
+        expect(value.current?.failure?.details).toContain('native_tool_unavailable');
+        await act(async () => { value.current?.failure?.retry(); });
+        expect(action).toHaveBeenCalledTimes(2);
+        expect(value.current?.failure).not.toBeNull();
+        await act(async () => { value.current?.dismissFailure(); });
+        expect(value.current?.failure).toBeNull();
+        await act(async () => { await value.current?.run({ id: 'row:inline', failureTitle: 'Could not start api', action: async () => ({ status: 'succeeded' }) }); });
+        expect(value.current?.failure).toBeNull();
+    });
+
     it('does not trigger success affordances or a failure alert for a pending policy approval', async () => {
         const { value, Harness } = renderRunner();
         await renderScreen(<Harness />);
