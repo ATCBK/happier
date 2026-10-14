@@ -31,6 +31,10 @@ import { formatUsageCalendarPeriod, formatUsageObservedAt } from '@/sync/domains
 import { usageSourceTitle } from '@/sync/domains/usage/usageLabels';
 export { usageSourceTitle, usageAgentTitle, usageDimensionLabel } from '@/sync/domains/usage/usageLabels';
 import { useUsageWidgetPageHasCoverageDetail } from './usageWidgetBatch';
+import { useProjectAccountRows } from '@/sync/domains/workspaces/projectAccountRows';
+import { projectProjectListV1 } from '@happier-dev/protocol/workspaces';
+import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { resolveWorkspaceRefDisplayName } from '@/components/projects/resolveWorkspaceRefDisplayName';
 
 /** What every Usage body receives from the one dispatcher: admitted facts, never a fetch handle. */
 export type UsageBodyProps = Readonly<{
@@ -56,6 +60,29 @@ export function usagePeriodPhrase(query: Pick<UsageQuery, 'period' | 'timeZoneOf
 // One projection per admitted accounting response and presentation; bodies share it, never rebuild it.
 type UsageBodyAnalyticsView = UsageAnalyticsViewModel & Readonly<{ pageCost: UsagePageCostProjection }>;
 const viewModels = new WeakMap<object, Map<string, UsageBodyAnalyticsView>>();
+
+/** Names stay in the opened Account projection; accounting carries only the Project anchor. */
+export function useUsageProjectLabels(serverId: string): ReadonlyMap<string, string> {
+  const rows = useProjectAccountRows();
+  return React.useMemo(() => {
+    const labels = new Map<string, string>();
+    if (!rows || rows.status === 'locked' || rows.status === 'refused'
+      || !areServerProfileIdentifiersEquivalent(rows.scope.serverId, serverId)) return labels;
+    const projection = projectProjectListV1({ serverId, workspaceRefs: rows.workspaceRefs,
+      organizations: rows.organizations, normalizeServerId: resolveServerProfileScopeIdForIdentifier });
+    for (const group of [...projection.projectGroups, ...projection.hiddenProjectGroups]) {
+      const ref = group.items[0];
+      if (ref) labels.set(group.projectKey.projectKey, resolveWorkspaceRefDisplayName(ref));
+    }
+    // The opened snapshot supplies Home/Account authority. Native opaque keys
+    // retain their producing CLI profile namespace, which is not a UI Home id
+    // or routing grant; join those keys only within this admitted snapshot.
+    for (const row of rows.organizations) {
+      if (row.value.label) labels.set(row.key.projectKey, row.value.label);
+    }
+    return labels;
+  }, [rows, serverId]);
+}
 
 /** The incumbent UI projection of A facts for this slice (A owns the numbers, this only shapes them). */
 export function useUsageAnalyticsView(
@@ -314,10 +341,31 @@ export function usageCoverageLineMode(gaps: readonly Pick<UsageQuerySourceState,
 /** The page header's one "Still reading …" fact: every source any view's read still waits on, named once. */
 const USAGE_PAGE_READ_SOURCES: ReadonlySet<string> = new Set(['accounting', 'quota', 'work', 'how_you_work']);
 
+export function readUsagePageAsOfMs(slices: readonly Pick<UsageQueryResultSlice, 'sources' | 'quota'>[]): number | null {
+  // Older observations retain their own dates in source detail. The page names
+  // its latest witnessed update, never the oldest historical source in a total.
+  let latest: number | null = null;
+  for (const slice of slices) {
+    for (const source of slice.sources) {
+      if (source.asOfMs !== undefined) latest = latest === null ? source.asOfMs : Math.max(latest, source.asOfMs);
+    }
+    // A refresh can retain individual account facts before its qualified source
+    // rows arrive. The aggregate quota date deliberately remains conservative.
+    for (const read of slice.quota ?? []) {
+      if (read.current && wasConnectedServiceQuotaObserved(read.current)) {
+        latest = latest === null ? read.current.fetchedAtMs : Math.max(latest, read.current.fetchedAtMs);
+      }
+    }
+  }
+  return latest;
+}
+
 export function describeUsagePagePendingSources(slices: readonly Pick<UsageQueryResultSlice, 'sources'>[]): string | null {
   // Only the page's shared reads; a widget's own read (a pool selection) is said by that widget.
   const names = [...new Set(slices.flatMap(slice => slice.sources
-    .filter(source => source.status === 'pending' || source.status === 'not_loaded')
+    // Not loaded also describes intentionally undemanded private evidence.
+    // Only its producer's pending state establishes that a read is in flight.
+    .filter(source => source.status === 'pending')
     // A sibling can already supply the aggregate quota while this account is still being read.
     // Keep qualified identity at the Resource; the shared header names its read family only once.
     .map(source => source.source.startsWith('quota:') ? 'quota' : source.source)
