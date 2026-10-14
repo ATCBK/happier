@@ -1,9 +1,9 @@
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { listActionSpecs, listActionCliCommandDeclarations } from '../../packages/protocol/src/actions/actionSpecs.ts';
+import { AGENT_ACTION_EXCLUSION_REASONS, listActionSpecs, listActionCliCommandDeclarations } from '../../packages/protocol/src/actions/actionSpecs.ts';
 import { listActionSpecsForCatalogSurface } from '../../packages/protocol/src/actions/actionCatalog.ts';
 import { BUILT_IN_SETTINGS_DECLARATIONS_V1, buildBuiltInAccountSettingMutationV1,
-  resolveBuiltInAccountSettingResetValueV1 } from '../../packages/protocol/src/actions/settings/settingsDeclarations.ts';
+  readPortablePlatformAccountSettingBindingV1, resolveBuiltInAccountSettingResetValueV1 } from '../../packages/protocol/src/actions/settings/settingsDeclarations.ts';
 import { accountSettingsParse } from '../../packages/protocol/src/account/settings/accountSettings.ts';
 import { collectUiActionParity, readUiActionParitySources } from './lib/uiActionParity.ts';
 
@@ -25,13 +25,24 @@ export function readCurrentUiActionParity() {
       anchors.push(declaration.anchor);
       settingBindings.set(`account:${key}`, anchors);
     }
+    // The semantic Enter-to-send row binds a different canonical key per host.
+    // Read both owners; an arbitrary metadata option never authorizes a write.
+    for (const platform of ['web', 'native'] as const) {
+      const binding = readPortablePlatformAccountSettingBindingV1(declaration, platform);
+      if (!binding || binding.access !== 'read_write') continue;
+      const anchors = settingBindings.get(`account:${binding.key}`) ?? [];
+      anchors.push(declaration.anchor);
+      settingBindings.set(`account:${binding.key}`, anchors);
+    }
   }
   return { sourceFiles: files.length, canonicalSpecs: specs.length,
     ...collectUiActionParity(files, specs, BUILT_IN_SETTINGS_DECLARATIONS_V1, {
+      sourceRoot: root,
       agentIds: new Set(listActionSpecsForCatalogSurface({ surface: 'agent' }).map(spec => spec.id)),
       mcpIds: new Set(listActionSpecsForCatalogSurface({ surface: 'mcp' }).map(spec => spec.id)),
       cliIds: new Set(listActionSpecsForCatalogSurface({ surface: 'cli' }).map(spec => spec.id)),
       cliCommandIds: new Set(listActionCliCommandDeclarations().map(({ spec }) => spec.id)),
+      agentExclusionReasons: new Map(Object.entries(AGENT_ACTION_EXCLUSION_REASONS)),
       settingBindings,
     }) };
 }

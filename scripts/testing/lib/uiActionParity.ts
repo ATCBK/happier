@@ -1,6 +1,6 @@
 import ts from 'typescript';
 import { readFileSync, readdirSync } from 'node:fs';
-import { join, relative, posix } from 'node:path';
+import { join, relative, posix, resolve as resolvePath } from 'node:path';
 
 export type UiParitySource = Readonly<{ filePath: string; content: string }>;
 type Surfaces = Readonly<{ ui?: boolean; agent?: boolean; mcp?: boolean; cli?: boolean }>;
@@ -16,7 +16,8 @@ export type UiParityFinding = Site & Readonly<{
 }>;
 type Discovery = Readonly<{ agentIds?: ReadonlySet<string>; mcpIds?: ReadonlySet<string>;
   cliIds?: ReadonlySet<string>; cliCommandIds?: ReadonlySet<string>;
-  settingBindings?: ReadonlyMap<string, readonly string[]> }>;
+  agentExclusionReasons?: ReadonlyMap<string, string>;
+  settingBindings?: ReadonlyMap<string, readonly string[]>; sourceRoot?: string }>;
 
 function unwrap(node: ts.Expression): ts.Expression {
   if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isParenthesizedExpression(node)
@@ -49,34 +50,85 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
   const findings: UiParityFinding[] = [];
   const exclusions: (Site & { reason: string })[] = [];
   const contents = new Map(files.map(file => [file.filePath, file.content]));
+  // Resolve first-party source operands without loading the framework type graph.
+  const root = discovery.sourceRoot ?? resolvePath('/__ui_action_parity__');
+  const relativePath = (path: string) => relative(root, resolvePath(root, path)).replaceAll('\\', '/');
+  const options: ts.CompilerOptions = { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler, jsx: ts.JsxEmit.Preserve,
+    strict: true, noEmit: true, skipLibCheck: true, baseUrl: root,
+    paths: { '@/*': ['apps/ui/sources/*'], '@happier-dev/protocol': ['packages/protocol/src/index.ts'],
+      '@happier-dev/protocol/*': ['packages/protocol/src/*'] } };
+  const host = ts.createCompilerHost(options, true);
+  const readExternal = host.readFile;
+  const externalExists = host.fileExists;
+  const mayReadExternal = (path: string) => !!discovery.sourceRoot && relativePath(path).startsWith('packages/');
+  host.getCurrentDirectory = () => root;
+  host.fileExists = path => contents.has(relativePath(path)) || mayReadExternal(path) && externalExists(path);
+  host.readFile = path => contents.get(relativePath(path)) ?? (mayReadExternal(path) ? readExternal(path) : undefined);
+  const directories = new Set<string>();
+  for (const path of contents.keys()) {
+    let parent = posix.dirname(path);
+    while (parent !== '.') { directories.add(parent); parent = posix.dirname(parent); }
+  }
+  const directoryExists = new Map<string, boolean>();
+  host.directoryExists = path => {
+    if (!directoryExists.has(path)) directoryExists.set(path, directories.has(relativePath(path))
+      || !!discovery.sourceRoot && ts.sys.directoryExists(path));
+    return directoryExists.get(path)!;
+  };
+  const resolutionCache = ts.createModuleResolutionCache(root, path => path, options);
   const modules = new Map<string, { source: ts.SourceFile; values: Map<string, ts.Expression>;
-    imports: Map<string, { path: string; name: string }> }>();
+    types: Map<string, ts.TypeNode>; imports: Map<string, { path: string; name: string }>; exports: string[] }>();
   function module(path: string) {
+    path = relativePath(path);
     const cached = modules.get(path);
     if (cached) return cached;
-    const content = contents.get(path);
+    const content = host.readFile(resolvePath(root, path));
     if (content === undefined) return undefined;
-    const source = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true,
-      /\.[jt]sx$/.test(path) ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+    const source = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true);
     const result = { source, values: new Map<string, ts.Expression>(),
-      imports: new Map<string, { path: string; name: string }>() };
+      types: new Map<string, ts.TypeNode>(), imports: new Map<string, { path: string; name: string }>(), exports: [] as string[] };
     modules.set(path, result);
     for (const statement of source.statements) {
       if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) {
         if (ts.isIdentifier(declaration.name) && declaration.initializer) result.values.set(declaration.name.text, declaration.initializer);
+        if (ts.isIdentifier(declaration.name) && declaration.type) result.types.set(declaration.name.text, declaration.type);
       }
+      if (ts.isTypeAliasDeclaration(statement)) result.types.set(statement.name.text, statement.type);
       if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
         const specifier = statement.moduleSpecifier.text;
-        const base = specifier.startsWith('@/') ? `apps/ui/sources/${specifier.slice(2)}`
-          : specifier.startsWith('.') ? posix.normalize(posix.join(posix.dirname(path), specifier)) : '';
-        const target = [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`].find(candidate => contents.has(candidate));
+        const targetPath = ts.resolveModuleName(specifier, resolvePath(root, path), options, host, resolutionCache).resolvedModule?.resolvedFileName;
+        const target = targetPath && relativePath(targetPath);
         const bindings = statement.importClause?.namedBindings;
         if (target && bindings && ts.isNamedImports(bindings)) for (const binding of bindings.elements) {
           result.imports.set(binding.name.text, { path: target, name: binding.propertyName?.text ?? binding.name.text });
         }
       }
+      if (ts.isExportDeclaration(statement) && statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
+        const targetPath = ts.resolveModuleName(statement.moduleSpecifier.text, resolvePath(root, path), options, host, resolutionCache).resolvedModule?.resolvedFileName;
+        const target = targetPath && relativePath(targetPath);
+        if (target && !statement.exportClause) result.exports.push(target);
+        if (target && statement.exportClause && ts.isNamedExports(statement.exportClause)) for (const binding of statement.exportClause.elements) {
+          result.imports.set(binding.name.text, { path: target, name: binding.propertyName?.text ?? binding.name.text });
+        }
+      }
     }
     return result;
+  }
+  function symbol(path: string, name: string, kind: 'values' | 'types', seen = new Set<string>()): ts.Expression | ts.TypeNode | undefined {
+    const key = `${path}:${name}:${kind}`;
+    if (seen.has(key)) return undefined;
+    seen.add(key);
+    const owner = module(path);
+    const local = owner?.[kind].get(name);
+    if (local) return local;
+    const imported = owner?.imports.get(name);
+    if (imported) return symbol(imported.path, imported.name, kind, seen);
+    for (const path of owner?.exports ?? []) {
+      const exported = symbol(path, name, kind, seen);
+      if (exported) return exported;
+    }
+    return undefined;
   }
   function property(node: ts.Expression, key: string): ts.Expression | undefined {
     node = resolve(node);
@@ -91,10 +143,8 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
     if (seen.has(node)) return node;
     seen.add(node);
     if (ts.isIdentifier(node)) {
-      const owner = module(node.getSourceFile().fileName);
-      const imported = owner?.imports.get(node.text);
-      const value = imported ? module(imported.path)?.values.get(imported.name) : owner?.values.get(node.text);
-      if (value) return resolve(value, seen);
+      const value = symbol(node.getSourceFile().fileName, node.text, 'values');
+      if (value && ts.isExpression(value)) return resolve(value, seen);
     }
     if (ts.isPropertyAccessExpression(node)) {
       const object = resolve(node.expression, seen);
@@ -102,6 +152,10 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
         const field = property(object, node.name.text);
         if (field) return resolve(field, seen);
       }
+    }
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+      && node.expression.expression.getText() === 'Object' && node.expression.name.text === 'freeze' && node.arguments[0]) {
+      return resolve(node.arguments[0], seen);
     }
     return node;
   }
@@ -117,20 +171,6 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
     const prefix = subpage && subId && scalar(property(subpage, 'anchors')) !== 'page' ? `${pageId}.${subId}` : pageId;
     const candidate = `${prefix}.${settingId}`;
     return declarations.some(declaration => declaration.anchor === candidate) ? candidate : undefined;
-  }
-  function anchor(node: ts.Expression): string | undefined {
-    const resolved = resolve(node);
-    const direct = scalar(property(resolved, 'anchor'));
-    if (direct) return direct;
-    // A page ref is checked against portable declarations, not a mirrored setting inventory.
-    if (ts.isPropertyAccessExpression(resolved) && ts.isPropertyAccessExpression(resolved.expression)
-      && resolved.expression.name.text === 'settings') {
-      const page = resolve(resolved.expression.expression);
-      if (ts.isCallExpression(page) && page.arguments[0]) {
-        return pageAnchor(page.arguments[0], resolved.name.text);
-      }
-    }
-    return undefined;
   }
   // Infer semantic binding root writes only from actual page-attached storage callbacks.
   const semanticWrites = new Map<string, Set<string>>();
@@ -193,6 +233,11 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
     }
     actions.push({ ...site, actionId });
     const spec = catalog.get(actionId);
+    const exclusionReason = discovery.agentExclusionReasons?.get(actionId);
+    if (spec && !spec.surfaces.agent && exclusionReason) {
+      exclusions.push({ ...site, reason: exclusionReason });
+      return;
+    }
     const finding = (code: UiParityFinding['code']) => findings.push({ ...site, code, operation: actionId });
     if (!spec) finding('unregistered_action');
     else if (!spec.surfaces.agent || (discovery.agentIds && !discovery.agentIds.has(actionId))) finding('agent_unavailable');
@@ -239,7 +284,8 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
     }
     const source = module(file.filePath)!.source;
     const aliases = new Map<string, string>();
-    type Binding = Readonly<{ initializer?: ts.Expression; writer?: string; dispatch?: boolean;
+    type Binding = Readonly<{ initializer?: ts.Expression; annotation?: ts.TypeNode; parameter?: boolean; writer?: string; dispatch?: boolean;
+      iterations?: readonly ts.Expression[];
       mutable?: Readonly<{ key: ts.Expression; scope: string }> }>;
     const bindings = new Map<ts.Node, Map<string, Binding>>();
     const mutableNames = new Set<string>();
@@ -263,42 +309,230 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
     }
     const location = (node: ts.Node): Site => {
       const owner = node.getSourceFile();
-      return { filePath: owner.fileName, line: owner.getLineAndCharacterOfPosition(node.getStart(owner)).line + 1 };
+      return { filePath: relativePath(owner.fileName), line: owner.getLineAndCharacterOfPosition(node.getStart(owner)).line + 1 };
     };
     function name(node: ts.Expression): string {
       if (ts.isIdentifier(node)) return aliases.get(node.text) ?? node.text;
       return ts.isPropertyAccessExpression(node) ? node.name.text : '';
     }
-    function strings(node: ts.Expression, seen = new Set<string>()): string[] {
-      node = unwrap(node);
-      if (ts.isStringLiteralLike(node)) return [node.text];
-      if (ts.isConditionalExpression(node)) return [...strings(node.whenTrue, seen), ...strings(node.whenFalse, seen)];
-      if (ts.isIdentifier(node) && !seen.has(node.text)) {
-        const value = lookup(node, node.text)?.initializer;
-        if (value) return strings(value, new Set([...seen, node.text]));
+    function complete(parts: (string[] | undefined)[]): string[] | undefined {
+      return parts.every(part => part !== undefined) ? [...new Set(parts.flat())] : undefined;
+    }
+    function queryValue(type: ts.TypeQueryNode): ts.Expression | undefined {
+      if (!ts.isIdentifier(type.exprName)) return undefined;
+      const value = symbol(type.getSourceFile().fileName, type.exprName.text, 'values');
+      return value && ts.isExpression(value) ? resolve(value) : undefined;
+    }
+    function elements(expression: ts.Expression, seen: Set<ts.Node>): string[] | undefined {
+      const value = resolve(expression);
+      if (ts.isArrayLiteralExpression(value)) return complete(value.elements.map(element =>
+        ts.isSpreadElement(element) ? elements(element.expression, seen) : finiteStrings(element, new Set(seen))));
+      if (ts.isObjectLiteralExpression(value)) return complete(value.properties.map(field =>
+        ts.isPropertyAssignment(field) ? elements(field.initializer, new Set(seen))
+          : ts.isShorthandPropertyAssignment(field) ? elements(field.name, new Set(seen)) : undefined));
+      return finiteStrings(value, seen);
+    }
+    function typeDefinition(type: ts.TypeNode, seen = new Set<ts.Node>()): ts.TypeNode {
+      if (seen.has(type)) return type;
+      seen.add(type);
+      if (ts.isTypeReferenceNode(type) && ts.isIdentifier(type.typeName)) {
+        if (type.typeName.text === 'Readonly' && type.typeArguments?.[0]) return typeDefinition(type.typeArguments[0], seen);
+        const definition = symbol(type.getSourceFile().fileName, type.typeName.text, 'types');
+        if (definition && ts.isTypeNode(definition) && definition !== type) return typeDefinition(definition, seen);
       }
+      return type;
+    }
+    function expressionType(expression: ts.Expression): ts.TypeNode | undefined {
+      expression = unwrap(expression);
+      if (ts.isIdentifier(expression)) {
+        const local = lookup(expression, expression.text);
+        if (local) return local.annotation;
+        const type = symbol(expression.getSourceFile().fileName, expression.text, 'types');
+        return type && ts.isTypeNode(type) ? type : undefined;
+      }
+      if (ts.isPropertyAccessExpression(expression)) {
+        const owner = expressionType(expression.expression);
+        const type = owner && typeDefinition(owner);
+        if (type && ts.isTypeLiteralNode(type)) {
+          const member = type.members.find(member => ts.isPropertySignature(member)
+            && member.name.getText().replaceAll(/['"]/g, '') === expression.name.text);
+          return member && ts.isPropertySignature(member) ? member.type : undefined;
+        }
+      }
+      return undefined;
+    }
+    function typeStrings(type: ts.TypeNode, seen = new Set<ts.Node>()): string[] | undefined {
+      if (seen.has(type)) return undefined;
+      seen.add(type);
+      if (ts.isLiteralTypeNode(type) && ts.isStringLiteralLike(type.literal)) return [type.literal.text];
+      if (ts.isUnionTypeNode(type)) return complete(type.types.map(member => typeStrings(member, new Set(seen))));
+      if (ts.isParenthesizedTypeNode(type)) return typeStrings(type.type, seen);
+      if (ts.isTypeReferenceNode(type) && ts.isIdentifier(type.typeName)) {
+        if ((type.typeName.text === 'Exclude' || type.typeName.text === 'Extract') && type.typeArguments?.length === 2) {
+          const all = typeStrings(type.typeArguments[0], new Set(seen));
+          const selected = typeStrings(type.typeArguments[1], new Set(seen));
+          return all && selected ? all.filter(value => selected.includes(value) === (type.typeName.getText() === 'Extract')) : undefined;
+        }
+        const definition = typeDefinition(type);
+        return definition !== type ? typeStrings(definition, seen) : undefined;
+      }
+      if (ts.isTypeOperatorNode(type) && type.operator === ts.SyntaxKind.KeyOfKeyword && ts.isTypeQueryNode(type.type)) {
+        const value = queryValue(type.type);
+        return value && ts.isObjectLiteralExpression(value) ? complete(value.properties.map(field =>
+          ts.isPropertyAssignment(field) || ts.isShorthandPropertyAssignment(field)
+            ? [field.name.getText().replaceAll(/['"]/g, '')] : undefined)) : undefined;
+      }
+      if (ts.isIndexedAccessTypeNode(type)) {
+        let objectType = type.objectType;
+        while (ts.isParenthesizedTypeNode(objectType)) objectType = objectType.type;
+        if (ts.isIndexedAccessTypeNode(objectType) && type.indexType.kind === ts.SyntaxKind.NumberKeyword) return typeStrings(objectType, seen);
+        if (!ts.isTypeQueryNode(objectType)) return undefined;
+        const value = queryValue(objectType);
+        if (!value) return undefined;
+        if (type.indexType.kind === ts.SyntaxKind.NumberKeyword && ts.isArrayLiteralExpression(value)) return elements(value, seen);
+        if (type.indexType.kind === ts.SyntaxKind.NumberKeyword && ts.isIdentifier(objectType.exprName)) {
+          const declared = symbol(objectType.getSourceFile().fileName, objectType.exprName.text, 'types');
+          const array = declared && ts.isTypeOperatorNode(declared) && declared.operator === ts.SyntaxKind.ReadonlyKeyword
+            ? declared.type : declared;
+          if (array && ts.isArrayTypeNode(array)) return typeStrings(array.elementType, seen);
+        }
+        const keys = typeStrings(type.indexType, new Set(seen));
+        return keys ? complete(keys.map(key => {
+          const field = property(value, key);
+          return field && elements(field, new Set(seen));
+        })) : undefined;
+      }
+      return undefined;
+    }
+    function finiteStrings(node: ts.Expression, seen = new Set<ts.Node>(), typed = true): string[] | undefined {
+      node = unwrap(node);
+      if (seen.has(node)) return undefined;
+      seen.add(node);
+      if (ts.isStringLiteralLike(node)) return [node.text];
+      if (ts.isConditionalExpression(node)) return complete([
+        finiteStrings(node.whenTrue, new Set(seen), typed), finiteStrings(node.whenFalse, new Set(seen), typed),
+      ]);
+      if (ts.isIdentifier(node)) {
+        const local = lookup(node, node.text);
+        if (local?.iterations) return complete(local.iterations.map(value => finiteStrings(value, new Set(seen), typed)));
+        if (local?.initializer) return finiteStrings(local.initializer, seen, typed);
+        if (local) return typed && local.annotation ? typeStrings(local.annotation) : undefined;
+      }
+      const fields = iterationFields(node);
+      if (fields) return complete(fields.map(value => value && finiteStrings(value, new Set(seen), typed)));
       const resolved = resolve(node);
-      if (resolved !== node && ts.isStringLiteralLike(resolved)) return [resolved.text];
-      return [];
+      if (resolved !== node) return finiteStrings(resolved, seen, typed);
+      if (ts.isElementAccessExpression(node) && node.argumentExpression) {
+        const keys = finiteStrings(node.argumentExpression, new Set(seen), typed);
+        return keys ? complete(keys.map(key => {
+          const field = property(node.expression, key);
+          return field && finiteStrings(field, new Set(seen), typed);
+        })) : undefined;
+      }
+      const type = typed && expressionType(node);
+      return type ? typeStrings(type) : undefined;
+    }
+    function strings(node: ts.Expression, seen = new Set<ts.Node>(), typed = true): string[] {
+      return finiteStrings(node, seen, typed) ?? [];
+    }
+    function localValue(node: ts.Expression, seen = new Set<ts.Node>()): ts.Expression {
+      node = unwrap(node);
+      if (seen.has(node)) return node;
+      seen.add(node);
+      if (ts.isIdentifier(node)) {
+        const local = lookup(node, node.text);
+        if (local) return local.initializer ? localValue(local.initializer, seen) : node;
+      }
+      return resolve(node);
+    }
+    function iterationFields(node: ts.Expression): (ts.Expression | undefined)[] | undefined {
+      if (!ts.isPropertyAccessExpression(node) || !ts.isIdentifier(node.expression)) return undefined;
+      return lookup(node.expression, node.expression.text)?.iterations?.map(value => property(value, node.name.text));
+    }
+    function settingAnchors(node: ts.Expression): string[] | undefined {
+      const fields = iterationFields(node);
+      if (fields) return complete(fields.map(value => value && settingAnchors(value)));
+      const value = localValue(node);
+      if (ts.isIdentifier(value) && lookup(value, value.text)?.parameter) return undefined;
+      const direct = scalar(property(value, 'anchor'));
+      if (direct) return [direct];
+      // Resolve lexical aliases and finite indexed page refs from the real page.
+      // Every resulting address still goes through declaration admission below.
+      if (ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) {
+        const settings = localValue(value.expression);
+        const keys = ts.isPropertyAccessExpression(value) ? [value.name.text]
+          : value.argumentExpression ? finiteStrings(value.argumentExpression) : undefined;
+        if (keys && ts.isPropertyAccessExpression(settings) && settings.name.text === 'settings') {
+          const page = localValue(settings.expression);
+          if (ts.isCallExpression(page) && name(page.expression) === 'defineSettingsPage' && page.arguments[0]) {
+            const anchors = keys.map(key => pageAnchor(page.arguments[0], key));
+            return anchors.every(anchor => anchor !== undefined) ? anchors : undefined;
+          }
+        }
+      }
+      return undefined;
+    }
+    function rpcReference(node: ts.Expression, seen = new Set<ts.Node>()): boolean {
+      node = unwrap(node);
+      if (seen.has(node)) return false;
+      seen.add(node);
+      if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) return rpcReference(node.expression, seen);
+      if (!ts.isIdentifier(node)) return false;
+      const local = lookup(node, node.text);
+      if (local?.initializer) return rpcReference(local.initializer, seen);
+      if (local?.parameter) return false;
+      const value = symbol(node.getSourceFile().fileName, node.text, 'values');
+      const declaration = value?.parent;
+      return !!value && value.getSourceFile().fileName.startsWith('packages/protocol/src/rpc/')
+        && !!declaration && ts.isVariableDeclaration(declaration) && ts.isIdentifier(declaration.name)
+        && /^(RPC_METHODS|SESSION_RPC_METHODS)$/.test(declaration.name.text);
     }
     function collect(node: ts.Node): void {
       if (ts.isImportSpecifier(node)) aliases.set(node.name.text, node.propertyName?.text ?? node.name.text);
-      if (ts.isParameter(node) && ts.isIdentifier(node.name)) declare(node, node.name.text, {});
+      if (ts.isParameter(node) && ts.isIdentifier(node.name)) {
+        const callback = node.parent;
+        const call = callback.parent;
+        const receiver = ts.isCallExpression(call) && call.arguments[0] === callback
+          && ts.isPropertyAccessExpression(call.expression) && /^(map|flatMap|forEach)$/.test(call.expression.name.text)
+          && callback.parameters[0] === node ? localValue(call.expression.expression) : undefined;
+        const receiverType = ts.isCallExpression(call) && ts.isPropertyAccessExpression(call.expression)
+          ? expressionType(call.expression.expression) : undefined;
+        const readonlyType = (type: ts.TypeNode | undefined) => !!type && (
+          ts.isTypeOperatorNode(type) && type.operator === ts.SyntaxKind.ReadonlyKeyword
+          || ts.isTypeReferenceNode(type) && /^(Readonly|ReadonlyArray)$/.test(type.typeName.getText()));
+        const immutable = receiver && (
+          ts.isAsExpression(receiver.parent) && (receiver.parent.type.getText() === 'const' || readonlyType(receiver.parent.type))
+          || readonlyType(receiverType)
+          || ts.isCallExpression(call) && ts.isPropertyAccessExpression(call.expression) && unwrap(call.expression.expression) === receiver);
+        const iterations = receiver && ts.isArrayLiteralExpression(receiver)
+          && immutable && receiver.elements.every(element => !ts.isSpreadElement(element)) ? [...receiver.elements] : undefined;
+        declare(node, node.name.text, { annotation: node.type, parameter: true, iterations });
+      }
       if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
         const init = unwrap(node.initializer);
         const writer = ts.isCallExpression(init) && /^(useApplySettings|useApplyLocalSettings)$/.test(name(init.expression))
           ? name(init.expression) === 'useApplyLocalSettings' ? 'local' : 'account'
           : ts.isCallExpression(init) && /^(useSettingActionWriter|useSettingActionFeedback)$/.test(name(init.expression)) ? 'anchor' : undefined;
         const dispatch = ts.isCallExpression(init) && /(?:ActionExecutor|ActionExecute)$/.test(name(init.expression));
-        declare(node, node.name.text, { initializer: node.initializer, writer, dispatch });
+        declare(node, node.name.text, { initializer: node.initializer, annotation: node.type, writer, dispatch });
       }
       if (ts.isCallExpression(node) && /^(createFrontDoorActionExecute|createFrontDoorUiActionExecutor)$/.test(name(node.expression))) {
-        // Mark containing initializers in the existing walk; do not rewalk every initializer subtree.
+        // A factory result may pass through a memo hook, but constructing one
+        // inside a domain callback does not turn that callback into an executor.
+        let child: ts.Node = node;
         let ancestor: ts.Node | undefined = node.parent;
         while (ancestor) {
-          if (ts.isVariableDeclaration(ancestor) && ts.isIdentifier(ancestor.name)) {
+          if (ts.isVariableDeclaration(ancestor) && ts.isIdentifier(ancestor.name) && ancestor.initializer === child) {
             declare(ancestor, ancestor.name.text, { ...lookup(ancestor.name, ancestor.name.text), dispatch: true });
+            break;
           }
+          const transparent = ts.isParenthesizedExpression(ancestor) || ts.isAsExpression(ancestor)
+            || ts.isSatisfiesExpression(ancestor) || ts.isNonNullExpression(ancestor)
+            || ts.isArrowFunction(ancestor) && ancestor.body === child
+            || ts.isCallExpression(ancestor) && /^(useMemo|useCallback)$/.test(name(ancestor.expression))
+              && ancestor.arguments.some(argument => argument === child);
+          if (!transparent) break;
+          child = ancestor;
           ancestor = ancestor.parent;
         }
       }
@@ -325,7 +559,7 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
     collect(source);
     const checked = new Set<number>();
     const checkedSettings = new Set<ts.Expression>();
-    function delta(expression: ts.Expression, scope: string, seen = new Set<ts.Node>()): void {
+    function delta(expression: ts.Expression, scope: string, seen = new Set<ts.Node>(), previous = new Set<Binding>()): void {
       expression = unwrap(expression);
       if (seen.has(expression)) {
         findings.push({ ...location(expression), code: 'dynamic_setting', operation: 'cyclic setting delta' });
@@ -334,10 +568,14 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
       seen.add(expression);
       const local = ts.isIdentifier(expression) ? lookup(expression, expression.text)?.initializer : undefined;
       const value = local ? unwrap(local) : resolve(expression);
-      if (value !== expression) { delta(value, scope, seen); return; }
+      if (value !== expression) { delta(value, scope, seen, previous); return; }
       if (ts.isConditionalExpression(value)) {
-        delta(value.whenTrue, scope, new Set(seen)); delta(value.whenFalse, scope, new Set(seen));
-      } else if (ts.isArrowFunction(value) && !ts.isBlock(value.body)) delta(value.body, scope, seen);
+        delta(value.whenTrue, scope, new Set(seen), previous); delta(value.whenFalse, scope, new Set(seen), previous);
+      } else if (ts.isArrowFunction(value) && !ts.isBlock(value.body)) {
+        const parameter = value.parameters[0];
+        const binding = parameter && ts.isIdentifier(parameter.name) ? lookup(parameter.name, parameter.name.text) : undefined;
+        delta(value.body, scope, seen, binding ? new Set([...previous, binding]) : previous);
+      }
       else if (ts.isObjectLiteralExpression(value)) {
         for (const field of value.properties) {
           if (ts.isPropertyAssignment(field) || ts.isShorthandPropertyAssignment(field)) {
@@ -345,7 +583,10 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
               : [field.name.getText(source).replaceAll(/['"]/g, '')];
             for (const key of keys) checkSetting(key, scope, location(field));
             if (!keys.length) findings.push({ ...location(field), code: 'dynamic_setting', operation: ts.SyntaxKind[field.kind] });
-          } else if (ts.isSpreadAssignment(field)) delta(field.expression, scope, new Set(seen));
+          } else if (ts.isSpreadAssignment(field)) {
+            const prior = ts.isIdentifier(field.expression) ? lookup(field.expression, field.expression.text) : undefined;
+            if (!prior || !previous.has(prior)) delta(field.expression, scope, new Set(seen), previous);
+          }
           else findings.push({ ...location(field), code: 'dynamic_setting', operation: ts.SyntaxKind[field.kind] });
         }
       } else findings.push({ ...location(expression), code: 'dynamic_setting', operation: ts.SyntaxKind[expression.kind] });
@@ -353,9 +594,22 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
     function dispatch(node: ts.Expression): void {
       if (checked.has(node.pos)) return;
       checked.add(node.pos);
-      const ids = strings(node);
-      if (ids.length) for (const id of ids) checkAction(id, location(node));
-      else findings.push({ ...location(node), code: 'dynamic_action', operation: ts.SyntaxKind[node.kind] });
+      const operand = unwrap(node);
+      const binding = ts.isIdentifier(operand) ? lookup(operand, operand.text) : undefined;
+      const annotation = binding?.annotation;
+      const definition = annotation && ts.isTypeReferenceNode(annotation) && ts.isIdentifier(annotation.typeName)
+        ? symbol(annotation.getSourceFile().fileName, annotation.typeName.text, 'types') : undefined;
+      // A whole-catalog transport parameter does not assert a concrete UI
+      // capability. Its literal/family callers are still walked independently.
+      if (binding?.parameter && definition?.getSourceFile().fileName === 'packages/protocol/src/actions/actionIds.ts'
+        && ts.isIndexedAccessTypeNode(definition) && ts.isTypeQueryNode(definition.objectType)
+        && definition.objectType.exprName.getText() === 'ACTION_IDS' && definition.indexType.kind === ts.SyntaxKind.NumberKeyword) {
+        exclusions.push({ ...location(node), reason: 'canonical ActionId forwarding parameter; concrete callers remain walked' });
+      } else {
+        const ids = strings(node);
+        if (ids.length) for (const id of ids) checkAction(id, location(node));
+        else findings.push({ ...location(node), code: 'dynamic_action', operation: `${ts.SyntaxKind[node.kind]}: ${node.getText()}` });
+      }
     }
     function visit(node: ts.Node): void {
       if (ts.isIdentifier(node) && mutableNames.has(node.text) && !(ts.isBindingElement(node.parent) && node.parent.name === node)
@@ -376,7 +630,8 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
         const request = ts.isObjectLiteralExpression(node.parent) && ts.isCallExpression(node.parent.parent)
           && node.parent.parent.arguments[0] === node.parent
           && /^(execute|executeAction|invoke|dispatch)$/.test(name(node.parent.parent.expression));
-        if ((property === 'actionId' && (request || strings(node.initializer).some(id => catalog.has(id))))
+        if ((property === 'actionId' && (request || !rpcReference(node.initializer)
+          && strings(node.initializer, new Set(), false).some(id => catalog.has(id))))
           || (property === 'id' && registration)) dispatch(node.initializer);
       }
       if (ts.isCallExpression(node)) {
@@ -392,21 +647,28 @@ export function collectUiActionParity(files: readonly UiParitySource[], specs: r
         } else if (first && writer && (ts.isIdentifier(node.expression) || /^(setSetting|applySettings|applyLocalSettings)$/.test(called))) {
           const operand = unwrap(first);
           if (writer === 'anchor') {
-            const declaredAnchor = anchor(operand);
-            const values = declaredAnchor ? [declaredAnchor] : [];
+            const values = settingAnchors(operand) ?? [];
             if (values.length) for (const value of values) checkAnchor(value, location(first));
             else findings.push({ ...location(first), code: 'dynamic_setting', operation: ts.SyntaxKind[first.kind] });
           } else delta(operand, writer);
         } else if (first && !/^(getActionSpec|isActionSpec|resolveAction|readAction)/.test(called)) {
-          const candidates = strings(first);
           // Literal ids also find thin family clients whose method is simply named `run`.
           const conventional = /^(execute|executeAction|invoke|dispatch|executeOnMachine|executeOnSession|executeOnSource|useAction)$/.test(called);
           const receiver = ts.isPropertyAccessExpression(node.expression) ? node.expression.expression.getText(source) : '';
           const isDispatch = callable?.dispatch || called === 'useAction' || /^executeOn(Machine|Session|Source)$/.test(called)
+            || ts.isCallExpression(node.expression) && /^(createFrontDoorActionExecute|createFrontDoorUiActionExecutor)$/.test(name(node.expression.expression))
             || (conventional && /(?:[Aa]ction|executor|^actions$)/.test(receiver));
+          const candidates = strings(first, new Set(), !!isDispatch || conventional);
+          if (!isDispatch && rpcReference(first)) {
+            ts.forEachChild(node, visit);
+            return;
+          }
           if ((isDispatch || conventional) && candidates.some(id => id.includes('.'))) dispatch(first);
-          else if (candidates.some(id => catalog.has(id))) dispatch(first);
-          else if (isDispatch && !candidates.length && !ts.isObjectLiteralExpression(unwrap(first))) dispatch(first);
+          // Catalog ids passed to feature/binding readers or membership checks
+          // are data. Thin `read`, `mutate` and `prepare` clients remain walked.
+          else if (!/^(get|is|has|includes|useFeature)/.test(called) && candidates.some(id => catalog.has(id))) dispatch(first);
+          else if (isDispatch && !candidates.length && !ts.isObjectLiteralExpression(unwrap(first))
+            && !(expressionType(first) && ts.isTypeLiteralNode(typeDefinition(expressionType(first)!)))) dispatch(first);
         }
       }
       ts.forEachChild(node, visit);
