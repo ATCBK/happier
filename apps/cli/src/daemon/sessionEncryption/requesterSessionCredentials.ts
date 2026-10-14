@@ -445,7 +445,7 @@ export async function verifyRequesterSessionCredentialBinding(input: Readonly<{
       fetchSessionById({ token: input.credentials.token, serverUrl: input.serverHttpBaseUrl, sessionId: input.sessionId,
         ...(input.signal ? { signal: input.signal } : {}) }),
     ]));
-    const owner = session ? tryDecryptSessionOwnerMetadataView({ credentials: input.credentials,
+    const owner = input.expectedSessionCreationTag !== undefined && session ? tryDecryptSessionOwnerMetadataView({ credentials: input.credentials,
       accountEncryptionMode: currentness.mode, rawSession: session }) : null;
     const correspondence = input.expectedSessionCreationTag === undefined ? null
       : SessionCreationCorrespondenceV1Schema.safeParse(owner?.sessionCreationCorrespondenceV1);
