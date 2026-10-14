@@ -88,6 +88,8 @@ const workflowRunProjectionSelect = {
     visibleTeamId: true,
     originKind: true,
     automationId: true,
+    // Soft-deleted definitions retain their scope; active catalog membership is not Run ownership.
+    automation: { select: { scopeSessionId: true } },
     originSessionId: true,
     state: true,
     revision: true,
@@ -183,6 +185,7 @@ function projectRun(row: WorkflowRunRow): WorkflowRunSummaryV1 {
         ...(row.attentionRequired === undefined ? {} : { attentionRequired: row.attentionRequired }),
         heldCount: state === "cancelled" ? 0 : row._count.workflowInvocations,
         origin,
+        ...(origin.kind === "automation" ? { automationScopeSessionId: row.automation?.scopeSessionId ?? null } : {}),
         state,
         revision: row.revision,
         machineId,
