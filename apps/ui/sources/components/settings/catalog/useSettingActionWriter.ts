@@ -5,7 +5,6 @@ import { useMountedActionExecution } from '@/components/approvals/useMountedActi
 import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { getStorage } from '@/sync/domains/state/storageStore';
-import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import type { SettingRef, SettingValue } from './settingDeclarations';
 
@@ -13,7 +12,7 @@ export type SettingActionAddress = Pick<SettingRef, 'anchor'> & Readonly<{ key?:
 
 /** Exact declared-setting ingress; the mounted Action owner retains admission and approval. */
 export function useSettingActionWriter(options: Readonly<{ serverId?: string }> = {}) {
-    const scope = useAccountSettingsScope();
+    const scope = getStorage()(state => state.settingsScope);
     const lifetime = React.useMemo(() => captureActiveServerAccountScopeLifetime(), [scope]);
     const mounted = useMountedActionExecution(scope);
     const serverId = options.serverId;

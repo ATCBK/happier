@@ -66,9 +66,9 @@ describe('declared setting Action writer', () => {
             const retained = profile![1];
             await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings, useProfiles: true })); });
             await act(async () => { retained(current => !current); });
-            await vi.waitFor(() => expect(account.persistedSettings.useProfiles).toBe(false));
+            await act(async () => { await vi.waitFor(() => expect(account.persistedSettings.useProfiles).toBe(false)); });
             await act(async () => { await apply!({ useMachinePickerSearch: true, analyticsOptOut: true, sessionTmuxTmpDir: null }); });
-            await vi.waitFor(() => expect(account.persistedSettings).toMatchObject({ useMachinePickerSearch: true, analyticsOptOut: true, sessionTmuxTmpDir: null }));
+            await act(async () => { await vi.waitFor(() => expect(account.persistedSettings).toMatchObject({ useMachinePickerSearch: true, analyticsOptOut: true, sessionTmuxTmpDir: null })); });
             const writes = account.settingsWrites.length;
             await act(async () => { profile![1](() => null); });
             expect(account.settingsWrites).toHaveLength(writes);
@@ -77,6 +77,9 @@ describe('declared setting Action writer', () => {
                 // @ts-expect-error Deliberate runtime boundary input with the wrong scalar type.
                 await apply!({ useProfiles: 'true' });
             });
+            expect(account.persistedSettings.useProfiles).toBe(false);
+            expect(account.settingsWrites).toHaveLength(writes);
+            await act(async () => { await apply!({ useProfiles: undefined }); });
             expect(account.persistedSettings.useProfiles).toBe(false);
             expect(account.settingsWrites).toHaveLength(writes);
         } finally { standardCleanup(); await account.dispose(); }
@@ -95,14 +98,15 @@ describe('declared setting Action writer', () => {
             await act(async () => { await apply!({ useProfiles: true, sessionListSectionModeV1: 'activity',
                 usageCoachPreferencesV1: settingsParse({ usageCoachPreferencesV1: { modelSuggestion: 'off' } }).usageCoachPreferencesV1,
                 sessionUsageGaugeLabels: true }); });
-            await vi.waitFor(() => expect(account.persistedSettings).toMatchObject({
+            await act(async () => { await vi.waitFor(() => expect(account.persistedSettings).toMatchObject({
                 useProfiles: true, sessionListSectionModeV1: 'activity', usageCoachPreferencesV1: { modelSuggestion: 'off' }, sessionUsageGaugeLabels: true,
-            }));
+            })); });
             const retained = apply!;
             const writes = account.settingsWrites.length;
             await act(async () => { screen.tree.update(<></>); });
             await act(async () => { await retained({ useProfiles: false }); });
             expect(account.persistedSettings.useProfiles).toBe(true);
+            expect(storage.getState().settings.useProfiles).toBe(true);
             expect(account.settingsWrites).toHaveLength(writes);
             const updater = vi.fn(() => ({ useProfiles: false }));
             await act(async () => { storage.setState({ settingsScope: { serverId: account.scope.serverId, accountId: 'another-account' } }); });
