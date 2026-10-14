@@ -112,6 +112,8 @@ async function createMinisignBootstrapFixture(t) {
     `  [IO.File]::Copy(${quote(binary)}, (Join-Path $dir 'minisign.exe'))`, '}',
     '$fixtureZip = Join-Path $fixtureRoot "fixture.zip"',
     '[IO.Compression.ZipFile]::CreateFromDirectory($archiveRoot, $fixtureZip)',
+    // Installed system commands must not bypass the fallback under test.
+    'function Get-Command { param($Name, $ErrorAction); if ($Name -eq "minisign") { return $null }; Microsoft.PowerShell.Core\\Get-Command @PSBoundParameters }',
     // Network/download bytes and filesystem visibility are genuine system
     // boundaries. Hash the real vendor archive separately in live validation;
     // here the fake network artifact has the pinned checksum at that boundary.
