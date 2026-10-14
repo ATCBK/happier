@@ -63,6 +63,9 @@ export function createSessionActionTarget(params: Readonly<{
         terminalControlServiceability?.v === 1
         && terminalControlServiceability.state === 'recoverable_unservable'
     );
+    const hasReadableOwnerMetadataWithoutTerminalLifecycle = ownerSession !== null
+        && ownerMetadata !== null
+        && ownerMetadata.terminal?.controlServiceabilityV1 === undefined;
     const canStop = session.access?.capabilities.stopSession === true;
     const canArchive = session.access?.capabilities.archiveSession === true && !isArchived && (!isActive || canStop);
     const hasWriteAccess = session.access?.capabilities.submitAgentInput === true;
@@ -101,7 +104,11 @@ export function createSessionActionTarget(params: Readonly<{
             session.access?.capabilities.deleteSession === true
             && !isActive
             && params.isConnected !== true
-            && isSessionTerminalPermanentlyAbsent(terminalControlServiceability),
+            // An archived pre-launch failure has no terminal lifecycle to
+            // retire. The Home-owned Delete Action remains authoritative for
+            // that row; explicit non-retired terminal evidence still fails closed.
+            && ((isArchived && hasReadableOwnerMetadataWithoutTerminalLifecycle)
+                || isSessionTerminalPermanentlyAbsent(terminalControlServiceability)),
         readStateAction: isArchived
             ? { kind: 'none', visible: false }
             : resolveSessionReadStateAction(session),
