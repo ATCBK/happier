@@ -1,4 +1,5 @@
 import type { ExecutionRunIntent } from '@happier-dev/protocol';
+import type { ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 
 import {
   runEphemeralExecutionRunTextPrompt,
@@ -24,6 +25,7 @@ export async function runEphemeralExecutionRunTextPromptWithRunnerConfig(params:
       backendId: string;
     };
     modelId?: string;
+    modelSelection?: ProviderBoundModelRef;
     permissionMode?: string;
   }>;
   intent: ExecutionRunIntent;
@@ -42,6 +44,7 @@ export async function runEphemeralExecutionRunTextPromptWithRunnerConfig(params:
     sessionId: params.sessionId,
     backendTarget,
     modelId,
+    ...(params.runner.modelSelection ? { modelSelection: params.runner.modelSelection } : {}),
     permissionMode,
     intent: params.intent,
     prompt: params.prompt,
