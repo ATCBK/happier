@@ -161,7 +161,7 @@ export type McpServerActionPortsV1 = Readonly<{
 }>;
 
 const catalogFailureCodes = new Set<string>([
-  ...McpServerCatalogSnapshotV1Schema.options[1].shape.reason.options,
+  ...McpServerCatalogSnapshotV1Schema._zod.def.options[1].shape.reason.options,
   'invalid-mutation', 'reference-conflict', 'outcome_unknown', 'server_scope_mismatch',
   'not_authenticated', 'permission_denied', 'admission_unavailable', 'invalid_action_output',
   'machine_unreachable', 'mcp_catalog_unavailable',
@@ -210,6 +210,9 @@ export function createMcpServerActionExecuteV1(ports: McpServerActionPortsV1) {
       }
       const snapshot = await ports.readCatalog(context);
       if (snapshot.status !== 'ready' || snapshot.authority !== 'active') return { ok: true, result: { ok: false, code: 'catalog_unavailable' } };
+      if (inputRules.expectedRevision !== undefined && inputRules.expectedRevision !== snapshot.revision) {
+        return { ok: true, result: { ok: false, code: 'conflict' } };
+      }
       const ids = inputRules.items.map(item => 'serverId' in item ? item.serverId
         : snapshot.catalog.servers.find(server => server.name === item.name)?.id);
       const pluginAdmissionNeeded = ids.some(id => id !== undefined && isMcpPluginItemIdV1(id) && !snapshot.catalog.servers.some(server => server.id === id));

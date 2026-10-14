@@ -8,10 +8,83 @@ import { UsageCoachPreferencesV1Schema } from '../account/settings/usageCoachPre
 import { buildUsageCoachRemedies } from '../usage/coach/buildUsageCoachRemedies.js';
 import { evaluateUsageCoach } from '../usage/coach/evaluateUsageCoach.js';
 import { UsageMcpBindingUsageSchema } from '../usage/coach/usageMcpBindingUsage.js';
+import { UsageCoachApplyResultSchema } from '../usage/coach/coachActions.js';
+import { createMcpServerActionExecuteV1 } from '../mcp/servers/serverActionsV1.js';
+import { commitMcpServerCatalogMutationV1, loadMcpServerCatalogV1 } from '../mcp/servers/serverCatalogV1.js';
+import type { McpServerCatalogV1 } from '../mcp/servers/serverRowsV1.js';
 
 const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
 
 describe('evidence-bound Coach Action admission', () => {
+    it('composes witnessed MCP remedies with exact Undo and refuses intervening catalog edits', async () => {
+        let catalog: McpServerCatalogV1 = { v: 1, servers: [{ id: 'server', name: 'docs', transport: 'stdio',
+            stdio: { command: 'docs', args: [] }, env: {}, createdAt: 1, updatedAt: 10 }], bindings: [{
+            id: 'rule', serverId: 'server', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 20,
+        }] };
+        let revision = 40;
+        const original = catalog.bindings;
+        const usage = UsageMcpBindingUsageSchema.parse({ v: 1, evidenceId: 'mcp-window', sessionId: 'session', turnId: 'turn',
+            observedAtMs: 150, window: { startMs: 100, endMs: 150 }, coverage: 'complete', bindings: [{ serverId: 'server',
+                bindingId: 'rule', serverRevision: 10, bindingRevision: 20, catalogRevision: 40, toolCallCount: 0, schemaBytes: null }] });
+        const snapshot = () => loadMcpServerCatalogV1({ mode: 'plain', material: null,
+            readRow: async () => ({ status: 'present', revision, content: { t: 'plain', v: catalog } }) });
+        let raceAfterQuery = false;
+        const mcp = createMcpServerActionExecuteV1({ readCatalog: snapshot,
+            // Only the durable row transport is replaced; reducers and CAS remain real.
+            mutate: (change, expectedRevision) => commitMcpServerCatalogMutationV1({ catalog, revision, change, scope: null,
+                ctx: { nowMs: 300, newId: () => 'new-rule' }, writeCatalog: async candidate => {
+                    if (expectedRevision !== revision || candidate.expectedRevision !== revision) return { status: 'conflict', revision };
+                    catalog = candidate.catalog; return { status: 'updated', revision: ++revision, cursor: revision };
+                } }), machine: async () => { throw Error('No machine effect'); },
+        });
+        const executor = createActionExecutor({ isActionApprovalRequired: () => false, mcpServerAction: mcp,
+            usageActions: { query: async () => {
+                const finding = evaluateUsageCoach({ queryKey: 'query', period: { startMs: 100, endMs: 200 }, asOfMs: 200,
+                    currentness: 'current', detail: { coverage: 'partial', mcpUsage: [usage] } }).findings;
+                const admittedRemedies = buildUsageCoachRemedies({ findings: finding, composition: [], mcpUsage: [usage], serverId: 'home',
+                    sessions: [{ id: 'session', serverId: 'home', active: false, ownerMetadata: {}, agentTarget: null,
+                        access: { capabilities: { submitAgentInput: true } } }], mcpCatalog: await snapshot() });
+                const batch = resolveUsagePageAggregation({ queries: [query], howYouWork: [{ query, asOfMs: 200,
+                    detail: { status: 'partial', coach: { detail: { coverage: 'partial', mcpUsage: [usage] }, admittedRemedies } } }] });
+                if (raceAfterQuery) { revision += 1; raceAfterQuery = false; }
+                return batch;
+            } },
+        } as ActionExecutorDeps);
+        const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
+        const queried = await executor.execute('usage.query', { queries: [query] }, context);
+        expect(queried.ok).toBe(true);
+        const evaluation = resolveUsagePageAggregation({ queries: [query], howYouWork: [{ query, asOfMs: 200,
+            detail: { status: 'partial', coach: { detail: { coverage: 'partial', mcpUsage: [usage] } } } }] });
+        const evidenceKey = evaluation.results[0]!.coach!.findings.find(row => row.detectorId === 'mcp_overhead')!.evidenceKey;
+        const apply = await executor.execute('usage.coach.apply', { query, evidenceKey }, context);
+        expect(apply, JSON.stringify(apply)).toMatchObject({ ok: true, result: { kind: 'applied', reversal: { kind: 'mcp_binding' } } });
+        if (!apply.ok) throw Error('Apply failed');
+        const receipt = UsageCoachApplyResultSchema.parse(apply.result);
+        expect(catalog.bindings[0]!.enabled).toBe(false);
+        const undo = await executor.execute('usage.coach.undo', { query, evidenceKey, reversal: receipt.reversal }, context);
+        expect(undo, JSON.stringify(undo)).toMatchObject({ ok: true, result: { kind: 'undone' } });
+        expect(catalog.bindings.map(({ updatedAt: _clock, ...rule }) => rule))
+            .toEqual(original.map(({ updatedAt: _clock, ...rule }) => rule));
+        // New native observation sees the restored configuration and its real row revision.
+        usage.bindings[0]!.catalogRevision = revision;
+        usage.bindings[0]!.bindingRevision = catalog.bindings[0]!.updatedAt;
+        const reapplied = await executor.execute('usage.coach.apply', { query, evidenceKey }, context);
+        expect(reapplied.ok).toBe(true);
+        if (!reapplied.ok) throw Error('Reapply failed');
+        const nextReceipt = UsageCoachApplyResultSchema.parse(reapplied.result);
+        await mcp({ actionId: 'mcp.rules.set', input: { items: [{ serverId: 'server' }], change: {
+            kind: 'write', write: { place: { t: 'machine', machineId: 'other-machine' }, state: 'on' },
+        } }, context });
+        const intervening = catalog;
+        expect(await executor.execute('usage.coach.undo', { query, evidenceKey, reversal: nextReceipt.reversal }, context))
+            .toMatchObject({ ok: false, errorCode: 'coach_owner_refused' });
+        expect(catalog).toBe(intervening);
+        // Apply must also refuse a row changed between the authorized query and effect.
+        catalog = { ...catalog, bindings: original }; usage.bindings[0]!.catalogRevision = revision;
+        usage.bindings[0]!.bindingRevision = original[0]!.updatedAt; raceAfterQuery = true;
+        expect(await executor.execute('usage.coach.apply', { query, evidenceKey }, context)).toMatchObject({ ok: false });
+        expect(catalog.bindings).toBe(original);
+    });
     it('prepares the canonical rules address from witnessed MCP usage', () => {
         const usage = UsageMcpBindingUsageSchema.parse({ v: 1, evidenceId: 'mcp-window', sessionId: 'session', turnId: 'turn',
             observedAtMs: 150, window: { startMs: 100, endMs: 150 }, coverage: 'complete', bindings: [{ serverId: 'server',

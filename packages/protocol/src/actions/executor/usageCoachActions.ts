@@ -59,6 +59,7 @@ export async function executeUsageCoachAction(actionId: UsageCoachActionId, valu
                 break;
             case 'mcp_binding':
                 restored = await child('mcp.rules.set', { items: [{ serverId: reversal.owner.serverId }],
+                    expectedRevision: reversal.appliedRevision,
                     change: { kind: 'replace', rules: reachRulesToDraftsV1(reversal.owner.previous) } });
                 break;
         }
@@ -107,6 +108,7 @@ export async function executeUsageCoachAction(actionId: UsageCoachActionId, valu
             ...(remedy.providerConnectionId !== undefined ? { providerConnectionId: remedy.providerConnectionId } : {}),
             ...(remedy.expected ? { expected: remedy.expected } : {}), captureBefore: true }); break;
         case 'mcp_binding': applied = await child('mcp.rules.set', { items: [{ serverId: remedy.serverId }],
+            expectedRevision: remedy.expectedRevision,
             change: { kind: 'write', write: { place: remedy.target, state: remedy.enabled ? 'on' : 'off',
                 ...(remedy.agentId ? { agentId: remedy.agentId } : {}) } } }); break;
         case 'prepared_session': applied = await child('session.spawn_new', remedy.input); break;
@@ -136,7 +138,7 @@ export async function executeUsageCoachAction(actionId: UsageCoachActionId, valu
     } else if (remedy.kind === 'mcp_binding') {
         const receipt = McpRulesSetOutputV1Schema.safeParse(result);
         if (!receipt.success || !receipt.data.ok || receipt.data.items.length !== 1) return failure('coach_owner_result_invalid');
-        reversal = { kind: 'mcp_binding', owner: receipt.data.items[0]! };
+        reversal = { kind: 'mcp_binding', owner: receipt.data.items[0]!, appliedRevision: receipt.data.revision };
     }
     if (reversal && !matchesRemedy(remedy, reversal)) return failure('coach_owner_result_invalid');
     return { ok: true, result: { kind: 'applied', evidenceKey: request.evidenceKey, remedy,
