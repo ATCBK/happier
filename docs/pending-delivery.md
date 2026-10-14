@@ -138,6 +138,9 @@ launch-mode classifier follows symlinks to the same real path that the launcher
 imports. The launcher also reports when it imports the provider into its own
 process; its actual exit then proves provider exit, including extensionless links
 to JavaScript. Filesystem classification alone never retires provider tasks.
+Agent SDK process capture qualifies direct provider/runtime invocations separately
+from Windows shell shims. A shim's exit alone retains unknown task inventory;
+successful owned tree cleanup can establish stop when it observed the live root.
 Unverified owned cleanup or an unexpected native launcher exit whose provider
 termination cannot be confirmed ends the runner instead of retrying into the same
 ledger; unresolved task identities remain unknown. Native children may keep stream

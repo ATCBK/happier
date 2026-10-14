@@ -1,6 +1,9 @@
 import type { Query, SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sdk';
 import { ChildProcess, spawn } from 'node:child_process';
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -8,9 +11,18 @@ import { createClaudeProviderRuntimeActivityAdapter } from '@/backends/claude/pr
 import { createSessionRuntimeActivity } from '@/session/runtimeActivity/createSessionRuntimeActivity';
 import { createDeferred } from '@/testkit/async/deferred';
 import { waitForProcessExit } from '@/testkit/process/spawn';
+import { isPidAlive } from '@/testkit/process/spawn';
+import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { claudeRemoteAgentSdk } from './claudeRemoteAgentSdk';
 import { makeMode } from './claudeRemoteAgentSdk.testkit';
 import { createClaudeRuntimeActivityEvidence } from './runtimeActivityEvidence';
+
+// Capture and launch real OS children; Windows platform selection is restored at this OS boundary.
+vi.mock('node:child_process', async importOriginal => {
+    const actual = await importOriginal<typeof import('node:child_process')>();
+    return { ...actual, spawn: vi.fn(actual.spawn) };
+});
 
 // The SDK transport and OS process are the boundaries; the ledger, adapter and session
 // contribution below remain real so premature task abandonment reaches the publication.
@@ -74,6 +86,119 @@ function runStoppedProcessFixture(child: ControlledProcess, evidence: ReturnType
 }
 
 describe('claudeRemoteAgentSdk owned process exit', () => {
+    it.runIf(process.platform !== 'win32').each(['javascript-direct', 'native-direct', 'wrapper-exit', 'wrapper-cleanup'])('qualifies provider stop through SDK 0.2.123 and its actual OS invocation (%s)', async (kind) => {
+        const dir = await mkdtemp(join(tmpdir(), 'happier-sdk-owned-invocation-'));
+        const pidPath = join(dir, 'provider-pid');
+        const aliveAckPath = join(dir, 'provider-alive-ack');
+        const providerPath = join(dir, kind === 'javascript-direct' ? 'provider.js' : 'provider');
+        const shellWrapper = join(dir, 'comspec');
+        const shimPath = join(dir, 'claude.cmd');
+        const wrapsProvider = kind.startsWith('wrapper-');
+        const env = createEnvKeyScope(['ComSpec']);
+        const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+        if (!platformDescriptor) throw new Error('Expected OS platform descriptor');
+        const restorePlatform = () => Object.defineProperty(process, 'platform', platformDescriptor);
+        await writeFile(providerPath, `#!${process.execPath}
+            const fs = require('node:fs');
+            fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+            process.on('SIGUSR2', () => fs.writeFileSync(${JSON.stringify(aliveAckPath)}, 'alive'));
+            const send = value => console.log(JSON.stringify(value));
+            require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+                const message = JSON.parse(line);
+                if (message.type === 'control_request') {
+                    send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id,
+                        response: { commands: [], models: [], agents: [] } } });
+                } else if (message.type === 'user') {
+                    send({ type: 'system', subtype: 'init', session_id: 'owned-session' });
+                    send({ type: 'system', subtype: 'task_started', session_id: 'owned-session', task_id: 'background-task',
+                        task_type: 'local_agent', is_backgrounded: true });
+                    send({ type: 'result', subtype: 'success', session_id: 'owned-session' });
+                    process.stdout.end(() => {
+                        if (${wrapsProvider}) process.kill(process.ppid, 'SIGUSR1');
+                        else process.exit(0);
+                    });
+                }
+            });
+            setInterval(() => {}, 1000);
+        `, { mode: 0o755 });
+        await writeFile(shimPath, 'Windows shell shim fixture\n');
+        await writeFile(shellWrapper, `#!${process.execPath}
+            require('node:child_process').spawn(process.execPath, [${JSON.stringify(providerPath)}], { stdio: 'inherit' });
+            process.on('SIGTERM', () => {});
+            process.on('SIGUSR1', () => {
+                if (${kind === 'wrapper-exit'}) process.exit(0);
+                else process.stdout.end();
+            });
+        `, { mode: 0o755 });
+        const activity = createSessionRuntimeActivity('supported');
+        const snapshots: Array<{ state: string; activeCount: number }> = [];
+        await activity.bindPublisher({ publish: async snapshot => { snapshots.push(snapshot); }, close: async () => {} });
+        const contributionHandle = activity.agentRuntimeContributionHandle;
+        if (!contributionHandle) throw new Error('Expected supported runtime contribution');
+        const evidence = createClaudeRuntimeActivityEvidence();
+        const adapter = createClaudeProviderRuntimeActivityAdapter({ contributionHandle, providerActivityLedger: evidence.providerActivityLedger });
+        let sent = false;
+        const providerTurnFinished = createDeferred<void>();
+        const originalSpawn = vi.mocked(spawn).getMockImplementation();
+        if (!originalSpawn) throw new Error('Expected real OS spawn boundary');
+        if (wrapsProvider) {
+            env.patch({ ComSpec: shellWrapper });
+            // Exercise the actual canonical Windows invocation; Linux executes the fixture at the OS boundary.
+            Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'win32' });
+            vi.mocked(spawn).mockImplementationOnce((command, args, options) => {
+                restorePlatform();
+                return originalSpawn(command, args, options);
+            });
+        }
+        let providerPid: number | undefined;
+        try {
+            const run = claudeRemoteAgentSdk({
+                sessionId: null, transcriptPath: null, path: dir,
+                claudeExecutablePath: wrapsProvider ? shimPath : providerPath,
+                canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+                isAborted: () => false,
+                nextMessage: async () => {
+                    if (sent) { await providerTurnFinished.promise; return null; }
+                    sent = true;
+                    return { message: 'start background work', mode: makeMode() };
+                },
+                onReady: async () => {
+                    if (kind === 'wrapper-exit') {
+                        const captured = vi.mocked(spawn).mock.results.find(result => result.type === 'return' && result.value.spawnfile === shellWrapper);
+                        if (!captured || captured.type !== 'return') throw new Error('Expected actual canonical ComSpec child');
+                        if (captured.value.exitCode === null && captured.value.signalCode === null) await once(captured.value, 'exit');
+                    }
+                    providerTurnFinished.resolve();
+                }, onSessionFound: () => {}, onMessage: () => {},
+                providerRuntimeActivityEvidence: evidence, runtimeActivityAdapter: adapter,
+            });
+            const failure: unknown = await run.then(() => null, (error: unknown) => error);
+            providerPid = Number(await readFile(pidPath, 'utf8'));
+            if (wrapsProvider) {
+                expect(vi.mocked(spawn).mock.calls.some(([command, args]) => command === shellWrapper && Array.isArray(args) && args[0] === '/d')).toBe(true);
+            }
+            if (kind === 'wrapper-exit') {
+                expect(isPidAlive(providerPid)).toBe(true);
+                process.kill(providerPid, 'SIGUSR2');
+                await vi.waitFor(async () => expect(await readFile(aliveAckPath, 'utf8')).toBe('alive'));
+                expect(evidence.providerActivityLedger.getActiveProviderTaskCount()).toBe(1);
+                expect(snapshots.at(-1)).toEqual({ state: 'unknown', activeCount: 0 });
+                expect(failure).toMatchObject({ code: 'claude_native_provider_exit_unverified' });
+            } else {
+                expect(failure).toBeNull();
+                expect(isPidAlive(providerPid)).toBe(false);
+                expect(evidence.providerActivityLedger.hasActiveProviderTasks()).toBe(false);
+                expect(snapshots.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+            }
+        } finally {
+            restorePlatform();
+            env.restore();
+            if (!providerPid) providerPid = Number(await readFile(pidPath, 'utf8').catch(() => '0'));
+            await killProcessTree({ pid: providerPid });
+            await activity.dispose();
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
     it.each([
         { denySignals: false, runtimeFails: false },
         { denySignals: true, runtimeFails: false },
@@ -206,15 +331,15 @@ describe('claudeRemoteAgentSdk owned process exit', () => {
         }
     });
 
-    it.each([null, 'SIGTERM'] as const)('settles already-exited owned processes (%s) without waiting for another exit event', async (signal) => {
+    it.each([null, 'SIGTERM'] as const)('settles already-exited opaque SDK processes (%s) without treating them as provider exit', async (signal) => {
         const child = new ControlledProcess();
         child.exit(signal);
         const evidence = createClaudeRuntimeActivityEvidence();
         evidence.providerActivityLedger.apply({ type: 'started', sessionId: 's1', taskId: 'old-task' });
 
-        await runStoppedProcessFixture(child, evidence);
+        await expect(runStoppedProcessFixture(child, evidence)).rejects.toMatchObject({ code: 'claude_native_provider_exit_unverified' });
 
-        expect(evidence.providerActivityLedger.hasActiveProviderTasks()).toBe(false);
+        expect(evidence.providerActivityLedger.hasActiveProviderTasks()).toBe(true);
     });
 
     it('propagates a failed OS spawn without waiting for an exit that cannot arrive or abandoning known tasks', async () => {
@@ -232,7 +357,7 @@ describe('claudeRemoteAgentSdk owned process exit', () => {
         }
     });
 
-    it('keeps background task evidence and finalization pending until the owned process exits', async () => {
+    it('keeps background task evidence and finalization pending until an opaque SDK process exits', async () => {
         const child = new ControlledProcess();
         const resultPublished = createDeferred();
         const finishStream = createDeferred();
@@ -301,14 +426,14 @@ describe('claudeRemoteAgentSdk owned process exit', () => {
             expect(didReturn).toBe(false);
 
             child.exit();
-            await run;
+            await expect(run).rejects.toMatchObject({ code: 'claude_native_provider_exit_unverified' });
             await adapter.publishCurrent('verify-process-exit');
-            expect(evidence.providerActivityLedger.hasActiveProviderTasks()).toBe(false);
-            expect(publish).toHaveBeenLastCalledWith({ state: 'idle', activeCount: 0 });
+            expect(evidence.providerActivityLedger.hasActiveProviderTasks()).toBe(true);
+            expect(publish).toHaveBeenLastCalledWith({ state: 'unknown', activeCount: 0 });
         } finally {
             finishStream.resolve();
             if (child.exitCode === null) child.exit();
-            await run;
+            await run.catch(() => {});
             await activity.dispose();
         }
     });

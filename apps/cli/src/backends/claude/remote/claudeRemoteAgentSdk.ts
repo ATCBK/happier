@@ -43,7 +43,7 @@ import {
 import { withCurrentHappierSessionId } from '@/agent/runtime/session/currentSessionIdEnv';
 
 import type { SDKMessage, SDKSystemMessage, SDKUserMessage } from '@/backends/claude/sdk';
-import type { PermissionResult } from '@/backends/claude/sdk/types';
+import { ClaudeNativeProviderExitUnverifiedError, type PermissionResult } from '@/backends/claude/sdk/types';
 import type { JsRuntime } from '@/backends/claude/runClaude';
 import { createSubprocessStderrAppender, resolveSubprocessArtifactsDir } from '@/agent/runtime/subprocessArtifacts';
 import { join } from 'node:path';
@@ -825,6 +825,16 @@ export async function claudeRemoteAgentSdk(opts: {
 
     const messages = new PushableAsyncIterable<SDKUserMessage>();
 
+    const ownedProcess: {
+        child: ChildProcess | null;
+        exit: Promise<'exited' | 'spawn-failed'> | null;
+        providerIsChild: boolean;
+    } = { child: null, exit: null, providerIsChild: false };
+    const sameArgs = (left: readonly string[], right: readonly string[]): boolean =>
+        left.length === right.length && left.every((arg, index) => arg === right[index]);
+    const matchesInvocation = (child: ChildProcess, command: string, args: readonly string[]): boolean =>
+        child.spawnfile === command && sameArgs(child.spawnargs.slice(1), args);
+
     const defaultSpawnClaudeCodeProcess = (spawnOptions: AgentSdkSpawnOptions): AgentSdkSpawnedProcess => {
         const invocation = resolveWindowsCommandInvocation({
             command: spawnOptions.command,
@@ -850,6 +860,11 @@ export async function claudeRemoteAgentSdk(opts: {
             windowsHide: true,
             ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
         });
+        ownedProcess.child = child;
+        // Windows shell shims insert a ComSpec command and shell arguments. A direct SDK
+        // invocation keeps its provider/runtime arguments and belongs to this captured child.
+        ownedProcess.providerIsChild = sameArgs(invocation.args, spawnOptions.args)
+            && matchesInvocation(child, invocation.command, invocation.args);
         child.stderr?.on('data', (data: Buffer | string) => {
             const text = data.toString();
             if (debugEnabled) {
@@ -865,13 +880,12 @@ export async function claudeRemoteAgentSdk(opts: {
     };
 
     const spawnBaseProcess = opts.spawnClaudeCodeProcess ?? defaultSpawnClaudeCodeProcess;
-    const ownedProcess: {
-        child: ChildProcess | null;
-        exit: Promise<'exited' | 'spawn-failed'> | null;
-    } = { child: null, exit: null };
     queryOptions.spawnClaudeCodeProcess = (spawnOptions: AgentSdkSpawnOptions): AgentSdkSpawnedProcess => {
         const child = spawnBaseProcess(spawnOptions);
+        const providerIsChild = (ownedProcess.child === child && ownedProcess.providerIsChild)
+            || (child instanceof ChildProcess && matchesInvocation(child, spawnOptions.command, spawnOptions.args));
         ownedProcess.child = child instanceof ChildProcess ? child : null;
+        ownedProcess.providerIsChild = providerIsChild;
         ownedProcess.exit = new Promise((resolve) => {
             const settle = (outcome: 'exited' | 'spawn-failed') => {
                 child.off('exit', onExit);
@@ -2392,10 +2406,14 @@ export async function claudeRemoteAgentSdk(opts: {
             // Abort can set ChildProcess.killed while it is still alive, causing the SDK to skip
             // its delayed termination. The canonical process-tree owner finishes owned cleanup.
             const child = ownedProcess.child;
+            let processTreeStopped = false;
             if (child && child.exitCode === null && child.signalCode === null) {
-                await killProcessTree(child);
+                processTreeStopped = (await killProcessTree(child)).rootObservedAlive;
             }
             if (ownedProcess.exit && await ownedProcess.exit === 'exited') {
+                if (!ownedProcess.providerIsChild && !processTreeStopped) {
+                    throw new ClaudeNativeProviderExitUnverifiedError();
+                }
                 handleClaudeRuntimeActivityLoss({
                     ...runtimeActivityEffectParams,
                     reason: 'claude_agent_sdk_process_exit',
