@@ -702,9 +702,10 @@ function writeFakeAcpThoughtThenPromptStopAgentScript(params: {
   return scriptPath;
 }
 
-function writeFakeAcpEndlessMessageChunksAgentScript(params: {
+function writeFakeAcpUnansweredPromptAgentScript(params: {
   dir: string;
   chunkIntervalMs: number;
+  traffic: 'output' | 'metadata' | 'silent';
 }): string {
   const scriptPath = join(params.dir, 'fake-acp-endless-chunks-agent.mjs');
   const chunkIntervalMs = Number.isFinite(params.chunkIntervalMs) ? Math.max(1, Math.trunc(params.chunkIntervalMs)) : 1;
@@ -751,6 +752,7 @@ function writeFakeAcpEndlessMessageChunksAgentScript(params: {
         }
 
         if (method === 'session/prompt') {
+          if (${JSON.stringify(params.traffic)} === 'silent') continue;
           let i = 0;
           setInterval(() => {
             i += 1;
@@ -759,10 +761,13 @@ function writeFakeAcpEndlessMessageChunksAgentScript(params: {
               method: 'session/update',
               params: {
                 sessionId: 'test-session',
-                update: {
+                update: ${params.traffic === 'metadata' ? `{
+                  sessionUpdate: 'current_mode_update',
+                  currentModeId: 'metadata-only-mode',
+                }` : `{
                   sessionUpdate: 'agent_message_chunk',
                   content: { type: 'text', text: 'chunk_' + i },
-                },
+                }`},
               },
             });
           }, ${chunkIntervalMs});
@@ -1987,12 +1992,13 @@ describe('AcpBackend.waitForResponseComplete', () => {
     });
   }, 20_000);
 
-  it('resolves with a timed_out outcome when the absolute turn hard cap expires despite continued updates', async () => {
+  it.each(['output', 'metadata', 'silent'] as const)('settles submission custody at the hard cap (%s)', async (traffic) => {
     await withEnvVar('HAPPIER_ACP_TURN_HARD_CAP_TIMEOUT_MS', '150', async () => {
       await withTempDir('happier-acp-hard-cap-', async (dir) => {
-        const scriptPath = writeFakeAcpEndlessMessageChunksAgentScript({
+        const scriptPath = writeFakeAcpUnansweredPromptAgentScript({
           dir,
           chunkIntervalMs: 20,
+          traffic,
         });
         let backendForCleanup: AcpBackend | undefined;
 
@@ -2004,23 +2010,34 @@ describe('AcpBackend.waitForResponseComplete', () => {
             args: [scriptPath],
             transportHandler: createAcpTestTransportHandler({
               idleTimeoutMs: 100,
-              promptLivenessTimeoutMs: 500,
+              promptLivenessTimeoutMs: 5_000,
             }),
           });
           backendForCleanup = backend;
+          const messages: AgentMessage[] = [];
+          backend.onMessage(message => messages.push(message));
 
           const started = await backend.startSession();
-          await backend.sendPrompt(started.sessionId, 'hi');
+          const submitted = await backend.sendPrompt(started.sessionId, 'hi');
+          if (submitted.kind !== 'submitted_to_transport') throw new Error('expected prompt transport submission');
 
           const result = await Promise.race([
-            (backend.waitForResponseComplete(5_000) as Promise<unknown>).then((outcome) => ({ type: 'outcome' as const, outcome })),
+            Promise.all([backend.waitForResponseComplete(5_000), submitted.settlement]).then(([outcome, settlement]) => ({
+              type: 'outcome' as const, outcome, settlement,
+            })),
             new Promise<{ type: 'timer' }>((resolve) => setTimeout(() => resolve({ type: 'timer' }), 600)),
           ]);
 
-          expect(result).toEqual({
+          expect(result).toMatchObject({
             type: 'outcome',
             outcome: { kind: 'timed_out', capMs: 150 },
+            settlement: { kind: traffic === 'output' ? 'effect_observed_without_prompt_response' : 'effect_may_have_occurred' },
           });
+          if (traffic === 'metadata') {
+            expect(messages).toContainEqual(expect.objectContaining({ type: 'event', name: 'current_mode_update' }));
+          } else if (traffic === 'output') {
+            expect(messages).toContainEqual(expect.objectContaining({ type: 'model-output' }));
+          }
         } finally {
           await backendForCleanup?.dispose().catch(() => {});
         }
