@@ -5,6 +5,7 @@ import { buildBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.
 import { buildSessionPermissionRespondRpcParamsV1, type SessionPermissionRespondRpcParamsV1 } from '../sessions/permissions/respondRpcParamsV1.js';
 import { projectSessionBoardGetResultV1, SessionBoardGetInputV1Schema } from '../sessions/board/actions.js';
 import { SessionSurfaceItemV1Schema } from '../sessions/board/item.js';
+import { AutomationV3RunMutationResponseSchema } from '../automations/automationApiV3.js';
 
 function context(ids: string[], sessions = ['s1']): ActionExecutorContext {
   return {
@@ -17,6 +18,35 @@ function context(ids: string[], sessions = ['s1']): ActionExecutorContext {
 }
 
 describe('ActionExecutor API token grant admission', () => {
+  it('checks the actual run-now Automation operand before reaching the workflow HTTP port', async () => {
+    const admitted: string[] = [];
+    const workflowAction: NonNullable<ActionExecutorDeps['workflowAction']> = async ({ actionId, input }) => {
+      if (actionId !== 'workflow.trigger.run_now') throw new Error('Unexpected Action');
+      admitted.push(input.automationId);
+      return AutomationV3RunMutationResponseSchema.parse({ run: {
+        id: 'run-brief', automationId: input.automationId, revision: 1, triggerId: null, triggerRetired: false,
+        state: 'queued', cause: { kind: 'manual', invokedAt: 1 }, dueAt: 1,
+        claimedAt: null, startedAt: null, finishedAt: null, claimedByMachineId: null, leaseExpiresAt: null,
+        attempt: 0, errorCode: null, producedSessionId: null, executionDispatchState: null, executionAttempt: 0,
+        replyHandoffState: 'none', replyHandoffAttempt: 0, replyHandoffDueAt: null, createdAt: 1, updatedAt: 1,
+      } });
+    };
+    const executor = createActionExecutor({ workflowAction } as unknown as ActionExecutorDeps);
+    const ctx = context(['workflow.trigger.run_now'], []);
+    // This keeper isolates the grant ceiling at the real executor; the host's
+    // already-admitted approval waiver is independent of that ceiling.
+    ctx.bypassApprovals = true;
+    ctx.externalActionTarget = { kind: 'machine', machineId: 'm1' };
+    if (!ctx.externalActionCredential?.grant) throw new Error('Expected grant');
+    ctx.externalActionCredential.grant.targets = { sessions: [], machines: ['m1'] };
+    ctx.externalActionCredential.grant.automationIds = ['brief'];
+    const allowed = await executor.execute('workflow.trigger.run_now', { automationId: 'brief' }, ctx);
+    expect(allowed, JSON.stringify(allowed))
+      .toMatchObject({ ok: true, result: { run: { automationId: 'brief', state: 'queued' } } });
+    expect(await executor.execute('workflow.trigger.run_now', { automationId: 'other' }, ctx))
+      .toMatchObject({ ok: false, errorCode: 'credential_scope_denied' });
+    expect(admitted).toEqual(['brief']);
+  });
   it('refuses cross-Session copy source reads outside the credential target grant', async () => {
     const sourceReads: string[] = [];
     // This port models authenticated Board HTTP failure, not the source grant evaluator.

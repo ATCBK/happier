@@ -24,6 +24,28 @@ const spawn = {
 const grant = (patch: Partial<ApiTokenGrantV1> = {}): ApiTokenGrantV1 => ApiTokenGrantV1Schema.parse({ ...full, ...patch });
 
 describe('API token grant admission', () => {
+  it('restricts run-now to exact Automation IDs without replacing Machine admission', () => {
+    const g = ApiTokenGrantV1Schema.parse({ ...full,
+      actions: { families: [], ids: ['workflow.trigger.run_now'] },
+      targets: { sessions: [], machines: ['m1'] }, automationIds: ['brief'],
+    });
+    const request = { grant: g, actionId: 'workflow.trigger.run_now', target: machine };
+    expect(evaluate({ ...request, automationId: 'brief' })).toEqual({ ok: true });
+    for (const automationId of [undefined, null, '', 'other', ' brief', { id: 'brief' }]) {
+      expect(evaluate({ ...request, automationId })).toEqual({ ok: false, reason: 'automation_not_granted' });
+    }
+    expect(evaluate({ ...request, automationId: 'brief', target: { kind: 'machine', machineId: 'm2' } }))
+      .toEqual({ ok: false, reason: 'target_not_granted' });
+    expect(evaluate({ grant: full, actionId: 'workflow.trigger.run_now', target: machine })).toEqual({ ok: true });
+    expect(within(g, full)).toBe(true);
+    expect(within({ ...g, automationIds: ['other'] }, g)).toBe(false);
+    expect(within({ ...g, automationIds: null }, g)).toBe(false);
+    expect(within({ ...g, automationIds: undefined }, g)).toBe(false);
+    expect(within(g, g)).toBe(true);
+    for (const automationIds of [[], ['brief', 'brief'], [''], { ids: ['brief'] }]) {
+      expect(ApiTokenGrantV1Schema.safeParse({ ...full, automationIds }).success).toBe(false);
+    }
+  });
   it('projects only canonical creation admission facts without prompt or startup custody', () => {
     const authored = { ...spawn, creationKey: 'start', initialInput: { text: 'private prompt' },
       agentSessionStartupInstructionsV1: { v: 1, id: 'managed.start', revision: 1, instructions: 'Private startup instructions' } };

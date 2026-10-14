@@ -1134,6 +1134,8 @@ const externalActionExecutionAuthorizationRoutingShapeV1 = () => ({
     actionId: ExternalActionActionIdV1Schema,
     requestId: ExternalActionRequestIdV1Schema,
     requestEnvelopeDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+    /** Exact run-now operand, stamped from the admitted plaintext request. */
+    automationId: ExternalActionTargetIdV1Schema.optional(),
     target: ExternalActionTargetV1Schema,
     managedContinuation: ExternalActionManagedContinuationV1Schema.optional(),
     handoffAdmission: ExternalActionHandoffBindingV1Schema.optional(),
@@ -1156,6 +1158,9 @@ export const ExternalActionExecutionAuthorizationBindingV1Schema = lazyZodSchema
   ExternalActionTerminalServerPrincipalV1Schema.omit({ authority: true })
     .extend(externalActionExecutionAuthorizationRoutingShapeV1()).strict(),
 ]).superRefine((value, context) => {
+  if (value.automationId !== undefined && value.actionId !== 'workflow.trigger.run_now') {
+    context.addIssue({ code: 'custom', path: ['automationId'], message: 'Automation admission binds only run-now' });
+  }
   if (value.pendingResetStartAdmission && (value.actionId !== 'session.pending.resetStart.set'
     || value.target.kind === 'session' && projectExternalActionPendingResetStartSessionDigestV1(value.target.sessionId) !== value.pendingResetStartAdmission.sessionDigest)) {
     context.addIssue({ code: 'custom', path: ['pendingResetStartAdmission'], message: 'Reset admission binds only its exact Session set input' });

@@ -134,9 +134,12 @@ describe('SDK embed helpers', () => {
   it('reuses the spawn owner and its retry identity with all grant bounds', async () => {
     const spawns: Array<Record<string, unknown>> = [];
     const model = { agentTargetKey: grant.create.agentTargetKey, providerConnectionId: null, modelId: 'model-safe' };
+    const otherAgentModel = {
+      agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'codex-default',
+    };
     let refuseInitialInput = false;
     vi.stubGlobal('fetch', vi.fn(async (url: URL, options: RequestInit) => {
-      if (url.pathname.endsWith('/self')) return json({ ...self, grant: { ...grant, models: [model] },
+      if (url.pathname.endsWith('/self')) return json({ ...self, grant: { ...grant, models: [otherAgentModel, model] },
         embedConfig: { ...config, newChat: { enabled: false } } });
       const body = JSON.parse(String(options.body)) as Record<string, unknown>;
       const actionId = url.pathname.split('/').at(-1);
