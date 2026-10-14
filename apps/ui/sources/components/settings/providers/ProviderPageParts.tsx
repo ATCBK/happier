@@ -1,10 +1,8 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { StyleSheet } from 'react-native-unistyles';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
-import { ProviderPickerLine } from './ProviderErrorItems';
 
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -38,53 +36,6 @@ export function ProviderSavedSecretControl(props: Readonly<{
                 onPress={props.onChoose}
             />
         </View>
-    );
-}
-
-/**
- * A save or Connect waiting for its approval: what was asked, and the way to the approval. The
- * request's own continuation finishes the page once it is approved; this only says so.
- */
-export function ProviderApprovalPendingBanner(props: Readonly<{
-    testID: string;
-    onOpen: () => void;
-} & (
-    | { presentation?: 'banner'; providerName: string }
-    /** The compact form inside a picker, beside its other status lines; it names the choice that is waiting. */
-    | { presentation: 'line'; modelName?: string | null }
-)>) {
-    const { theme } = useUnistyles();
-    if (props.presentation === 'line') {
-        return (
-            <ProviderPickerLine
-                testID={props.testID}
-                iconName="info"
-                iconColor={theme.colors.text.secondary}
-                subject={props.modelName ?? undefined}
-                title={t('settingsProvidersCollection.approvalPendingTitle')}
-                action={{
-                    testID: `${props.testID}.open`,
-                    label: t('settingsProvidersCollection.openApproval'),
-                    iconName: 'caret-right',
-                    onPress: props.onOpen,
-                }}
-            />
-        );
-    }
-    return (
-        <AttentionBanner
-            testID={props.testID}
-            tone="neutral"
-            accessibilityLiveRegion="polite"
-            title={t('settingsProvidersCollection.approvalPendingTitle')}
-            description={t('settingsProvidersCollection.approvalPendingDescription', { provider: props.providerName })}
-            action={{
-                testID: `${props.testID}.open`,
-                label: t('settingsProvidersCollection.openApproval'),
-                display: 'secondary',
-                onPress: props.onOpen,
-            }}
-        />
     );
 }
 

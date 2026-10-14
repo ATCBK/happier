@@ -37,7 +37,8 @@ import { MachineScopedSection } from '@/components/settings/machines/MachineScop
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import { ProviderErrorItems } from '@/components/settings/providers/ProviderErrorItems';
 import { ProviderExternalLinkItem } from '@/components/settings/providers/ProviderExternalLinkItem';
-import { ProviderApprovalPendingBanner, ProviderHeaderActions, ProviderProbeResult, ProviderSavedSecretControl } from '@/components/settings/providers/ProviderPageParts';
+import { ProviderHeaderActions, ProviderProbeResult, ProviderSavedSecretControl } from '@/components/settings/providers/ProviderPageParts';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 import { ConnectedAccountPurposeTargetChooser } from '@/components/settings/connectedServices/account/ConnectedAccountPurposeTargetChooser';
 import {
     useProjectedConnectedServicesRegistry,
@@ -167,8 +168,12 @@ function ProviderDuplicateDraft(props: Readonly<{
         </ItemGroup>
         {props.pending && props.pendingApproval ? (
             // Names the connection being added ("DeepSeek · Work"), not the one already on this page.
-            <ProviderApprovalPendingBanner testID="provider-connection-duplicate-approval"
-                providerName={name.trim() || props.providerName} onOpen={props.pendingApproval.onOpen} />
+            <ActionApprovalPendingNotice presentation="banner" testID="provider-connection-duplicate-approval"
+                    message={t('settingsProvidersCollection.approvalPendingTitle')}
+                    description={t('settingsProvidersCollection.approvalPendingDescription', { provider: name.trim() || props.providerName })}
+                    openLabel={t('settingsProvidersCollection.openApproval')}
+                    onOpenApproval={props.pendingApproval.onOpen}
+                />
         ) : null}
     </>;
 }

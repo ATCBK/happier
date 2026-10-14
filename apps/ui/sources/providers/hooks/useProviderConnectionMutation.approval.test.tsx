@@ -51,7 +51,101 @@ function installWritableCatalog(serverId: string, respondAfter?: PromiseLike<voi
     });
 }
 
+/** Observe retained href entries without adding a production-only inspection API. */
+function observeApprovalHrefMaps() {
+    const maps = new Map<string, Map<unknown, unknown>>();
+    const originalSet = Map.prototype.set;
+    const spy = vi.spyOn(Map.prototype, 'set').mockImplementation(function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
+        if (typeof key === 'string' && typeof value === 'string' && value.startsWith('/inbox/approvals/')) {
+            originalSet.call(maps, key, this);
+        }
+        return originalSet.call(this, key, value);
+    });
+    return { maps, restore: () => spy.mockRestore() };
+}
+
 describe('Provider mutation deferred approval', () => {
+    it.each(['settlement', 'Account retirement', 'unmount'] as const)(
+        'releases approval href custody at %s', async ending => {
+            const { serverId } = await scopedAccount.restore({ accountId: 'account-href', catalog: connectionCatalog(), machines: [] });
+            installWritableCatalog(serverId);
+            await harness.requireUiApproval(serverId, 'providers.connections.delete');
+            const observed = observeApprovalHrefMaps();
+            const hook = await renderHook(() => useProviderActionClient(serverId));
+            let execution: Promise<unknown> | undefined;
+            try {
+                await waitForHomeGovernance(() => expect(hook.getCurrent().ready).toBe(true));
+                await act(async () => {
+                    execution = hook.getCurrent().mutateProviderConnection({ serverId,
+                        request: { action: 'delete', connectionId: 'pc_a' },
+                    }).then(value => ({ value }), failure => ({ failure }));
+                });
+                await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(1));
+                const artifactId = harness.artifacts(serverId).list()[0]!.id;
+                const href = `/inbox/approvals/${artifactId}?serverId=${encodeURIComponent(serverId)}`;
+                expect(hook.getCurrent().pendingApproval).toEqual({ artifactId, href });
+                const entries = observed.maps.get(artifactId);
+                expect(entries?.get(artifactId)).toBe(href);
+                if (ending === 'settlement') await decideApprovalAsInbox(serverId, artifactId, 'reject');
+                else if (ending === 'Account retirement') await act(async () => { await harness.switchAccount(serverId, 'account-next'); });
+                else await hook.unmount();
+                await act(async () => { await execution; });
+                expect(entries?.has(artifactId)).toBe(false);
+                if (ending !== 'unmount') expect(hook.getCurrent().pendingApproval).toBeNull();
+                expect(machineRpc).not.toHaveBeenCalled();
+            } finally {
+                await hook.unmount();
+                await execution;
+                observed.restore();
+            }
+        },
+    );
+
+    it('releases one completed href while preserving the next pending approval on its own Home', async () => {
+        const { serverId: homeA } = await scopedAccount.restore({ accountId: 'account-href-a', catalog: connectionCatalog(), machines: [] });
+        const homeB = await scopedAccount.addHome({ name: 'Approval href B', serverUrl: 'https://approval-href-b.test',
+            accountId: 'account-href-b', active: false });
+        installWritableCatalog(homeA);
+        installWritableCatalog(homeB);
+        await harness.requireUiApproval(homeA, 'providers.connections.delete');
+        await harness.requireUiApproval(homeB, 'providers.connections.delete');
+        const observed = observeApprovalHrefMaps();
+        const hook = await renderHook(() => useProviderActionClient([homeA, homeB]));
+        const executions: Promise<unknown>[] = [];
+        try {
+            await waitForHomeGovernance(() => expect(hook.getCurrent().ready).toBe(true));
+            const queue = async (serverId: string) => {
+                await act(async () => {
+                    executions.push(hook.getCurrent().mutateProviderConnection({ serverId,
+                        request: { action: 'delete', connectionId: 'pc_a' },
+                    }).then(value => ({ value }), failure => ({ failure })));
+                });
+                await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(1));
+                return harness.artifacts(serverId).list()[0]!.id;
+            };
+            const artifactA = await queue(homeA);
+            const artifactB = await queue(homeB);
+            const entriesA = observed.maps.get(artifactA);
+            const entriesB = observed.maps.get(artifactB);
+            expect(hook.getCurrent().pendingApproval).toEqual({ artifactId: artifactA,
+                href: `/inbox/approvals/${artifactA}?serverId=${encodeURIComponent(homeA)}` });
+            await decideApprovalAsInbox(homeA, artifactA, 'reject');
+            await act(async () => { await executions[0]; });
+            await waitForHomeGovernance(() => expect(hook.getCurrent().pendingApproval).toEqual({ artifactId: artifactB,
+                href: `/inbox/approvals/${artifactB}?serverId=${encodeURIComponent(homeB)}` }));
+            expect(entriesA?.has(artifactA)).toBe(false);
+            expect(entriesB?.has(artifactB)).toBe(true);
+            await decideApprovalAsInbox(homeB, artifactB, 'reject');
+            await act(async () => { await executions[1]; });
+            expect(entriesB?.has(artifactB)).toBe(false);
+            expect(hook.getCurrent().pendingApproval).toBeNull();
+        } finally {
+            await hook.unmount();
+            await Promise.all(executions);
+            observed.restore();
+        }
+    });
+
     it('projects a manual-model approval from the real Models page hook and keeps its draft after rejection', async () => {
         const { serverId } = await scopedAccount.restore({ accountId: 'account-model-review', catalog: connectionCatalog(), machines: [] });
         const catalog = installWritableCatalog(serverId);
