@@ -2,6 +2,7 @@ import type { AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agent-ru
 import type { SessionSkillPlanV1 } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
 import type { SkillLibraryItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import type { ReachContextV1 } from '@happier-dev/protocol/reach/resolveReachV1';
+import type { SkillRuleV1 } from '@happier-dev/protocol/reach/reachRuleV1';
 import type { StoredCredentials } from '@/persistence';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { SkillArtifactStore } from '../library/readSkillLibraryContent';
@@ -17,7 +18,7 @@ import { prepareSessionSkillPlan } from './prepareSessionSkillPlan';
 import { ensureSkillSessionDirHttp } from '@/daemon/controlClient';
 import { SkillOwnerKeySchema } from '../store/skillStore';
 import { SkillSessionStartupIdentitySchema } from '../store/controlRoutes';
-import { createRealpathNormalizer } from '@/mcp/servers/createRealpathNormalizer';
+import { createRealpathNormalizer, realpathReachRules } from '@/mcp/servers/createRealpathNormalizer';
 import { resolveSessionProjectPromptStack } from '@/agent/prompting/coding/sessionProjectPromptStack';
 import { prepareActivePromptLibraryRecord } from '@/settings/prompts/hydratePromptLibraryCatalog';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
@@ -41,6 +42,7 @@ export type ResolveRunnerSkillsInput = Readonly<{
   operationContext?: SavedSecretOperationContextV1;
 }>;
 export type RunnerSkillsResult = Readonly<{
+  reach?: Readonly<{ context: ReachContextV1; rules: readonly SkillRuleV1[] }>;
   delivery?: AgentSessionSkillDelivery; plan: SessionSkillPlanV1;
   indexItems: readonly SkillLibraryItemV1[]; unavailable?: true;
   unavailableReason?: string;
@@ -84,6 +86,7 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
   const scopeKey = input.accountSnapshot?.scopeKey;
   const current = createRunnerSkillsCurrentnessCheck(input);
   let unavailableReason = 'project_context_unavailable';
+  let reach: RunnerSkillsResult['reach'];
   try {
     await current();
     let snapshot = input.accountSnapshot;
@@ -96,7 +99,9 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
       unavailableReason: 'project_skill_migration_unavailable' };
     if (project.projectKey !== null) snapshot = input.operationContext
       ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
-    if (!snapshot?.promptLibraryCatalog && scopeKey) {
+    // A Session's own Account wakes can start hydration before skills admission.
+    // Loading is outstanding demand, not a completed unavailable rules read.
+    if ((!snapshot?.promptLibraryCatalog || snapshot.promptLibraryCatalog.status === 'loading') && scopeKey) {
       unavailableReason = 'skill_rules_unavailable';
       await prepareActivePromptLibraryRecord({ credentials: input.credentials, key: 'skill-rules', scopeKey,
         lifetimeToken: lifetime, ...(input.operationContext ? { operationContext: input.operationContext } : {}) });
@@ -123,26 +128,28 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
     unavailableReason = 'skill_library_unavailable';
     const inventory = await readSkillLibraryInventory(artifacts);
     await current();
+    const normalizePath = createRealpathNormalizer();
     let context: ReachContextV1 = input.reachContext ?? {
       machineId: input.machineId, machinePlatform: process.platform === 'win32' ? 'win32' : 'posix',
-      directory: createRealpathNormalizer()(input.directory), projectKey: null, agentId: input.agentId,
+      directory: normalizePath(input.directory), projectKey: null, agentId: input.agentId,
     };
     if (!input.reachContext) context = { ...context, projectKey: project.projectKey };
     const initial = inventory.map(artifact => ({ skillId: artifact.artifactId, name: String(artifact.header.title) }));
     const selected = resolveSessionCapabilitiesV1({ context, mcp: null,
-      skills: { items: [...initial, ...FIRST_PARTY_SKILLS_V1], rules },
+      skills: { items: [...initial, ...FIRST_PARTY_SKILLS_V1], rules: realpathReachRules(rules, normalizePath) },
       selection, agentAcceptsUserMcp: false }).skills;
+    reach = { context, rules };
     unavailableReason = 'skill_plan_unavailable';
     const { plan, contents, nativeSkills } = await prepareSessionSkillPlan({ inventory, artifacts, selected, agentSkills,
       agentHasActionChannel: input.agentHasActionChannel, directory: input.directory, home: input.home, assertCurrent: current });
     // Startup can deliver readable items, but a failed live read cannot withdraw the retained folder's content.
     if (input.lifecycle === 'reapply' && plan.items.some(item => item.reason === 'content_unreadable')) {
-      return { plan, indexItems: [], unavailable: true, unavailableReason: 'content_unreadable' };
+      return { reach, plan, indexItems: [], unavailable: true, unavailableReason: 'content_unreadable' };
     }
     const delivered = () => plan.items.filter(item => item.state === 'delivered');
-    if (plan.plan === 'index') return { plan, indexItems: delivered().flatMap(item => contents.has(item.skillId) ? [contents.get(item.skillId)!.item] : []) };
+    if (plan.plan === 'index') return { reach, plan, indexItems: delivered().flatMap(item => contents.has(item.skillId) ? [contents.get(item.skillId)!.item] : []) };
     // Unknown native state cannot change a retained folder, including on a later live reapply.
-    if (nativeSkills.status === 'failed') return { plan, indexItems: [], unavailable: true, unavailableReason: 'native_scan_failed' };
+    if (nativeSkills.status === 'failed') return { reach, plan, indexItems: [], unavailable: true, unavailableReason: 'native_scan_failed' };
     const nativeDisables = plan.nativeDisables.filter(item => item.state === 'applied').map(({ name, path }) => ({ name, path }));
     try {
       const result = await (transports.ensureSessionDir ?? (content => {
@@ -160,17 +167,17 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
       await current();
       const failures = new Set(result.failed.map(item => item.skillId));
       for (const item of plan.items) if (failures.has(item.skillId)) { item.state = 'unavailable'; item.reason = 'materialize_failed'; }
-      return { plan, indexItems: [], failureDetails: result.failed.flatMap(item => item.detail ? [{ skillId: item.skillId, detail: item.detail }] : []),
+      return { reach, plan, indexItems: [], failureDetails: result.failed.flatMap(item => item.detail ? [{ skillId: item.skillId, detail: item.detail }] : []),
         delivery: { pluginRoot: result.pluginRoot, skillsRoot: result.skillsRoot,
         items: delivered().map(({ skillId, name, digest }) => ({ skillId, name, digest })), nativeDisables } };
     } catch (error) {
       const code: unknown = error && typeof error === 'object' ? Reflect.get(error, 'code') : undefined;
       const failureDetails = typeof code === 'string' ? delivered().map(item => ({ skillId: item.skillId, detail: code })) : undefined;
       for (const item of plan.items) if (item.state === 'delivered') { item.state = 'unavailable'; item.reason = 'materialize_failed'; }
-      return { plan, indexItems: [], unavailable: true, unavailableReason: 'materialize_failed', ...(failureDetails ? { failureDetails } : {}) };
+      return { reach, plan, indexItems: [], unavailable: true, unavailableReason: 'materialize_failed', ...(failureDetails ? { failureDetails } : {}) };
     }
   } catch (error) {
-    return { plan: emptyPlan, indexItems: [], unavailable: true,
+    return { ...(reach ? { reach } : {}), plan: emptyPlan, indexItems: [], unavailable: true,
       unavailableReason: error instanceof Error && error.message === 'scope-retired' ? 'scope-retired' : unavailableReason };
   }
 }

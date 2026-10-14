@@ -22,8 +22,7 @@ export function createSkillsUpdateTracker(input: Readonly<{
   return {
     kind: 'skill',
     async list() {
-      const raw = await input.execute('skills.list', {}, { surface: 'cli' }, input.signal);
-      const { items } = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(raw);
+      const items = await input.execute.listRegistryTrackedSkills(input.signal);
       return items.flatMap(item => {
         if (item.provenance.kind === 'registry') return [{ key: item.skillId, provenance: item.provenance.registry,
           ...(item.upstream ? { upstream: item.upstream } : {}) }];
