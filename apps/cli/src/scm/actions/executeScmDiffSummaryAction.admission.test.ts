@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
 import { getAgentStaticModels } from '@happier-dev/agents';
 import { getActionSpec, ExecutionRunStartRequestSchema, ExecutionRunScmDiffSummaryInputV1Schema, ScmComparisonSchema, PluginManifestV2Schema,
-    createActionExecutor,
+    createActionExecutor, accountSettingsParse,
     type ActionExecuteResult, type BackendTargetRefV2, type ScmDiffSummaryGenerateInput } from '@happier-dev/protocol';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
@@ -53,6 +53,7 @@ import type { ExecutionRunHostBridge } from '@/agent/runtime/bridges/executionRu
 import { createMutableApiSessionClientFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import type { ExecutionRunAdmittedPendingInputV1 } from '@/api/session/client/transport/sessionClientInteractionApi';
 import { UserMessageSchema } from '@/api/types';
+import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import type { DurableProviderInputAcceptanceV1 } from '@/agent/runtime/session/input/providerInputOutcome';
 import { ExecutionRunListResponseSchema, ExecutionRunStartFailureDetailsV1Schema } from '@happier-dev/protocol/execution/runs/responseSchemas';
@@ -195,6 +196,7 @@ describe('SCM generation through real host admission', () => {
             { investigateSurroundingFiles: true, parentAvailable: true, automaticModel: false },
             { investigateSurroundingFiles: false, parentAvailable: false, automaticModel: false },
             { investigateSurroundingFiles: false, parentAvailable: true, automaticModel: true },
+            { investigateSurroundingFiles: false, parentAvailable: false, automaticModel: true },
         ])('admits UI commit generation with investigation $investigateSurroundingFiles, applied parent $parentAvailable and automatic model $automaticModel through the registered Run RPC', async ({ investigateSurroundingFiles, parentAvailable, automaticModel }) => {
             const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-session-rpc-' });
             directories.push(fixture.rootPath);
@@ -257,7 +259,12 @@ describe('SCM generation through real host admission', () => {
                 await updateSettings(settings => ({ ...settings,
                     machineIdByServerId: { ...settings.machineIdByServerId, [configuration.activeServerId]: machineId } }));
                 const machineExecutor = createActionExecutor(createCliActionDeps({ token, credentials: { token, encryption: null },
-                    sessionId: '', mode: 'plain', ctx: null, serverId: configuration.activeServerId, serverHttpBaseUrl: serverUrl,
+                    sessionId: automaticModel && parentAvailable ? sessionId : '', mode: 'plain', ctx: null, serverId: configuration.activeServerId, serverHttpBaseUrl: serverUrl,
+                    ...(automaticModel && parentAvailable ? { getCurrentAppliedChildSelection: async () => {
+                        const connected = await readAppliedParentConnectedServices({ runnerPid: process.pid, sessionId, agentId: 'claude' });
+                        return connected.status === 'applied' ? { status: 'applied' as const, backendTarget, modelId,
+                            connectedServices: connected.connectedServices } : connected;
+                    } } : {}),
                     scmFilesystemAccessPolicy: { kind: 'restrictedRoots', roots: [fixture.rootPath] },
                     machineActionDirectTargetTransport: { machineId, invoke: async method => {
                         if (method !== 'capabilities.detect') throw new Error(`Unexpected Machine transport method: ${method}`);
@@ -466,7 +473,27 @@ describe('SCM generation through real host admission', () => {
                     // The machine owner creates the saved result before invoking
                     // the Session's Run. Observe only that genuine network boundary.
                     if (parentAvailable) assertBeforeStart = assertRunRefusals;
+                    const savedBefore = await scmDiffSummaryResultStore.list();
                     const generationOperations = createScmDiffSummaryOperations({ actionExecutor: machineExecutor });
+                    const previousSettings = getActiveAccountSettingsSnapshot();
+                    try {
+                        setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({
+                            'scm.diffSummary.enabled': false }), settingsVersion: 1, loadedAtMs: Date.now(),
+                            settingsSecretsReadKeys: [], scopeKey: 'disabled-generation-seam' });
+                        // The client projection deliberately says enabled. The
+                        // registered host Action owns the actual admission.
+                        const refused = await generationOperations.generateFromUserAction({ sessionId, backendTarget,
+                            input: { cwd: fixture.rootPath, source: { kind: 'workingTree' }, comparisonId: captured.comparison.id,
+                                sessionId, modelSelector: { modelId }, outputs: ['walkthrough', 'commitPlan'] },
+                            settings: { 'scm.diffSummary.enabled': true } });
+                        expect(refused).toMatchObject({ ok: false });
+                        expect(ScmDiffSummaryGenerateOutputSchema.parse(generationOperations.getState()
+                            .entriesByKey[refused.key]?.latestOutput)).toEqual({ success: false,
+                            errorCode: 'SCM_DIFF_SUMMARY_DISABLED', error: expect.any(String) });
+                        expect(ExecutionRunListResponseSchema.parse(await client.call('execution.run.list', {})).runs).toEqual([]);
+                    } finally {
+                        if (previousSettings) setActiveAccountSettingsSnapshot(previousSettings); else clearActiveAccountSettingsSnapshot();
+                    }
                     const generationResponse = await generationOperations.generateFromUserAction({ sessionId, backendTarget,
                         input: {
                             cwd: fixture.rootPath, source: { kind: 'workingTree' }, comparisonId: captured.comparison.id, sessionId,
@@ -478,6 +505,17 @@ describe('SCM generation through real host admission', () => {
                         settings: { 'scm.diffSummary.outputLanguage': 'fr',
                             'scm.diffSummary.investigateSurroundingFiles': investigateSurroundingFiles },
                     });
+                    if (automaticModel && !parentAvailable) {
+                        expect(generationResponse.ok).toBe(false);
+                        const refused = ScmDiffSummaryGenerateOutputSchema.parse(
+                            generationOperations.getState().entriesByKey[generationResponse.key]?.latestOutput);
+                        expect(refused).toMatchObject({ success: false, errorCode: 'MODEL_UNAVAILABLE' });
+                        expect(refused.resultId).toBeUndefined();
+                        expect(refused.runId).toBeUndefined();
+                        expect(await scmDiffSummaryResultStore.list()).toEqual(savedBefore);
+                        expect(ExecutionRunListResponseSchema.parse(await client.call('execution.run.list', {})).runs).toEqual([]);
+                        return;
+                    }
                     expect(generationResponse.ok, JSON.stringify({ generationResponse, responses, transportFailures })).toBe(true);
                     const generation = ScmDiffSummaryGenerateOutputSchema.safeParse(
                         generationOperations.getState().entriesByKey[generationResponse.key]?.latestOutput);

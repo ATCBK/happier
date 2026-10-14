@@ -29,6 +29,22 @@ describe('executeScmDiffSummaryAction', () => {
         return fixture;
     }
 
+    it.each([undefined, 'summary-session'])('refuses Explain-off before capture, saved output or Run admission in scope %s', async (sessionId) => {
+        const previous = getActiveAccountSettingsSnapshot();
+        setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({ 'scm.diffSummary.enabled': false }),
+            settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: 'disabled-account' });
+        try {
+            const executeCanonicalAction = vi.fn(async () => { throw new Error('Disabled generation must not admit a Run'); });
+            const output = await executeScmDiffSummaryAction({ request: { cwd: '/missing-disabled-summary-repository',
+                source: { kind: 'workingTree' }, outputs: ['walkthrough', 'commitPlan'], cachePolicy: { mode: 'bypass' } },
+                ...(sessionId ? { sessionId } : {}), machineId: 'machine', backendTarget: BACKEND_TARGET, executeCanonicalAction });
+            expect(output).toEqual({ success: false, errorCode: 'SCM_DIFF_SUMMARY_DISABLED', error: expect.any(String) });
+            expect(executeCanonicalAction).not.toHaveBeenCalled();
+        } finally {
+            if (previous) setActiveAccountSettingsSnapshot(previous); else clearActiveAccountSettingsSnapshot();
+        }
+    });
+
     it('uses the shared Account prose preference for headless admission while preserving explicit language selection', async () => {
         const previous = getActiveAccountSettingsSnapshot();
         const fixture = await changedRepository();
