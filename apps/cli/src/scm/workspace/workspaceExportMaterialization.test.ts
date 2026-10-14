@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process';
-import { access, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, readdir, readlink, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createScmBackendRegistry } from '@/scm/registry';
 import { computeWorkspaceSyncRootFingerprint, readWorkspaceSyncRootObjectIdentity } from '@/workspaces/sync/workspaceSyncRootIdentity';
@@ -21,14 +21,6 @@ import {
 
 const childFixturePath = join(dirname(fileURLToPath(import.meta.url)), 'workspaceExportMaterialization.child.ts');
 
-async function waitForFile(path: string): Promise<void> {
-    const deadline = Date.now() + 30_000;
-    while (!(await access(path).then(() => true, () => false))) {
-        if (Date.now() >= deadline) throw new Error(`timed out waiting for ${path}`);
-        await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-}
-
 const naming = {
     siblingCopySuffixBase: 'copy',
     backupDirectoryPrefix: '.backup',
@@ -36,6 +28,61 @@ const naming = {
 } as const;
 const registry = createScmBackendRegistry([]);
 describe('workspace export materialization custody', () => {
+    it('preserves contained, dangling and cyclic link objects in a materialized workspace', async () => {
+        const fixture = await mkdtemp(join(tmpdir(), 'workspace-export-contained-links-'));
+        try {
+            const source = join(fixture, 'source');
+            const target = join(fixture, 'target');
+            await mkdir(source);
+            await writeFile(join(source, 'context.txt'), 'context');
+            const links = { 'read-context': 'context.txt', dangling: 'missing.txt', first: 'second', second: 'first' };
+            for (const [name, destination] of Object.entries(links)) await symlink(destination, join(source, name));
+            const built = await buildScmWorkspaceIntegrationWorkspaceExportArtifactsWithBlobProviderFromTransferEntries({
+                entries: ['context.txt', ...Object.keys(links)].map(relativePath => ({ relativePath, sourcePath: join(source, relativePath) })),
+            });
+            const materialized = await materializeWorkspaceExportArtifactsWithScmWorkspace({
+                workspaceExportArtifacts: built.workspaceExportArtifacts,
+                targetPath: target,
+                conflictPolicy: 'replace_existing',
+                blobProvider: built.blobProvider,
+                registry,
+                naming,
+            });
+            await expect(readFile(join(target, 'read-context'), 'utf8')).resolves.toBe('context');
+            for (const [name, destination] of Object.entries(links)) await expect(readlink(join(target, name))).resolves.toBe(destination);
+            await materialized.custody.commit();
+        } finally {
+            await rm(fixture, { recursive: true, force: true });
+        }
+    });
+
+    it('refuses a natively escaping link chain before replacing the existing target', async () => {
+        const fixture = await mkdtemp(join(tmpdir(), 'workspace-export-link-chain-'));
+        try {
+            const source = join(fixture, 'source');
+            const target = join(fixture, 'target');
+            await mkdir(join(source, 'dir'), { recursive: true });
+            await mkdir(target);
+            await writeFile(join(target, 'user.txt'), 'keep');
+            await symlink('..', join(source, 'dir', 'up'));
+            await symlink('dir/up/../outside', join(source, 'top'));
+            const built = await buildScmWorkspaceIntegrationWorkspaceExportArtifactsWithBlobProviderFromTransferEntries({
+                entries: ['dir', 'dir/up', 'top'].map(relativePath => ({ relativePath, sourcePath: join(source, relativePath) })),
+            });
+            await expect(materializeWorkspaceExportArtifactsWithScmWorkspace({
+                workspaceExportArtifacts: built.workspaceExportArtifacts,
+                targetPath: target,
+                conflictPolicy: 'replace_existing',
+                blobProvider: built.blobProvider,
+                registry,
+                naming,
+            })).rejects.toThrow();
+            await expect(readFile(join(target, 'user.txt'), 'utf8')).resolves.toBe('keep');
+        } finally {
+            await rm(fixture, { recursive: true, force: true });
+        }
+    });
+
     it('opens retained receipt fields across restart and rewrites only canonical custody', async () => {
         const fixture = await realpath(await mkdtemp(join(tmpdir(), 'workspace-export-retained-receipt-')));
         try {
@@ -275,37 +322,56 @@ describe('workspace export materialization custody', () => {
         }
     });
 
-    it('rehydrates rollback custody after the materializing process is killed', async () => {
-        const fixture = await mkdtemp(join(tmpdir(), 'workspace-export-custody-crash-'));
-        const target = join(fixture, 'target');
-        const receiptPath = join(fixture, 'receipt.json');
-        await mkdir(target);
-        await writeFile(join(target, 'old.txt'), 'old');
-        const child = spawn(process.execPath, [
-            '--import',
-            'tsx',
-            childFixturePath,
-            target,
-            receiptPath,
-        ], {
-            cwd: join(dirname(childFixturePath), '../../..'),
-            env: process.env,
-            stdio: ['ignore', 'pipe', 'pipe'],
-        });
-        let stderr = '';
-        child.stderr?.setEncoding('utf8');
-        child.stderr?.on('data', (chunk: string) => { stderr += chunk; });
-        const exitedBeforeReceipt = new Promise<never>((_resolve, reject) => {
-            child.once('error', error => reject(new Error(`materialization child failed: ${stderr}`, { cause: error })));
-            child.once('exit', (code, signal) => reject(new Error(`materialization child exited before receipt (code=${code}, signal=${signal}): ${stderr}`)));
-        });
-        try {
-            await Promise.race([waitForFile(receiptPath), exitedBeforeReceipt]);
-            child.kill('SIGKILL');
-            await new Promise<void>((resolve, reject) => {
-                child.once('error', reject);
-                child.once('exit', () => resolve());
+    describe('child-process rollback recovery', () => {
+        let fixture: string | undefined;
+        let child: ReturnType<typeof spawn> | undefined;
+
+        // Cold source loading prepares the real process fixture; it is not part
+        // of the bounded crash/recovery behavior exercised by the test.
+        beforeAll(async () => {
+            fixture = await mkdtemp(join(tmpdir(), 'workspace-export-custody-crash-'));
+            const target = join(fixture, 'target');
+            const receiptPath = join(fixture, 'receipt.json');
+            await mkdir(target);
+            await writeFile(join(target, 'old.txt'), 'old');
+            child = spawn(process.execPath, [
+                '--import', 'tsx', childFixturePath, target, receiptPath,
+            ], {
+                cwd: join(dirname(childFixturePath), '../../..'),
+                env: process.env,
+                stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
             });
+            let stderr = '';
+            child.stderr?.setEncoding('utf8');
+            child.stderr?.on('data', (chunk: string) => { stderr += chunk; });
+            await new Promise<void>((resolve, reject) => {
+                child!.once('message', message => {
+                    if (message !== 'workspace-materialization-ready') {
+                        reject(new Error('Materialization child returned an unexpected readiness message'));
+                        return;
+                    }
+                    resolve();
+                });
+                child!.once('error', error => reject(new Error(`materialization child failed: ${stderr}`, { cause: error })));
+                child!.once('exit', (code, signal) => reject(new Error(`materialization child exited before receipt (code=${code}, signal=${signal}): ${stderr}`)));
+            });
+        }, 0);
+
+        afterAll(async () => {
+            child?.kill('SIGKILL');
+            if (fixture) await rm(fixture, { recursive: true, force: true });
+        }, 0);
+
+        it('rehydrates rollback custody after the materializing process is killed', async () => {
+            if (!fixture || !child) throw new Error('Materialization child fixture is unavailable');
+            const target = join(fixture, 'target');
+            const receiptPath = join(fixture, 'receipt.json');
+            const exited = new Promise<void>((resolve, reject) => {
+                child!.once('error', reject);
+                child!.once('exit', () => resolve());
+            });
+            child.kill('SIGKILL');
+            await exited;
             await expect(readFile(join(target, 'new.txt'), 'utf8')).resolves.toBe('new');
             const receipt = JSON.parse(await readFile(receiptPath, 'utf8')) as WorkspaceTargetMaterializationReceiptV1;
             const recovered = await rehydrateWorkspaceTargetMaterialization({
@@ -318,12 +384,7 @@ describe('workspace export materialization custody', () => {
             await recovered.abort();
             await expect(readFile(join(target, 'old.txt'), 'utf8')).resolves.toBe('old');
             await expect(readFile(join(target, 'new.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-        } catch (error) {
-            throw new Error(`child-process recovery failed: ${stderr}`, { cause: error });
-        } finally {
-            child.kill('SIGKILL');
-            await rm(fixture, { recursive: true, force: true });
-        }
+        });
     });
 
     it('treats a missing named backup as an already-crossed commit boundary', async () => {

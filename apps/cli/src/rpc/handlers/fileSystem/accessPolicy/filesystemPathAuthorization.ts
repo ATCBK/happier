@@ -37,8 +37,8 @@ function isMissingPath(error: unknown): boolean {
   return pathErrorCode(error) === 'ENOENT' || pathErrorCode(error) === 'ENOTDIR';
 }
 
-function resolveRealPathForAuthorization(pathValue: string, platform: NodeJS.Platform): string {
-  const resolved = normalizeFilesystemPathForPolicy(pathValue, platform);
+function resolveRealPathForAuthorization(pathValue: string, platform: NodeJS.Platform, pathRepresentation?: 'native_literal'): string {
+  const resolved = pathRepresentation === 'native_literal' ? pathValue : normalizeFilesystemPathForPolicy(pathValue, platform);
   if (platform !== process.platform) {
     return resolved;
   }
@@ -48,20 +48,22 @@ function resolveRealPathForAuthorization(pathValue: string, platform: NodeJS.Pla
   let candidate = resolved;
   while (true) {
     try {
-      const realAncestor = realpathSync(candidate);
+      const realAncestor = pathRepresentation === 'native_literal' ? realpathSync.native(candidate) : realpathSync(candidate);
       return normalizeFilesystemPathForPolicy(
         api.join(realAncestor, ...missingSegments.reverse()),
         platform,
       );
     } catch (error) {
-      if (!isMissingPath(error)) throw error;
+      if (!isMissingPath(error) && !(pathRepresentation === 'native_literal' && pathErrorCode(error) === 'ELOOP')) throw error;
       // realpath cannot open a dangling link. Resolve its destination before
       // appending the missing suffix, so a write cannot escape through it.
-      try {
-        const destination = readlinkSync(candidate);
-        return resolveRealPathForAuthorization(api.resolve(api.dirname(candidate), destination, ...missingSegments.reverse()), platform);
-      } catch (linkError) {
-        if (!isMissingPath(linkError) && pathErrorCode(linkError) !== 'EINVAL') throw linkError;
+      if (pathRepresentation !== 'native_literal') {
+        try {
+          const destination = readlinkSync(candidate);
+          return resolveRealPathForAuthorization(api.resolve(api.dirname(candidate), destination, ...missingSegments.reverse()), platform);
+        } catch (linkError) {
+          if (!isMissingPath(linkError) && pathErrorCode(linkError) !== 'EINVAL') throw linkError;
+        }
       }
       const parent = dirname(candidate);
       if (parent === candidate) return resolved;
@@ -69,6 +71,15 @@ function resolveRealPathForAuthorization(pathValue: string, platform: NodeJS.Pla
       candidate = parent;
     }
   }
+}
+
+/** Resolve native spelling before any lexical dot-segment normalization.
+ * Missing/cyclic suffixes have no readable target; their nearest real ancestor
+ * still proves whether the literal path can escape the owning root.
+ */
+export function resolveNativeFilesystemPathForAuthorization(pathValue: string): string {
+  if (!pathApi(process.platform).isAbsolute(pathValue)) throw new Error('A native filesystem path must be absolute');
+  return resolveRealPathForAuthorization(pathValue, process.platform, 'native_literal');
 }
 
 function resolveAllowedRootForAuthorization(pathValue: string, platform: NodeJS.Platform): string {
