@@ -10,7 +10,7 @@ import { useInputFieldOptions, type InputFieldOptionsRequest } from '@/component
 import { InputTypePickerHostProvider } from '@/components/sessions/actions/InputTypePickerHostProvider';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX, resolveItemGroupContentHorizontalInsetPx } from '@/components/ui/lists/itemGroupSpacing';
+import { ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX } from '@/components/ui/lists/itemGroupSpacing';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 import { Text } from '@/components/ui/text/Text';
 import { getWidgetSizeFootprintV1 } from '@happier-dev/protocol/widgets';
@@ -47,9 +47,9 @@ const PHONE_PREVIEW_HEIGHT_PX = 168;
 const SIDE_BY_SIDE_MIN_WIDTH_PX = POPOVER_PREVIEW_WIDTH_PX + 260;
 
 const NO_OPTIONS: readonly WidgetSetupValue[] = Object.freeze([]);
-/** Cancels the untitled group's own inset and top spacer, so its sheet starts at the pane's edges. */
+/** Cancels the untitled group's top spacer, so its sheet starts at the pane's top edge. The pane owns its own
+ * sides (a contained list scope), so the sheet adds no inset there to cancel with a negative margin. */
 const PANE_SHEET_FLUSH = {
-    marginHorizontal: -resolveItemGroupContentHorizontalInsetPx(),
     marginTop: -(Platform.select(ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX) ?? 0),
 } as const;
 
@@ -202,7 +202,7 @@ export function WidgetSetupStep(props: Readonly<{
             {...options.resolveOptions.pickerContext}
             contextKey={JSON.stringify([consumer, draft, options.snapshot])}>
         <CoreCollectionScope>
-        <ListPresentationProvider value="page">
+        <ListPresentationProvider value="page" {...(pane ? { pageInsets: 'contained' as const } : {})}>
             {/* In the Add pane the inputs' sheet shares the title's and the preview's edges (lab A2/A2p). */}
             <ItemGroup surface={pane ? 'sheet' : 'none'} density="compact" {...(pane ? { style: PANE_SHEET_FLUSH } : {})}>
                 {setup.fields.map((entry, index) => {
