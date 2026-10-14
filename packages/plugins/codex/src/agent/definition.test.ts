@@ -4,6 +4,11 @@ import { AGENT_DEFINITION } from './definition.js';
 import { PLUGIN_MANIFEST } from '../manifest.js';
 
 describe('AGENT_DEFINITION', () => {
+  it('projects proven app-server MCP host mediation through the canonical manifest', () => {
+    expect(PLUGIN_MANIFEST.contributes.agents[0]?.capabilities.tools).toMatchObject({
+      mcpToolControl: { off: 'hidden', approval: 'host' },
+    });
+  });
   it('declares prompted JSON output through the canonical capability projection', () => {
     expect(PLUGIN_MANIFEST.contributes.agents[0]?.capabilities).toHaveProperty('structuredOutput', { formats: ['json'] });
   });

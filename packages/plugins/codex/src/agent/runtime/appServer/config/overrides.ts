@@ -129,13 +129,18 @@ export function buildCodexAppServerConfigOverrides(
         overrides.push(`skills.config=[${disables.join(',')}]`);
     }
 
-    const hasFirstPartyHappierMcpServer = serverNames.some(isFirstPartyHappierMcpBridgeServerName);
-    const happierMcpStartupTimeoutMs = readCodexAppServerStartupRpcTimeoutMs(options.processEnv ?? {});
-    if (hasFirstPartyHappierMcpServer) {
+    const mcpStartupTimeoutMs = readCodexAppServerStartupRpcTimeoutMs(options.processEnv ?? {});
+    if (serverNames.length > 0) {
         // Recent Codex versions otherwise give optional MCP servers only a short shared grace
-        // while building the first turn's tool catalog. Keep Happier optional, but let its tools
+        // while building the first turn's tool catalog. Keep injected servers optional, but let their tools
         // use the same bounded startup budget as the app-server connection itself.
-        overrides.push(`mcp_optional_startup_grace_ms=${happierMcpStartupTimeoutMs}`);
+        overrides.push(`mcp_optional_startup_grace_ms=${mcpStartupTimeoutMs}`);
+    }
+    if (serverNames.some(name => !isFirstPartyHappierMcpBridgeServerName(name) && options.mcpToolPolicy?.[name])) {
+        // Codex 0.162.1's tool-approval elicitation contains a human title but
+        // no tool id or call id. Its requestUserInput path carries itemId and
+        // reaches the existing canonical MCP correlation/host permission codec.
+        overrides.push('features.tool_call_mcp_elicitation=false');
     }
 
     for (const serverName of [...serverNames].sort((left, right) => left.localeCompare(right))) {
@@ -157,6 +162,7 @@ export function buildCodexAppServerConfigOverrides(
             overrides.push(`mcp_servers.${injectedKey}.env=${serializeTomlInlineTable(config.env)}`);
         }
         overrides.push(`mcp_servers.${injectedKey}.enabled=true`);
+        overrides.push(`mcp_servers.${injectedKey}.startup_timeout_sec=${mcpStartupTimeoutMs / 1_000}`);
         const policy = isFirstPartyHappierMcpBridgeServerName(serverName) ? undefined : options.mcpToolPolicy?.[serverName];
         const disabledTools = policy ? Object.entries(policy.tools)
             .filter(([, setting]) => setting === 'off' || setting === 'deny').map(([tool]) => tool) : [];
@@ -181,7 +187,6 @@ export function buildCodexAppServerConfigOverrides(
             overrides.push(`mcp_servers.${injectedKey}.default_tools_approval_mode=${quoteTomlString('approve')}`);
         }
         if (isFirstPartyHappierMcpBridgeServerName(serverName)) {
-            overrides.push(`mcp_servers.${injectedKey}.startup_timeout_sec=${happierMcpStartupTimeoutMs / 1_000}`);
             const timeoutMs = readCodexHappierMcpToolCallTimeoutMs(options.processEnv);
             overrides.push(`mcp_servers.${injectedKey}.tool_timeout_sec=${timeoutMs / 1_000}`);
             appendHappierMcpStaticApprovalOverrides(overrides, injectedKey);
