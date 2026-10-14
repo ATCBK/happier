@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { open, stat } from 'node:fs/promises';
+import { z } from 'zod';
 
 import { defineProtocolJsonValue } from '@happier-dev/plugin-sdk/protocol';
 import type {
@@ -14,6 +15,7 @@ import {
     type JsonlScannerFileSystem,
     type ExternalSessionContentSearchControl,
     searchExternalSessionContent,
+    ExternalSessionContentSearchYield,
 } from '@happier-dev/plugin-sdk/sessions/file-stores';
 
 import { readClaudeTaskLifecycleEnvelope } from '../../../transcripts/taskNotification.js';
@@ -25,7 +27,8 @@ import {
     readClaudeJsonlLineIdentity,
 } from '../../../transcripts/projection.js';
 
-import { readClaudeJsonlFileSize, resolveClaudeJsonlSessionFile } from './files.js';
+import { ClaudeCandidateSourceChangedError, readClaudeJsonlFileSize, resolveClaudeJsonlSessionFile } from './files.js';
+import { applyClaudeTitleRecord, resolveClaudeTitle } from './metadata.js';
 import type { ClaudeExternalSessionSource } from './source.js';
 
 type ClaudeBackwardCursorV1 = Readonly<{
@@ -211,6 +214,39 @@ export async function readClaudeExternalTranscriptBranch(params: Readonly<{
     return { offsets: parentUuid === undefined ? null : offsets, partial: partial || typeof parentUuid === 'string' };
 }
 
+const ClaudeContentSearchRowSchema = z.object({
+    startOffsetBytes: z.number().int().nonnegative(),
+    endOffsetBytes: z.number().int().nonnegative(),
+}).strict();
+
+const ClaudeContentSearchProgressSchema = z.object({
+    fileRelPath: z.string(),
+    sourceIdentity: z.string(),
+    endOffsetBytes: z.number().int().nonnegative(),
+    branchParentUuid: z.union([z.string(), z.null(), z.literal(false)]),
+    count: z.number().int().nonnegative(),
+    partial: z.boolean(),
+    title: z.object({ customTitle: ClaudeContentSearchRowSchema.nullable(), aiTitle: ClaudeContentSearchRowSchema.nullable(), fallbackTitle: ClaudeContentSearchRowSchema.nullable(),
+        customTitleSeen: z.boolean().optional(), aiTitleSeen: z.boolean().optional() }).strict(),
+    match: ClaudeContentSearchRowSchema.extend({ itemIndex: z.number().int().nonnegative(), newerItems: z.number().int().nonnegative() }).strict().optional(),
+}).strict();
+
+export type ClaudeContentSearchProgress = z.infer<typeof ClaudeContentSearchProgressSchema>;
+
+export function parseClaudeContentSearchProgress(value: unknown): ClaudeContentSearchProgress | null {
+    const parsed = ClaudeContentSearchProgressSchema.safeParse(value);
+    return parsed.success ? parsed.data : null;
+}
+
+export class ClaudeContentSearchYield extends ExternalSessionContentSearchYield {
+    constructor(readonly progress: ClaudeContentSearchProgress) { super(); }
+}
+
+async function readClaudeContentSearchSourceIdentity(filePath: string) {
+    const file = await stat(filePath, { bigint: true });
+    return { size: Number(file.size), identity: `${file.dev}:${file.ino}:${file.size}:${file.mtimeNs}:${file.ctimeNs}` };
+}
+
 export async function searchClaudeExternalTranscript(params: Readonly<{
     filePath: string;
     fileRelPath: string;
@@ -219,42 +255,123 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
     signal?: AbortSignal;
     ripgrep: AgentExternalSessionsInvocation['ripgrep'];
     control: ExternalSessionContentSearchControl;
-}>): Promise<Readonly<{ match?: { snippet: string; sourceItemId: string; messageIndex: number }; partial: boolean }>> {
-    return searchExternalSessionContent({
-        query: params.query, paths: [params.filePath], ripgrep: params.ripgrep, control: params.control,
-        decode: async (matchText) => {
-            const scanParams = { ...params, fileSystem: params.control.fileSystem, checkWork: params.control.checkWork };
-            const branch = await readClaudeExternalTranscriptBranch(scanParams);
-            let offsetBytes = 0;
-            const records: { id: string; snippet?: string }[] = [];
-            let partial = branch.partial;
-            while (true) {
-                throwIfAborted(params.signal);
-                const page = await readJsonlFileForward({ filePath: params.filePath, offsetBytes, maxBytes: params.maxBytes, maxItems: Math.max(1, params.maxBytes), fileSystem: params.control.fileSystem });
-                throwIfAborted(params.signal);
-                partial ||= page.truncated || Boolean(page.diagnostics?.length);
-                for (const line of page.items) {
-                    params.control.checkWork();
-                    if (branch.offsets && !branch.offsets.has(line.startOffsetBytes)) continue;
-                    const projected = projectClaudeJsonlLineRecord({ fileRelPath: params.fileRelPath, lineStartOffsetBytes: line.startOffsetBytes, lineValue: line.value });
-                    partial ||= projected.disposition === 'unsupported';
-                    for (const item of projected.items) {
-                        const content = item.raw.content;
-                        const text = isTranscriptObject(content)
-                            ? content.type === 'text' && typeof content.text === 'string' ? content.text
-                                : content.type === 'acp' && 'data' in content && isTranscriptObject(content.data) && content.data.type === 'message' && typeof content.data.message === 'string' ? content.data.message : null
-                            : null;
-                        const snippet = text !== null ? matchText(text) : null;
-                        records.push({ id: item.id, ...(snippet !== null ? { snippet } : {}) });
-                    }
-                }
-                if (page.reachedEnd) break;
-                if (page.nextOffsetBytes <= offsetBytes) { partial = true; break; }
-                offsetBytes = page.nextOffsetBytes;
-            }
-            return { records, partial };
+    progress?: ClaudeContentSearchProgress;
+}>): Promise<Readonly<{ match?: { snippet: string; sourceItemId: string; messageIndex: number }; partial: boolean; title?: string }>> {
+    const file = await readClaudeContentSearchSourceIdentity(params.filePath);
+    const sourceIdentity = file.identity;
+    if (params.progress && (params.progress.fileRelPath !== params.fileRelPath || params.progress.sourceIdentity !== sourceIdentity)) {
+        throw new ClaudeCandidateSourceChangedError('Claude content-search transcript changed during pagination.');
+    }
+    let progress: ClaudeContentSearchProgress = params.progress ?? {
+        fileRelPath: params.fileRelPath, sourceIdentity, endOffsetBytes: file.size,
+        branchParentUuid: false, count: 0, partial: false,
+        title: { customTitle: null, aiTitle: null, fallbackTitle: null },
+    };
+    const remoteSessionId = params.fileRelPath.split('/').at(-1)!.slice(0, -'.jsonl'.length);
+    // EOF closes cooperative scanning. Native-row verification and response
+    // assembly finish under the containing operation's cancellation lifetime.
+    const scanControl: ExternalSessionContentSearchControl = {
+        ...params.control,
+        checkWork(resetEstimate) {
+            if (progress.endOffsetBytes === 0) params.control.assertNotYielded();
+            else params.control.checkWork(resetEstimate);
         },
-    });
+    };
+    try {
+        const result = await searchExternalSessionContent({
+            query: params.query, ...(params.progress ? {} : { paths: [params.filePath] }), ripgrep: params.ripgrep, control: scanControl,
+            decode: async (matchText) => {
+                while (progress.endOffsetBytes > 0) {
+                    throwIfAborted(params.signal);
+                    const initialEndOffsetBytes = progress.endOffsetBytes;
+                    const page = await readJsonlFileBackwardPage({ filePath: params.filePath, endOffsetBytes: progress.endOffsetBytes,
+                        maxBytes: params.maxBytes, maxItems: Math.max(1, params.maxBytes), fileSystem: params.control.fileSystem,
+                        onDiagnostic: () => { progress = { ...progress, partial: true }; },
+                        onLine: (line) => {
+                            params.control.checkWork();
+                            const selected = selectClaudeExternalBranchLine(line.value, progress.branchParentUuid === false ? undefined : progress.branchParentUuid);
+                            let count = progress.count;
+                            let match = progress.match;
+                            let partial = progress.partial;
+                            if (selected.selected) {
+                                const projected = projectClaudeJsonlLineRecord({ fileRelPath: params.fileRelPath, lineStartOffsetBytes: line.startOffsetBytes, lineValue: line.value });
+                                partial ||= projected.disposition === 'unsupported';
+                                for (let itemIndex = projected.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+                                    const item = projected.items[itemIndex]!;
+                                    const content = item.raw.content;
+                                    const text = isTranscriptObject(content)
+                                        ? content.type === 'text' && typeof content.text === 'string' ? content.text
+                                            : content.type === 'acp' && 'data' in content && isTranscriptObject(content.data) && content.data.type === 'message' && typeof content.data.message === 'string' ? content.data.message : null
+                                        : null;
+                                    const snippet = text !== null ? matchText(text) : null;
+                                    if (snippet !== null) match = { startOffsetBytes: line.startOffsetBytes, endOffsetBytes: line.endOffsetBytes, itemIndex, newerItems: count };
+                                    count += 1;
+                                }
+                            }
+                            const row = { startOffsetBytes: line.startOffsetBytes, endOffsetBytes: line.endOffsetBytes };
+                            const titleRecord = applyClaudeTitleRecord({ customTitle: null, aiTitle: null, fallbackTitle: null }, line.value, remoteSessionId, 'backward');
+                            const title = { ...progress.title };
+                            if (titleRecord.customTitleSeen && !title.customTitleSeen) {
+                                title.customTitleSeen = true;
+                                title.customTitle = titleRecord.customTitle === null ? null : row;
+                            }
+                            if (titleRecord.aiTitleSeen && !title.aiTitleSeen) {
+                                title.aiTitleSeen = true;
+                                title.aiTitle = titleRecord.aiTitle === null ? null : row;
+                            }
+                            if (titleRecord.fallbackTitle !== null) title.fallbackTitle = row;
+                            progress = { ...progress, endOffsetBytes: line.startOffsetBytes,
+                                branchParentUuid: selected.parentUuid === undefined ? false : selected.parentUuid,
+                                count, partial, title,
+                                ...(match ? { match } : {}) };
+                        },
+                    });
+                    throwIfAborted(params.signal);
+                    params.control.assertNotYielded();
+                    if (!page.reachedStart && page.nextEndOffsetBytes >= initialEndOffsetBytes) {
+                        progress = { ...progress, partial: true };
+                        break;
+                    }
+                    progress = { ...progress, endOffsetBytes: page.nextEndOffsetBytes, partial: progress.partial || Boolean(page.diagnostics?.length) };
+                    if (page.reachedStart) break;
+                }
+                // A caller's opaque continuation carries positions, never
+                // authoritative text. Re-read and re-match the native row.
+                const line = progress.match ? await readSearchRow(progress.match) : null;
+                const item = line && progress.match ? projectClaudeJsonlLineRecord({ fileRelPath: params.fileRelPath,
+                    lineStartOffsetBytes: line.startOffsetBytes, lineValue: line.value }).items[progress.match.itemIndex] : undefined;
+                const content = item?.raw.content;
+                const text = isTranscriptObject(content)
+                    ? content.type === 'text' && typeof content.text === 'string' ? content.text
+                        : content.type === 'acp' && 'data' in content && isTranscriptObject(content.data) && content.data.type === 'message' && typeof content.data.message === 'string' ? content.data.message : null
+                    : null;
+                const snippet = text !== null ? matchText(text) : null;
+                return { records: item && snippet !== null && progress.match ? [{ id: item.id, snippet,
+                    messageIndex: progress.count - progress.match.newerItems - 1 }] : [],
+                    partial: progress.partial || typeof progress.branchParentUuid === 'string' };
+            },
+        });
+        const titleRow = progress.title.customTitle ?? progress.title.aiTitle ?? progress.title.fallbackTitle;
+        const titleLine = result.match && titleRow ? await readSearchRow(titleRow) : null;
+        const title = titleLine ? resolveClaudeTitle(applyClaudeTitleRecord({ customTitle: null, aiTitle: null, fallbackTitle: null }, titleLine.value, remoteSessionId)) : null;
+        if ((await readClaudeContentSearchSourceIdentity(params.filePath)).identity !== sourceIdentity) {
+            throw new ClaudeCandidateSourceChangedError('Claude content-search transcript changed while scanning.');
+        }
+        throwIfAborted(params.signal);
+        return { ...result, ...(title ? { title } : {}) };
+    } catch (error) {
+        if (error instanceof ExternalSessionContentSearchYield) throw new ClaudeContentSearchYield(progress);
+        throw error;
+    }
+
+    async function readSearchRow(row: z.infer<typeof ClaudeContentSearchRowSchema>) {
+        throwIfAborted(params.signal);
+        const page = await readJsonlFileForward({ filePath: params.filePath, offsetBytes: row.startOffsetBytes,
+            maxBytes: Math.max(1, row.endOffsetBytes - row.startOffsetBytes + 1), maxItems: 1 });
+        throwIfAborted(params.signal);
+        const line = page.items[0];
+        return line?.startOffsetBytes === row.startOffsetBytes ? line : null;
+    }
 }
 
 function isTranscriptObject(value: unknown): value is Readonly<Record<string, unknown>> {

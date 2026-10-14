@@ -105,6 +105,10 @@ export type ExternalSessionProviderOps = Readonly<{
     includeThreads?: boolean;
     maxBytes?: number;
     signal?: AbortSignal;
+    /** Containing caller's hard invocation deadline. */
+    deadlineAtMs?: number;
+    /** Cooperative content-scan deadline; terminal page settlement may follow it. */
+    scanDeadlineAtMs?: number;
     readCandidateIndexState?: AgentExternalSessionCandidateIndexLookup;
   }>) => Promise<ExternalSessionCandidatesPage>;
   pageTranscript: (params: Readonly<{

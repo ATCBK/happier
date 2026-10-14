@@ -1,23 +1,28 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { logger } from '@/ui/logger';
 
 import {
   resolveExternalSessionsSourceKeyForDeclaration,
   ingestPluginManifestV2,
+  ExternalSessionsSourceSchema,
   MAX_PLUGIN_TRANSCRIPT_SOURCES_PER_CONTRIBUTION,
   MAX_AGENT_ROUTING_ID_BYTES,
   type PluginAgentContributionV2,
 } from '@happier-dev/protocol';
 import type { AgentExternalSessionsContribution } from '@happier-dev/plugin-sdk/sessions/external';
-import type { AgentSessionHostServices, AgentSessionRuntime, AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
+import { QualifiedConnectedAccountPurposeBindingV1Schema } from '@happier-dev/protocol/connect/connected-account-purpose-bindings';
+import type { AgentRuntimeHandoffSurface, AgentSessionHostServices, AgentSessionRuntime, AgentSessionRuntimeContext, AgentTranscriptFileFollowHandle } from '@happier-dev/plugin-sdk/agents/runtime';
+import { createPluginTranscriptFileFollowService } from '@/plugins/runtime/context/transcripts/fileFollow';
+import { createTranscriptFileFollowPathGrantRegistry } from '@/plugins/runtime/context/transcripts/fileFollowGrants';
 import { SessionRuntimeActivitySnapshotSchema } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
 import type { RuntimeActivitySnapshotTail } from '@/api/session/sessionClientPort';
 import { createHostRuntimeActivityProjection } from '@/agent/runtime/session/activity/createHostRuntimeActivityProjection';
+import { createNativeAgentSessionOperations } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
 import { createHostTerminalTranscriptFollowService } from '@/agent/runtime/session/terminal/transcriptFollow';
 import { createSessionProviderInputConsumer } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
 import { registerSessionProviderInputAdmissionRpc, requestSessionInputLiveWork } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
@@ -51,7 +56,12 @@ import {
   createAgentExternalSessionsExecutionSurface,
 } from '@/agent/runtime/registry/agentExternalSessionsExecutionSurface';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
-import { resolveConnectedServiceMaterializedHomeRoot } from '@/daemon/connectedServices/catalogHooks';
+import { getConnectedServiceStateSharingDescriptor, resolveConnectedServiceMaterializedHomeRoot } from '@/daemon/connectedServices/catalogHooks';
+import { resolveConnectedServiceNativeHomeTarget } from '@/daemon/connectedServices/materialize/resolveConnectedServiceNativeHomeTarget';
+import { applyConnectedServiceStateSharingDescriptor } from '@/daemon/connectedServices/stateSharing/applyConnectedServiceStateSharingDescriptor';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { resolveExternalSessionSourceSurface } from '@/session/actions/externalSessions/providerOpsResolution';
 
 import {
   createConfiguredPluginExternalSessionsAdapter as createConfiguredPluginExternalSessionsAdapterOwner,
@@ -325,6 +335,31 @@ function isAbortedSignal(signal: AbortSignal | null): boolean {
 }
 
 describe('configured external-session source materializer', () => {
+  let admittedRuntime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | undefined;
+  beforeAll(async () => {
+    admittedRuntime = await createAdmittedPluginRuntimeFixture({
+      controller: pluginReloadController,
+      runtimeOptions: { pluginIds: [CODEX_PLUGIN_MANIFEST.id] },
+    });
+  });
+  afterAll(async () => { await admittedRuntime?.dispose(); });
+
+  it('admits the connected Codex home through the real raw source surface without explicit preactivation', async () => {
+    if (!admittedRuntime) throw new Error('Admitted runtime fixture unavailable');
+    const activeServerDir = join(admittedRuntime.happyHomeDir, 'active-server');
+    const expectedSource = connectedCodexSource(activeServerDir, 'work').source;
+    expect(resolveConnectedServiceMaterializedHomeRoot('codex', {
+      activeServerDir, serviceId: 'openai-codex', profileId: 'work',
+    })).toBe(expectedSource.homePath);
+    const source = ExternalSessionsSourceSchema.parse({
+      kind: 'codexHome', home: 'connectedService',
+      connectedServiceId: 'openai-codex', connectedServiceProfileId: 'work',
+    });
+    const result = await resolveExternalSessionSourceSurface('codex', source, { activeServerDir });
+    expect(result).toMatchObject({ ok: true });
+    expect(result).toMatchObject({ source: expectedSource });
+  });
+
   it('retires only the replaced Agent occurrence while retaining the other Agent provider cache', async () => {
     const pi = agent(readManifestAgentContribution(PI_PLUGIN_MANIFEST, 'pi'));
     const ohmypi = agent(readManifestAgentContribution(OHMYPI_PLUGIN_MANIFEST, 'ohmypi'));
@@ -455,6 +490,26 @@ describe('configured external-session source materializer', () => {
       const activeServerDir = join(root, 'active-server');
       const connectedSource = connectedCodexSource(activeServerDir, 'work');
       const connectedCodexHome = connectedSource.source.homePath;
+      expect(ExternalSessionsSourceSchema.parse(connectedSource.source)).toEqual(connectedSource.source);
+      const descriptor = await getConnectedServiceStateSharingDescriptor('codex');
+      if (!descriptor?.nativeHome) throw new Error('Admitted Codex native home unavailable');
+      const binding = QualifiedConnectedAccountPurposeBindingV1Schema.parse({
+        purpose: { consumer: { pluginId: CODEX_PLUGIN_MANIFEST.id, localId: 'codex' }, purpose: 'model_upstream' },
+        target: { kind: 'account', account: {
+          service: { pluginId: CODEX_PLUGIN_MANIFEST.id, localId: 'openai-codex' }, accountId: 'work',
+        } },
+      });
+      const purpose = binding.purpose;
+      // The launch producer and source consumer must select the identical home.
+      expect(connectedCodexHome).toBe(resolveConnectedServiceNativeHomeTarget({
+        agentId: 'codex', activeServerDir, nativeHome: descriptor.nativeHome,
+        snapshot: {
+          purposes: [purpose], fileMaterializationPurposes: [{
+            purpose, serviceRefs: [{ pluginId: CODEX_PLUGIN_MANIFEST.id, localId: 'openai-codex' }],
+          }],
+          bindings: [binding],
+        },
+      }));
       const remoteSessionId = '11111111-1111-1111-1111-111111111111';
       const sessionDirectory = join(connectedCodexHome, 'sessions', '2026', '08', '25');
       await mkdir(sessionDirectory, { recursive: true });
@@ -690,7 +745,7 @@ describe('configured external-session source materializer', () => {
   });
 
   it('resolves retained Pi Session source inputs through the current pinned root and refuses a foreign retained file', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'happier-pi-retained-source-'));
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'happier-pi-retained-source-')));
     const previousHome = process.env.HOME;
     const previousUserProfile = process.env.USERPROFILE;
     try {
@@ -815,6 +870,7 @@ describe('configured external-session source materializer', () => {
         .resolves.toEqual({
           status: 'unavailable',
           code: 'plugin_external_follow_identity_ambiguous',
+          diagnostic: { reason: 'identity_ambiguous' },
         });
       expect(resolveLinkIdentity).toHaveBeenCalledTimes(2);
 
@@ -851,6 +907,7 @@ describe('configured external-session source materializer', () => {
       })).resolves.toEqual({
         status: 'unavailable',
         code: 'plugin_external_follow_identity_unavailable',
+        diagnostic: { reason: 'retained_source_not_matched' },
       });
       expect(resolveLinkIdentity).not.toHaveBeenCalled();
     });
@@ -1172,24 +1229,87 @@ describe('configured external-session source materializer', () => {
     expect(resolveProviderOps).toHaveBeenCalledOnce();
   });
 
-  it('admits the shipped claude Agent terminal follow and publishes known idle and active Activity', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'happier-claude-configured-follow-'));
+  it.each([
+    { timing: 'existing', resumability: true, longCwd: false, sharedState: false },
+    { timing: 'created after SessionStart', resumability: true, longCwd: false, sharedState: false },
+    { timing: 'created after SessionStart', resumability: false, longCwd: false, sharedState: false },
+    { timing: 'existing', resumability: true, longCwd: true, sharedState: false },
+    { timing: 'existing', resumability: true, longCwd: true, sharedState: true },
+    { timing: 'created after SessionStart', resumability: true, longCwd: true, sharedState: true },
+  ] as const)('admits the shipped claude Agent terminal follow and publishes known idle and active Activity ($timing transcript, resume=$resumability, long cwd=$longCwd, shared state=$sharedState)', async ({ timing, resumability, longCwd, sharedState }) => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'happier-claude-configured-follow-')));
+    const nativeConfigDir = sharedState ? join(root, 'native', '.claude') : root;
+    const configDir = sharedState
+      ? join(root, 'daemon', 'connected-services', 'homes', 'claude-subscription', 'profile', 'claude', 'claude-config')
+      : root;
+    const nativeLongCwd = process.platform === 'win32'
+      ? 'C:\\Users\\Alice\\' + 'machine-resources\\session-directory\\'.repeat(7) + 'workspace'
+      : '/repo/' + 'machine-resources/session-directory/'.repeat(7) + 'workspace';
+    const cwd = longCwd ? nativeLongCwd : root;
+    // Native directory evaluated with installed Claude Code 2.1.296, independently of Happier's resolver.
+    const nativeProjectId = longCwd
+      ? process.platform === 'win32'
+        ? 'C--Users-Alice-machine-resources-session-directory-machine-resources-session-directory-machine-resources-session-directory-machine-resources-session-directory-machine-resources-session-directory-machi-vuldd7'
+        : '-repo-machine-resources-session-directory-machine-resources-session-directory-machine-resources-session-directory-machine-resources-session-directory-machine-resources-session-directory-machine-resour-kkf00o'
+      : '-test';
+    const projectDir = join(nativeConfigDir, 'projects', nativeProjectId);
     const remoteSessionId = '33333333-3333-3333-3333-333333333333';
-    await mkdir(join(root, 'projects', '-test'), { recursive: true });
-    await writeFile(join(root, 'projects', '-test', `${remoteSessionId}.jsonl`),
-      JSON.stringify({ type: 'user', uuid: 'history', timestamp: new Date(0).toISOString(), message: { content: 'history' } }) + '\n');
+    const transcriptPath = join(configDir, 'projects', nativeProjectId, `${remoteSessionId}.jsonl`);
+    if (timing === 'existing') {
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(join(projectDir, `${remoteSessionId}.jsonl`),
+        JSON.stringify({ type: 'user', uuid: 'history', timestamp: new Date(0).toISOString(), message: { content: 'history' } }) + '\n');
+    }
+    if (sharedState) {
+      await mkdir(join(nativeConfigDir, 'projects'), { recursive: true });
+      const definitionPath = '../../../../../packages/plugins/claude/src/agent/definition.js';
+      const { AGENT_STATE_SHARING_DESCRIPTOR: descriptor } = await import(definitionPath) as {
+        AGENT_STATE_SHARING_DESCRIPTOR: NonNullable<Awaited<ReturnType<typeof getConnectedServiceStateSharingDescriptor>>>;
+      };
+      await applyConnectedServiceStateSharingDescriptor({
+        descriptor,
+        nativeSourceContext: { sourceRoot: nativeConfigDir, sourceEnv: { CLAUDE_CONFIG_DIR: nativeConfigDir } },
+        target: { targetMaterializedRoot: configDir, targetMaterializedEnv: {} },
+        configMode: 'isolated', requestedStateMode: 'shared', effectiveStateMode: 'shared', cwd,
+      });
+      expect(await realpath(join(configDir, 'projects'))).toBe(join(nativeConfigDir, 'projects'));
+    }
+    // The authenticated hook grants the not-yet-created path in production. Keep the
+    // actual grant/follower owners: a fixture requiring realpath up front hides this race.
+    const grants = createTranscriptFileFollowPathGrantRegistry();
+    await grants.grant({ pluginId: CLAUDE_PLUGIN_MANIFEST.id, runtimeId: 'claude-follow-test',
+      scope: { kind: 'session', sessionId: 'claude-activity' }, path: transcriptPath,
+      reason: 'providerTranscriptSource', evidence: { kind: 'sessionStartTranscriptPath', providerSessionId: remoteSessionId } });
+    const fileFollow = createPluginTranscriptFileFollowService({ pluginId: CLAUDE_PLUGIN_MANIFEST.id,
+      runtimeId: 'claude-follow-test', readSessionId: () => 'claude-activity', fileFollowPathGrants: grants });
+    const fileHandles: AgentTranscriptFileFollowHandle[] = [];
     const contributionPath = '../../../../../packages/plugins/claude/src/agent/surfaces/sessions/external/contribution.js';
     const { createClaudeExternalSessionsContribution } = await import(contributionPath);
-    const contribution: AgentExternalSessionsContribution = createClaudeExternalSessionsContribution({ env: { CLAUDE_CONFIG_DIR: root } });
+    const contribution: AgentExternalSessionsContribution = createClaudeExternalSessionsContribution({ env: { CLAUDE_CONFIG_DIR: configDir } });
     const ops = providerOpsFromRealContribution(contribution, { pluginId: CLAUDE_PLUGIN_MANIFEST.id, agentId: 'claude' });
     if (!ops.resolveLinkIdentity) throw new Error('Claude follow identity operation unavailable');
     const followOps = { ...ops, resolveLinkIdentity: ops.resolveLinkIdentity };
+    const handoffPath = '../../../../../packages/plugins/claude/src/agent/surfaces/sessions/handoff/providerOps.js';
+    const { claudeHandoffSurface } = await import(handoffPath) as { claudeHandoffSurface: AgentRuntimeHandoffSurface };
+    const localMetadata = longCwd ? await claudeHandoffSurface.buildRuntimeLocalMetadata?.({
+      identity: { machineId: 'machine-1', workingDirectory: cwd, transcriptStorage: 'direct', vendorResumeId: remoteSessionId },
+      runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: { configDir } },
+    }, {
+      plugin: { id: CLAUDE_PLUGIN_MANIFEST.id, version: CLAUDE_PLUGIN_MANIFEST.version },
+      contribution: { id: 'claude', qualifiedId: `${CLAUDE_PLUGIN_MANIFEST.id}/agents/claude` },
+      surface: 'agent', invokedAtMs: Date.now(), signal: new AbortController().signal,
+      services: createUnavailablePluginServices(),
+    }) : null;
+    const producedSource = longCwd ? ExternalSessionsSourceSchema.parse(localMetadata?.externalSessionSource) : undefined;
+    // Fresh create admission has no retained native id/source binding. The real
+    // default-source resolver must discover the file in its linked config home.
+    const boundSource = sharedState ? undefined : producedSource;
     const basis = { accountSettingsRevision: 'account:claude' };
     const resolveTarget = () => resolveConfiguredExternalSessionFollowTarget({
         agents: [{ id: 'claude', identity: { pluginId: CLAUDE_PLUGIN_MANIFEST.id, localId: 'claude' },
           richDefinition: { provenance: 'first_party', definition: readManifestAgentContribution(CLAUDE_PLUGIN_MANIFEST, 'claude') } }],
         account: { connectedServicesV2: [] }, basis, readCurrentBasis: () => basis, isCurrent: () => true,
-        agentId: 'claude', remoteSessionId, resolveProviderOps: async () => followOps,
+        agentId: 'claude', remoteSessionId, boundSource, resolveProviderOps: async () => followOps,
     });
     // Runtime imports keep plugin compilation ownership, matching the existing Claude projector harness.
     const fixturesPath = '../../../../../packages/plugins/claude/src/agent/runtime/engine.testkit.js';
@@ -1198,7 +1318,7 @@ describe('configured external-session source materializer', () => {
     const fixtures = await import(fixturesPath) as {
       createTerminalHostFixture(): { service: unknown };
       createEventsFixture(): { service: unknown };
-      createSdkExecFixture(): { service: unknown; emit(row: unknown): Promise<void> };
+      createSdkExecFixture(options?: { providerExitOwnership?: 'direct' }): { service: unknown; emit(row: unknown): Promise<void> };
       createSessionHooksFixture(): { service: { startServer: ReturnType<typeof vi.fn> } };
       createPluginContextFixture(terminal: unknown, events: unknown, overrides?: unknown): {
         agentRuntime: Pick<AgentSessionHostServices, 'transcripts'>;
@@ -1212,7 +1332,7 @@ describe('configured external-session source materializer', () => {
     const native = await import(nativePath) as { createClaudeNativeSessionRuntimeFromOperations(
       operations: unknown, request: unknown, context: AgentSessionRuntimeContext,
     ): AgentSessionRuntime };
-    const exec = fixtures.createSdkExecFixture();
+    const exec = fixtures.createSdkExecFixture(sharedState ? {} : undefined);
     const hooks = fixtures.createSessionHooksFixture();
     const terminal = fixtures.createTerminalHostFixture();
     const baseCtx = fixtures.createPluginContextFixture(terminal.service, fixtures.createEventsFixture().service);
@@ -1256,18 +1376,30 @@ describe('configured external-session source materializer', () => {
     });
     const ctx = fixtures.createPluginContextFixture(terminal.service, fixtures.createEventsFixture().service, {
       exec: exec.service, sessionHooks: hooks.service,
-      transcripts: { ...baseCtx.agentRuntime.transcripts, followSource: async (request: Parameters<NonNullable<AgentSessionHostServices['transcripts']['followSource']>>[0]) => {
+      transcripts: { ...baseCtx.agentRuntime.transcripts,
+        fileFollow: { follow: async (request: Parameters<typeof fileFollow.follow>[0]) => {
+          const handle = await fileFollow.follow(request); fileHandles.push(handle); return handle;
+        } },
+        followSource: async (request: Parameters<NonNullable<AgentSessionHostServices['transcripts']['followSource']>>[0]) => {
         const result = await follow.bindProviderSession({ agentId: 'claude', ...request });
         if (result.status === 'unavailable') throw new Error(result.code);
         return result.binding;
       } },
     });
-    const operations = sdk.createClaudeAgentSdkTurnOperations({ ctx, directory: root, launchEnv: { CLAUDE_CONFIG_DIR: root },
-      happierSessionId: 'claude-activity', permissionMode: 'default', enableSessionWorkState: true, enableSessionResumability: true });
+    const operations = sdk.createClaudeAgentSdkTurnOperations({ ctx, directory: cwd, launchEnv: { CLAUDE_CONFIG_DIR: configDir },
+      happierSessionId: 'claude-activity', permissionMode: 'default', enableSessionWorkState: true, enableSessionResumability: resumability });
     // Only host registration is substituted; native operations, source correlation and Activity publication remain real.
     const context = { session: { services: { activeInput: { bind: () => ({ dispose() {} }) }, models: { bind: () => ({ dispose() {} }) } } } } as unknown as AgentSessionRuntimeContext;
-    runtime = native.createClaudeNativeSessionRuntimeFromOperations(operations, { kind: 'create', sessionId: 'claude-activity', cwd: root }, context);
-    const subscription = runtime.watch(event => { void binding.observeEvent(event); });
+    runtime = native.createClaudeNativeSessionRuntimeFromOperations(operations, { kind: 'create', sessionId: 'claude-activity', cwd }, context);
+    const hostOperations = createNativeAgentSessionOperations(runtime, 'claude-activity',
+      undefined, undefined, undefined, undefined, undefined, {
+        context, cwd, connectedAccounts: [],
+        capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+        cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false },
+      });
+    const unsubscribe = hostOperations.subscribeRuntimeEvents(event => {
+      if ('kind' in event) void binding.observeEvent(event);
+    });
     const queue = new MessageQueue2<string>(() => 'mode');
     const consumer = createSessionProviderInputConsumer({ messageQueue: queue, session: {
       waitForMetadataUpdate: () => new Promise<boolean>(() => {}), getMetadataSnapshot: () => ({}), getAgentStateSnapshot: () => ({}),
@@ -1286,16 +1418,25 @@ describe('configured external-session source materializer', () => {
     try {
       queue.pushImmediate('work', 'mode');
       await consumer.waitForNextInput({ abortSignal: signal });
-      operations.beginProviderTurn('turn-1');
-      await operations.sendProviderTurnPrompt('work');
+      await hostOperations.sendTurnPrompt('work', { localId: 'work-1', turnId: 'turn-1' });
       const hookRequest = hooks.service.startServer.mock.calls[0]?.[0] as { onSessionHook(id: string, row: unknown): Promise<void> };
       await hookRequest.onSessionHook(remoteSessionId, { hook_event_name: 'SessionStart', source: 'startup',
-        session_id: remoteSessionId, transcript_path: join(root, 'projects', '-test', `${remoteSessionId}.jsonl`) }).catch(error => baselineErrors.push(error));
+        session_id: remoteSessionId, transcript_path: transcriptPath }).catch(error => baselineErrors.push(error));
+      expect(baselineErrors).toEqual([]);
+      if (timing === 'created after SessionStart') {
+        await vi.waitFor(() => expect(tail.settlement?.committedProjection).toMatchObject({ state: 'unknown', activeCount: 0 }));
+      }
       // Foreground input custody must stay active even though the background inventory can be idle.
       expect(await consumer.readLiveWork()).toMatchObject({ input: 'active' });
       expect(readSessionActivityEligibility(tracked, await liveWork.read())).toMatchObject({
         eligible: false, reasons: expect.arrayContaining([{ kind: 'working' }]),
       });
+      await hookRequest.onSessionHook(remoteSessionId, { hook_event_name: 'UserPromptSubmit',
+        session_id: remoteSessionId, prompt: 'work', transcript_path: transcriptPath });
+      await mkdir(projectDir, { recursive: true });
+      await appendFile(transcriptPath, JSON.stringify({ type: 'user', uuid: 'accepted-work',
+        sessionId: remoteSessionId, timestamp: new Date().toISOString(), message: { content: 'work' } }) + '\n');
+      for (const handle of fileHandles) await handle.drainNow();
       await exec.emit({ type: 'result', subtype: 'success', is_error: false, session_id: remoteSessionId,
         num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8 });
       await operations.waitForProviderTurnCompletion();
@@ -1306,9 +1447,9 @@ describe('configured external-session source materializer', () => {
       const idle = readSessionActivityEligibility(tracked, await liveWork.read());
       expect(idle).toMatchObject({ eligible: true, settledAt: expect.any(Number) });
       expect(readSessionActivityEligibility(tracked, await liveWork.read())).toEqual(idle);
-      expect(await resolveTarget()).toMatchObject({ status: 'resolved', ref: { agentId: 'claude', remoteSessionId } });
-      operations.beginProviderTurn('turn-2');
-      await operations.sendProviderTurnPrompt('background work');
+      expect(await resolveTarget()).toMatchObject({ status: 'resolved', ref: { agentId: 'claude', remoteSessionId },
+        ...(longCwd ? { source: { projectId: nativeProjectId } } : {}) });
+      await hostOperations.sendTurnPrompt('background work', { localId: 'work-2', turnId: 'turn-2' });
       await exec.emit({ type: 'system', subtype: 'task_started', session_id: remoteSessionId,
         task_id: 'child', task_type: 'local_agent', is_backgrounded: true });
       await vi.waitFor(async () => expect(await consumer.readLiveWork()).toMatchObject({ session: 'active' }));
@@ -1322,7 +1463,8 @@ describe('configured external-session source materializer', () => {
       await operations.waitForProviderTurnCompletion();
       await vi.waitFor(async () => expect(await consumer.readLiveWork()).toMatchObject({ session: 'settled', input: 'settled' }));
     } finally {
-      subscription.dispose(); await runtime.dispose(); await follow.releaseActiveBindings(); activity.dispose();
+      unsubscribe(); await hostOperations.resetOrDisposeRuntime(); await follow.releaseActiveBindings(); activity.dispose();
+      for (const handle of fileHandles) await handle.close();
       await rm(root, { recursive: true, force: true });
     }
   });
