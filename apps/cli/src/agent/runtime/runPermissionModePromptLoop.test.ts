@@ -2020,4 +2020,141 @@ describe('runPermissionModePromptLoop', () => {
     expect(runtime.reset).not.toHaveBeenCalled();
     expect(runtime.sendPrompt).toHaveBeenCalledTimes(1);
   });
+
+  it('yields to timers while the abort signal is aborted but not yet replaced, then delivers the queued prompt', async () => {
+    // A host's abort handler aborts the signal, awaits the provider's cancel, and only then installs a
+    // fresh signal. Until then the real input consumer answers `null` at once. If the loop retries those
+    // empty wakes without ever yielding a macrotask, the timer that stands in for the cancel can never
+    // fire, so the signal is never replaced and the loop spins until the process runs out of heap.
+    const session = createPromptLoopSession();
+    const queue = createModeQueue();
+    const runtime = createRuntime();
+    const messageBuffer = new MessageBuffer();
+    const permissionHandler = {
+      setPermissionMode: vi.fn(),
+      reset: vi.fn(),
+    } as any;
+
+    queue.push({ text: 'sent after stop', localId: 'local-after-stop' }, { permissionMode: 'default' });
+
+    const realConsumer = createSessionProviderInputConsumer({ messageQueue: queue, session });
+    const MAX_EMPTY_WAKES = 1000;
+    let waitCalls = 0;
+    const inputConsumer: typeof realConsumer = {
+      ...realConsumer,
+      waitForNextInput: async (waitOpts) => {
+        waitCalls += 1;
+        if (waitCalls > MAX_EMPTY_WAKES) {
+          throw new Error(`prompt loop is spinning on empty input wakes (${waitCalls} calls without yielding to timers)`);
+        }
+        return realConsumer.waitForNextInput(waitOpts);
+      },
+    };
+
+    // The Stop has been pressed: the current signal is aborted and its replacement arrives only after
+    // the (simulated) provider cancel completes on a later macrotask.
+    let abortController = new AbortController();
+    abortController.abort();
+    const cancelTimer = setTimeout(() => {
+      abortController = new AbortController();
+    }, 20);
+
+    let shouldExit = false;
+    try {
+      await (runPermissionModePromptLoop as unknown as (params: any) => Promise<void>)({
+        providerName: 'Test Provider',
+        agentMessageType: 'cursor',
+        explicitPermissionMode: undefined,
+        session,
+        messageQueue: queue,
+        inputConsumer,
+        permissionHandler,
+        runtime,
+        createOverrideSynchronizer: () => ({ syncFromMetadata: () => {}, flushPendingAfterStart: async () => {} }),
+        messageBuffer,
+        shouldExit: () => shouldExit,
+        getAbortSignal: () => abortController.signal,
+        keepAlive: () => {},
+        setThinking: () => {},
+        sendReady: () => {
+          shouldExit = true;
+        },
+        currentPermissionModeUpdatedAt: 0,
+        setCurrentPermissionMode: () => {},
+        setCurrentPermissionModeUpdatedAt: () => {},
+        formatPromptErrorMessage: (caught: unknown) => `Error: ${String(caught)}`,
+      });
+    } finally {
+      clearTimeout(cancelTimer);
+    }
+
+    expect(runtime.sendPrompt).toHaveBeenCalledTimes(1);
+    expect(runtime.sendPrompt).toHaveBeenCalledWith('sent after stop');
+    expect(waitCalls).toBeLessThan(10);
+  });
+
+  it('does not wait before exiting when shutdown aborted the input wait', async () => {
+    // Only the timers are faked, so a retry delay that is started here can never finish on its own.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const session = createPromptLoopSession();
+      session.waitForPendingEligibilityUpdate = vi.fn(
+        (signal?: AbortSignal) =>
+          new Promise<boolean>((resolve) => {
+            signal?.addEventListener('abort', () => resolve(false), { once: true });
+          }),
+      );
+      const queue = createModeQueue();
+      const runtime = createRuntime();
+      const messageBuffer = new MessageBuffer();
+      const permissionHandler = {
+        setPermissionMode: vi.fn(),
+        reset: vi.fn(),
+      } as any;
+
+      const abortController = new AbortController();
+      let shouldExit = false;
+      let exited = false;
+      const loopPromise = (runPermissionModePromptLoop as unknown as (params: any) => Promise<void>)({
+        providerName: 'Test Provider',
+        agentMessageType: 'cursor',
+        explicitPermissionMode: undefined,
+        session,
+        messageQueue: queue,
+        permissionHandler,
+        runtime,
+        createOverrideSynchronizer: () => ({ syncFromMetadata: () => {}, flushPendingAfterStart: async () => {} }),
+        messageBuffer,
+        shouldExit: () => shouldExit,
+        getAbortSignal: () => abortController.signal,
+        keepAlive: () => {},
+        setThinking: () => {},
+        sendReady: () => {},
+        currentPermissionModeUpdatedAt: 0,
+        setCurrentPermissionMode: () => {},
+        setCurrentPermissionModeUpdatedAt: () => {},
+        formatPromptErrorMessage: (caught: unknown) => `Error: ${String(caught)}`,
+      }).then(() => {
+        exited = true;
+      });
+
+      // The loop parks in its input wait with nothing queued.
+      for (let index = 0; index < 10; index += 1) {
+        await waitForPromptLoopTick();
+      }
+      expect(exited).toBe(false);
+
+      // Shutdown: exit is requested first, then the wait is aborted, so the wait answers `null` while exiting.
+      shouldExit = true;
+      abortController.abort();
+      for (let index = 0; index < 10 && !exited; index += 1) {
+        await waitForPromptLoopTick();
+      }
+
+      expect(exited).toBe(true);
+      await loopPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
