@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { Typography } from './Typography';
+import { EYEBROW_TYPOGRAPHY, Typography } from './Typography';
 
 describe('Typography visual primitive helpers', () => {
     it('exposes tabular numerals as a fresh single-purpose style fragment', () => {
@@ -12,7 +12,7 @@ describe('Typography visual primitive helpers', () => {
     });
 
     it('exposes eyebrow styling for uppercase section labels', () => {
-        const style = Typography.eyebrow();
+        const style = EYEBROW_TYPOGRAPHY;
 
         expect(style).toMatchObject({
             textTransform: 'uppercase',
@@ -23,8 +23,8 @@ describe('Typography visual primitive helpers', () => {
     });
 
     it('exposes rowTitle and rowMeta helpers for two-tier rows', () => {
-        const title = Typography.rowTitle();
-        const meta = Typography.rowMeta();
+        const title = Typography.variant('label', 'semiBold');
+        const meta = Typography.variant('meta');
 
         expect(Number(title.fontSize)).toBeGreaterThan(Number(meta.fontSize));
         expect(Number(title.lineHeight)).toBeGreaterThanOrEqual(Number(title.fontSize));
@@ -32,18 +32,18 @@ describe('Typography visual primitive helpers', () => {
     });
 
     it('uses the canonical Inter faces for prose and chrome while key hints stay mono', () => {
-        expect(Typography.reading().fontFamily).toContain('Inter-Regular');
-        expect(Typography.rowMeta().fontFamily).toContain('Inter-Regular');
-        expect(Typography.timestamp().fontFamily).toContain('Inter-Regular');
-        expect(Typography.eyebrow().fontFamily).toContain('Inter-SemiBold');
-        expect(Typography.rowTitle().fontFamily).toContain('Inter-SemiBold');
-        expect(Typography.pillLabel().fontFamily).toContain('Inter-SemiBold');
-        expect(Typography.keyHint().fontFamily).toContain('IBMPlexMono-Regular');
+        expect(Typography.variant('reading').fontFamily).toContain('Inter-Regular');
+        expect(Typography.variant('meta').fontFamily).toContain('Inter-Regular');
+        expect(({ ...Typography.variant('micro', 'regular'), ...Typography.tabular() }).fontFamily).toContain('Inter-Regular');
+        expect(EYEBROW_TYPOGRAPHY.fontFamily).toContain('Inter-SemiBold');
+        expect(Typography.variant('label', 'semiBold').fontFamily).toContain('Inter-SemiBold');
+        expect(Typography.variant('micro', 'semiBold').fontFamily).toContain('Inter-SemiBold');
+        expect(({ ...Typography.variant('micro', 'regular'), ...Typography.mono(), ...Typography.tabular() }).fontFamily).toContain('IBMPlexMono-Regular');
     });
 
     it('exposes compact pill and key-hint label helpers', () => {
-        const pillLabel = Typography.pillLabel();
-        const keyHint = Typography.keyHint();
+        const pillLabel = Typography.variant('micro', 'semiBold');
+        const keyHint = ({ ...Typography.variant('micro', 'regular'), ...Typography.mono(), ...Typography.tabular() });
 
         expect(Number(pillLabel.fontSize)).toBeGreaterThan(0);
         expect(Number(keyHint.fontSize)).toBeGreaterThan(0);
@@ -51,6 +51,6 @@ describe('Typography visual primitive helpers', () => {
     });
 
     it('uses tabular numerals for timestamps', () => {
-        expect(Typography.timestamp().fontVariant).toEqual(['tabular-nums']);
+        expect(({ ...Typography.variant('micro', 'regular'), ...Typography.tabular() }).fontVariant).toEqual(['tabular-nums']);
     });
 });

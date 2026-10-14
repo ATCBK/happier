@@ -11,9 +11,9 @@ import { HAPPIER_TYPE_WEIGHT, resolveHappierTypeScale, type HappierTypeRole, typ
  * Usage Examples:
  * 
  * // Default typography (Inter)
- * <Text style={{ fontSize: 16, ...Typography.default() }}>Regular text</Text>
+ * <Text variant="label">Regular text</Text>
  * <Text style={{ fontSize: 16, ...Typography.default('italic') }}>Italic text</Text>
- * <Text style={{ fontSize: 16, ...Typography.default('semiBold') }}>Semi-bold text</Text>
+ * <Text variant="label" emphasis="semiBold">Semi-bold text</Text>
  * 
  * // Monospace typography (IBM Plex Mono)
  * <Text style={{ fontSize: 14, ...Typography.mono() }}>Code text</Text>
@@ -133,49 +133,12 @@ function variantTypography(role: HappierTypeRole, emphasis?: HappierTypeEmphasis
     return { ...metrics, ...defaultTypography(weight) };
 }
 
-function eyebrowTypography(): Pick<TextStyle, 'fontFamily' | 'fontWeight' | 'fontSize' | 'lineHeight' | 'letterSpacing' | 'textTransform'> {
-    return {
-        ...variantTypography('micro', 'semiBold'),
-        letterSpacing: 0.8,
-        textTransform: 'uppercase',
-    };
-}
-
-function rowTitleTypography(): Pick<TextStyle, 'fontFamily' | 'fontWeight' | 'fontSize' | 'lineHeight' | 'letterSpacing'> {
-    return variantTypography('label', 'semiBold');
-}
-
-function rowMetaTypography(): Pick<TextStyle, 'fontFamily' | 'fontSize' | 'lineHeight' | 'letterSpacing'> {
-    return variantTypography('meta');
-}
-
-/**
- * Reading prose — a detail's ask, a summary, a step's body: text that is read rather than scanned, a step
- * above the row meta line (lab c7 `.body`, 14/21) and below the row title in weight.
- */
-function readingTypography(): Pick<TextStyle, 'fontFamily' | 'fontWeight' | 'fontSize' | 'lineHeight' | 'letterSpacing'> {
-    return variantTypography('reading');
-}
-
-// A pill takes the micro role with the semibold face; D3 owns the native iOS size.
-function pillLabelTypography(): Pick<TextStyle, 'fontFamily' | 'fontWeight' | 'fontSize' | 'lineHeight' | 'letterSpacing'> {
-    return variantTypography('micro', 'semiBold');
-}
-
-function keyHintTypography(): Pick<TextStyle, 'fontFamily' | 'fontSize' | 'lineHeight' | 'fontVariant'> {
-    return {
-        ...variantTypography('micro', 'regular'),
-        ...Typography.mono(),
-        ...tabularTypography(),
-    };
-}
-
-function timestampTypography(): Pick<TextStyle, 'fontFamily' | 'fontSize' | 'lineHeight' | 'fontVariant'> {
-    return {
-        ...variantTypography('micro', 'regular'),
-        ...tabularTypography(),
-    };
-}
+/** Uppercase chrome is the micro role plus the Eyebrow component's two modifiers. */
+export const EYEBROW_TYPOGRAPHY: Readonly<Pick<TextStyle, 'fontFamily' | 'fontSize' | 'lineHeight' | 'letterSpacing' | 'textTransform'>> = Object.freeze({
+    ...variantTypography('micro', 'semiBold'),
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+});
 
 export const Typography = {
     variant: variantTypography,
@@ -189,21 +152,6 @@ export const Typography = {
 
     // Tabular numbers (fontVariant: ['tabular-nums']) for jitter-free dynamic counts/times
     tabular: tabularTypography,
-
-    // Uppercase, tracked section/kicker labels (non-editable typography primitive)
-    eyebrow: eyebrowTypography,
-
-    // Standard two-tier row rhythm (non-editable typography primitives)
-    rowTitle: rowTitleTypography,
-    rowMeta: rowMetaTypography,
-
-    // Reading prose (detail bodies, summaries, story steps)
-    reading: readingTypography,
-
-    // Compact label primitives for status pills and keyboard hints
-    pillLabel: pillLabelTypography,
-    keyHint: keyHintTypography,
-    timestamp: timestampTypography,
 
     // Logo font style (Bricolage Grotesque)
     logo: () => ({
