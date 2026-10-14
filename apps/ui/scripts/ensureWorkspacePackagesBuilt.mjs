@@ -83,7 +83,7 @@ export async function ensureUiWorkspacePackagesBuilt({
     // from installed dependency admission.
     const { resolveUiPostinstallTasks } = await import('../tools/resolveUiPostinstallTasks.mjs');
     const tasks = resolveUiPostinstallTasks({ env });
-    const retainLastGreen = env.HAPPIER_STACK_DEV_READ_ONLY_DEPENDENCIES === '1';
+    const retainLastGreen = env[WORKSPACE_BUILD_MODE_ENV] !== 'strict';
     const { buildPasswordKdfWorker } = await import('../tools/password/buildPasswordKdfWorker.mjs');
     const { buildAtmosphereRenderers } = await import('../tools/atmosphere/buildAtmosphereRenderers.mjs');
     if (tasks.includes('vendor-password-kdf-worker')) await buildPasswordKdfWorker({ uiDirectory: uiPackageDir, retainLastGreen });

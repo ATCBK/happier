@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { brotliDecompressSync, gunzipSync } from 'node:zlib';
+import { runInNewContext } from 'node:vm';
 import { run } from '../utils/proc/proc.mjs';
 import { exportSourceWebUi } from './build_source_web_ui.mjs';
 import { createTempFixture } from '../testkit/core/temp_fixture.mjs';
@@ -480,11 +481,41 @@ test('cold Expo source preparation needs no workspace dist build or materializat
   await assert.rejects(access(join(repoDir, '.project/tmp/cli-source-dev-shared-deps-sync.json')), { code: 'ENOENT' });
 });
 
+async function prepareFiniteSourceWebFixture({ sourceRepo, repoDir }) {
+  await captureSourceWebBuildInputs({ repoDir: sourceRepo, outputDir: repoDir });
+  // Keep the real captured compiler/tooling, but author one small app/plugin.
+  // The separate whole-app export case exercises the complete plugin census.
+  const pluginName = '@happier-dev/plugins-admission-fixture';
+  await writeFile(join(repoDir, 'apps/cli/package.json'), JSON.stringify({ name: '@happier-dev/cli',
+    type: 'module', bundledDependencies: [pluginName] }));
+  await writeFile(join(repoDir, 'apps/ui/package.json'), JSON.stringify({ name: '@happier-dev/ui',
+    type: 'module', dependencies: { [pluginName]: '0.0.0' } }));
+  await rm(join(repoDir, 'apps/ui/sources'), { recursive: true });
+  await mkdir(join(repoDir, 'apps/ui/sources/app'), { recursive: true });
+  const uiInput = join(repoDir, 'apps/ui/sources/app/_layout.tsx');
+  const uiSource = 'export const admissionInput = "captured-ui-input";';
+  await writeFile(uiInput, uiSource);
+  const pluginRoot = join(repoDir, 'packages/plugins/admission-fixture');
+  await mkdir(join(pluginRoot, 'src'), { recursive: true });
+  await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({ name: pluginName, version: '0.0.0',
+    type: 'module', exports: { './manifest': './src/manifest.ts', './happier-plugin-ui/panel': './src/panel.ts' } }));
+  await writeFile(join(pluginRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify({
+    id: 'happier.admission-fixture', contributes: { ui: {
+      renderers: [{ id: 'panel', kind: 'reactNative', artifact: 'panel' }],
+    } },
+  })};`);
+  const pluginInput = join(pluginRoot, 'src/panel.ts');
+  await writeFile(pluginInput, 'export function renderSurface() { return "captured-plugin-input"; }');
+  const toolInput = 'apps/ui/scripts/prepareSourcePluginUiArtifacts.mjs';
+  const toolDigest = createHash('sha256').update(await readFile(join(repoDir, toolInput))).digest('hex');
+  return { uiInput, uiSource, pluginInput, toolInput, toolDigest };
+}
+
 test('source web export retains captured UI and workspace inputs across live additions, removals and edits', async context => {
   const fixture = await createTempFixture(context, { prefix: 'happier-web-input-churn-' });
   const sourceRepo = fileURLToPath(new URL('../../../../', import.meta.url));
   const repoDir = fixture.path('live');
-  await captureSourceWebBuildInputs({ repoDir: sourceRepo, outputDir: repoDir });
+  const { toolInput, toolDigest } = await prepareFiniteSourceWebFixture({ sourceRepo, repoDir });
   const uiInput = 'apps/ui/sources/webExportChurn.ts';
   const workspaceInput = 'packages/protocol/src/webExportChurn.ts';
   const specimenInput = 'apps/ui/sources/dev/testkit/harness/liveExportSpecimen.ts';
@@ -494,7 +525,7 @@ test('source web export retains captured UI and workspace inputs across live add
   await writeFile(join(repoDir, workspaceInput), 'export const value = "captured-workspace";');
   const result = await exportSourceWebUi({ repoDir, baseDir: fixture.path('state'), outputDir: fixture.path('output'),
     env: { ...process.env, EXPO_PUBLIC_DEBUG: '0' },
-    runImpl: async (_command, args, { cwd }) => {
+    runImpl: async (_command, args, { cwd, env }) => {
       await rm(join(repoDir, uiInput));
       await writeFile(join(repoDir, workspaceInput), 'export const value = "changed-live";');
       await writeFile(join(repoDir, 'apps/ui/sources/createdDuringExport.ts'), 'export const late = true;');
@@ -503,6 +534,15 @@ test('source web export retains captured UI and workspace inputs across live add
       assert.equal(await readFile(join(inputRepo, uiInput), 'utf8'), 'export const value = "captured-ui";');
       assert.equal(await readFile(join(inputRepo, workspaceInput), 'utf8'), 'export const value = "captured-workspace";');
       await assert.rejects(access(join(cwd, 'sources/createdDuringExport.ts')), { code: 'ENOENT' });
+      assert.equal(createHash('sha256').update(await readFile(join(inputRepo, toolInput))).digest('hex'), toolDigest);
+      const inputs = Object.keys(JSON.parse(await readFile(fixture.path('output/tools/metafile.json'), 'utf8')).inputs);
+      assert.ok(inputs.some(path => path.replaceAll('\\', '/').endsWith(`/workspace/${toolInput}`)));
+      const inventory = (await readFile(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY, 'utf8')).replaceAll('export const ', 'const ');
+      const artifacts = runInNewContext(`${inventory}\nBUNDLED_PLUGIN_UI_APP_ARTIFACTS`, { require: path => path });
+      assert.deepEqual(Array.from(artifacts, artifact => artifact.pluginId), ['happier.admission-fixture']);
+      const module = { exports: {} };
+      runInNewContext(await readFile(artifacts[0].files[0].asset, 'utf8'), { module, exports: module.exports });
+      assert.equal(module.exports.renderSurface(), 'captured-plugin-input');
       const web = args[args.indexOf('--output-dir') + 1];
       await mkdir(web);
       await writeFile(join(web, 'index.html'), '<script src="./app.js"></script>');
@@ -625,32 +665,7 @@ test('source web export admits its complete finite capture before consumption an
     const native = await installNativeAdmissionFixture({ root: fixture.root });
     const sourceRepo = fileURLToPath(new URL('../../../../', import.meta.url));
     const repoDir = fixture.path('repo');
-    await captureSourceWebBuildInputs({ repoDir: sourceRepo, outputDir: repoDir });
-    // Keep the real captured compiler/tooling, but author one small app/plugin
-    // for this admission contract. Other cases exercise the complete app census.
-    const pluginName = '@happier-dev/plugins-admission-fixture';
-    await writeFile(join(repoDir, 'apps/cli/package.json'), JSON.stringify({ name: '@happier-dev/cli',
-      type: 'module', bundledDependencies: [pluginName] }));
-    await writeFile(join(repoDir, 'apps/ui/package.json'), JSON.stringify({ name: '@happier-dev/ui',
-      type: 'module', dependencies: { [pluginName]: '0.0.0' } }));
-    await rm(join(repoDir, 'apps/ui/sources'), { recursive: true });
-    await mkdir(join(repoDir, 'apps/ui/sources/app'), { recursive: true });
-    const uiInput = join(repoDir, 'apps/ui/sources/app/_layout.tsx');
-    const uiSource = 'export const admissionInput = "captured-ui-input";';
-    await writeFile(uiInput, uiSource);
-    const pluginRoot = join(repoDir, 'packages/plugins/admission-fixture');
-    await mkdir(join(pluginRoot, 'src'), { recursive: true });
-    await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({ name: pluginName, version: '0.0.0',
-      type: 'module', exports: { './manifest': './src/manifest.ts', './happier-plugin-ui/panel': './src/panel.ts' } }));
-    await writeFile(join(pluginRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify({
-      id: 'happier.admission-fixture', contributes: { ui: {
-        renderers: [{ id: 'panel', kind: 'reactNative', artifact: 'panel' }],
-      } },
-    })};`);
-    const pluginInput = join(pluginRoot, 'src/panel.ts');
-    await writeFile(pluginInput, 'export function renderSurface() { return "captured-plugin-input"; }');
-    const toolInput = 'apps/ui/scripts/prepareSourcePluginUiArtifacts.mjs';
-    const toolDigest = createHash('sha256').update(await readFile(join(repoDir, toolInput))).digest('hex');
+    const { uiInput, uiSource, pluginInput, toolInput, toolDigest } = await prepareFiniteSourceWebFixture({ sourceRepo, repoDir });
     const outputDir = fixture.path('export');
     const available = fixture.path('available-memory');
     const lowMemoryObserved = fixture.path('low-memory-observed');
