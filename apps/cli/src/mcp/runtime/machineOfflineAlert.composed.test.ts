@@ -16,6 +16,8 @@ import { configuration } from '@/configuration';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { createHappierMcpServer } from '@/mcp/createHappierMcpServer';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { handleActionsCommand } from '@/cli/commands/actions';
+import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
 import { createDaemonSessionAccountActionExecutor } from '@/daemon/agentRuntime/createDaemonSessionAccountActionExecutor';
 import { createDaemonControlApp } from '@/daemon/controlServer';
 import type { TrackedSession } from '@/daemon/types';
@@ -196,7 +198,7 @@ it.each([false, true])('routes delayed Agent approval through its Account owner;
     if (conflict) {
       conflict = false;
       content = { t: 'plain', v: { actionsSettingsV1: policy, favoriteMachines: ['concurrent'], futureSetting: 'preserved',
-        machineOfflineAlertsV1: { machineIds: ['peer', 'concurrent'] } } };
+        sessionReplayMaxSeedChars: 1024, machineOfflineAlertsV1: { machineIds: ['peer', 'concurrent'] } } };
       version += 1;
       return { status: 200, data: { success: false, error: 'version-mismatch', currentVersion: version, currentContent: content } };
     }
@@ -341,12 +343,6 @@ it.each([false, true])('routes delayed Agent approval through its Account owner;
     if (!accountExecutor) throw new Error('Missing real Account executor');
     // A person's standalone CLI decision has Account credentials, not the
     // originating runner's live-custody callback. Exercise that real factory.
-  const approvalExecutor = createCliActionExecutorFromCredentials({ credentials: decidingCredentials,
-      serverId, serverApiUrl: serverUrl, serverIdentityId: 'srv_alert',
-      externalActionClient: true,
-      readCredentials: async () => decidingCredentials, pluginActionExecutionOwner: 'current_process',
-      actionsSettingsProvider: createActionSettingsProvider({ scopeKey: resolveAccountSettingsScopeKeyForToken(credentials.token),
-        getAccountSettings: () => accountSettingsParse(content.t === 'plain' ? content.v : {}) }) });
     expect(await call('settings.get', { anchor, key: machineId })).toEqual({ ok: true, result: { anchor, value: false } });
     await new Promise(resolve => setTimeout(resolve, 1_500));
     expect(settled).toBe(false);
@@ -363,12 +359,21 @@ it.each([false, true])('routes delayed Agent approval through its Account owner;
       if (!raw || typeof raw !== 'object' || typeof callback !== 'function') throw new Error('Invalid Machine RPC');
       callback({ ok: false, error: 'Machine offline' });
     });
-    const decision = await approvalExecutor.execute('approval.request.decide', { artifactId, decision: 'approve' },
-      { surface: 'cli' });
-    expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true });
-    if (!decision.ok) throw new Error('Expected approval decision');
-    expect(getActionSpec('approval.request.decide').outputSchema?.safeParse(decision.result).success).toBe(true);
-    expect(decision.result).toMatchObject({ status: installationChanged ? 'failed' : 'approved' });
+    const output = captureConsoleJsonOutput();
+    let decision: unknown;
+    try {
+      await runWithServerHttpBaseUrl(serverUrl, () => handleActionsCommand(['invoke', 'approval.request.decide',
+        '--input-json', JSON.stringify({ artifactId, decision: 'approve' }), '--json'], {
+        readCredentialsFn: async () => decidingCredentials,
+        getServerProfileFn: async () => ({ id: serverId, name: 'Alert Home', serverUrl, createdAt: 1, updatedAt: 1 }),
+        createExecutorFn: params => createCliActionExecutorFromCredentials({ ...params,
+          pluginActionExecutionOwner: 'current_process',
+          actionsSettingsProvider: createActionSettingsProvider({ scopeKey: resolveAccountSettingsScopeKeyForToken(credentials.token),
+            getAccountSettings: () => accountSettingsParse(content.t === 'plain' ? content.v : {}) }) }),
+      }));
+      decision = output.json();
+    } finally { output.restore(); process.exitCode = 0; }
+    expect(decision).toMatchObject({ ok: true, data: { status: installationChanged ? 'failed' : 'approved' } });
     expect(await pending).toMatchObject(installationChanged
       ? { ok: false, errorCode: 'approval_stale' } : { ok: true, result: { anchor, value: true } });
     expect(await runWithServerHttpBaseUrl(serverUrl, () => store.approvalsGet({ artifactId, serverId })))
