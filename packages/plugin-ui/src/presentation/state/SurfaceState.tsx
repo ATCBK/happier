@@ -237,9 +237,12 @@ export function HappierSurfaceState(props: HappierSurfaceStateProps) {
   ) : diagnosticMarker;
 
   if (props.size === 'line') {
+    // One block (final-acceptance 10): the cause on the leading edge and its recovery at the trailing
+    // end. A line is not a card: it never grows a Details disclosure under it (the raw code stays on
+    // the QA marker), so a narrow card never stacks three alignments.
     const lineActions = actions.some(Boolean) ? (
       <View
-        style={{ flexDirection: 'row', gap: HAPPIER_STATE_LINE_METRICS.gapPx }}
+        style={{ flexDirection: 'row', alignItems: 'center', gap: HAPPIER_STATE_LINE_METRICS.gapPx }}
       >
         {actions.map((action, index) =>
           action ? (
@@ -298,7 +301,7 @@ export function HappierSurfaceState(props: HappierSurfaceStateProps) {
             })}
           </HappierStateLine>
         </View>
-        {diagnosticDetails}
+        {diagnosticMarker}
       </View>
     );
   }

@@ -35,6 +35,16 @@ vi.mock('react-native', async () => {
  * only).
  */
 describe('SurfaceStateCard', () => {
+    it('keeps a failed line one block: the cause and its recovery, no disclosure under it (final-acceptance 10)', async () => {
+        const screen = await renderScreen(<SurfaceStateCard testID="vitals" size="line" kind="error" title="Couldn't read this machine"
+            diagnosticCode="machine_rpc_failed" action={{ testID: 'retry', label: 'Retry', onPress: () => {} }} />);
+        const line = screen.findByTestId('vitals')!;
+        expect(line.findAll((node) => node.props?.testID === 'retry')).not.toHaveLength(0);
+        // A line never grows a centred Details block beneath it; the code stays on the QA marker.
+        expect(screen.findByTestId('vitals-details-toggle')).toBeFalsy();
+        expect(screen.findByTestId('vitals-diagnostic-machine_rpc_failed')).toBeTruthy();
+        await screen.unmount();
+    });
     it.each([undefined, 'inline'] as const)('reads failure detail before recovery in %s layout', async (layout) => {
         const screen = await renderScreen(<SurfaceStateCard layout={layout} kind="error" title="Failed"
             detail="The comparison could not be loaded." action={{ label: 'Retry', onPress: () => {} }} />);
