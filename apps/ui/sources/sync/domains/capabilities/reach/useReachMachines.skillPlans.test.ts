@@ -10,6 +10,8 @@ import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixture
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -37,7 +39,166 @@ const { machineAgentInventoryStore } = await import('@/agents/machineAgents/mach
 const { serverAccountScopedResourceKey } = await import('@/sync/domains/scope/serverAccountScope');
 const { WhereItsOnControl } = await import('@/components/capabilities/where/WhereItsOnControl');
 const { describeReach } = await import('@/components/capabilities/where/whereItsOnPresentation');
+const { useMcpAddPlaces } = await import('@/components/settings/mcpServers/add/useMcpAddPlaces');
+const { useReachRulesState } = await import('./useReachRulesState');
+const { reachRuleKeyV1 } = await import('@happier-dev/protocol/reach/reachRulesChangeV1');
+const { SkillsRulesSetInputV1Schema, McpRulesSetInputV1Schema } = await import('@happier-dev/protocol/actions/specs/capabilityRules');
+const { createActionExecutor } = await import('@happier-dev/protocol/actions/actionExecutor');
+const { createMcpServerActionExecuteV1 } = await import('@happier-dev/protocol/mcp/servers/serverActionsV1');
+const { commitMcpServerCatalogMutationV1 } = await import('@happier-dev/protocol/mcp/servers/serverCatalogV1');
+const { McpServerCatalogV1Schema } = await import('@happier-dev/protocol/mcp/servers/serverRowsV1');
+const { PromptLibraryRecordV1Schema } = await import('@happier-dev/protocol/prompts/library/promptLibraryRowsV1');
+const { WorkspaceRefV1Schema } = await import('@happier-dev/protocol/workspaces/workspaceRefV1');
 const before = storage.getState();
+it.each(['skill', 'mcp_server'] as const)('%s mounts Account Project choices and writes Only/Except with D33 precedence', async kind => {
+    const serverUrl = 'https://project-places.test';
+    await network.addHome(serverUrl, 'project-places-account');
+    const home = await adoptHomeProfile({ source: 'manual', descriptor: { v: 1,
+        homeServerIdentityId: 'srv_project_places', canonicalServerUrl: serverUrl, revision: 1,
+        endpoints: [{ kind: 'https', url: serverUrl }] } });
+    await setActiveServerId(home.id);
+    if (!home.serverIdentityId) throw new Error('Expected qualified Home');
+    const scope = { serverId: home.serverIdentityId, accountId: 'project-places-account' };
+    const machines = ['a', 'b'].map(id => createMachineFixture({ id, activeAt: Date.now(), metadata: {
+        ...createMachineFixture().metadata!, agentInventory: { checkedAt: 2, installedAgentIds: ['codex', 'gemini'] },
+    } }));
+    const refs = machines.map(machine => WorkspaceRefV1Schema.parse({ id: `checkout-${machine.id}`, serverId: scope.serverId,
+        machineId: machine.id, projectKey: 'project-key', rootPath: `/src/${machine.id}/garden`, label: 'Garden', createdAtMs: 1 }));
+    storage.setState({ settingsScope: scope, profileScope: scope, machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
+        machineListByServerId: { [scope.serverId]: machines }, machineListStatusByServerId: { [scope.serverId]: 'idle' },
+        projectAccountRows: createProjectAccountRowsFixture(scope, { workspaceRefs: [...refs,
+            { ...refs[0]!, id: 'second-checkout-a', rootPath: '/src/worktree' },
+            { ...refs[0]!, id: 'foreign', serverId: 'srv_another_home', projectKey: 'foreign-project' }],
+        }) });
+    const placesHook = await renderHook(() => kind === 'skill' ? useSkillPlaces() : useMcpAddPlaces());
+    expect(placesHook.getCurrent().names.projectName('project-key')).toBe('Garden');
+    expect(placesHook.getCurrent().projects).toEqual([{ projectKey: 'project-key', name: 'Garden', machineCount: 2 }]);
+    const foreignSessionPlaces = await renderHook(() => useSkillPlaces('srv_another_home'));
+    expect(foreignSessionPlaces.getCurrent().projects).toEqual([]);
+    expect(foreignSessionPlaces.getCurrent().names.projectName('project-key')).toBe('project-key');
+    await foreignSessionPlaces.unmount();
+    const firstProjects = placesHook.getCurrent().projects;
+    await act(async () => storage.setState({ settingsVersion: 42 }));
+    expect(placesHook.getCurrent().projects).toBe(firstProjects);
+    const writes: Array<{ actionId: string; change: import('@happier-dev/protocol/reach/reachRulesChangeV1').ReachRulesChangeV1 }> = [];
+    let persisted: import('@happier-dev/protocol/reach/reachRuleV1').ReachRulesV1 = [];
+    let revision = 1;
+    let nextId = 0;
+    let initialRules: import('@happier-dev/protocol/reach/reachRuleV1').ReachRulesV1 = [];
+    const ruleWriteContext = () => ({ nowMs: revision + 1, newId: () => `rule-${nextId++}` });
+    const mcpCatalog = () => McpServerCatalogV1Schema.parse({ v: 1, servers: [{ id: 'item', name: 'garden-helper',
+        transport: 'stdio', stdio: { command: 'garden-helper', args: [] }, env: {}, createdAt: 1, updatedAt: 1 }],
+        bindings: persisted.map(rule => ({ ...rule, serverId: 'item' })) });
+    // Only durable-row and library reads/writes are substituted; admission, Actions, mutation,
+    // receipt schemas, optimistic state, places, sentence and resolver remain real.
+    const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+        skillRules: {
+            serverId: scope.serverId,
+            assertCurrent: () => { expect(storage.getState().settingsScope).toEqual(scope); },
+            ruleWriteContext,
+            listSkills: async () => [{ id: 'item', name: 'garden-helper' }],
+            readCatalog: async () => ({ catalog: { status: 'ready', rows: [{ revision,
+                record: PromptLibraryRecordV1Schema.parse({ key: 'skill-rules', value: { v: 1,
+                    rules: persisted.map(rule => ({ ...rule, skillId: 'item' })) } }) }], tombstones: [], diagnostics: [] } }),
+            writeRecord: async input => {
+                if (input.expectedRevision !== revision) return { status: 'conflict', revision };
+                const record = PromptLibraryRecordV1Schema.parse(input.record);
+                if (record.key !== 'skill-rules') throw new Error('Unexpected row write');
+                persisted = record.value.rules.map(({ skillId: _skillId, ...rule }) => rule);
+                return { status: 'updated', revision: ++revision, cursor: revision };
+            },
+        },
+        mcpServerAction: createMcpServerActionExecuteV1({
+            readCatalog: async () => ({ status: 'ready', authority: 'active', revision, scope,
+                diagnostics: [], catalog: mcpCatalog() }),
+            mutate: async (change, expectedRevision) => {
+                if (expectedRevision !== revision) return { status: 'conflict', revision };
+                return commitMcpServerCatalogMutationV1({ catalog: mcpCatalog(), revision, change, scope,
+                    ctx: ruleWriteContext(), writeCatalog: async input => {
+                        if (input.expectedRevision !== revision) return { status: 'conflict', revision };
+                        persisted = input.catalog.bindings.map(({ serverId: _serverId, ...rule }) => rule);
+                        return { status: 'updated', revision: ++revision, cursor: revision };
+                    } });
+            },
+            machine: async () => { throw new Error('Unexpected Machine operation'); },
+        }),
+    }));
+    const execute: import('./useReachRulesState').ExecuteReachRules = async (actionId, input) => {
+        const parsed = (actionId === 'skills.rules.set' ? SkillsRulesSetInputV1Schema : McpRulesSetInputV1Schema).parse(input);
+        writes.push({ actionId, change: parsed.change });
+        return executor.execute(actionId, input, { surface: 'ui', authority: 'present_user',
+            actionCaller: { kind: 'host' }, serverId: scope.serverId });
+    };
+    function ProjectControl() {
+        const places = kind === 'skill' ? useSkillPlaces() : useMcpAddPlaces();
+        const reach = useReachRulesState({ key: `${kind}/item`, kind, itemId: 'item', rules: initialRules,
+            status: 'ready', revision: 1, valueAvailable: true }, execute);
+        return React.createElement(WhereItsOnControl, { kind, rules: reach.rules, status: reach.status,
+            projection: projectReachOnMachines(reach.rules, places.machines, undefined, places.workspaceRefs),
+            places: { agentIds: places.agentIds, machines: places.placeMachines, projects: places.projects },
+            onChange: reach.change, onUndo: async () => { await reach.undoLast(); },
+            presentation: 'section', testID: 'account-project' });
+    }
+    let screen = await renderScreen(React.createElement(ProjectControl));
+    const node = (testID: string, handler: string) => screen.findAll(n => n.props.testID === testID && typeof n.props[handler] === 'function')[0]!;
+    const choose = async (testID: string, id: string) => { await act(async () => { await node(testID, 'onSelect').props.onSelect(id); }); };
+    await act(async () => node('account-project:sentence', 'onPress').props.onPress());
+    const menu = node('account-project:addMenu', 'onSelect');
+    expect(menu.props.items.flatMap((item: { id: string }) => item.id)).toContain('project:project-key');
+    expect(menu.props.items.flatMap((item: { id: string }) => item.id)).not.toContain('project:foreign-project');
+    await choose('account-project:addMenu', 'project:project-key');
+    expect(writes[0]).toMatchObject({ actionId: kind === 'skill' ? 'skills.rules.set' : 'mcp.rules.set',
+        change: { kind: 'replace', rules: [{ target: { t: 'project', projectKey: 'project-key' }, enabled: true }] } });
+    const summaryText = async (renderer = screen) => {
+        await renderer.pressByTestIdAsync('account-project:sentence');
+        const result = renderer.getTextContent().replace(/\s+/gu, ' ');
+        await renderer.pressByTestIdAsync('account-project:sentence');
+        return result;
+    };
+    expect(await summaryText()).toContain('Only in Garden');
+    expect(projectReachOnMachines(persisted, placesHook.getCurrent().machines, undefined, refs)
+        .filter(row => row.projectKey === 'project-key').map(row => row.machineId)).toEqual(['a', 'b']);
+    await act(async () => screen.findByType(WhereItsOnControl).props.onUndo());
+    expect(persisted).toEqual([]);
+    await choose('account-project:addMenu', 'project:project-key');
+    await screen.unmount();
+    initialRules = [...persisted, { id: 'gemini-off', target: { t: 'allMachines' }, agentId: 'gemini',
+        enabled: false, createdAt: 1, updatedAt: 1 }];
+    persisted = initialRules;
+    screen = await renderScreen(React.createElement(ProjectControl));
+    await act(async () => node('account-project:sentence', 'onPress').props.onPress());
+    expect(await summaryText()).toContain('except Gemini');
+    expect(projectReachOnMachines(persisted, placesHook.getCurrent().machines, 'project-key')
+        .every(row => row.agents.find(agent => agent.agentId === 'gemini')?.enabled === false)).toBe(true);
+    const projectRow = `account-project:rule:${reachRuleKeyV1({ target: { t: 'project', projectKey: 'project-key' } })}`;
+    await choose(`${projectRow}:agents`, 'gemini');
+    expect(await summaryText()).toContain('for Gemini in Garden');
+    expect(projectReachOnMachines(persisted, placesHook.getCurrent().machines, 'project-key')
+        .every(row => row.agents.find(agent => agent.agentId === 'gemini')?.enabled === true)).toBe(true);
+    expect(projectReachOnMachines(persisted, placesHook.getCurrent().machines, 'other-project')
+        .every(row => row.agents.find(agent => agent.agentId === 'gemini')?.enabled === false)).toBe(true);
+    await screen.unmount();
+    initialRules = []; persisted = []; revision = 1;
+    const exceptScreen = await renderScreen(React.createElement(ProjectControl));
+    await act(async () => exceptScreen.findAll(n => n.props.testID === 'account-project:sentence' && typeof n.props.onPress === 'function')[0]!.props.onPress());
+    await act(async () => exceptScreen.findAll(n => n.props.testID === 'account-project:everywhere' && typeof n.props.onChange === 'function')[0]!.props.onChange('on'));
+    await act(async () => exceptScreen.findAll(n => n.props.testID === 'account-project:addMenu' && typeof n.props.onSelect === 'function')[0]!.props.onSelect('project:project-key'));
+    expect(writes.at(-1)).toMatchObject({ actionId: kind === 'skill' ? 'skills.rules.set' : 'mcp.rules.set',
+        change: { rules: expect.arrayContaining([{ target: { t: 'project', projectKey: 'project-key' }, enabled: false }]) } });
+    expect(await summaryText(exceptScreen)).toContain('except in Garden');
+    await exceptScreen.unmount();
+    const rows = storage.getState().projectAccountRows!;
+    await act(async () => storage.setState({ projectAccountRows: { ...rows, status: 'loading', organizations: [
+        { key: { kind: 'project-organization', serverId: scope.serverId, projectKey: 'project-key' },
+            revision: 2, value: { label: 'Garden tools', hidden: true } },
+    ] } }));
+    expect(placesHook.getCurrent().names.projectName('project-key')).toBe('Garden tools');
+    expect(placesHook.getCurrent().projects).toEqual([{ projectKey: 'project-key', name: 'Garden tools', machineCount: 2 }]);
+    await act(async () => storage.setState({ settingsScope: { ...scope, accountId: 'another-account' } }));
+    expect(placesHook.getCurrent().projects).toEqual([]);
+    expect(placesHook.getCurrent().names.projectName('project-key')).toBe('project-key');
+    await placesHook.unmount();
+});
 afterEach(async () => { await standardCleanup(); storage.setState(before, true); clearDaemonMergedProjectionCacheForTests();
     resetAcpCatalogSnapshotsForTests(); network.resetRequests(); });
 afterAll(() => network.dispose());

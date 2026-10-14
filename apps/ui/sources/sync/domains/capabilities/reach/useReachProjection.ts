@@ -11,6 +11,10 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { useReachRulesCatalog } from '@/sync/store/useReachRulesCatalog';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useProjectAccountRows } from '@/sync/domains/workspaces/projectAccountRows';
+import { projectProjectListV1 } from '@happier-dev/protocol/workspaces';
+import { resolveWorkspacePathBasenameV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
+import { resolveWorkspaceDisplayLabel } from '@/sync/domains/workspaces/workspaceLabel';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { readInstalledMachineAgentInventory } from './installedMachineAgents';
@@ -26,6 +30,34 @@ export type ReachMachineProjection = Readonly<
   ReachProjectionV1[number] & { offline: boolean; projectKey?: string; agentInventoryComplete?: boolean }
 >;
 const empty: readonly ReachMachineProjection[] = Object.freeze([]);
+const emptyProjects: readonly Readonly<{ projectKey: string; name: string; machineCount: number }>[] = Object.freeze([]);
+const emptyWorkspaceRefs: readonly WorkspaceRefV1[] = Object.freeze([]);
+
+/** Accepted Account Projects, from the same scoped rows and grouping owner as Projects and reach. */
+export function useReachProjects(serverId?: string | null) {
+  const scope = useAccountSettingsScope();
+  const rows = useProjectAccountRows();
+  return React.useMemo(() => {
+    if (!scope || !rows || !areServerAccountScopesEqual(scope, rows.scope)
+      || (serverId && !areServerProfileIdentifiersEquivalent(serverId, scope.serverId))) {
+      return { projects: emptyProjects, workspaceRefs: emptyWorkspaceRefs };
+    }
+    const workspaceRefs = rows.workspaceRefs.filter(ref => areServerProfileIdentifiersEquivalent(ref.serverId, scope.serverId));
+    const grouped = projectProjectListV1({ serverId: scope.serverId, workspaceRefs,
+      organizations: rows.organizations, normalizeServerId: resolveServerProfileScopeIdForIdentifier });
+    // Hidden Projects remain valid rule targets and must keep their names in existing rules.
+    const projects = [...grouped.projectGroups, ...grouped.hiddenProjectGroups].map(group => {
+      const ref = group.items[0]!;
+      const organization = rows.organizations.find(row => row.key.projectKey === group.projectKey.projectKey
+        && areServerProfileIdentifiersEquivalent(row.key.serverId, scope.serverId));
+      return { projectKey: group.projectKey.projectKey,
+        name: organization?.value.label ?? resolveWorkspaceDisplayLabel({ scope: ref, workspaceRef: ref,
+          fallbackPathLabel: resolveWorkspacePathBasenameV1(ref.rootPath) ?? ref.rootPath }),
+        machineCount: new Set(group.items.map(item => item.machineId)).size };
+    });
+    return { projects, workspaceRefs };
+  }, [scope, rows, serverId]);
+}
 
 /** One Account machine as reach sees it: published install facts and REACH's presence predicate. */
 export type ReachMachine = Readonly<{
@@ -158,14 +190,12 @@ export function useReachProjection(
 ): readonly ReachMachineProjection[] {
   const catalog = useReachRulesCatalog(kind, itemId);
   const { scope, machines } = useReachMachines();
-  const projects = useProjectAccountRows();
+  const { workspaceRefs } = useReachProjects(scope?.serverId);
   return React.useMemo(
     () =>
       !scope || !catalog.valueAvailable
         ? empty
-        : projectReachOnMachines(catalog.rules, machines, opts?.projectKey,
-          areServerAccountScopesEqual(scope, projects?.scope)
-            ? projects?.workspaceRefs.filter(ref => areServerProfileIdentifiersEquivalent(ref.serverId, scope.serverId)) : []),
-    [scope, catalog.valueAvailable, catalog.rules, opts?.projectKey, machines, projects],
+        : projectReachOnMachines(catalog.rules, machines, opts?.projectKey, workspaceRefs),
+    [scope, catalog.valueAvailable, catalog.rules, opts?.projectKey, machines, workspaceRefs],
   );
 }

@@ -6,20 +6,24 @@ import {
 } from '@/agents/registry/useSessionAgentCatalogIdentity';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
 import { joinList } from '@/utils/text/joinList';
+import { useReachProjects } from '@/sync/domains/capabilities/reach/useReachProjection';
 
 import type { WhereItsOnNames } from './whereItsOnPresentation';
 
 /**
  * The names "Where it's on" words use: Agents from the catalog identity owner, machines and projects
- * from the caller's places. One builder for the control's sentence and the lists' short summaries.
+ * from the caller's places (Account Projects by default). One builder for the control's sentence and
+ * the lists' short summaries, returning the same Account places for the saved and Add controls.
  */
 export function useWhereItsOnNames(input: Readonly<{
   agentIds: readonly string[];
   machines: readonly Readonly<{ machineId: string; name: string }>[];
-  projects: readonly Readonly<{ projectKey: string; name: string }>[];
+  projects?: readonly Readonly<{ projectKey: string; name: string }>[];
   machineId?: string | null;
   serverId?: string | null;
-}>): Readonly<{ names: WhereItsOnNames; identityById: ReadonlyMap<string, SessionAgentCatalogIdentity> }> {
+}>) {
+  const accountProjects = useReachProjects(input.serverId);
+  const projects = input.projects ?? accountProjects.projects;
   const machines = React.useMemo(() => input.machines.map(machine => ({ machineId: machine.machineId, agentIds: input.agentIds })), [input.machines, input.agentIds]);
   const identities = useAgentCatalogIdentities({
     agentIds: input.agentIds,
@@ -42,15 +46,15 @@ export function useWhereItsOnNames(input: Readonly<{
   }, [identities]);
   const names = React.useMemo<WhereItsOnNames>(() => {
     const machines = new Map(input.machines.map((machine) => [machine.machineId, machine.name]));
-    const projects = new Map(input.projects.map((project) => [project.projectKey, project.name]));
+    const projectNames = new Map(projects.map((project) => [project.projectKey, project.name]));
     const machineName = (machineId: string) => machines.get(machineId) ?? machineId;
     return {
       agentName: (agentId) => joinList(identities.filter(identity => identity.entry.agentId === agentId)
         .map(identity => identity.entry.title)) || agentId,
       machineName,
-      projectName: (projectKey) => projects.get(projectKey) ?? projectKey,
+      projectName: (projectKey) => projectNames.get(projectKey) ?? projectKey,
       folderLabel: (machineId, root) => `${formatPathRelativeToHome(root)} · ${machineName(machineId)}`,
     };
-  }, [input.machines, input.projects, identities]);
-  return { names, identityById };
+  }, [input.machines, projects, identities]);
+  return { names, identityById, projects: accountProjects.projects, workspaceRefs: accountProjects.workspaceRefs };
 }

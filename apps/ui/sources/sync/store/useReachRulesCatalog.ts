@@ -38,7 +38,7 @@ export function useReachRulesLookup(requestedScope?: ServerAccountScope | null) 
     const rules = React.useCallback((kind: 'skill' | 'mcp_server', itemId: string) =>
         (kind === 'skill' ? skills.value : mcp.value) === null ? null
             : selectReachRules(kind, itemId, { skillRules: skills.value, mcp: mcp.value }), [skills.value, mcp.value]);
-    return { scope, rules, mcpCatalog: mcp.value };
+    return { scope, rules, skillRules: skills.value, mcpCatalog: mcp.value };
 }
 
 /** Select one item's rules from its existing Account row; only the selected catalog is demanded. */
