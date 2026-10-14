@@ -91,6 +91,9 @@ vi.mock('@/sync/domains/server/serverRuntime', () => ({
     getActiveServerSnapshot: () => runtime.activeServerSnapshot,
 }));
 
+// Prepare the real modal graph outside the recovery interaction's clock.
+await import('./ApiTokenCreateModal');
+
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (typeof style === 'function') return flattenStyle(style({ pressed: false, focused: false }));
     if (Array.isArray(style)) return Object.assign({}, ...style.filter(Boolean).map(flattenStyle));
@@ -193,6 +196,11 @@ describe('ApiTokenCreateModal', () => {
         expect(resumed.get('returnTo')).toBe('/settings/account/api-tokens');
         expect(JSON.parse(resumed.get('draft') ?? 'null')).toEqual({
             label: 'Release deploy', expiryPreset: '1y', encryptionAccess: true, access: 'limited', grant,
+        });
+        const { readApiTokenCreateResume } = await import('./apiTokenCreateResume');
+        expect(readApiTokenCreateResume(Object.fromEntries(resumed))).toEqual({
+            draft: state.createDraft,
+            target: { targetServerId: 'home-a', targetServerUrl: 'https://home-a.example.test', expectedAccountId: 'account-a' },
         });
         expect(destination).toContain('targetServerId=home-a');
         expect(destination).toContain('targetServerUrl=https%3A%2F%2Fhome-a.example.test');

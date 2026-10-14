@@ -34,8 +34,8 @@ const CreateDraftResumeSchema = z.object({
     encryptionAccess: z.boolean().optional(),
     authorizeUnattendedTeamAccess: z.boolean().optional(),
     access: z.enum(['full', 'limited']),
-    grant: ApiTokenGrantV1Schema.optional(),
-    embedConfig: EmbedConfigV1Schema.optional(),
+    grant: z.optional(ApiTokenGrantV1Schema),
+    embedConfig: z.optional(EmbedConfigV1Schema),
 }).strict().superRefine((draft, context) => {
     // A limited draft is only its grant: without one it cannot resume as anything honest.
     if (draft.access === 'limited' && draft.grant === undefined) {

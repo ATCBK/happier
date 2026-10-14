@@ -1,4 +1,5 @@
 import type { Href } from 'expo-router';
+import { omit, pick } from 'zod/mini';
 
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 
@@ -12,7 +13,7 @@ import { UsageQuerySchema } from '@happier-dev/protocol/inputs/usageQuery';
 import type { UsageWidgetPageInitialFilters, UsageWidgetPageScope, UsageWidgetQueryOverrides } from './usageWidgetPageContext';
 
 /** The route and page both project the same canonical input fields. */
-export const UsageWidgetPageScopeSchema = UsageQuerySchema.pick({ period: true, agents: true, machines: true, projects: true, sources: true, session: true, costBasis: true });
+export const UsageWidgetPageScopeSchema = pick(UsageQuerySchema, { period: true, agents: true, machines: true, projects: true, sources: true, session: true, costBasis: true });
 
 export function parseUsageWidgetPageScope(value: unknown): UsageWidgetPageScope | null {
     const parsed = UsageWidgetPageScopeSchema.safeParse(value);
@@ -40,7 +41,7 @@ const VALID_DIMENSIONS = new Set<UsageDimension>([
 ]);
 
 /** Route transport for the existing non-context clauses, not another filter grammar. */
-const UsageWidgetQueryOverridesSchema = UsageQuerySchema.omit({ period: true, agents: true, machines: true, projects: true,
+const UsageWidgetQueryOverridesSchema = omit(UsageQuerySchema, { period: true, agents: true, machines: true, projects: true,
     sources: true, session: true, costBasis: true, metric: true, breakdown: true });
 
 function readSingleParam(value: RouteParamValue): string | null {
