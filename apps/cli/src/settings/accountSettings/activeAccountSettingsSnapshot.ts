@@ -140,6 +140,14 @@ export function preserveAccountCatalogsInSnapshot(
   let accepted: ActiveAccountSettingsSnapshot = inherited.length > 0 && previous
     ? { ...next, ...Object.fromEntries(inherited.map(field => [field, previous[field]])) }
     : next;
+  if (previous && belongsToSameAccount(previous, accepted)) {
+    // A newer observation can advance revision/timing without changing the
+    // preferences or material consumed by an admitted operation.
+    const unchanged = (['settings', 'rawSettings', 'settingsSecretsReadKeys'] as const)
+      .filter(field => previous[field] !== accepted[field] && isDeepStrictEqual(previous[field], accepted[field]));
+    if (unchanged.length > 0) accepted = { ...accepted,
+      ...Object.fromEntries(unchanged.map(field => [field, previous[field]])) };
+  }
   if (previous && belongsToSameAccount(previous, accepted)
     && !isDeepStrictEqual(previous.settingsSecretsReadKeys, accepted.settingsSecretsReadKeys)) {
     accepted = {

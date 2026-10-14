@@ -59,7 +59,10 @@ export async function projectRequesterAccountActionAuthorization(
 }
 
 /** Both admitted owners use these same Account ports; Session provenance stays in its caller guard. */
-async function projectAdmittedAccountCustody(input: RequesterAccountActionAuthorizationInput): Promise<ExternalActionExecutionAuthorizationV1 | null> {
+async function projectAdmittedAccountCustody(
+  input: RequesterAccountActionAuthorizationInput,
+  isCustodyLive: () => boolean = () => true,
+): Promise<ExternalActionExecutionAuthorizationV1 | null> {
   const parsed = ExternalActionExecutionAuthorizationV1Schema.safeParse(input.authorization);
   const { bootstrap } = input;
   const stamp = bootstrap.attribution;
@@ -81,14 +84,17 @@ async function projectAdmittedAccountCustody(input: RequesterAccountActionAuthor
       randomBytes: length => new Uint8Array(randomBytes(length)) });
     const isCurrent = async (): Promise<boolean> => {
       try {
-        if (input.signal?.aborted || !await bootstrap.isCurrent()) return false;
+        if (input.signal?.aborted || !isCustodyLive()) return false;
         const next = await fetchAccountEncryptionCurrentness({ token: bootstrap.credentials.token,
           serverBaseUrl: bootstrap.serverHttpBaseUrl, ...(input.signal ? { signal: input.signal } : {}) });
         // Account seq also advances for unrelated activity; encryption custody follows its own mode/key transition.
         return next.mode === currentness.mode && next.updatedAt === currentness.updatedAt
           && next.signingKeyFingerprint === currentness.signingKeyFingerprint
           && next.contentKeyFingerprint === currentness.contentKeyFingerprint
-          && !input.signal?.aborted && await bootstrap.isCurrent();
+          // Check the distinct bootstrap/Machine fact once, after the encryption
+          // read; local retirement remains observable across either await.
+          && !input.signal?.aborted && await bootstrap.isCurrent()
+          && !input.signal?.aborted && isCustodyLive();
       } catch { return false; }
     };
     // Loaded only when a real admitted invocation asks for private Account ports.
@@ -267,7 +273,7 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
       credentials: input.credentials, serverHttpBaseUrl: input.serverHttpBaseUrl, isCurrent,
       attribution: { serverId: input.serverId, accountId: profile.id, machineId: wire.binding.machineId,
         installationId: wire.binding.installationId },
-    }, ...(input.signal ? { signal: input.signal } : {}) });
+    }, ...(input.signal ? { signal: input.signal } : {}) }, () => live);
     if (!authorization || !await isCurrent()) return null;
     const savedSecretOperationContext = createInvocationSavedSecretOperationContextV1({ credentials: input.credentials,
       snapshot: accountSettingsContext, serverHttpBaseUrl: input.serverHttpBaseUrl,

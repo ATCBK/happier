@@ -37,6 +37,8 @@ export function createActionSettingsProvider(params: Readonly<{
   getAccountSettings?: (() => AccountSettings | null) | null;
   /** Credential-derived Account scope for long-lived runtime policy. */
   scopeKey?: string | null;
+  /** Session ingress retains host policy rather than standalone CLI environment policy. */
+  allowEnvironmentOverride?: boolean;
 }> = {}): ActionSettingsProvider {
   const initialSnapshot = getActiveAccountSettingsSnapshot();
   const scopeKey = params.scopeKey ?? null;
@@ -71,7 +73,7 @@ export function createActionSettingsProvider(params: Readonly<{
     },
     getActionsSettings: () => {
       const accountSettings = getAccountSettings();
-      return scopeKey
+      return scopeKey || params.allowEnvironmentOverride === false
         ? normalizeActionsSettingsV1(accountSettings?.actionsSettingsV1)
         : resolveActionsSettingsWithEnvironmentOverride(accountSettings ?? {});
     },

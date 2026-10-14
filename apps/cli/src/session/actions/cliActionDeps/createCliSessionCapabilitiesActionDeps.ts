@@ -80,8 +80,11 @@ export function createCliSessionCapabilitiesActionDeps(params: Readonly<{
         const generic = SpawnCapabilitiesPreviewSuccessV1Schema.parse({ ok: true, machinePlatform: result.machinePlatform,
           mcp: result.mcp, skills: result.skills, applyTiming: result.applyTiming });
         const apply = readCapabilitySelectionApplyV1(session.metadata);
+        const refusal = apply.mcp ?? apply.skills;
         return { ok: true, mcp: { items: generic.mcp.items }, skills: generic.skills,
-          pendingApply: { ...readPendingCapabilityApplyV1(session.metadata), ...(apply.mcp ?? apply.skills ?? {}) }, applyTiming: generic.applyTiming };
+          pendingApply: { ...readPendingCapabilityApplyV1(session.metadata), ...(refusal ? {
+            reason: refusal.reason, ...(refusal.restartBy ? { restartBy: refusal.restartBy } : {}),
+          } : {}) }, applyTiming: generic.applyTiming };
       } catch { context.signal?.throwIfAborted(); return { ok: false, code: 'session_unavailable' }; }
     },
     sessionCapabilities: {

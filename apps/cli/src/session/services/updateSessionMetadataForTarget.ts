@@ -10,7 +10,7 @@ import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient'
 
 export type UpdateSessionMetadataForTargetResult =
   | Readonly<{ ok: true; sessionId: string; metadata: Record<string, unknown>; version: number }>
-  | Readonly<{ ok: false; code: 'session_not_found' | 'session_id_ambiguous' | 'session_lookup_timeout' | 'encryption_material_unavailable' | 'unsupported' | 'conflict' | 'forbidden' | 'unknown_error'; candidates?: string[] }>;
+  | Readonly<{ ok: false; code: 'session_not_found' | 'session_id_ambiguous' | 'session_lookup_timeout' | 'encryption_material_unavailable' | 'account_encryption_currentness_unavailable' | 'metadata_privacy_upgrade_required' | 'session_publisher_authority_lost' | 'unsupported' | 'conflict' | 'forbidden' | 'unknown_error'; candidates?: string[] }>;
 
 export async function updateSessionMetadataForTarget(params: Readonly<{
   credentials: StoredCredentials;

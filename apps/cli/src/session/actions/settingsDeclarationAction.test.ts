@@ -17,6 +17,8 @@ describe('headless settings conditional writes', () => {
         { actionId: 'settings.get', input: { anchor: 'delegation.workDepthLimit', includeVersion: true } },
         { actionId: 'settings.set', input: { anchor: 'delegation.workDepthLimit', value: 2, expectedSettingsVersion: 4 } },
         { actionId: 'settings.set', input: { anchor: 'delegation.workDepthLimit', value: 2, reversal: { kind: 'capture' } } },
+        { actionId: 'settings.get', input: { anchor: 'notifications.machineOffline', key: 'machine' } },
+        { actionId: 'settings.set', input: { anchor: 'notifications.machineOffline', key: 'machine', value: true } },
     ] as const)('requires Account credentials before the headless conditional owner can read or mutate', async request => {
         const action = createCliSettingsDeclarationAction({});
         expect(await action({ ...request, context: { surface: 'agent' } }))
@@ -24,10 +26,13 @@ describe('headless settings conditional writes', () => {
     });
     it('never borrows daemon credentials for an external conditional preference read', async () => {
         const action = createCliSettingsDeclarationAction({ credentials: { token: 'daemon', encryption: null } });
-        expect(await action({ actionId: 'settings.get', input: { anchor: 'usage.coachPreferences', includeVersion: true },
-            context: { surface: 'agent', externalActionCredential: { accountId: 'account', principalId: 'principal',
-                credentialId: 'credential', grant: API_TOKEN_FULL_GRANT_V1 } } }))
-            .toMatchObject({ ok: false, errorCode: 'requester_account_material_unavailable' });
+        for (const input of [{ anchor: 'usage.coachPreferences', includeVersion: true },
+            { anchor: 'notifications.machineOffline', key: 'machine' }]) {
+            expect(await action({ actionId: 'settings.get', input,
+                context: { surface: 'agent', externalActionCredential: { accountId: 'account', principalId: 'principal',
+                    credentialId: 'credential', grant: API_TOKEN_FULL_GRANT_V1 } } }))
+                .toMatchObject({ ok: false, errorCode: 'requester_account_material_unavailable' });
+        }
     });
     it('uses the current Account material for a same-Account Session Action authorization', async () => {
         const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');

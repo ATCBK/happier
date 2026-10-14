@@ -70,6 +70,37 @@ describe('bootstrapAccountSettingsContext', () => {
     resetInMemoryAccountSettingsContextForTests();
   });
 
+  it('renews freshness after an unchanged authoritative refresh without republishing Settings', async () => {
+    Object.assign(mutableConfigurationForTest(), { clientEncryptionRequirement: 'follow_account' });
+    const credentials = createTokenOnlyCredentialsStub();
+    // HTTP, persistent cache and process-environment writes are system boundaries.
+    const get = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200,
+      data: { version: 1, content: { t: 'plain', v: {} } } });
+    const options = { credentials, ttlMs: 1_000,
+      deps: { resolveCachePath: () => '/tmp/happier-settings-freshness', readCache: async () => null,
+        writeCache: async () => {}, applySideEffects: () => {} } };
+    const initial = await bootstrapAccountSettingsContext({ ...options, nowMs: 1_000 });
+    const snapshot = getActiveAccountSettingsSnapshot();
+    const refreshed = await bootstrapAccountSettingsContext({ ...options, nowMs: 2_000 });
+    await bootstrapAccountSettingsContext({ ...options, nowMs: 2_100 });
+    await bootstrapAccountSettingsContext({ ...options, nowMs: 2_200 });
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(refreshed.settings).toBe(initial.settings);
+    expect(getActiveAccountSettingsSnapshot()).toBe(snapshot);
+    // The same existing TTL still expires; force and revision demands bypass freshness.
+    await bootstrapAccountSettingsContext({ ...options, nowMs: 3_000 });
+    expect(get).toHaveBeenCalledTimes(3);
+    await bootstrapAccountSettingsContext({ ...options, nowMs: 3_001, refresh: 'force' });
+    expect(get).toHaveBeenCalledTimes(4);
+    await expect(bootstrapAccountSettingsContext({ ...options, nowMs: 3_002,
+      minSettingsVersion: 2 })).rejects.toMatchObject({ code: 'ACCOUNT_SETTINGS_STALE' });
+    get.mockRejectedValue(new Error('Settings service unavailable'));
+    await bootstrapAccountSettingsContext({ ...options, nowMs: 4_001 });
+    await bootstrapAccountSettingsContext({ ...options, nowMs: 4_100 });
+    expect(get).toHaveBeenCalledTimes(7);
+    expect(getActiveAccountSettingsSnapshot()).toBe(snapshot);
+  });
+
   it.each([{ mode: 'plain' as const, custodian: true }, { mode: 'e2ee' as const, custodian: true },
     { mode: 'plain' as const, custodian: false }])('loads invocation-bound requester $mode policy without replacing custodian state or process defaults (custodian=$custodian)', async ({ mode, custodian }) => {
     const alice = { source: 'network' as const, settings: accountSettingsParse({}), settingsVersion: 1,

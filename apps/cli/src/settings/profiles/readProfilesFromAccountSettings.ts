@@ -10,6 +10,8 @@ import type { StoredCredentials } from '@/persistence';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken,
   type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 export type CliAiLaunchProfile = AiLaunchProfile;
 
@@ -182,28 +184,37 @@ export async function loadAccountLaunchProfileArtifacts(settings: unknown, crede
   return await loadAiLaunchProfileArtifacts(references, createCredentialedAccountArtifactStore(credentials), signal);
 }
 
-export async function readAccountLaunchProfiles(settings: unknown, credentials: StoredCredentials, signal?: AbortSignal, profileCatalog?: ProfileCatalogSnapshotV1) {
-  const scopeKey = resolveAccountSettingsScopeKey(credentials);
-  const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
-  const assertCurrent = () => {
-    signal?.throwIfAborted();
-    if (getActiveAccountSettingsSnapshot()?.scopeKey !== scopeKey
-      || getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken) {
-      throw new ProfileCatalogUnavailableError('unavailable');
-    }
+export async function readAccountLaunchProfiles(settings: unknown, credentials: StoredCredentials, signal?: AbortSignal, profileCatalog?: ProfileCatalogSnapshotV1,
+  operationContext?: SavedSecretOperationContextV1) {
+  const read = async () => {
+    const scopeKey = resolveAccountSettingsScopeKey(credentials);
+    const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
+    const readSnapshot = () => operationContext ? operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
+    const assertCurrent = async () => {
+      signal?.throwIfAborted();
+      if (operationContext && (operationContext.credentials.token !== credentials.token || !await operationContext.isCurrent())
+        || readSnapshot()?.scopeKey !== scopeKey
+        || !operationContext && getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken) {
+        throw new ProfileCatalogUnavailableError('unavailable');
+      }
+    };
+    await assertCurrent();
+    const { readAuthoringMemoryLastUsedProfile } = await import('./readAuthoringMemoryLastUsedProfile');
+    const catalog = profileCatalog ?? await (await import('./hydrateProfileCatalog')).refreshActiveProfileCatalog({ credentials, signal, operationContext });
+    await assertCurrent();
+    const captured = readSnapshot();
+    if (!captured) throw new ProfileCatalogUnavailableError('unavailable');
+    const source = operationContext ? readProfileSettingsFromAccountSnapshot({ ...captured, profileCatalog: catalog })
+      : readProfileSettingsForAccount({ settings, credentials, profileCatalog: catalog });
+    const [artifacts, lastUsedProfile] = await Promise.all([
+      loadAccountLaunchProfileArtifacts(source, credentials, signal, catalog),
+      readAuthoringMemoryLastUsedProfile(credentials, signal),
+    ]);
+    await assertCurrent();
+    const observed = readSnapshot();
+    const providerSettings = observed?.providerConnectionsCatalog?.status === 'ready'
+      ? readProviderSettingsForCli(observed).settings : undefined;
+    return { ...readProfilesFromAccountSettings(source, artifacts, { lastUsedProfile }, catalog, providerSettings), artifactsById: artifacts };
   };
-  assertCurrent();
-  const { readAuthoringMemoryLastUsedProfile } = await import('./readAuthoringMemoryLastUsedProfile');
-  const catalog = profileCatalog ?? await (await import('./hydrateProfileCatalog')).refreshActiveProfileCatalog({ credentials, signal });
-  assertCurrent();
-  const source = readProfileSettingsForAccount({ settings, credentials, profileCatalog: catalog });
-  const [artifacts, lastUsedProfile] = await Promise.all([
-    loadAccountLaunchProfileArtifacts(source, credentials, signal, catalog),
-    readAuthoringMemoryLastUsedProfile(credentials, signal),
-  ]);
-  assertCurrent();
-  const observed = getActiveAccountSettingsSnapshot();
-  const providerSettings = observed?.providerConnectionsCatalog?.status === 'ready'
-    ? readProviderSettingsForCli(observed).settings : undefined;
-  return { ...readProfilesFromAccountSettings(source, artifacts, { lastUsedProfile }, catalog, providerSettings), artifactsById: artifacts };
+  return await (operationContext ? runWithServerHttpBaseUrl(operationContext.serverHttpBaseUrl, read) : read());
 }

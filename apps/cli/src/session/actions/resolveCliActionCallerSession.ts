@@ -1,4 +1,4 @@
-import type { ActionExecutorContext, BackendTargetRefV2 } from '@happier-dev/protocol';
+import type { ActionExecutorContext, BackendTargetRefV2, ExternalActionTargetV1 } from '@happier-dev/protocol';
 import type { StoredCredentials } from '@/persistence';
 import type { ResolveSessionTransportContextResult } from '@/session/services/resolveSessionTransportContext';
 import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
@@ -58,8 +58,8 @@ type CallerSessionFacts = Readonly<{
 export async function resolveCliActionCallerSession(params: Readonly<{
   context: ActionExecutorContext;
   credentials?: StoredCredentials;
-  boundSessionId: string;
-  readBoundSession: () => Promise<CallerSessionFacts>;
+  boundSessionId?: string;
+  readBoundSession?: () => Promise<CallerSessionFacts>;
   resolveTransportForSession: (sessionId: string, signal?: AbortSignal) => Promise<Extract<ResolveSessionTransportContextResult, { ok: true }> | Readonly<{ ok: false }>>;
 }>): Promise<(CallerSessionFacts & Readonly<{ sessionId: string }>) | null> {
   const callerSessionId = params.context.actionCaller?.kind === 'session'
@@ -67,7 +67,8 @@ export async function resolveCliActionCallerSession(params: Readonly<{
   const sessionId = typeof callerSessionId === 'string' ? callerSessionId.trim() : '';
   if (!sessionId || (params.context.actionCaller?.kind === 'session'
     && params.context.defaultSessionId !== sessionId)) return null;
-  if (sessionId === params.boundSessionId) return { sessionId, ...await params.readBoundSession() };
+  if (sessionId === params.boundSessionId) return params.readBoundSession
+    ? { sessionId, ...await params.readBoundSession() } : null;
   // A selector is not authenticated Session identity.
   if (params.context.actionCaller?.kind !== 'session') return null;
   const transport = await params.resolveTransportForSession(sessionId, params.context.signal);
@@ -80,4 +81,16 @@ export async function resolveCliActionCallerSession(params: Readonly<{
     backendTarget: resolveBackendTargetFromSessionMetadata(metadata),
     machineId: readString(transport.rawSession.machineId) ?? readString(metadata?.machineId),
     directory: readString(metadata?.path) ?? readString(transport.rawSession.path) };
+}
+
+/** The caller's workspace is resolved before signing, never from the relay host. */
+export async function resolveCliActionCallerWorkflowTarget(params: Parameters<typeof resolveCliActionCallerSession>[0] & Readonly<{
+  target?: ExternalActionTargetV1;
+}>): Promise<Extract<ExternalActionTargetV1, { kind: 'machine' }> | null> {
+  if (params.target && params.target.kind !== 'machine') return null;
+  const session = await resolveCliActionCallerSession(params);
+  if (!session?.machineId || !session.directory
+    || params.target && params.target.machineId !== session.machineId) return null;
+  return params.target?.project ? params.target : { kind: 'machine', machineId: session.machineId,
+    project: { machineId: session.machineId, directory: session.directory } };
 }

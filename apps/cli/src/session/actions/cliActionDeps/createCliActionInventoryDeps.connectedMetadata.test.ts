@@ -26,7 +26,7 @@ it.each(['ready', 'partial', 'unavailable'] as const)('projects real connected i
     snapshot: { source: 'network', settings: accountSettingsParse(raw), rawSettings: raw, settingsVersion: 7,
       loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) } });
   const profile = AccountProfileSchema.parse({ id: 'bob', connectedAccountsV4: [{ ref: account, status: 'connected',
-    authenticationModeId: 'oauth', revisionSemantics: 'legacy_unfenced', credentialRevision: null,
+    authenticationModeId: 'oauth', kind: 'oauth', revisionSemantics: 'legacy_unfenced', credentialRevision: null,
     configurationReady: true, configurationRevision: null, scopes: [], displayName: 'Native Account',
     providerIdentity: { accountId: 'private-provider-identity', email: 'work@example.test' } }],
   connectedAccountGroupsV4: [{ v: 1, ref: group, incarnation: 'group-1', displayName: 'Native Group',
@@ -69,8 +69,11 @@ it.each(['ready', 'partial', 'unavailable'] as const)('projects real connected i
   const result = await deps.spawnConnectedServicesList!({ agentId: 'codex', backendTargetKey: 'agent:happier.agent.codex/codex' });
   const accountLabel = status === 'unavailable' ? 'Native Account' : 'Row Account';
   const groupLabel = status === 'unavailable' ? 'Native Group' : 'Row Group';
-  expect(result).toMatchObject({ profileOptionsByServiceId: { 'happier.agent.codex/openai-codex': [{ profileId: 'work', label: accountLabel }] },
-    groupOptionsByServiceId: { 'happier.agent.codex/openai-codex': [{ groupId: 'team', label: groupLabel }] },
+  expect(result).toMatchObject({ agentId: 'codex', supportedServiceIds: ['happier.agent.codex/openai-codex'],
+    profileOptionsByServiceId: { 'happier.agent.codex/openai-codex': [{ profileId: 'work', label: accountLabel,
+      status: 'connected', kind: 'oauth', providerEmail: 'work@example.test' }] },
+    groupOptionsByServiceId: { 'happier.agent.codex/openai-codex': [{ groupId: 'team', label: groupLabel,
+      activeProfileId: 'work', memberProfileIds: ['work'], generation: 4, enabledMemberCount: 1, autoSwitch: false, status: 'ready' }] },
     items: [{ value: 'happier.agent.codex/openai-codex:profile:work', label: accountLabel }] });
   expect(JSON.stringify(result)).not.toContain('private-provider-identity');
   expect(writes).toEqual(status === 'ready' ? [{ futurePreference: 'retained' }] : []);

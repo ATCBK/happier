@@ -763,8 +763,9 @@ export function createCliActionInventoryDeps(params: Readonly<{
     },
     spawnProfilesList: async (args) => {
       const accountSettings = await readAccountSettings();
-      const profileSnapshot = accountSettings && params.credentials
-        ? await readAccountLaunchProfiles(accountSettings, params.credentials)
+      const credentials = params.savedSecretOperationContext?.credentials ?? params.credentials;
+      const profileSnapshot = accountSettings && credentials
+        ? await readAccountLaunchProfiles(accountSettings, credentials, undefined, undefined, params.savedSecretOperationContext)
         : accountSettings ? readProfilesFromAccountSettings(accountSettings)
         : readProfilesFromAccountSettings({});
       // Filter, order, bound and completeness all come from the Protocol-owned

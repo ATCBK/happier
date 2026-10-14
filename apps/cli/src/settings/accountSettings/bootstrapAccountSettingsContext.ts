@@ -403,6 +403,8 @@ type InMemoryAccountSettingsContext = Readonly<{
   context: AccountSettingsContext;
   lifetimeToken: number;
   snapshot: NonNullable<ReturnType<typeof getActiveAccountSettingsSnapshot>>;
+  /** Last accepted observation; equal revisions do not republish the snapshot. */
+  validatedAtMs: number;
 }>;
 
 const inMemoryByScopeKey = new Map<string, InMemoryAccountSettingsContext>();
@@ -420,8 +422,13 @@ function rememberInMemoryAccountSettingsContext(
   context: AccountSettingsContext,
   lifetimeToken: number,
   snapshot: NonNullable<ReturnType<typeof getActiveAccountSettingsSnapshot>>,
+  validatedAtMs?: number,
 ): void {
-  inMemoryByScopeKey.set(scopeKey, Object.freeze({ context, lifetimeToken, snapshot }));
+  const previous = inMemoryByScopeKey.get(scopeKey);
+  const previousValidation = previous?.snapshot === snapshot && previous.lifetimeToken === lifetimeToken
+    ? previous.validatedAtMs : context.loadedAtMs;
+  inMemoryByScopeKey.set(scopeKey, Object.freeze({ context, lifetimeToken, snapshot,
+    validatedAtMs: Math.max(previousValidation, validatedAtMs ?? context.loadedAtMs) }));
 }
 
 export function resetInMemoryAccountSettingsContextForTests(): void {
@@ -649,9 +656,10 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
   const active = getActiveAccountSettingsSnapshot();
   const activeLifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
   const inMemory = inMemoryByScopeKey.get(scopeKey);
+  const inMemoryIsCurrent = inMemory?.snapshot === active && inMemory.lifetimeToken === activeLifetimeToken;
   const existing = active?.scopeKey === scopeKey
     ? (
-      inMemory?.snapshot === active && inMemory.lifetimeToken === activeLifetimeToken
+      inMemoryIsCurrent
         ? inMemory.context
         : contextFromActiveSnapshot(active)
     )
@@ -659,7 +667,8 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
   if (
     refresh === 'auto'
     && existing
-    && shouldTreatCacheAsFresh({ version: 2, cachedAt: existing.loadedAtMs, settingsContent: null, settingsVersion: existing.settingsVersion }, nowMs, ttlMs)
+    && shouldTreatCacheAsFresh({ version: 2, cachedAt: inMemoryIsCurrent ? inMemory.validatedAtMs : existing.loadedAtMs,
+      settingsContent: null, settingsVersion: existing.settingsVersion }, nowMs, ttlMs)
     && shouldTreatVersionAsFresh(existing.settingsVersion, minSettingsVersion)
   ) {
     const currentPublication = currentPublicationForScope();
@@ -733,7 +742,13 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
       settingsSecretsReadKeys,
       whenRefreshed: null,
     };
-    return publishContext(ctx).context;
+    const publication = publishContext(ctx);
+    if (params.publication !== 'invocation' && cache?.settingsVersion === publication.context.settingsVersion
+      && activeSnapshotPublicationIsCurrent(publication)) {
+      rememberInMemoryAccountSettingsContext(scopeKey, publication.context, publication.lifetimeToken,
+        publication.snapshot, cache.cachedAt);
+    }
+    return publication.context;
   };
 
   const fetchAndPersist = async (): Promise<AccountSettingsContext> => {
@@ -781,7 +796,12 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
     }
     const activeAfterWrite = getActiveAccountSettingsSnapshot();
     if (activeAfterWrite?.scopeKey === scopeKey) {
-      return contextFromActiveSnapshot(activeAfterWrite);
+      const context = contextFromActiveSnapshot(activeAfterWrite);
+      if (activeAfterWrite === publication.snapshot && activeAfterWrite.settingsVersion === settingsVersion
+        && activeSnapshotPublicationIsCurrent(publication) && params.shouldCommit?.() !== false) {
+        rememberInMemoryAccountSettingsContext(scopeKey, context, publication.lifetimeToken, activeAfterWrite, nowMs);
+      }
+      return context;
     }
     throw createAccountSettingsLiveApplyError(
       'ACCOUNT_SETTINGS_SCOPE_CHANGED',

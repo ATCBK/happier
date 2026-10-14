@@ -7,9 +7,50 @@ import { createResolvedContributionRegistry } from '@/plugins/projection/registr
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
 import { getAgentCore, isBundledAgentId } from '@happier-dev/agents';
 import { readProviderStateSharingRiskAgentIdsV1 } from '@happier-dev/protocol/actions/settings/providerStateSharingMutations';
-import { encodeScmDiffSummaryModelOverride } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
+import { encodeScmDiffSummaryModelOverride, scmDiffSummarySettingBinding, SCM_DIFF_SUMMARY_SETTING_KEYS } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 
 describe('exact remote Voice Agent catalog admission', () => {
+    it('enumerates an admitted external Agent for an unset summary model without persisted identity resolution', async () => {
+        const admitted = await createAuthoredAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+            plugins: [{ manifest: createPluginManifestV2Fixture({ id: 'acme.summary-catalog', contributes: {
+                agents: [{ id: 'claude', title: 'External Agent', primary: 'executionRuns', runtime: { kind: 'custom' },
+                    capabilities: { executionRuns: { open: ['create'], stop: true, checkpoint: false },
+                        structuredOutput: { formats: ['json'] } } }],
+            } }), files: {
+                'daemon.mjs': `export function createAgent() { throw new Error('Catalog enumeration must not execute an Agent'); }
+                    export function activate(api) {
+                        api.agents.register('claude', createAgent, { sessionRunnerFactory: {
+                            module: './daemon.mjs', export: 'createAgent', runtimeApiVersion: 1
+                        } });
+                    }`,
+            } }],
+        });
+        try {
+            const external = [...readCurrentContributionRegistry().agentDefinitionsById.values()]
+                .find(entry => entry.identity?.pluginId === 'acme.summary-catalog');
+            expect(external?.id).toBe('acme.summary-catalog/claude');
+            const settings = accountSettingsParse({});
+            const catalog = await createCliSettingsCatalogServices({}).readScmDiffSummaryCatalog!(settings, '');
+            expect(catalog).not.toBeNull();
+            expect(catalog?.isCurrent(settings)).toBe(true);
+            expect(settings[SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]).toBe('');
+        } finally {
+            await admitted.dispose();
+        }
+    });
+    it('admits prefetch with the catalog-owned low-cost default while leaving the override unset', async () => {
+        const settings = accountSettingsParse({});
+        const services = createCliSettingsCatalogServices({});
+        const catalog = await services.readScmDiffSummaryCatalog!(settings, '');
+        expect(catalog?.profiles.some(profile => profile.costTier === 'low' && profile.structuredOutput === 'supported')).toBe(true);
+        const binding = scmDiffSummarySettingBinding(SCM_DIFF_SUMMARY_SETTING_KEYS.prefetch);
+        const prepared = await binding.prepare(settings, true, services);
+        expect(prepared?.(settings)).toEqual({ [SCM_DIFF_SUMMARY_SETTING_KEYS.prefetch]: true });
+        expect(settings[SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]).toBe('');
+    });
     it('refuses an unknown model target without treating the Custom ACP declaration as executable', async () => {
         expect([...readCurrentContributionRegistry().agentDefinitionsById.values()].some(entry => entry.id === 'custom-acp')).toBe(true);
         const services = createCliSettingsCatalogServices({});

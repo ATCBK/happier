@@ -14,6 +14,7 @@ import { createActionOperationRunner } from '../actionOperations/actionOperation
 import { createActionOperationStore } from '../actionOperations/actionOperationStore';
 import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import { verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -33,6 +34,117 @@ function bootstrap(credentials: StoredCredentials, isCurrent = async () => true)
 }
 
 describe('admitted requester Action projection', () => {
+  it('evaluates distinct Account and bootstrap facts once on each side of Home verification', async () => {
+    const root = { ...authorization, binding: { ...authorization.binding, accountEncryptionMode: 'plain' as const } };
+    const privateKey = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(31)).secretKey;
+    const reads = vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'bob' } };
+      if (url.endsWith('/v2/account/settings')) return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      throw new Error(`Unexpected requester GET ${url}`);
+    });
+    const posts = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { ok: true } });
+    // The installed bootstrap checks its root at Home. Keep that real owner;
+    // only its HTTP reply is replaced, so nested bootstrap reads are counted.
+    const admitted = await requesterAccountOwner.admitRequesterAccountActionContext({ authorization: root,
+      credentials: { token: 'bob-ordinary', encryption: null }, serverId: 'home-profile', serverIdentityId: 'stable-home',
+      serverHttpBaseUrl: 'https://requester-home.test', isCurrent: () => verifyExternalActionExecutionAuthorizationCurrent({
+        authorization: root, effectActionId: root.binding.actionId, target: root.binding.target,
+        installationId: 'installation', privateKey, serverHttpBaseUrl: 'https://requester-home.test',
+      }) });
+    if (!admitted) throw new Error('Missing real private custody');
+    try {
+      const carrier = await projectExternalActionRequesterHttpAuthorization({ authorization: admitted.authorization,
+        serverId: 'home-profile', serverIdentityId: 'stable-home', serverHttpBaseUrl: 'https://requester-home.test',
+        target: root.binding.target, installationId: 'installation', privateKey, isCurrent: admitted.isCurrent });
+      if (!carrier?.requesterHttpProjection) throw new Error('Missing real HTTP projection');
+      reads.mockClear(); posts.mockClear();
+      expect(await carrier.requesterHttpProjection.isCurrent()).toBe(true);
+      expect({ encryption: reads.mock.calls.filter(([url]) => String(url).endsWith('/currentness')).length,
+        verify: posts.mock.calls.filter(([url]) => String(url).endsWith('/verify')).length }).toEqual({ encryption: 2, verify: 3 });
+      // A different Machine/local guard is a separate fact, even with the same
+      // Account facet. It must still veto headers before any Home request.
+      let installedCurrent = true;
+      const distinct = await projectExternalActionRequesterHttpAuthorization({ authorization: admitted.authorization,
+        serverId: 'home-profile', serverIdentityId: 'stable-home', serverHttpBaseUrl: 'https://requester-home.test',
+        target: root.binding.target, installationId: 'installation', privateKey, isCurrent: async () => installedCurrent });
+      expect(distinct).not.toBeNull();
+      installedCurrent = false;
+      reads.mockClear(); posts.mockClear();
+      expect(await distinct?.requesterHttpProjection?.createRequestHeaders({ effectActionId: root.binding.actionId,
+        method: 'POST', path: '/v1/account/project-rows/list' })).toBeNull();
+      expect(reads).not.toHaveBeenCalled();
+      expect(posts).not.toHaveBeenCalled();
+    } finally {
+      await admitted.dispose();
+      reads.mockClear(); posts.mockClear();
+      expect(await admitted.isCurrent()).toBe(false);
+      expect(reads).not.toHaveBeenCalled();
+      expect(posts).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['mode', 'signing key', 'content key', 'retirement'] as const)('refuses headers and projection output when %s changes during Home verification', async change => {
+    const secret = new Uint8Array(32).fill(8);
+    const mode = change === 'signing key' || change === 'content key' ? 'e2ee' : 'plain';
+    const signingKeyFingerprint = computeAccountEncryptionMigrateKeyFingerprintV1(nacl.sign.keyPair.fromSeed(secret).publicKey);
+    const contentKeyFingerprint = computeAccountEncryptionMigrateKeyFingerprintV1(nacl.box.keyPair.fromSecretKey(
+      deriveAccountMachineKeyFromRecoverySecret(secret)).publicKey);
+    const changedKeyFingerprint = computeAccountEncryptionMigrateKeyFingerprintV1(nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(9)).publicKey);
+    let currentness = { mode: mode as 'plain' | 'e2ee', version: 1, updatedAt: 1,
+      signingKeyFingerprint: mode === 'e2ee' ? signingKeyFingerprint : null,
+      contentKeyFingerprint: mode === 'e2ee' ? contentKeyFingerprint : null };
+    vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'bob' } };
+      if (url.endsWith('/v2/account/settings')) return { status: 200, data: mode === 'e2ee'
+        ? { content: null, version: 0 } : { content: { t: 'plain', v: {} }, version: 1 } };
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: currentness };
+      throw new Error(`Unexpected private requester read ${url}`);
+    });
+    let holdVerify = false;
+    let entered!: () => void;
+    let release!: () => void;
+    const awaited = new Promise<void>(resolve => { entered = resolve; });
+    const pendingVerify = new Promise<void>(resolve => { release = resolve; });
+    vi.spyOn(axios, 'post').mockImplementation(async (url: string) => {
+      if (!url.endsWith('/verify')) throw new Error(`Unexpected private requester write ${url}`);
+      if (holdVerify) { entered(); await pendingVerify; }
+      return { status: 200, data: { ok: true } };
+    });
+    const root = ExternalActionExecutionAuthorizationV1Schema.parse({ ...authorization,
+      binding: { ...authorization.binding, accountEncryptionMode: mode } });
+    const privateKey = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(31)).secretKey;
+    const admitted = await requesterAccountOwner.admitRequesterAccountActionContext({ authorization: root,
+      credentials: { token: 'bob-ordinary', encryption: mode === 'e2ee' ? { type: 'legacy', secret } : null },
+      serverId: 'home-profile', serverIdentityId: 'stable-home',
+      serverHttpBaseUrl: 'https://requester-home.test', isCurrent: () => change === 'retirement'
+        ? verifyExternalActionExecutionAuthorizationCurrent({ authorization: root, effectActionId: root.binding.actionId,
+          target: root.binding.target, installationId: 'installation', privateKey, serverHttpBaseUrl: 'https://requester-home.test' })
+        : Promise.resolve(true) });
+    if (!admitted) throw new Error('Missing real private custody');
+    const input = { authorization: admitted.authorization, serverId: 'home-profile', serverIdentityId: 'stable-home',
+      serverHttpBaseUrl: 'https://requester-home.test', target: root.binding.target, installationId: 'installation',
+      privateKey, isCurrent: admitted.isCurrent };
+    const carrier = await projectExternalActionRequesterHttpAuthorization(input);
+    if (!carrier?.requesterHttpProjection) throw new Error('Missing real HTTP projection');
+    holdVerify = true;
+    try {
+      const headers = carrier.requesterHttpProjection.createRequestHeaders({ effectActionId: root.binding.actionId,
+        method: 'POST', path: '/v1/account/project-rows/list', body: { keys: [] } });
+      const projection = projectExternalActionRequesterHttpAuthorization(input);
+      const local = change === 'retirement' ? admitted.isCurrent() : null;
+      await awaited;
+      if (change === 'retirement') await admitted.dispose();
+      else currentness = { ...currentness, ...(change === 'mode' ? { mode: 'e2ee' as const, signingKeyFingerprint, contentKeyFingerprint }
+        : change === 'signing key' ? { signingKeyFingerprint: changedKeyFingerprint } : { contentKeyFingerprint: changedKeyFingerprint }) };
+      release();
+      expect(await headers).toBeNull();
+      expect(await projection).toBeNull();
+      if (local) expect(await local).toBe(false);
+    } finally { release(); await admitted.dispose(); }
+  });
+
   it.each(['plain', 'e2ee'] as const)('scopes borrowed own-Account credentials without retiring installed custody (%s)', async mode => {
     const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'own-account-root', binding: {
       accountId: 'bob', custodianAccountId: 'bob', authentication: { kind: 'account', tokenEpoch: 1 },

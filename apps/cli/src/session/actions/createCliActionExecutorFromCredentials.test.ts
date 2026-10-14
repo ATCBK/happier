@@ -427,23 +427,6 @@ describe('createCliActionExecutorFromCredentials', () => {
     expect(invocation.run).toHaveBeenCalledTimes(1);
   });
 
-  it('passes the live registered prompt adapter reader to the canonical CLI action deps', async () => {
-    const credentials = {
-      token: 'token_test',
-      encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) },
-    };
-    const readRegisteredPromptAssetAdapters = vi.fn(() => new Map());
-
-    await createCliActionExecutorFromCredentials({
-      credentials,
-      readRegisteredPromptAssetAdapters,
-    }).execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' });
-
-    expect(createCliActionExecutor).toHaveBeenLastCalledWith(expect.objectContaining({
-      readRegisteredPromptAssetAdapters,
-    }));
-  });
-
   it('passes both resolved runtime caller currentness callbacks to canonical CLI Action deps', async () => {
     const credentials = {
       token: 'token_test',

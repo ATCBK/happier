@@ -5,8 +5,10 @@ import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/librar
 import { PromptLibraryCatalogKeyV1Schema, PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
-import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, readAccountRoleOverridesFromSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { prepareRequesterSessionBootstrap } from '@/daemon/sessionEncryption/requesterSessionCredentials';
 import { createCliActionExecutorFromCredentials } from './createCliActionExecutorFromCredentials';
 
 const axiosGet = vi.hoisted(() => vi.fn());
@@ -23,6 +25,65 @@ afterEach(() => {
 });
 
 describe('credentialed Action policy binding before settings bootstrap', () => {
+  it('hydrates Role admission into the admitted requester snapshot rather than the ambient Account', async () => {
+    resetInMemoryAccountSettingsContextForTests();
+    vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_MODE', 'auto');
+    vi.stubEnv('HAPPIER_ACTIONS_SETTINGS_V1', '');
+    const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'requester-role-owner' })).toString('base64url')}.signature`,
+      encryption: null, credentialProvenance: 'stored_session' as const };
+    const base = 'https://requester-role-home.example.invalid';
+    // HTTP and installed-Machine currentness are the external boundaries;
+    // requester bootstrap, captured catalogs and the Action factory stay real.
+    axiosGet.mockImplementation(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === ACCOUNT_SECURITY_PATH_V1) return { status: 404, data: {} };
+      if (path === '/v1/account/profile') return { status: 200, data: { id: 'requester-role-owner' } };
+      if (path === '/v2/account/settings') return { status: 200, data: { version: 7, content: { t: 'plain', v: {} } } };
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+        settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows:
+        PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1, content: { t: 'plain', v:
+          key === 'role-overrides' ? { key, value: { v: 1, overrides: { scout: { roleId: 'scout',
+            instructionsOverride: 'Use the requester override.' } } } } : emptyPromptLibraryRecordV1(key) } })) } };
+      if (path === '/v1/artifacts') return { status: 200, data: [] };
+      if (path === '/v1/account/entity-rows/profiles/transfer') return { status: 200, data: { status: 'absent' } };
+      if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+      throw new Error(`Unexpected requester Role HTTP read ${path}`);
+    });
+    await runWithServerHttpBaseUrl(base, async () => {
+      const prepared = await prepareRequesterSessionBootstrap({ credentials,
+        attribution: { serverId: 'requester-home', accountId: 'requester-role-owner', machineId: 'requester-machine', installationId: 'requester-installation' },
+        boundary: { serverId: 'requester-home', serverHttpBaseUrl: base, happyHomeDir: '/tmp/cli-requester-role-fixture' },
+        verifyMachineAdmissionCurrent: async () => true });
+      expect(prepared).not.toBeNull();
+      if (!prepared) throw new Error('Requester fixture admission failed');
+      const bootstrap = prepared.admitted;
+      const ambient = { scopeKey: 'another-account', source: 'network' as const, loadedAtMs: 1,
+        settingsVersion: 1, settingsSecretsReadKeys: [], settings: accountSettingsParse({}) };
+      setActiveAccountSettingsSnapshot(ambient);
+      const installedAmbient = getActiveAccountSettingsSnapshot();
+      const readSnapshot = () => {
+        const snapshot = bootstrap.savedSecretOperationContext.readSnapshot();
+        if (!snapshot) throw new Error('Requester snapshot retired');
+        return snapshot;
+      };
+      try {
+        const executor = createCliActionExecutorFromCredentials({ credentials, requesterSessionBootstrap: bootstrap,
+          actionsSettingsProvider: {
+            getActionsSettings: () => normalizeActionsSettingsV1(readSnapshot().settings.actionsSettingsV1),
+            getAccountSettings: () => readSnapshot().settings,
+            getAccountRoleOverrides: () => readAccountRoleOverridesFromSnapshot(readSnapshot()),
+          }, readCredentials: async () => await bootstrap.isCurrent() ? credentials : null,
+          pluginActionExecutionOwner: 'current_process' });
+        const result = await executor.execute('roles.get', { roleId: 'scout' }, { surface: 'cli', authority: 'present_user' });
+        expect(result.ok ? { ok: true } : result).toEqual({ ok: true });
+        expect(result).toMatchObject({ ok: true, result: { roleId: 'scout' } });
+        expect(readAccountRoleOverridesFromSnapshot(readSnapshot())).toMatchObject({ status: 'ready',
+          overrides: { scout: { roleId: 'scout', instructionsOverride: 'Use the requester override.' } } });
+        expect(getActiveAccountSettingsSnapshot()).toBe(installedAmbient);
+      } finally { await prepared.cleanupOnFailure(); }
+    });
+  });
   it.each(['execute', 'prepare'] as const)('reads Account Role overrides on a cold %s invocation', async method => {
     resetInMemoryAccountSettingsContextForTests();
     vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_MODE', 'auto');
@@ -57,11 +118,8 @@ describe('credentialed Action policy binding before settings bootstrap', () => {
     expect(result).toMatchObject({ ok: true, result: { items: expect.arrayContaining([
       expect.objectContaining({ roleId: 'scout' }),
     ]) } });
-    expect(getActiveAccountSettingsSnapshot()?.promptLibraryCatalog).toMatchObject({ status: 'ready', rows: expect.arrayContaining([
-      expect.objectContaining({ record: { key: 'role-overrides', value: { v: 1, overrides: {
-        scout: { roleId: 'scout', instructionsOverride: 'Use the Account override.' },
-      } } } }),
-    ]) });
+    // Catalog contents belong to the captured operation (covered above), not a
+    // second ambient publication. Cold callers must still admit both reads.
     expect(await executor.execute('roles.get', { roleId: 'scout' }, context)).toMatchObject({ ok: true,
       result: { roleId: 'scout' } });
   });

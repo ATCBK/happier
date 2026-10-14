@@ -74,6 +74,25 @@ describe('active account settings snapshot publication', () => {
     resetActiveAccountSettingsSnapshotForTests();
   });
 
+  it('retains equal preference and key material identities across a newer observed revision', () => {
+    const first = { ...snapshot({ scopeKey: 'scope-refresh', version: 1, timing: 'after_runtime_idle' }),
+      rawSettings: { sessionPendingQueueDeliveryTiming: 'after_runtime_idle' }, settingsSecretsReadKeys: [new Uint8Array([1, 2])] };
+    setActiveAccountSettingsSnapshot(first);
+    const lifetime = getActiveAccountSettingsSnapshotLifetimeToken();
+    const next = { ...snapshot({ scopeKey: 'scope-refresh', version: 2, timing: 'after_runtime_idle' }),
+      rawSettings: { sessionPendingQueueDeliveryTiming: 'after_runtime_idle' }, settingsSecretsReadKeys: [new Uint8Array([1, 2])] };
+    const result = commitActiveAccountSettingsSnapshot(next);
+    expect(result.didCommit).toBe(true);
+    expect(result.snapshot.settingsVersion).toBe(2);
+    expect(result.snapshot.settings).toBe(first.settings);
+    expect(result.snapshot.rawSettings).toBe(first.rawSettings);
+    expect(result.snapshot.settingsSecretsReadKeys).toBe(first.settingsSecretsReadKeys);
+    expect(getActiveAccountSettingsSnapshotLifetimeToken()).toBe(lifetime);
+    const changed = commitActiveAccountSettingsSnapshot(snapshot({ scopeKey: 'scope-refresh', version: 3, timing: 'after_foreground_ready' }));
+    expect(changed.snapshot.settings).not.toBe(first.settings);
+    expect(changed.snapshot.settings.sessionPendingQueueDeliveryTiming).toBe('after_foreground_ready');
+  });
+
   it('publishes ACP row-only revisions and rejects a retired lifetime without rewriting preferences', () => {
     setActiveAccountSettingsSnapshot(snapshot({ scopeKey: 'scope-acp', version: 7, timing: 'after_runtime_idle' }));
     const bound = { scopeKey: 'scope-acp', lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() };
@@ -597,16 +616,17 @@ describe('active account settings snapshot publication', () => {
     expect([...resourceDataKey]).toEqual(new Array(32).fill(23));
   });
 
-  it('preserves the accepted newer same-Account snapshot identity when no independent catalog fields need inheritance', () => {
+  it('publishes the canonical accepted snapshot after sharing unchanged same-Account values', () => {
     setActiveAccountSettingsSnapshot(snapshot({ scopeKey: 'scope-a', version: 4, timing: 'after_runtime_idle' }));
     const next = snapshot({ scopeKey: 'scope-a', version: 5, timing: 'after_foreground_ready' });
     const listener = vi.fn();
     const unsubscribe = subscribeActiveAccountSettingsSnapshot(listener);
     try {
       const committed = commitActiveAccountSettingsSnapshot(next);
-      expect(committed.snapshot).toBe(next);
-      expect(getActiveAccountSettingsSnapshot()).toBe(next);
-      expect(listener.mock.calls[0]?.[1]).toBe(next);
+      expect(committed.snapshot).toEqual(next);
+      expect(committed.snapshot.settings).toBe(next.settings);
+      expect(getActiveAccountSettingsSnapshot()).toBe(committed.snapshot);
+      expect(listener.mock.calls[0]?.[1]).toBe(committed.snapshot);
     } finally { unsubscribe(); }
   });
 
