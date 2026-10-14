@@ -62,6 +62,25 @@ function projection(entries: Record<string, Readonly<{ id: string }> & Record<st
 }
 
 describe('connectedAccountDescriptorProjection', () => {
+  it('retains static descriptors without execution admission and prefers an admitted declaration when it returns', () => {
+    const projected = descriptor();
+    const unavailable = { kind: 'ready' as const, descriptors: [projected], executionUnavailablePluginIds: ['acme.accounts'] };
+    const initial = createConnectedAccountDescriptorProjectionLoadingState('server-a');
+    const state = advanceConnectedAccountDescriptorProjectionState(initial, mergeConnectedAccountDescriptorProjections([unavailable]));
+    expect(projectConnectedServiceRegistryEntries(state)[0]).toMatchObject({
+      projectedTitle: 'Acme account', executable: false, supportsToken: false, projectionStatus: 'ready',
+    });
+    const admitted = descriptor({ title: 'Current account' });
+    const restored = advanceConnectedAccountDescriptorProjectionState(state, mergeConnectedAccountDescriptorProjections([
+      unavailable, { kind: 'ready', descriptors: [admitted] },
+    ]));
+    expect(projectConnectedServiceRegistryEntries(restored)[0]).toMatchObject({
+      projectedTitle: 'Current account', executable: true, projectionStatus: 'ready',
+    });
+    const withdrawn = advanceConnectedAccountDescriptorProjectionState(restored, mergeConnectedAccountDescriptorProjections([unavailable]));
+    expect(projectConnectedServiceRegistryEntries(withdrawn)[0]).toMatchObject({ projectedTitle: 'Acme account', executable: false });
+  });
+
   it('publishes answering descriptors while another machine is still resolving without a read failure', () => {
     const projected = descriptor();
     const merged = mergeConnectedAccountDescriptorProjections([

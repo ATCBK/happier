@@ -108,6 +108,13 @@ export async function completeMcpOAuthCallback(input: McpOAuthCallbackInput): Pr
     }
     const { normalizeInternalReturnPath } = await import('@/utils/path/routeUtils');
     assertCurrent();
-    return { kind: 'connected', machineId, returnTo: normalizeInternalReturnPath(account.returnTo)
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const pending = await TokenStorage.getPendingExternalConnect();
+    assertCurrent();
+    const matches = pending?.provider === `mcp:${attemptId}` && pending.serverId === account.serverId;
+    const retainedReturn = matches ? normalizeInternalReturnPath(pending.returnTo) : null;
+    if (matches) await TokenStorage.clearPendingExternalConnect();
+    assertCurrent();
+    return { kind: 'connected', machineId, returnTo: normalizeInternalReturnPath(account.returnTo) ?? retainedReturn
         ?? `/settings/mcp/${encodeURIComponent(settled.account.accountId)}` };
 }
