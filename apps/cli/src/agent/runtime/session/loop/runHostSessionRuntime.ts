@@ -131,6 +131,7 @@ import { resolveRunnerSkills, type RunnerSkillsResult } from '@/prompts/skills/r
 import { readAppliedSessionSkillDelivery } from '@/prompts/skills/runtime/reapplySessionSkills';
 import { resolveCapabilityApplyAgentFacts } from '@/session/runtime/capabilityApplyFacts';
 import { publishRunnerSkillNotice } from '@/prompts/skills/runtime/publishRunnerSkillNotice';
+import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { applyRunnerMcpSessionContext } from '@/mcp/runtime/applyRunnerMcpSessionContext';
 import { createSessionRoleContext } from '@/session/roles/sessionRoleContext';
 import { createWorkspaceWritesPolicyPreparation } from '@/session/roles/workspaceWritesPolicyPreparation';
@@ -202,6 +203,7 @@ import {
   createHostRuntimeActivityProjection,
   resolveAgentRuntimeActivitySubscriber,
   type HostRuntimeActivityProjection,
+  type HostRuntimeActivitySnapshot,
 } from '@/agent/runtime/session/activity/createHostRuntimeActivityProjection';
 import type { RuntimeActivityApplicability } from '@/agent/runtime/session/activity/runtimeActivityApplicability';
 import type { TerminalRemoteSessionMode } from './runTerminalRemoteSessionModeLoop';
@@ -542,6 +544,7 @@ export type HostSessionRuntimeFactoryParams = Readonly<{
   messageQueue?: MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>;
   messageBuffer: MessageBuffer;
   mcpServers: Record<string, McpServerConfig>;
+  mcpServersStrictMode?: boolean;
   mcpToolPolicy?: import('@happier-dev/plugin-sdk/agents/runtime').AgentSessionOpenRequest['mcpToolPolicy'];
   mcpServerIdentities?: Readonly<Record<string, McpServerIdentity>>;
   resolvedMcpServers?: readonly import('@/mcp/runtimeTypes').ResolvedSessionMcpServer[];
@@ -990,7 +993,7 @@ export async function runHostSessionRuntime(
   let startupPhaseStartedAt = startupStartedAt;
   const recordStartupPhase = (phase: string): void => {
     const now = performance.now();
-    logger.info(`${config.uiLogPrefix} Startup phase`, {
+    logger.infoFile(`${config.uiLogPrefix} Startup phase`, {
       phase,
       durationMs: Math.round(now - startupPhaseStartedAt),
       elapsedMs: Math.round(now - startupStartedAt),
@@ -1238,9 +1241,10 @@ export async function runHostSessionRuntime(
       .catch(() => undefined);
   };
 
-  const reportFireAndForgetRuntimeActivityError = (): void => {
-    logger.debug(`${config.uiLogPrefix} Runtime Activity background publication failed (non-fatal)`, {
-      error: 'runtime_activity_background_publication_failed',
+  const reportRuntimeActivityPublicationError = (_error: unknown, snapshot: HostRuntimeActivitySnapshot): void => {
+    logger.warn(`${config.uiLogPrefix} Runtime Activity publication failed (non-fatal)`, {
+      error: 'runtime_activity_publication_failed',
+      ...snapshot,
     });
   };
 
@@ -1385,7 +1389,7 @@ export async function runHostSessionRuntime(
         agentRuntimeApplicability: runtimeActivityApplicability,
         enqueueRegisteredSessionStateFieldMutation: (mutation) =>
           newSession.enqueueRegisteredSessionStateFieldMutation(mutation),
-        onFireAndForgetPublicationError: reportFireAndForgetRuntimeActivityError,
+        onPublicationError: reportRuntimeActivityPublicationError,
       });
       executionRunsActivityBinding = runtimeActivityProjection.bindExecutionRuns();
       unsubscribeExecutionRunActivity = newSession.subscribeExecutionRunActivitySnapshots((activeCount) => {
@@ -1854,7 +1858,7 @@ export async function runHostSessionRuntime(
     agentRuntimeApplicability: runtimeActivityApplicability,
     enqueueRegisteredSessionStateFieldMutation: (mutation) =>
       session.enqueueRegisteredSessionStateFieldMutation(mutation),
-    onFireAndForgetPublicationError: reportFireAndForgetRuntimeActivityError,
+    onPublicationError: reportRuntimeActivityPublicationError,
   });
   executionRunsActivityBinding = runtimeActivityProjection.bindExecutionRuns();
   unsubscribeExecutionRunActivity = session.subscribeExecutionRunActivitySnapshots((activeCount) => {
@@ -2216,6 +2220,7 @@ export async function runHostSessionRuntime(
   });
   let inputConsumer: SessionProviderInputConsumer<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt> | null = null;
   const inFlightSteerController: InFlightSteerController = {
+    readActivePermissionMode: () => permissionHandler.getPermissionMode(),
     readActiveModelSelection: () =>
       modelTransitionCoordinator?.readActiveTarget().selection ?? null,
     supportsInFlightSteer: () => runtimeForInFlightSteer?.supportsInFlightSteer?.() === true,
@@ -2314,7 +2319,12 @@ export async function runHostSessionRuntime(
       if (typeof apply !== 'function') {
         return { status: 'unsupported', reason: 'runtime_without_in_flight_config_capability' };
       }
-      return apply(delta);
+      const outcome = await apply(delta);
+      if (outcome.status === 'applied' || outcome.status === 'scheduled_in_turn') {
+        const mode = parseAgentPermissionIntentV1Alias(delta.permissionMode);
+        if (mode) permissionHandler.setPermissionMode(mode);
+      }
+      return outcome;
     },
   };
 
@@ -2511,10 +2521,12 @@ export async function runHostSessionRuntime(
     },
   });
   let lastPendingQueueDeliveryTiming = pendingQueueDeliveryTiming;
+  let observeCapabilityAccountSettings: (() => void) | null = null;
   const unsubscribePendingQueueDeliveryTiming = runtimeAuthority.scope === 'session'
     ? () => undefined
     : subscribeActiveAccountSettingsSnapshot(() => {
       applyMcpAccountPolicyUpdate?.();
+      observeCapabilityAccountSettings?.();
       const nextPendingQueueDeliveryTiming = readPendingQueueDeliveryTiming();
       const broadenedEligibility = lastPendingQueueDeliveryTiming === 'after_runtime_idle'
         && nextPendingQueueDeliveryTiming === 'after_foreground_ready';
@@ -2634,7 +2646,7 @@ export async function runHostSessionRuntime(
     });
   }
   currentLifecycleSession.bindMcpRequestAuthPort(daemonTurnContributionsBridge?.mcpRequestAuth);
-  const { happierMcpServer, mcpServers, mcpServerIdentities, mcpToolPolicy, resolvedServers } = receivesUserMcpServers
+  const { happierMcpServer, mcpServers, mcpServersStrictMode, mcpServerIdentities, mcpToolPolicy, resolvedServers } = receivesUserMcpServers
     ? await runWithServerHttpBaseUrl(sessionOpenContext.home.serverUrl, () => resolveRunnerMcpServersFn({
       session: runnerMcpSession,
       credentials: runtimeAuthority.sessionCredentials,
@@ -2661,7 +2673,7 @@ export async function runHostSessionRuntime(
       sessionMetadata: runtimeSessionMetadataSnapshot ?? runtimeMetadata,
       ...(config.resolvedMcpServers ? { resolvedMcpServers: config.resolvedMcpServers } : {}),
     }))
-    : { happierMcpServer: { stop: () => undefined }, mcpServers: {}, mcpServerIdentities: undefined, mcpToolPolicy: undefined, resolvedServers: undefined };
+    : { happierMcpServer: { stop: () => undefined }, mcpServers: {}, mcpServersStrictMode: undefined, mcpServerIdentities: undefined, mcpToolPolicy: undefined, resolvedServers: undefined };
   readMcpToolContext = () => ({ mcpServerIdentities: mcpServerIdentities ?? {},
     catalog: mcpAccountScopeKey && getActiveAccountSettingsSnapshot()?.scopeKey === mcpAccountScopeKey
       && getActiveAccountSettingsSnapshotLifetimeToken() === mcpAccountLifetimeToken
@@ -2686,6 +2698,7 @@ export async function runHostSessionRuntime(
     });
   };
   mcpServerForConstructionCleanup = happierMcpServer;
+  recordStartupPhase('mcp_preparation');
   if (runtimeAuthority.scope === 'account' && runtimeAuthority.accountCredentials) {
     const accountSnapshot = getActiveAccountSettingsSnapshot();
     runnerSkills = await runWithServerHttpBaseUrl(sessionOpenContext.home.serverUrl, () => resolveRunnerSkills({
@@ -2702,7 +2715,7 @@ export async function runHostSessionRuntime(
     }));
     await publishRunnerSkillNotice(currentLifecycleSession, runnerSkills);
   }
-  recordStartupPhase('mcp_preparation');
+  recordStartupPhase('skills_preparation');
   const memoryRecallGuidanceEnabled = await resolveCliMemoryRecallGuidanceEnabled();
   const messageBuffer = new MessageBuffer();
   const sessionStateBridge = createCliRuntimeSessionStateBridge({
@@ -2796,6 +2809,7 @@ export async function runHostSessionRuntime(
     messageBuffer,
     mcpServers,
     mcpServerIdentities,
+    ...(mcpServersStrictMode !== undefined ? { mcpServersStrictMode } : {}),
     resolvedMcpServers: resolvedServers,
     mcpToolPolicy,
     getMcpToolContext: () => readMcpToolContext(),
@@ -3486,6 +3500,7 @@ export async function runHostSessionRuntime(
   });
   runtimeForSessionRollback = nativeRuntime;
   const capabilitySelectionAgentFacts = await resolveCapabilityApplyAgentFacts({ agentId: policyAgentId,
+    registry: config.pluginRuntimeRegistryLease?.registry,
     metadata: { runtimeDescriptorV1: nativeRuntime?.runtimeDescriptorV1 ?? runtimeOpts.runtimeDescriptorV1 }, sessionRunning: true });
   const unsubscribeRuntimePublication = subscribeSessionRuntimePublicationToMetadata({
     session: currentLifecycleSession,
@@ -3495,6 +3510,7 @@ export async function runHostSessionRuntime(
     publishOwnerMetadata: currentLifecycleSession.hasOwnerMetadataAuthority(),
     capabilitySelection: capabilitySelectionAgentFacts,
     resolveCapabilitySelectionForDescriptor: descriptor => resolveCapabilityApplyAgentFacts({ agentId: policyAgentId,
+      registry: config.pluginRuntimeRegistryLease?.registry,
       metadata: { runtimeDescriptorV1: descriptor }, sessionRunning: true }),
   });
   if (nativeRuntime) {
@@ -3566,7 +3582,8 @@ export async function runHostSessionRuntime(
           || appliedTarget.selection.providerConnectionId !== null)) return { status: 'unavailable' };
         const connected = await readAppliedParentConnectedServices({
           sessionId: currentLifecycleSession.sessionId, runnerPid: process.pid, agentId: policyAgentId,
-        }).catch(() => ({ status: 'unavailable' as const }));
+        }, { signal: startupRegistrationLifetime.signal }).catch(() => ({ status: 'unavailable' as const }));
+        if (startupRegistrationLifetime.signal.aborted || !modelTransitionCoordinator) return { status: 'unavailable' };
         const after = await modelTransitionCoordinator.readAppliedTarget();
         if (connected.status !== 'applied' || after.status !== 'applied' || after.target !== appliedTarget
           || JSON.stringify(hookRuntime.readAppliedTeamCredentialModel?.()) !== JSON.stringify(teamCredentialModel)) return { status: 'unavailable' };
@@ -3736,6 +3753,20 @@ export async function runHostSessionRuntime(
       terminalRemoteModeLoop,
       capabilitySelection: {
         agent: capabilitySelectionAgentFacts,
+        initialSkillRules: runnerSkills?.reach,
+        readSkillRules: () => {
+          if (!isSessionOpenAccountCurrent() || !runnerSkills?.reach) return null;
+          const snapshot = readSessionOpenAccountOperation()?.readSnapshot();
+          if (!snapshot?.promptLibraryCatalog) return null;
+          const read = readPromptLibraryCatalogRecordV1({ catalog: snapshot.promptLibraryCatalog, key: 'skill-rules',
+            rawSettings: snapshot.source === 'none' ? undefined : snapshot.rawSettings });
+          return read.status === 'ready' && read.record.key === 'skill-rules'
+            ? { context: runnerSkills.reach.context, rules: read.record.value.rules } : null;
+        },
+        subscribeAccountSettings: listener => {
+          observeCapabilityAccountSettings = listener;
+          return () => { if (observeCapabilityAccountSettings === listener) observeCapabilityAccountSettings = null; };
+        },
         ...(runtimeAuthority.scope === 'account' && runtimeAuthority.accountCredentials ? { skillsRunner: {
           readInput: () => ({
             ownerKey: currentLifecycleSession.sessionId, agentId: policyAgentId, machineId, directory: runtimeDirectory,

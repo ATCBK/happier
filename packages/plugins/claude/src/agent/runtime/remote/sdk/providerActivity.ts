@@ -145,6 +145,18 @@ function readHookTaskActivity(
   return null;
 }
 
+export function readClaudeProviderTaskToolTarget(
+  toolName: string,
+  toolInput: unknown,
+  sessionId: string | null | undefined,
+): ClaudeProviderTaskIdentity | null {
+  if (toolName !== 'TaskStop' && toolName !== 'TaskOutput') return null;
+  const input = record(toolInput);
+  const taskId = input ? readTaskId(input) : null;
+  const nativeSessionId = readClaudeProviderIdentityValue(sessionId);
+  return taskId && nativeSessionId ? { sessionId: nativeSessionId, taskId } : null;
+}
+
 export function isReplayClaudeAgentSdkMessage(value: unknown): boolean {
   const row = record(value);
   return row?.isReplay === true || row?.is_replay === true;
@@ -306,17 +318,26 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
     phase: 'active' | 'terminal_before_confirmation';
     observed: boolean;
     backgroundConfirmed: boolean;
+    ownerScope?: object;
+    requiresOwnerConfirmation?: true;
   }>;
   const entries = new Map<string, LedgerEntry>();
-  let observationGapFree = true;
+  let observationPhase: 'observing' | 'lost' | 'stopped' = 'observing';
+  type ToolCall = Readonly<{ target?: ClaudeProviderTaskIdentity; targetOwner?: object }>;
+  type OwnerObservation =
+    | { kind: 'query'; observed: boolean; toolCalls: Map<string, ToolCall> }
+    | { kind: 'terminal'; observed: boolean }
+    | { kind: 'source-baseline'; observed: false };
+  const ownerObservations = new Map<object, OwnerObservation>();
 
-  const activeEntries = (): LedgerEntry[] => [...entries.values()]
-    .filter((entry) => entry.phase === 'active');
+  const activeEntries = (ownerScope?: object): LedgerEntry[] => [...entries.values()]
+    .filter((entry) => entry.phase === 'active'
+      && (ownerScope === undefined || entry.ownerScope === undefined || entry.ownerScope === ownerScope));
 
   const getSnapshot = (): ClaudeProviderActivitySnapshot => {
     const activeCount = activeEntries().filter((entry) => entry.observed).length;
     if (activeCount > 0) return { state: 'active', activeCount };
-    return observationGapFree && activeEntries().length === 0
+    return observationPhase !== 'lost' && ![...ownerObservations.values()].some((owner) => !owner.observed) && activeEntries().length === 0
       ? { state: 'idle', activeCount: 0 }
       : { state: 'unknown', activeCount: 0 };
   };
@@ -328,18 +349,82 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
   };
 
   return Object.freeze({
-    apply(activity: ClaudeProviderTaskActivity): boolean {
+    registerOwner(ownerScope: object): void {
+      ownerObservations.set(ownerScope, { kind: 'query', observed: true, toolCalls: new Map() });
+    },
+    completeQueryObservation(ownerScope: object): void {
+      // A final native result closes this empty observer, without claiming process exit.
+      const owner = ownerObservations.get(ownerScope);
+      if (owner?.kind !== 'query' || !owner.observed || activeEntries(ownerScope).length > 0) return;
+      const previous = getSnapshot();
+      ownerObservations.delete(ownerScope);
+      notifyIfChanged(previous);
+    },
+    registerTerminalOwner(ownerScope: object): void {
+      ownerObservations.set(ownerScope, { kind: 'terminal', observed: true });
+    },
+    isTerminalOwnerObserved(ownerScope: object): boolean {
+      const owner = ownerObservations.get(ownerScope);
+      return owner?.kind === 'terminal' && owner.observed;
+    },
+    getRegisteredTerminalOwners(): object[] {
+      return [...ownerObservations].flatMap(([scope, owner]) => owner.kind === 'terminal' ? [scope] : []);
+    },
+    noteSourceBaselinePending(sourceScope: object): void {
+      const previous = getSnapshot();
+      ownerObservations.set(sourceScope, { kind: 'source-baseline', observed: false });
+      notifyIfChanged(previous);
+    },
+    noteSourceBaselineComplete(sourceScope: object): void {
+      if (ownerObservations.get(sourceScope)?.kind !== 'source-baseline') return;
+      const previous = getSnapshot();
+      ownerObservations.delete(sourceScope);
+      notifyIfChanged(previous);
+    },
+    observeToolUse(ownerScope: object, toolUseId: string, target: ClaudeProviderTaskIdentity | null): void {
+      const owner = ownerObservations.get(ownerScope);
+      if (owner?.kind !== 'query') return;
+      const targetOwner = target ? entries.get(keyOf(target))?.ownerScope : undefined;
+      owner.toolCalls.set(toolUseId, target ? { target, ...(targetOwner ? { targetOwner } : {}) } : {});
+    },
+    resolveToolUse(toolUseId: string): Readonly<{ ownerScope: object; target?: ClaudeProviderTaskIdentity; targetOwner?: object }> | null {
+      let match: Readonly<{ ownerScope: object; target?: ClaudeProviderTaskIdentity; targetOwner?: object }> | null = null;
+      for (const [ownerScope, owner] of ownerObservations) {
+        if (owner.kind !== 'query') continue;
+        const toolCall = owner.toolCalls.get(toolUseId);
+        if (!toolCall) continue;
+        if (match) return null;
+        match = { ownerScope, ...toolCall };
+      }
+      return match;
+    },
+    getRegisteredQueryOwners(): object[] {
+      return [...ownerObservations].flatMap(([ownerScope, owner]) =>
+        owner.kind === 'query' ? [ownerScope] : []);
+    },
+    getProviderTaskOwner(identity: ClaudeProviderTaskIdentity): object | undefined {
+      const entry = entries.get(keyOf(identity));
+      return entry?.phase === 'active' ? entry.ownerScope : undefined;
+    },
+    apply(activity: ClaudeProviderTaskActivity, ownerScope?: object): boolean {
+      if (ownerScope === undefined && observationPhase === 'stopped') return false;
+      if (ownerScope !== undefined) {
+        const owner = ownerObservations.get(ownerScope);
+        if (!owner || owner.kind === 'source-baseline') return false;
+      }
       const previous = getSnapshot();
       const key = keyOf(activity);
       if (activity.type === 'terminal') {
         const current = entries.get(key);
         if (current?.phase === 'active') {
+          if (current.ownerScope !== undefined && current.ownerScope !== ownerScope) return false;
           entries.set(key, {
             sessionId: activity.sessionId,
             taskId: activity.taskId,
             phase: 'terminal_before_confirmation',
             observed: false,
             backgroundConfirmed: true,
+            ...(current.ownerScope ? { requiresOwnerConfirmation: true as const } : {}),
           });
         } else {
           if (!current) {
@@ -349,6 +434,7 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
               phase: 'terminal_before_confirmation',
               observed: false,
               backgroundConfirmed: false,
+              ...(ownerScope ? { requiresOwnerConfirmation: true as const } : {}),
             });
           }
           return false;
@@ -356,12 +442,23 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
       } else if (activity.type === 'progress') {
         if (activity.confirmsActivity === false) return false;
         const current = entries.get(key);
-        if (current?.phase !== 'active' || current.observed) return false;
-        entries.set(key, { ...current, observed: true });
+        if (current?.phase !== 'active') return false;
+        if (current.ownerScope !== undefined && current.ownerScope !== ownerScope) return false;
+        if (current.observed && (ownerScope === undefined || current.ownerScope !== undefined)) return false;
+        entries.set(key, { ...current, observed: true, ...(ownerScope ? { ownerScope } : {}) });
       } else {
         const current = entries.get(key);
         if (activity.admission === 'known-resume' && (!current || !current.backgroundConfirmed)) return false;
-        if (current?.phase === 'active' && current.observed) return false;
+        if (ownerScope === undefined && (current?.ownerScope !== undefined || current?.requiresOwnerConfirmation)) return false;
+        if (current?.phase === 'active' && ownerScope !== undefined && current.ownerScope !== undefined
+          && current.ownerScope !== ownerScope && activity.admission !== 'resume' && activity.admission !== 'known-resume') return false;
+        if (current?.phase === 'active' && current.observed) {
+          const confirmsOwner = ownerScope !== undefined && (current.ownerScope === undefined
+            || activity.admission === 'resume' || activity.admission === 'known-resume');
+          if (!confirmsOwner || current.ownerScope === ownerScope) return false;
+          entries.set(key, { ...current, ownerScope });
+          return true;
+        }
         if (current?.phase === 'terminal_before_confirmation' && activity.admission !== 'resume' && activity.admission !== 'known-resume') {
           // A late real launch proves background membership without undoing its settled outcome.
           if (!current.backgroundConfirmed) entries.set(key, { ...current, backgroundConfirmed: true });
@@ -373,31 +470,63 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
           phase: 'active',
           observed: activity.confirmsActivity !== false,
           backgroundConfirmed: true,
+          ...(ownerScope ? { ownerScope } : current?.ownerScope ? { ownerScope: current.ownerScope } : {}),
         });
       }
       notifyIfChanged(previous);
       return true;
     },
     getSnapshot,
-    getActiveProviderTasks(): readonly ClaudeProviderTaskIdentity[] {
-      return activeEntries().map(({ sessionId, taskId }) => ({ sessionId, taskId }));
+    getActiveProviderTasks(ownerScope?: object): readonly ClaudeProviderTaskIdentity[] {
+      return activeEntries(ownerScope).map(({ sessionId, taskId }) => ({ sessionId, taskId }));
     },
     getActiveProviderTaskCount(): number {
       return activeEntries().length;
     },
-    hasActiveProviderTasks(): boolean {
-      return activeEntries().length > 0;
+    hasActiveProviderTasks(ownerScope?: object): boolean {
+      return activeEntries(ownerScope).length > 0;
     },
     hasProviderTask(identity: ClaudeProviderTaskIdentity): boolean {
       return entries.get(keyOf(identity))?.phase === 'active';
     },
-    noteObservationLost(): void {
+    noteObservationLost(ownerScope?: object): void {
+      // An ended whole provider cannot be made live or unknown by its delayed observer callbacks.
+      if (ownerScope === undefined && observationPhase === 'stopped') return;
+      if (ownerScope !== undefined && !ownerObservations.has(ownerScope)) return;
       const previous = getSnapshot();
-      observationGapFree = false;
+      if (ownerScope === undefined) observationPhase = 'lost';
+      else {
+        const owner = ownerObservations.get(ownerScope);
+        if (owner) owner.observed = false;
+      }
       // Unresolved identities remain available for exact task operations. Only fresh native
       // evidence about an individual task can restore its current activity after observer loss.
       for (const [key, entry] of entries) {
-        if (entry.phase === 'active') entries.set(key, { ...entry, observed: false });
+        if (entry.phase === 'active' && (ownerScope === undefined || entry.ownerScope === ownerScope)) {
+          entries.set(key, { ...entry, observed: false });
+        }
+      }
+      notifyIfChanged(previous);
+    },
+    noteProviderStopped(ownerScope?: object): void {
+      if (ownerScope !== undefined && ownerObservations.get(ownerScope)?.kind === 'source-baseline') return;
+      const previous = getSnapshot();
+      if (ownerScope !== undefined) ownerObservations.delete(ownerScope);
+      for (const [key, entry] of entries) {
+        if (entry.phase !== 'active') continue;
+        if (ownerScope !== undefined && entry.ownerScope !== ownerScope) continue;
+        entries.set(key, {
+          sessionId: entry.sessionId,
+          taskId: entry.taskId,
+          phase: 'terminal_before_confirmation',
+          observed: false,
+          backgroundConfirmed: entry.backgroundConfirmed,
+          ...(entry.ownerScope || entry.requiresOwnerConfirmation ? { requiresOwnerConfirmation: true as const } : {}),
+        });
+      }
+      if (ownerScope === undefined) {
+        ownerObservations.clear();
+        observationPhase = 'stopped';
       }
       notifyIfChanged(previous);
     },

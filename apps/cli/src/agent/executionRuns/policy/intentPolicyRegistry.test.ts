@@ -12,6 +12,15 @@ import {
 } from './intentPolicyRegistry';
 
 describe('executionRun intent policy registry', () => {
+  it('admits native Voice streaming with resumable retention and rejects ephemeral run retention', () => {
+    const voiceStart = { intent: 'voice_agent' as const, permissionMode: 'read_only',
+      runClass: 'long_lived' as const, ioMode: 'streaming' as const };
+    expect(validateExecutionRunStartIntentPolicy({ ...voiceStart, retentionPolicy: 'resumable' })).toEqual({ ok: true });
+    expect(validateExecutionRunStartIntentPolicy({ ...voiceStart, retentionPolicy: 'ephemeral' })).toMatchObject({
+      ok: false, errorCode: 'execution_run_not_allowed',
+    });
+  });
+
   it('admits a read-only retained review for findings-first narration', () => {
     expect(validateExecutionRunStartIntentPolicy({ intent: 'review', permissionMode: 'read_only',
       retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming' })).toEqual({ ok: true });

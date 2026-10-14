@@ -4,7 +4,6 @@ import {
     type AgentSessionHostServices,
     type AgentExecutionRunHooksServiceV1,
     type AgentSessionHookServerStartRequest,
-    type AgentSessionHookServerHandle,
     type AgentSessionProviderBinding,
     type AgentSessionRuntime,
     type AgentSessionSkillDelivery,
@@ -45,7 +44,7 @@ import {
     queryWithContext,
     type ClaudeSdkQueryContext,
 } from '../../../sdk/query.js';
-import type { ClaudeSdkQuery } from '../../../sdk/query.js';
+import { ClaudeSdkQuery } from '../../../sdk/query.js';
 import type {
     PermissionResult,
     SDKAssistantMessage,
@@ -107,6 +106,7 @@ import {
     isClaudeProviderActivityHookObservationLoss,
     isReplayClaudeAgentSdkMessage,
     normalizeClaudeProviderTaskEvent,
+    readClaudeProviderTaskToolTarget,
     type ClaudeProviderTaskActivity,
 } from './providerActivity.js';
 import {
@@ -780,7 +780,7 @@ export function createClaudeAgentSdkTurnOperations(
     let activeQuery: ClaudeSdkQuery | null = null;
     let disposeQuery: ClaudeSdkQuery | null = null;
     let retainedInterruptedQuery: ClaudeSdkQuery | null = null;
-    let activeProviderTaskId: string | null = null;
+    let activeProviderTask: Readonly<{ taskId: string; ownerScope?: object }> | null = null;
     const cancelledQueries = new WeakMap<ClaudeSdkQuery, string>();
     let activeCompletion: DeferredCompletion | null = null;
     let lastTurnCompletionFailure: Error | null = null;
@@ -804,9 +804,15 @@ export function createClaudeAgentSdkTurnOperations(
     const sessionWorkStateEnabled = params.enableSessionWorkState === true;
     const happierSessionId = readString(params.happierSessionId);
     let promotedTranscriptPath: string | null = null;
-    let sessionHookServer: AgentSessionHookServerHandle | null = null;
-    let sessionHookPluginDir: string | null = null;
-    let sessionHookSetupPromise: Promise<string | null> | null = null;
+    type SessionHookBinding = Readonly<{ pluginDir: string; dispose(): Promise<void> }>;
+    type LocalTerminalHookBinding = Readonly<{
+        plan: Extract<Awaited<ReturnType<NonNullable<AgentSessionRuntime['prepareTerminalPresentation']>>>, { kind: 'terminal_launch' }>['plan'];
+        hooks: SessionHookBinding;
+    }>;
+    let sessionHookBinding: SessionHookBinding | null = null;
+    let sessionHookSetupPromise: Promise<SessionHookBinding | null> | null = null;
+    let preparedLocalHookBinding: LocalTerminalHookBinding | null = null;
+
     let runtimeDisposed = false;
     let runtimeDisposePromise: Promise<void> | null = null;
     const pendingNativeStarts: Array<Readonly<{
@@ -814,6 +820,7 @@ export function createClaudeAgentSdkTurnOperations(
     }>> = [];
     let orderedSourceBinding: {
         providerSessionId: string;
+        replay: 'historical' | 'fresh';
         handle: Readonly<{ dispose(): Promise<void> }> | null;
         acquisition: Promise<void> | null;
     } | null = null;
@@ -844,12 +851,9 @@ export function createClaudeAgentSdkTurnOperations(
             },
             fileFollow: workflowFileFollow!,
             onProviderTaskActivity: (activity) => {
-                applyProviderTaskActivity(activity);
-                if (activity.type === 'terminal' && activeProviderTaskId === activity.taskId) {
-                    const remaining = providerActivityLedger.getActiveProviderTasks();
-                    activeProviderTaskId = remaining.length > 0
-                        ? remaining[remaining.length - 1]!.taskId
-                        : null;
+                const didChange = applyProviderTaskActivity(activity);
+                if (didChange && activity.type === 'terminal' && activeProviderTask?.taskId === activity.taskId) {
+                    reconcileActiveProviderTask();
                 }
             },
             logError: (message, error) => { params.ctx.logger.debug(`[ClaudeAgentSdk] ${message}`, { error }); },
@@ -926,7 +930,7 @@ export function createClaudeAgentSdkTurnOperations(
         });
     }
 
-    const resumeIdentityOwner = params.enableSessionResumability === true && happierSessionId
+    const resumeIdentityOwner = (params.enableSessionResumability === true || sessionWorkStateEnabled) && happierSessionId
         ? createClaudeAgentSdkResumeIdentityOwner({
             ctx: sessionContext!,
             expectedInitialProviderSessionId: params.initialProviderSessionId,
@@ -943,7 +947,13 @@ export function createClaudeAgentSdkTurnOperations(
             },
             onTranscriptPromoted: async ({ providerSessionId: provenProviderSessionId, transcriptPath, isCurrent }) => {
                 if (!isCurrent() || providerSessionId !== provenProviderSessionId) return;
+                // A fresh SessionStart precedes creation of Claude's JSONL file. The
+                // existing exact accepted-prompt proof supplies the first materialized
+                // transcript; acquiring source history inside that hook would fail before
+                // Claude can write it. Resumed histories still bind at SessionStart.
+                await bindOrderedSourceHistory(provenProviderSessionId, {}, true);
                 if (!isCurrent() || providerSessionId !== provenProviderSessionId) return;
+                if (params.enableSessionResumability !== true) return;
                 resumableProviderSessionId = provenProviderSessionId;
                 pendingResumeProviderSessionId = null;
                 if (promotedTranscriptPath !== transcriptPath) {
@@ -976,34 +986,50 @@ export function createClaudeAgentSdkTurnOperations(
         });
     }
 
-    async function bindOrderedSourceHistory(nativeSessionId: string, payload: Readonly<Record<string, unknown>>): Promise<void> {
+    async function bindOrderedSourceHistory(
+        nativeSessionId: string,
+        payload: Readonly<Record<string, unknown>>,
+        transcriptMaterialized = false,
+    ): Promise<void> {
         if (!workflowRuntime || runtimeDisposed) return;
-        if (orderedSourceBinding?.providerSessionId === nativeSessionId) {
-            await orderedSourceBinding.acquisition;
+        let binding = orderedSourceBinding;
+        if (binding?.providerSessionId !== nativeSessionId) {
+            if (binding) {
+                await binding.acquisition;
+                await binding.handle?.dispose();
+                providerActivityLedger.noteSourceBaselineComplete(binding);
+            }
+            binding = { providerSessionId: nativeSessionId,
+                replay: payload.source === 'resume' || params.initialProviderSessionId === nativeSessionId ? 'historical' : 'fresh',
+                handle: null, acquisition: null };
+            orderedSourceBinding = binding;
+            // An unacquired baseline is a scoped unknown observation, not a lost
+            // native stream. Successful acquisition retires only this pending scope;
+            // genuine observation-loss flags and outstanding tasks remain intact.
+            providerActivityLedger.noteSourceBaselinePending(binding);
+            reconcileProviderTaskRuntimeActivityForCurrentQuery('source-baseline-pending');
+        }
+        if (binding.handle || binding.acquisition) {
+            await binding.acquisition;
             return;
         }
-        const prior = orderedSourceBinding;
-        if (prior) {
-            await prior.acquisition;
-            await prior.handle?.dispose();
-        }
-        const binding = { providerSessionId: nativeSessionId,
-            handle: null as Readonly<{ dispose(): Promise<void> }> | null,
-            acquisition: null as Promise<void> | null };
-        orderedSourceBinding = binding;
+        if (binding.replay === 'fresh' && !transcriptMaterialized) return;
+        const currentBinding = binding;
         const acquisition = Promise.resolve().then(async () => {
             const followSource = sessionContext?.agentRuntime.transcripts.followSource;
             if (!followSource) throw new Error('Claude SDK work-state requires ordered source transcript following');
             const handle = await followSource({ providerSessionId: nativeSessionId,
-                replay: payload.source === 'resume' || params.initialProviderSessionId === nativeSessionId ? 'historical' : 'fresh' });
-            if (runtimeDisposed || orderedSourceBinding !== binding) { await handle.dispose(); return; }
-            binding.handle = handle;
+                replay: currentBinding.replay });
+            if (runtimeDisposed || orderedSourceBinding !== currentBinding) { await handle.dispose(); return; }
+            currentBinding.handle = handle;
             for (const receipt of pendingNativeStarts.splice(0)) {
                 if (receipt.providerSessionId !== nativeSessionId) continue;
                 observeNativeWorkflowHook(nativeSessionId, receipt.payload, receipt.observedAt, true);
             }
+            providerActivityLedger.noteSourceBaselineComplete(currentBinding);
+            reconcileProviderTaskRuntimeActivityForCurrentQuery('source-baseline-acquired');
         });
-        binding.acquisition = acquisition;
+        currentBinding.acquisition = acquisition;
         try { await acquisition; }
         catch (error) {
             pendingNativeStarts.length = 0;
@@ -1011,10 +1037,10 @@ export function createClaudeAgentSdkTurnOperations(
             providerActivityLedger.noteObservationLost();
             reconcileProviderTaskRuntimeActivityForCurrentQuery('source-baseline-failed');
             throw error;
-        } finally { binding.acquisition = null; }
+        } finally { currentBinding.acquisition = null; }
     }
 
-    async function ensureSessionHookPluginDir(): Promise<string | null> {
+    async function createSessionHookBinding(readOwnerScope?: () => object | null): Promise<SessionHookBinding | null> {
         const hookInstanceId = happierSessionId ?? (params.unlistedTools === 'deny' ? params.executionRunId : null);
         if (!hookInstanceId) return null;
         const sessionHooks = sessionContext?.agentRuntime.sessionHooks;
@@ -1024,14 +1050,15 @@ export function createClaudeAgentSdkTurnOperations(
             if (!happierSessionId) return null;
             throw new Error('Claude Session hooks are unavailable for a Session-bound runtime.');
         }
-        if (sessionHookPluginDir) return sessionHookPluginDir;
-        if (sessionHookSetupPromise) return await sessionHookSetupPromise;
-
-        sessionHookSetupPromise = (async () => {
+        return await (async () => {
             const sessionHookSecret = randomUUID();
             const hookRequest: AgentSessionHookServerStartRequest = {
+                ...(readOwnerScope ? { lifetime: 'invocation' as const } : {}),
                 sessionHookSecret,
                 onSessionHook: async (providerSessionId, payload) => {
+                    if (runtimeDisposed) return;
+                    const ownerScope = readOwnerScope?.();
+                    if (readOwnerScope && !ownerScope) return;
                     const observedAt = Date.now();
                     const lifecycle = readClaudeTaskLifecycleEnvelope(payload);
                     const bufferedNativeStart = lifecycle?.knownOnly === true && lifecycle.resumed === true
@@ -1041,7 +1068,7 @@ export function createClaudeAgentSdkTurnOperations(
                     } else if (lifecycle) {
                         observeNativeWorkflowHook(providerSessionId, payload, observedAt);
                     }
-                    if (!bufferedNativeStart) observeProviderTaskActivity(payload, providerSessionId);
+                    if (!bufferedNativeStart || ownerScope) observeProviderTaskActivity(payload, providerSessionId, ownerScope ?? undefined);
                     await resumeIdentityOwner?.observeSessionHook(providerSessionId, payload);
                     if (readString(payload.hook_event_name ?? payload.hookEventName ?? payload.eventName) === 'SessionStart') {
                         await bindOrderedSourceHistory(providerSessionId, payload);
@@ -1066,7 +1093,6 @@ export function createClaudeAgentSdkTurnOperations(
                 ? await sessionHooks.startServer({ ...hookRequest, providerId: 'claude', sessionId: happierSessionId,
                     lifecycle: { kind: 'session', sessionId: happierSessionId } })
                 : await detachedHooks!.startServer(hookRequest);
-            sessionHookServer = server;
             try {
                 const assets = await hooks.resolveForwarderAssets();
                 const hooksJson = buildClaudeHookPluginHooks({
@@ -1087,25 +1113,47 @@ export function createClaudeAgentSdkTurnOperations(
                 });
                 const manifest = buildClaudeHookPluginManifest({ instanceId: hookInstanceId });
                 const pluginRequest = {
+                    ...(readOwnerScope ? { lifetime: 'invocation' as const } : {}),
                     files: [
                         { path: '.claude-plugin/plugin.json', json: manifest },
                         { path: 'hooks/hooks.json', json: hooksJson },
                     ],
                 };
-                sessionHookPluginDir = sessionHooks && happierSessionId
+                const pluginDir = sessionHooks && happierSessionId
                     ? await sessionHooks.createPluginDir({ ...pluginRequest, providerId: 'claude',
                         lifecycle: { kind: 'session', sessionId: happierSessionId } })
                     : await detachedHooks!.createPluginDir(pluginRequest);
-                return sessionHookPluginDir;
+                return { pluginDir, async dispose() {
+                    const results = await Promise.allSettled([hooks.disposePluginDir(pluginDir), server.dispose()]);
+                    const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+                    if (failures.length === 0) return;
+                    params.ctx.logger.warn('[ClaudeAgentSdk] Session hook resource cleanup failed', {
+                        error: 'claude_session_hook_cleanup_failed',
+                    });
+                    if (failures.length === 1) throw failures[0];
+                    throw new AggregateError(failures, 'Claude Session hook resource cleanup failed', { cause: failures[0] });
+                } };
             } catch (error) {
-                sessionHookServer = null;
-                await server.dispose().catch(() => undefined);
+                try {
+                    await server.dispose();
+                } catch (cleanupError) {
+                    params.ctx.logger.warn('[ClaudeAgentSdk] Session hook resource cleanup failed', {
+                        error: 'claude_session_hook_cleanup_failed',
+                    });
+                    throw new AggregateError([error, cleanupError], 'Claude Session hook preparation and cleanup failed', { cause: error });
+                }
                 throw error;
             }
-        })().finally(() => {
-            sessionHookSetupPromise = null;
-        });
-        return await sessionHookSetupPromise;
+        })();
+    }
+
+    async function ensureSessionHookPluginDir(): Promise<string | null> {
+        if (sessionHookBinding) return sessionHookBinding.pluginDir;
+        sessionHookSetupPromise ??= createSessionHookBinding().then(binding => {
+            sessionHookBinding = binding;
+            return binding;
+        }).finally(() => { sessionHookSetupPromise = null; });
+        return (await sessionHookSetupPromise)?.pluginDir ?? null;
     }
 
     function observeSessionWorkStateMessage(message: SDKMessage): void {
@@ -1176,7 +1224,7 @@ export function createClaudeAgentSdkTurnOperations(
 
         const hookPluginDir = await ensureSessionHookPluginDir();
         const idleController = new AbortController();
-        const transientQuery = queryWithContext(params.queryContext ?? params.ctx.agentRuntime.exec, {
+        const transientQuery = createOwnedQuery({
             prompt: createIdlePromptStream(idleController.signal),
             options: {
                 cwd: params.directory,
@@ -1211,9 +1259,49 @@ export function createClaudeAgentSdkTurnOperations(
         return await withControlQuery(requestAndPublishContextUsage) ?? false;
     }
 
-    function applyProviderTaskActivity(activity: ClaudeProviderTaskActivity): void {
-        applyClaudeProviderTaskActivity({
+    function createOwnedQuery(config: Parameters<typeof queryWithContext>[1]): ClaudeSdkQuery {
+        if (runtimeDisposed) throw new Error('Claude Agent SDK runtime is disposed.');
+        const turnQuery = queryWithContext(params.queryContext ?? params.ctx.agentRuntime.exec, {
+            ...config,
+            onMessageReceived(message) {
+                if (!isReplayClaudeAgentSdkMessage(message)) {
+                    for (const block of extractToolUseBlocksFromSdkMessage(message)) {
+                        providerActivityLedger.observeToolUse(turnQuery, block.id, readClaudeProviderTaskToolTarget(
+                            block.name, block.input, readString(message.session_id) ?? providerSessionId,
+                        ));
+                    }
+                }
+                config.onMessageReceived?.(message);
+            },
+            onObservationLost(reason) {
+                providerActivityLedger.noteObservationLost(turnQuery);
+                reconcileProviderTaskRuntimeActivityForCurrentQuery(reason);
+                if (reason === 'dispose_failed') {
+                    params.ctx.logger.warn('[ClaudeAgentSdk] Owned process cleanup failed', {
+                        code: 'CLAUDE_SDK_PROCESS_CLEANUP_FAILED', ...providerActivityLedger.getSnapshot(),
+                    });
+                }
+                config.onObservationLost?.(reason);
+            },
+            onProcessExited(result) {
+                if (result.providerStopped === true) {
+                    providerActivityLedger.noteProviderStopped(turnQuery);
+                    if (activeProviderTask?.ownerScope === turnQuery) reconcileActiveProviderTask();
+                } else {
+                    providerActivityLedger.noteObservationLost(turnQuery);
+                }
+                reconcileProviderTaskRuntimeActivityForCurrentQuery('owned-process-exited');
+                config.onProcessExited?.(result);
+            },
+        });
+        providerActivityLedger.registerOwner(turnQuery);
+        return turnQuery;
+    }
+
+    function applyProviderTaskActivity(activity: ClaudeProviderTaskActivity, ownerScope?: object): boolean {
+        return applyClaudeProviderTaskActivity({
             activity,
+            ...(ownerScope ? { ownerScope } : {}),
             ledger: providerActivityLedger,
             runtimeActivityPublisher,
             logger: params.ctx.logger,
@@ -1221,27 +1309,46 @@ export function createClaudeAgentSdkTurnOperations(
         });
     }
 
-    function observeProviderTaskActivity(message: unknown, contextualSessionId?: string): boolean {
+    function reconcileActiveProviderTask(): void {
+        const identity = providerActivityLedger.getActiveProviderTasks().at(-1);
+        const owner = identity ? providerActivityLedger.getProviderTaskOwner(identity) : undefined;
+        activeProviderTask = identity ? {
+            taskId: identity.taskId,
+            ...(owner ? { ownerScope: owner } : {}),
+        } : null;
+    }
+
+    function observeProviderTaskActivity(message: unknown, contextualSessionId?: string, ownerScope?: object): boolean {
         const event = normalizeClaudeProviderTaskEvent(
             message,
             contextualSessionId ?? providerSessionId ?? undefined,
         );
+        if (event.activity && ownerScope === undefined && isRecord(message)
+            && readString(message.hook_event_name ?? message.hookEventName ?? message.eventName)) {
+            const toolUseId = readString(message.tool_use_id ?? message.toolUseId);
+            const toolCall = toolUseId ? providerActivityLedger.resolveToolUse(toolUseId) : null;
+            const exactOwner = event.activity.type === 'terminal' && toolCall?.target
+                ? toolCall.target.sessionId === event.activity.sessionId && toolCall.target.taskId === event.activity.taskId
+                    ? toolCall.targetOwner : undefined
+                : toolCall?.ownerScope;
+            if (exactOwner instanceof ClaudeSdkQuery) ownerScope = exactOwner;
+        }
         let didObserveActivity = false;
         if (event.activity) {
-            didObserveActivity = true;
-            applyProviderTaskActivity(event.activity);
+            didObserveActivity = applyProviderTaskActivity(event.activity, ownerScope);
+            if (!didObserveActivity && event.activity.type === 'terminal') return false;
         }
 
         if (event.interruptTarget?.type === 'active') {
-            activeProviderTaskId = event.interruptTarget.taskId;
+            const taskOwner = event.activity ? providerActivityLedger.getProviderTaskOwner(event.activity) : undefined;
+            if (taskOwner) ownerScope = taskOwner;
+            activeProviderTask = { taskId: event.interruptTarget.taskId, ...(ownerScope ? { ownerScope } : {}) };
         } else if (
             event.interruptTarget?.type === 'terminal'
-            && activeProviderTaskId === event.interruptTarget.taskId
+            && activeProviderTask?.taskId === event.interruptTarget.taskId
+            && (activeProviderTask.ownerScope === undefined || activeProviderTask.ownerScope === ownerScope)
         ) {
-            const remaining = providerActivityLedger.getActiveProviderTasks();
-            activeProviderTaskId = remaining.length > 0
-                ? remaining[remaining.length - 1]!.taskId
-                : null;
+            reconcileActiveProviderTask();
         }
         return didObserveActivity;
     }
@@ -1316,6 +1423,7 @@ export function createClaudeAgentSdkTurnOperations(
     }
 
     function completeProviderBackgroundObservation(turnQuery: ClaudeSdkQuery): void {
+        providerActivityLedger.completeQueryObservation(turnQuery);
         backgroundQueries.delete(turnQuery);
         if (backgroundQueries.size === 0) {
             reconcileProviderTaskRuntimeActivityForCurrentQuery('background-observation-complete');
@@ -1615,7 +1723,7 @@ export function createClaudeAgentSdkTurnOperations(
                 const assistantModelId = readSdkAssistantModelId(message);
                 if (assistantModelId) publishEffectiveModel({ modelId: assistantModelId });
                 if (isClaudeProviderActivityHookObservationLoss(message, providerSessionId)) {
-                    providerActivityLedger.noteObservationLost();
+                    providerActivityLedger.noteObservationLost(turnQuery);
                     reconcileProviderTaskRuntimeActivityForCurrentQuery('hook-response-observation-lost');
                 }
                 if (
@@ -1652,9 +1760,9 @@ export function createClaudeAgentSdkTurnOperations(
                         ...(currentTurnId ? { turnId: currentTurnId } : {}),
                     }));
                 }
-                const completedBackgroundTasks = observeProviderTaskActivity(message)
+                const completedBackgroundTasks = observeProviderTaskActivity(message, undefined, turnQuery)
                     && sawResult
-                    && !providerActivityLedger.hasActiveProviderTasks();
+                    && !providerActivityLedger.hasActiveProviderTasks(turnQuery);
                 const isSuccessfulResultMessage = isSdkResultMessage(message)
                     && message.subtype === 'success'
                     && message.is_error !== true;
@@ -1685,6 +1793,8 @@ export function createClaudeAgentSdkTurnOperations(
                         nativeRecordId: readString(message.uuid),
                         inferenceId: readString(message.message.id),
                         nativeSessionId: readString(message.session_id),
+                        turnId: !isReplayClaudeAgentSdkMessage(message) && !readString(message.parent_tool_use_id)
+                            ? currentTurnId : null,
                         modelId: readClaudeAssistantModelId(message),
                         ...(currentProviderModel ? { modelSource: 'provider' } : {}),
                         observedAtMs: Date.now(),
@@ -1785,7 +1895,8 @@ export function createClaudeAgentSdkTurnOperations(
                 }
                 if (isSuccessfulResultMessage) {
                     sawResult = true;
-                    const shouldContinueForBackgroundTasks = providerActivityLedger.hasActiveProviderTasks();
+                    const shouldContinueForBackgroundTasks = providerActivityLedger.hasActiveProviderTasks(turnQuery);
+                    if (!shouldContinueForBackgroundTasks) providerActivityLedger.completeQueryObservation(turnQuery);
                     if (currentTurnId && !cancelledQueries.has(turnQuery) && !foregroundCompleted
                         && Object.keys(params.mcpServers ?? {}).length > 0) {
                         publishRuntimeEvent(ClaudeProviderEventSchema.parse({ kind: 'mcp-tool-usage',
@@ -1853,8 +1964,8 @@ export function createClaudeAgentSdkTurnOperations(
                 }
                 return;
             }
-            if (!sawResult || providerActivityLedger.hasActiveProviderTasks()) {
-                providerActivityLedger.noteObservationLost();
+            if (!sawResult || providerActivityLedger.hasActiveProviderTasks(turnQuery)) {
+                providerActivityLedger.noteObservationLost(turnQuery);
                 reconcileProviderTaskRuntimeActivityForCurrentQuery('query-observation-lost');
             }
             if (!sawResult) {
@@ -1866,7 +1977,7 @@ export function createClaudeAgentSdkTurnOperations(
                 completion.reject(noResultError);
             }
         } catch (error) {
-            providerActivityLedger.noteObservationLost();
+            providerActivityLedger.noteObservationLost(turnQuery);
             reconcileProviderTaskRuntimeActivityForCurrentQuery('query-error-observation-lost');
             if (foregroundCompleted) {
                 backgroundQueries.delete(turnQuery);
@@ -1909,6 +2020,7 @@ export function createClaudeAgentSdkTurnOperations(
     const operations: ClaudeRuntimeTurnOperations & Readonly<{
         refreshSkills: NonNullable<AgentSessionRuntime['refreshSkills']>;
         prepareTerminalPresentation: NonNullable<AgentSessionRuntime['prepareTerminalPresentation']>;
+        observeTerminalExecution: NonNullable<AgentSessionRuntime['observeTerminalExecution']>;
         observeSourceTranscript: NonNullable<AgentSessionRuntime['observeSourceTranscript']>;
         subscribeCanonicalAgentSessionEvents: typeof runtimeActivityPublisher.subscribe;
         subscribeEffectiveModel: ClaudeEffectiveModelEvidenceSubscription;
@@ -1927,15 +2039,19 @@ export function createClaudeAgentSdkTurnOperations(
             await resumeIdentityOwner?.settleCurrentCandidate();
             const resumeFailure = resumeIdentityOwner?.readExplicitResumeFailure();
             if (resumeFailure) throw resumeFailure;
-            const hookPluginDir = await ensureSessionHookPluginDir();
-            if (runtimeDisposed) throw new Error('Claude Agent SDK runtime is disposed.');
-            const resumeId = readCurrentResumeProviderSessionId();
-            terminalStartupInstructions ??= params.startupInstructions
-                ? materializeClaudeStartupInstructions(params.startupInstructions) : undefined;
-            terminalMcpConfig ??= materializeClaudeMcpConfigArgsForSpawn(buildClaudeMcpConfigArgs(params.mcpServers), message => params.ctx.logger.warn(message));
-            return {
-                kind: 'terminal_launch',
-                plan: {
+            let binding: LocalTerminalHookBinding | null = null;
+            const hooks = await createSessionHookBinding(() => binding && providerActivityLedger.isTerminalOwnerObserved(binding) ? binding : null);
+            if (runtimeDisposed) {
+                await hooks?.dispose();
+                throw new Error('Claude Agent SDK runtime is disposed.');
+            }
+            const hookPluginDir = hooks?.pluginDir ?? null;
+            try {
+                const resumeId = readCurrentResumeProviderSessionId();
+                terminalStartupInstructions ??= params.startupInstructions
+                    ? materializeClaudeStartupInstructions(params.startupInstructions) : undefined;
+                terminalMcpConfig ??= materializeClaudeMcpConfigArgsForSpawn(buildClaudeMcpConfigArgs(params.mcpServers), message => params.ctx.logger.warn(message));
+                const plan: LocalTerminalHookBinding['plan'] = {
                     argv: resolveClaudeLaunchSettingsOverlayArgs({
                         args: [
                             ...(resumeId ? ['--resume', resumeId] : []),
@@ -1965,8 +2081,47 @@ export function createClaudeAgentSdkTurnOperations(
                         onLaunch: { target: 'local', reason: 'claude_sdk_terminal_start' },
                         onExit: { target: 'remote', reason: 'claude_sdk_terminal_exit' },
                     },
-                },
-            };
+                };
+                if (hooks) {
+                    const previousPrepared = preparedLocalHookBinding;
+                    binding = { plan, hooks };
+                    preparedLocalHookBinding = binding;
+                    await previousPrepared?.hooks.dispose();
+                }
+                return { kind: 'terminal_launch', plan };
+            } catch (error) {
+                if (binding && preparedLocalHookBinding === binding) preparedLocalHookBinding = null;
+                try {
+                    await hooks?.dispose();
+                } catch (cleanupError) {
+                    throw new AggregateError([error, cleanupError], 'Claude terminal preparation and cleanup failed', { cause: error });
+                }
+                throw error;
+            }
+        },
+        async observeTerminalExecution(input) {
+            const pending = preparedLocalHookBinding?.plan === input.plan ? preparedLocalHookBinding : null;
+            // Only this factory registers terminal scopes; its object retains the resources and plan.
+            const owned = providerActivityLedger.getRegisteredTerminalOwners()
+                .map(scope => scope as LocalTerminalHookBinding).find(scope => scope.plan === input.plan);
+            const binding = pending ?? owned;
+            if (!binding || (owned && input.kind === 'launch_failed')) return;
+            if (input.kind === 'started') {
+                if (runtimeDisposed || !pending) return;
+                preparedLocalHookBinding = null;
+                providerActivityLedger.registerTerminalOwner(binding);
+                return;
+            }
+            if (pending) preparedLocalHookBinding = null;
+            if (owned) {
+                if (input.kind === 'provider_stopped' && (input.exitCode !== null || input.signal !== null)) {
+                    providerActivityLedger.noteProviderStopped(binding);
+                } else {
+                    providerActivityLedger.noteObservationLost(binding);
+                }
+                reconcileProviderTaskRuntimeActivityForCurrentQuery(`local-terminal-${input.kind}`);
+            }
+            await binding.hooks.dispose();
         },
         async observeSourceTranscript(input) {
             if (runtimeDisposed || input.phase !== 'initial_replay'
@@ -2147,7 +2302,7 @@ export function createClaudeAgentSdkTurnOperations(
                 const settingsJson = denySettingsArgs.includes('--settings')
                     ? denySettingsArgs[denySettingsArgs.indexOf('--settings') + 1]
                     : Object.keys(launchSettings).length > 0 ? JSON.stringify(launchSettings) : undefined;
-                const turnQuery = queryWithContext(params.queryContext ?? params.ctx.agentRuntime.exec, {
+                const turnQuery = createOwnedQuery({
                     prompt: resolvePromptInput(promptContent, toolPermissionPolicy),
                     options: {
                         cwd: params.directory,
@@ -2288,19 +2443,20 @@ export function createClaudeAgentSdkTurnOperations(
                 currentTurnId = null;
                 return true;
             }
-            const turnQuery = activeQuery
-                ?? (activeProviderTaskId
-                    ? Array.from(backgroundQueries).at(-1) ?? disposeQuery
-                    : null);
-            if (!turnQuery) return false;
+            const turnQuery = (turnInFlight ? activeQuery : null) ?? activeProviderTask?.ownerScope;
+            if (!(turnQuery instanceof ClaudeSdkQuery)) return false;
+            const cancelledProviderTask = activeProviderTask;
+            const cancelledTurnId = currentTurnId;
             cancelledQueries.set(turnQuery, 'user_request');
-            const providerTaskId = activeProviderTaskId;
+            const providerTaskId = !turnInFlight && activeProviderTask
+                && activeProviderTask.ownerScope === turnQuery
+                ? activeProviderTask.taskId : undefined;
             if (providerTaskId) {
                 try {
                     await turnQuery.stopTask(providerTaskId);
-                    if (activeProviderTaskId === providerTaskId) activeProviderTaskId = null;
+                    if (activeProviderTask === cancelledProviderTask) activeProviderTask = null;
                     if (activeQuery === turnQuery) activeQuery = null;
-                    if (expectedTurnId === undefined || currentTurnId === expectedTurnId) currentTurnId = null;
+                    if (currentTurnId === cancelledTurnId) currentTurnId = null;
                     backgroundQueries.delete(turnQuery);
                     return true;
                 } catch (error) {
@@ -2313,7 +2469,7 @@ export function createClaudeAgentSdkTurnOperations(
             await turnQuery.interrupt();
             backgroundQueries.delete(turnQuery);
             settleUserCancelledTurn(turnQuery);
-            if (expectedTurnId === undefined || currentTurnId === expectedTurnId) currentTurnId = null;
+            if (currentTurnId === cancelledTurnId) currentTurnId = null;
             return true;
         },
         readProviderIdentity() {
@@ -2415,74 +2571,101 @@ export function createClaudeAgentSdkTurnOperations(
             if (runtimeDisposePromise) return await runtimeDisposePromise;
             runtimeDisposed = true;
             runtimeDisposePromise = (async () => {
-                const queriesToDispose = new Set<ClaudeSdkQuery>();
-                if (activeQuery) {
-                    cancelledQueries.set(activeQuery, 'runtime_disposed');
-                    queriesToDispose.add(activeQuery);
-                }
-                if (disposeQuery) queriesToDispose.add(disposeQuery);
-                if (retainedInterruptedQuery) queriesToDispose.add(retainedInterruptedQuery);
-                for (const queryToDispose of backgroundQueries) {
-                    queriesToDispose.add(queryToDispose);
-                }
-                activeQuery = null;
-                disposeQuery = null;
-                retainedInterruptedQuery = null;
-                activeProviderTaskId = null;
-                activeCompletion = null;
-                lastTurnCompletionFailure = null;
-                backgroundQueries.clear();
-                reconcileProviderTaskRuntimeActivityForCurrentQuery('runtime-dispose');
-                turnInFlight = false;
-                pendingSubmission = null;
-                await sessionHookSetupPromise?.catch(() => undefined);
-                pendingNativeStarts.length = 0;
-                const sourceBinding = orderedSourceBinding;
-                orderedSourceBinding = null;
-                await sourceBinding?.acquisition?.catch((error: unknown) => {
-                    params.ctx.logger.warn('[ClaudeAgentSdk] ordered source transcript baseline failed during disposal', { error });
-                });
-                await sourceBinding?.handle?.dispose();
-                if (workflowRuntime) {
-                    // Workflow runs, their agents and their `Task` children all live INSIDE this
-                    // query, so this teardown is the observation that they are over — resolve them
-                    // BEFORE the drain that publishes the query's last rows, or they stay painted
-                    // live until some later process's reconcile grace expires.
-                    try {
-                        workflowRuntime.finalizeInterruptedActivityOnShutdown();
-                    } catch {
-                        // Non-fatal: the startup reconcile still resolves these rows later.
+                const queriesToDispose = new Set(
+                    providerActivityLedger.getRegisteredQueryOwners()
+                        .filter((owner): owner is ClaudeSdkQuery => owner instanceof ClaudeSdkQuery),
+                );
+                const cleanupErrors: unknown[] = [];
+                const pendingLocalHooks = preparedLocalHookBinding;
+                preparedLocalHookBinding = null;
+                const localHooksToDispose = providerActivityLedger.getRegisteredTerminalOwners()
+                    .map(scope => scope as LocalTerminalHookBinding);
+                for (const scope of localHooksToDispose) providerActivityLedger.noteObservationLost(scope);
+                if (localHooksToDispose.length > 0) reconcileProviderTaskRuntimeActivityForCurrentQuery('local-terminal-disposed');
+                try {
+                    if (activeQuery) {
+                        cancelledQueries.set(activeQuery, 'runtime_disposed');
+                        queriesToDispose.add(activeQuery);
                     }
-                    await workflowRuntime.flush().catch(() => undefined);
-                    workflowRuntime.dispose();
-                }
-                await resumeIdentityOwner?.dispose().catch(() => undefined);
-                const tail = goalStatusTail;
-                goalStatusTail = null;
-                if (tail) await retireGoalStatusTail(tail);
-                await Promise.all(Array.from(retiringGoalStatusTails));
-                const hookPluginDir = sessionHookPluginDir;
-                await terminalStartupInstructions?.cleanup().catch(() => {
-                    params.ctx.logger.warn('[ClaudeAgentSdk] Terminal startup instruction cleanup failed', {
-                        error: 'terminal_startup_instruction_cleanup_failed',
+                    if (disposeQuery) queriesToDispose.add(disposeQuery);
+                    if (retainedInterruptedQuery) queriesToDispose.add(retainedInterruptedQuery);
+                    for (const queryToDispose of backgroundQueries) {
+                        queriesToDispose.add(queryToDispose);
+                    }
+                    activeQuery = null;
+                    disposeQuery = null;
+                    retainedInterruptedQuery = null;
+                    activeProviderTask = null;
+                    activeCompletion = null;
+                    lastTurnCompletionFailure = null;
+                    backgroundQueries.clear();
+                    reconcileProviderTaskRuntimeActivityForCurrentQuery('runtime-dispose');
+                    turnInFlight = false;
+                    pendingSubmission = null;
+                    await sessionHookSetupPromise?.catch(() => undefined);
+                    pendingNativeStarts.length = 0;
+                    const sourceBinding = orderedSourceBinding;
+                    orderedSourceBinding = null;
+                    await sourceBinding?.acquisition?.catch((error: unknown) => {
+                        params.ctx.logger.warn('[ClaudeAgentSdk] ordered source transcript baseline failed during disposal', { error });
                     });
-                });
-                terminalStartupInstructions = undefined;
-                sessionHookPluginDir = null;
-                if (hookPluginDir) {
-                    await (sessionContext?.agentRuntime.sessionHooks ?? params.ctx.agentRuntime.hooks)
-                        ?.disposePluginDir(hookPluginDir).catch(() => undefined);
+                    await sourceBinding?.handle?.dispose();
+                    if (workflowRuntime) {
+                        // Workflow runs, their agents and their `Task` children all live INSIDE this
+                        // query, so this teardown is the observation that they are over — resolve them
+                        // BEFORE the drain that publishes the query's last rows, or they stay painted
+                        // live until some later process's reconcile grace expires.
+                        try {
+                            workflowRuntime.finalizeInterruptedActivityOnShutdown();
+                        } catch {
+                            // Non-fatal: the startup reconcile still resolves these rows later.
+                        }
+                        await workflowRuntime.flush().catch(() => undefined);
+                        workflowRuntime.dispose();
+                    }
+                    await resumeIdentityOwner?.dispose().catch(() => undefined);
+                    const tail = goalStatusTail;
+                    goalStatusTail = null;
+                    if (tail) await retireGoalStatusTail(tail);
+                    await Promise.all(Array.from(retiringGoalStatusTails));
+                } catch (error) {
+                    cleanupErrors.push(error);
+                } finally {
+                    const hooksToDispose = sessionHookBinding;
+                    sessionHookBinding = null;
+                    const hookDisposals = await Promise.allSettled([
+                        ...(pendingLocalHooks ? [pendingLocalHooks.hooks.dispose()] : []),
+                        ...localHooksToDispose.map(scope => scope.hooks.dispose()),
+                        ...(hooksToDispose ? [hooksToDispose.dispose()] : []),
+                    ]);
+                    cleanupErrors.push(...hookDisposals.flatMap(result => result.status === 'rejected' ? [result.reason] : []));
+                    await terminalStartupInstructions?.cleanup().catch(() => {
+                        params.ctx.logger.warn('[ClaudeAgentSdk] Terminal startup instruction cleanup failed', {
+                            error: 'terminal_startup_instruction_cleanup_failed',
+                        });
+                    });
+                    terminalStartupInstructions = undefined;
+                    const queryDisposals = await Promise.allSettled(
+                        Array.from(queriesToDispose, queryToDispose => queryToDispose.dispose()),
+                    );
+                    cleanupErrors.push(...queryDisposals.flatMap(result =>
+                        result.status === 'rejected' ? [result.reason] : []));
+                    effectiveModelListeners.clear();
+                    usageObservationListeners.clear();
+                    try {
+                        await terminalMcpConfig?.cleanup();
+                    } catch (error) {
+                        cleanupErrors.push(error);
+                    } finally {
+                        terminalMcpConfig = undefined;
+                    }
                 }
-                const hookServer = sessionHookServer;
-                sessionHookServer = null;
-                if (hookServer) await hookServer.dispose().catch(() => undefined);
-                await Promise.all(Array.from(queriesToDispose, async (queryToDispose) => {
-                    await queryToDispose.dispose().catch(() => undefined);
-                }));
-                effectiveModelListeners.clear();
-                usageObservationListeners.clear();
-                await terminalMcpConfig?.cleanup();
-                terminalMcpConfig = undefined;
+                if (cleanupErrors.length === 1) throw cleanupErrors[0];
+                if (cleanupErrors.length > 1) {
+                    throw new AggregateError(cleanupErrors, 'Claude SDK session cleanup failed', {
+                        cause: cleanupErrors[0],
+                    });
+                }
             })();
             await runtimeDisposePromise;
         },

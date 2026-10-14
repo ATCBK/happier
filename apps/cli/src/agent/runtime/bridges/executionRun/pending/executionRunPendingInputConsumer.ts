@@ -65,6 +65,8 @@ export type ExecutionRunPendingInputConsumerOptions = Readonly<{
     isCurrent: () => boolean;
     getMetadataSnapshot?: () => ReturnType<ExecutionRunPendingInputBinding['getMetadataSnapshot']>;
     delivery: ExecutionRunPendingInputDelivery;
+    /** The Run lifecycle owner observes a proven refusal; unknown effects never enter this path. */
+    onInputRejectedBeforeEffect?: (outcome: Extract<SessionProviderInputOutcome, { kind: 'rejected_before_effect' }>) => Promise<void>;
 }>;
 
 export type ExecutionRunPendingInputConsumer = Readonly<{
@@ -156,18 +158,26 @@ export function createExecutionRunPendingInputConsumer(
     ): Promise<void> => {
         const entry = admitted.get(localId);
         const pendingAdmission = entry?.admission ?? pendingAdmissions.get(localId);
-        if (outcome) {
-            await port.observeProviderInputSettlement(outcome);
-        }
-        // The durable reader — not the settlement promise — proves the committed
-        // user anchor. An unavailable or unclassified row stays `unknown` so no
-        // caller may read it as either outcome.
-        const acceptance = await port.readDurableProviderInputAcceptanceV1(localId);
-        if (pendingAdmission && acceptance !== 'unknown') {
-            pendingAdmission.resolve(acceptance);
-            admitted.delete(localId);
-            pendingAdmissions.delete(localId);
-            for (const wake of wakeWaiters) wake();
+        try {
+            if (outcome) {
+                await port.observeProviderInputSettlement(outcome);
+            }
+            // The durable reader — not the settlement promise — proves the committed
+            // user anchor. An unavailable or unclassified row stays `unknown` so no
+            // caller may read it as either outcome.
+            const acceptance = await port.readDurableProviderInputAcceptanceV1(localId);
+            if (pendingAdmission && acceptance !== 'unknown') {
+                pendingAdmission.resolve(acceptance);
+                admitted.delete(localId);
+                pendingAdmissions.delete(localId);
+                for (const wake of wakeWaiters) wake();
+            }
+        } finally {
+            // Pending publication can be unavailable, but a positively observed
+            // pre-effect refusal still belongs to this exact Run's lifecycle.
+            if (outcome?.kind === 'rejected_before_effect' && !disposed && options.isCurrent()) {
+                await options.onInputRejectedBeforeEffect?.(outcome);
+            }
         }
     };
 
@@ -198,6 +208,9 @@ export function createExecutionRunPendingInputConsumer(
                 await settleAcceptance(localId, null);
                 continue;
             }
+            // Delivery can outlive Stop or occurrence replacement. Its former
+            // custody cannot settle Pending or terminalize the replacement.
+            if (disposed || !options.isCurrent()) return;
             // Command admission is not provider acceptance. The native input event
             // owns settlement, including events emitted after this promise resolves.
             if (outcome.status === 'admitted') continue;

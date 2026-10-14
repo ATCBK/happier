@@ -7,6 +7,36 @@ import {
 import * as providerActivityModule from './providerActivity.js';
 
 describe('Claude provider task lifecycle', () => {
+  it('retires a complete query observation without inventing process exit or clearing other unknown evidence', () => {
+    const ledger = createClaudeProviderActivityLedger();
+    const query = {}, baseline = {};
+    ledger.registerOwner(query);
+    ledger.noteSourceBaselinePending(baseline);
+    ledger.completeQueryObservation(query);
+    ledger.noteObservationLost(query);
+    expect(ledger.getSnapshot()).toEqual({ state: 'unknown', activeCount: 0 });
+    ledger.noteSourceBaselineComplete(baseline);
+    expect(ledger.getSnapshot()).toEqual({ state: 'idle', activeCount: 0 });
+
+    const lost = {};
+    ledger.registerOwner(lost);
+    ledger.noteObservationLost(lost);
+    ledger.completeQueryObservation(lost);
+    expect(ledger.getSnapshot()).toEqual({ state: 'unknown', activeCount: 0 });
+  });
+
+  it('retains unfinished background work when the foreground query completes', () => {
+    const ledger = createClaudeProviderActivityLedger(), query = {};
+    ledger.registerOwner(query);
+    ledger.apply({ type: 'started', admission: 'launch', sessionId: 's1', taskId: 'child' }, query);
+    ledger.completeQueryObservation(query);
+    expect(ledger.getSnapshot()).toEqual({ state: 'active', activeCount: 1 });
+    ledger.noteObservationLost(query);
+    ledger.completeQueryObservation(query);
+    expect(ledger.getSnapshot()).toEqual({ state: 'unknown', activeCount: 0 });
+    expect(ledger.getActiveProviderTasks()).toEqual([{ sessionId: 's1', taskId: 'child' }]);
+  });
+
   it('retains ambiguous startup membership as unobserved without downgrading fresh executions', () => {
     const ledger = createClaudeProviderActivityLedger();
     const ambiguous = { type: 'started' as const, admission: 'launch' as const,
@@ -426,6 +456,25 @@ describe('Claude provider task lifecycle', () => {
 });
 
 describe('createClaudeProviderActivityLedger', () => {
+  it('preserves whole-provider stop through delayed observation loss and unscoped native facts', () => {
+    const ledger = createClaudeProviderActivityLedger();
+    const launch = { type: 'started' as const, admission: 'launch' as const, sessionId: 's1', taskId: 'child' };
+    ledger.apply(launch);
+    expect(ledger.getSnapshot()).toEqual({ state: 'active', activeCount: 1 });
+    ledger.noteProviderStopped();
+    expect(ledger.getSnapshot()).toEqual({ state: 'idle', activeCount: 0 });
+    ledger.noteObservationLost();
+    expect(ledger.getSnapshot()).toEqual({ state: 'idle', activeCount: 0 });
+    expect(ledger.apply({ ...launch, admission: 'known-resume' })).toBe(false);
+    expect(ledger.apply({ ...launch, taskId: 'late-child' })).toBe(false);
+    expect(ledger.getActiveProviderTasks()).toEqual([]);
+    expect(ledger.getSnapshot()).toEqual({ state: 'idle', activeCount: 0 });
+    // A new native runtime owns a fresh ledger; late facts cannot restart the stopped runtime.
+    const nextRuntime = createClaudeProviderActivityLedger();
+    expect(nextRuntime.apply(launch)).toBe(true);
+    expect(nextRuntime.getSnapshot()).toEqual({ state: 'active', activeCount: 1 });
+  });
+
   it.each(['transcript', 'hook', 'child-hook'] as const)(
     'settles only the explicitly cancelled resumed child through %s evidence',
     (surface) => {
@@ -670,4 +719,59 @@ describe('createClaudeProviderActivityLedger', () => {
       expect(ledger.getActiveProviderTasks()).toEqual([{ sessionId: 's2', taskId: 'same' }]);
     }
   });
+  it.each(['terminal', 'progress', 'resume'] as const)(
+    'requires physical owner evidence for an owned task %s', (evidence) => {
+      const ledger = createClaudeProviderActivityLedger();
+      const queryA = {};
+      const queryB = {};
+      const task = { sessionId: 'native-owner', taskId: 'same-task' };
+      ledger.registerOwner(queryA);
+      ledger.registerOwner(queryB);
+      ledger.apply({ ...task, type: 'started', admission: 'launch' }, queryA);
+      ledger.apply({ ...task, type: 'started', admission: 'resume' }, queryB);
+      if (evidence === 'terminal') {
+        expect(ledger.apply({ ...task, type: 'terminal', terminalStatus: 'completed' })).toBe(false);
+        expect(ledger.getSnapshot()).toEqual({ state: 'active', activeCount: 1 });
+      } else if (evidence === 'progress') {
+        ledger.noteObservationLost(queryB);
+        expect(ledger.apply({ ...task, type: 'progress' })).toBe(false);
+        expect(ledger.getSnapshot()).toEqual({ state: 'unknown', activeCount: 0 });
+      } else {
+        ledger.noteProviderStopped(queryA);
+        ledger.noteProviderStopped(queryB);
+        expect(ledger.getSnapshot()).toEqual({ state: 'idle', activeCount: 0 });
+        expect(ledger.apply({ ...task, type: 'started', admission: 'known-resume' })).toBe(false);
+        expect(ledger.getSnapshot()).toEqual({ state: 'idle', activeCount: 0 });
+        const queryC = {};
+        ledger.registerOwner(queryC);
+        expect(ledger.apply({ ...task, type: 'started', admission: 'resume' }, queryC)).toBe(true);
+        expect(ledger.getSnapshot()).toEqual({ state: 'active', activeCount: 1 });
+      }
+    },
+  );
+
+  it.each(['none', 'query', 'unowned', 'history'] as const)(
+    'releases only the completed source-baseline observation (%s remains)', remaining => {
+      const ledger = createClaudeProviderActivityLedger();
+      const baseline = {};
+      const query = {};
+      ledger.noteSourceBaselinePending(baseline);
+      if (remaining === 'query') {
+        ledger.registerOwner(query);
+        ledger.noteObservationLost(query);
+      } else if (remaining === 'unowned') {
+        ledger.apply({ type: 'started', sessionId: 'local-terminal', taskId: 'unowned' });
+        ledger.noteObservationLost();
+      } else if (remaining === 'history') {
+        ledger.noteObservationLost();
+      }
+      expect(ledger.getSnapshot()).toEqual({ state: 'unknown', activeCount: 0 });
+      ledger.noteSourceBaselineComplete(baseline);
+      expect(ledger.getSnapshot()).toEqual({ state: remaining === 'none' ? 'idle' : 'unknown', activeCount: 0 });
+      if (remaining === 'unowned') {
+        expect(ledger.getActiveProviderTasks()).toEqual([{ sessionId: 'local-terminal', taskId: 'unowned' }]);
+      }
+    },
+  );
+
 });
