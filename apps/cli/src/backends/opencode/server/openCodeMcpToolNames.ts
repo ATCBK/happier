@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { HAPPIER_BUILT_IN_TOOL_NAMES } from '@/agent/tools/happierTools/catalog';
+
 import type { McpServerConfig } from '@/agent';
 import type { PermissionMode } from '@/api/types';
 import {
@@ -12,8 +14,11 @@ import {
 const OPEN_CODE_HAPPIER_SESSION_MCP_PREFIX = 'happier-session-';
 const OPEN_CODE_MCP_NAMESPACE_MAX_LENGTH = 64;
 const OPEN_CODE_MODEL_TOOL_NAME_MAX_LENGTH = 64;
-// Longest Happier MCP tool name; OpenCode exposes each tool to the model as `${clientName}_${toolName}`.
-export const OPEN_CODE_HAPPIER_MCP_TOOL_NAME_RESERVE = 40;
+// Reserve the complete built-in catalog, including manual tools and tools enabled by session policy.
+// OpenCode exposes each tool to the model as `${clientName}_${toolName}`.
+const OPEN_CODE_HAPPIER_MCP_TOOL_NAME_RESERVE = Math.max(
+  ...HAPPIER_BUILT_IN_TOOL_NAMES.map((name) => name.length),
+);
 const OPEN_CODE_MCP_CLIENT_NAME_MAX_LENGTH = Math.min(
   OPEN_CODE_MCP_NAMESPACE_MAX_LENGTH,
   OPEN_CODE_MODEL_TOOL_NAME_MAX_LENGTH - 1 - OPEN_CODE_HAPPIER_MCP_TOOL_NAME_RESERVE,

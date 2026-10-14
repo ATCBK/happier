@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { listActionSpecsForSurface } from '@happier-dev/protocol';
+import { HAPPIER_BUILT_IN_TOOL_NAMES } from '@/agent/tools/happierTools/catalog';
 
 import {
   buildOpenCodeSessionScopedPermissionRuleset,
   canonicalizeOpenCodeConfiguredMcpToolName,
-  OPEN_CODE_HAPPIER_MCP_TOOL_NAME_RESERVE,
   projectOpenCodeSessionMcpServers,
   resolveOpenCodeChangeTitleToolNameForMcpClient,
 } from './openCodeMcpToolNames';
@@ -14,9 +13,7 @@ const REAL_SESSION_ID = 'cmexample0000000000000000';
 const MODEL_TOOL_NAME_MAX_LENGTH = 64;
 
 function happierMcpToolNames(): string[] {
-  return listActionSpecsForSurface('mcp')
-    .map((spec) => spec.bindings?.mcpToolName)
-    .filter((name): name is string => typeof name === 'string' && name.length > 0);
+  return [...HAPPIER_BUILT_IN_TOOL_NAMES];
 }
 
 function projectedNameOf(
@@ -79,13 +76,6 @@ describe('OpenCode session-scoped MCP projection', () => {
       const modelToolName = `${clientName}_${toolName}`;
       expect(modelToolName.length, modelToolName).toBeLessThanOrEqual(MODEL_TOOL_NAME_MAX_LENGTH);
     }
-  });
-
-  it('reserves room for the longest Happier MCP tool name', () => {
-    const longest = Math.max(...happierMcpToolNames().map((name) => name.length));
-
-    // Past 40 the client name can no longer hold the `happier-session-` prefix and its digest: shorten the new tool name.
-    expect(longest).toBeLessThanOrEqual(OPEN_CODE_HAPPIER_MCP_TOOL_NAME_RESERVE);
   });
 
   it('denies every other Happier session namespace while retaining the current mode for its own tools', () => {
