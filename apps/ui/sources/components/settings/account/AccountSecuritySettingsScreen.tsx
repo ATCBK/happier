@@ -8,6 +8,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { UnboundSessionHomeScopeCard } from '@/components/sessions/access/UnboundSessionHomeScopeCard';
 import { SettingsCatalogPageChildren } from '@/components/settings/SettingsCatalogOverviewGroup';
 import { t } from '@/text';
 import { AccountEmailPasswordSection } from './AccountEmailPasswordSection';
@@ -86,6 +87,9 @@ export const AccountSecuritySettingsScreen = React.memo(function AccountSecurity
 
     React.useEffect(() => {
         if (routeTargetsActiveHome && routeTargetsActiveAccount) return;
+        // Settled credential failures already have a canonical recovery owner.
+        // A Home focus handoff cannot repair absent or unreadable credentials.
+        if (targetAccountScope.kind !== 'bound' && targetAccountScope.kind !== 'resolving') return;
         if (routeServerId === null || (routeTargetsActiveHome && targetAccountScope.kind === 'resolving')) return;
 
         let current = true;
@@ -115,6 +119,19 @@ export const AccountSecuritySettingsScreen = React.memo(function AccountSecurity
 
     const recoveryKeyTriggerRef = React.useRef<React.ComponentRef<typeof Pressable> | null>(null);
     const { open: openRecoveryKey } = useRecoveryKeyDisclosure(recoveryEmail, recoveryKeyTriggerRef);
+
+    if (targetAccountScope.kind !== 'bound' && targetAccountScope.kind !== 'resolving') {
+        return (
+            <ItemList style={{ paddingTop: 0 }}>
+                <SettingsPageHeader description={t('settingsAccount.securityPageDescription')} />
+                <UnboundSessionHomeScopeCard
+                    resolution={targetAccountScope}
+                    serverId={targetServerId}
+                    testIDPrefix="settings-account-security"
+                />
+            </ItemList>
+        );
+    }
 
     // A mailbox bearer addressed to Home A must never reach Home B while the
     // explicit focus handoff is still publishing. Mounting no Account Security

@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { View } from 'react-native';
@@ -75,7 +76,7 @@ export function showMachineShareSheet(params: Readonly<{
             ...(subtitle ? { subtitle } : {}),
             scrollHost: 'overlay',
             bodyScroll: 'none',
-            dimensions: { width: 560, maxHeightRatio: 0.92, size: 'md' },
+            dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92, size: 'md' },
         },
         closeOnBackdrop: true,
     });

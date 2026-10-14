@@ -6,6 +6,7 @@ import type { TeamAuthEntrySelection } from '@/components/teams/entry/TeamAuthEn
 import { firstRouteParam } from '@/components/settings/teams/teamRouteParams';
 import { teamSessionsPath } from '@/components/settings/teams/teamsRoutes';
 import { HomeAuthenticationFlow } from '@/components/account/auth/HomeAuthenticationFlow';
+import { TeamAuthenticationStep } from '@/components/teams/entry/TeamAuthenticationStep';
 import { projectTeamAuthSelection } from '@/components/teams/entry/teamAuthAction';
 import { teamSignInReturnPath, useTeamSignInHome } from '@/components/teams/entry/teamSignInHome';
 import { useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -276,17 +277,20 @@ function TeamSignInRouteBody({ teamId, serverId, carrier, expectsPostAuthInvitat
         const requiresTeamContinuation = selection.action.origin === 'team'
             || selected.execution.kind === 'mtls';
         return (
-            <HomeAuthenticationFlow
-                target={home.target}
-                actions={[selected]}
-                returnTo={returnTo}
-                teamAdmission={requiresTeamContinuation ? {
-                    teamId: selection.teamId,
-                    accountSelection: recoveringIdentity ? 'another' : 'current',
-                } : undefined}
-                onAuthenticated={() => router.replace(returnTo)}
-                onBack={() => setSelection(null)}
-            />
+            <TeamAuthenticationStep selection={selection} onBack={() => setSelection(null)}>
+                <HomeAuthenticationFlow
+                    target={home.target}
+                    actions={[selected]}
+                    openChosenAction
+                    returnTo={returnTo}
+                    teamAdmission={requiresTeamContinuation ? {
+                        teamId: selection.teamId,
+                        accountSelection: recoveringIdentity ? 'another' : 'current',
+                    } : undefined}
+                    onAuthenticated={() => router.replace(returnTo)}
+                    onBack={() => setSelection(null)}
+                />
+            </TeamAuthenticationStep>
         );
     }
     if (scopeResolution.kind === 'bound' && !recoveringIdentity) return (

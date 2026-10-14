@@ -559,7 +559,7 @@ export const AccountEmailPasswordSection = React.memo(function AccountEmailPassw
 
     const run = React.useCallback(async (
         operation: (signal: AbortSignal) => Promise<void>,
-        credentialField?: 'password' | 'currentPassword',
+        credentialField?: 'password' | 'currentPassword' | 'accountKey',
     ) => {
         if (busy || approvalPending || !scopeKey) return;
         const requestedScopeKey = scopeKey;
@@ -985,7 +985,7 @@ export const AccountEmailPasswordSection = React.memo(function AccountEmailPassw
             ? 'removed'
             : enrolled ? 'changed' : 'set_up');
         await reload();
-    }, openForm === 'remove_password' || (!e2ee && enrolled) ? 'currentPassword' : 'password');
+    }, e2ee ? 'accountKey' : openForm === 'remove_password' || enrolled ? 'currentPassword' : 'password');
 
     const cancelPasswordForm = () => {
         if (!enrolled && !e2ee && props.verificationToken) {

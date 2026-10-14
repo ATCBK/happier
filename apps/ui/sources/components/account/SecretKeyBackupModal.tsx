@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -144,7 +145,7 @@ export function SecretKeyBackupModal(props: Props) {
         closeButtonTestID: 'secret-key-backup-close',
         bodyScroll: 'auto' as const,
         footer,
-        dimensions: { width: 360, maxHeightRatio: 0.85, size: 'dialog' as const },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.narrow, maxHeightRatio: 0.85, size: 'dialog' as const },
     }), [footer]);
 
     useModalCardChrome(props.setChrome, chrome);

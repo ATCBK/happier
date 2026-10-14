@@ -3,6 +3,7 @@ import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import type { StepTransitionDirection } from '@/components/ui/motion/StepTransitionFrame';
+import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateSize';
 
 import { BrandPanel } from './BrandPanel';
 import { StagePane } from './StagePane';
@@ -140,7 +141,14 @@ export const UnauthenticatedSplitShell = React.memo(function UnauthenticatedSpli
                 transitionDirection={transitionDirection}
                 presentation={props.workflowPresentation ?? 'padded'}
             >
-                {props.children}
+                {/*
+                  * The workflow is one narrow column on every device, so its
+                  * states take the narrow-column step: readable title, and
+                  * actions as wide as the column like every other choice here.
+                  */}
+                <SurfaceStateSizeProvider size="phone">
+                    {props.children}
+                </SurfaceStateSizeProvider>
             </WorkflowPanel>
         </View>
     );

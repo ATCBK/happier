@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import { useNavigation, useRouter } from 'expo-router';
+import { useNavigation, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { TeamInvitationTokenV1Schema, type TeamInvitationPostAuthContinuationV1 } from '@happier-dev/protocol/teams';
 
 import { Item } from '@/components/ui/lists/Item';
@@ -18,15 +18,25 @@ import { UnauthenticatedSplitShell } from '@/components/onboarding/unauthShell';
 import { projectTeamAuthSelection } from '@/components/teams/entry/teamAuthAction';
 import { teamSignInReturnPath } from '@/components/teams/entry/teamSignInHome';
 import { HomeAuthenticationFlow } from '@/components/account/auth/HomeAuthenticationFlow';
+import { TeamAuthenticationStep } from '@/components/teams/entry/TeamAuthenticationStep';
 import { useExactHomeDestination } from '@/components/account/auth/useExactHomeDestination';
 import { getCurrentAuth } from '@/auth/context/currentAuth';
 import { useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { teamDetailPath } from '@/components/settings/teams/teamsRoutes';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { parseToken } from '@/utils/auth/parseToken';
 import { HomeCredentialUnreadableCard } from '@/components/sessions/access/UnboundSessionHomeScopeCard';
-import { resolveTeamJoinPresentation } from './teamJoinOutcome';
+import { TeamJoinedCard } from './TeamJoinedCard';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
+
+function accountIdFromToken(token: string): string | null {
+    try {
+        return parseToken(token) || null;
+    } catch {
+        return null;
+    }
+}
 
 function TeamJoinTerminalState(props: React.PropsWithChildren) {
     return (
@@ -82,6 +92,11 @@ export const TeamJoinScreen = React.memo(function TeamJoinScreen(props: Readonly
 )) {
     const navigation = useNavigation();
     const router = useRouter();
+    // Exact-Home focus may replace the workspace's Account binding. Keep the
+    // dispatcher from the current committed render; the old one must retain
+    // its scope/lifecycle guards and cannot enter the replacement workspace.
+    const routerRef = React.useRef(router);
+    React.useLayoutEffect(() => { routerRef.current = router; }, [router]);
     /**
      * `/join/<token>` is a cold-start deep link more often than not, so there
      * is frequently nothing behind it. Every exit goes through the one safe
@@ -103,6 +118,8 @@ export const TeamJoinScreen = React.memo(function TeamJoinScreen(props: Readonly
         outcome: 'joined';
         teamId: string;
         teamName: string;
+        /** The Account the authentication produced; `null` when its token does not name one. */
+        accountId: string | null;
     }> | null>(null);
     const useCurrentAccount = React.useCallback(() => {
         setSelection(null);
@@ -130,12 +147,12 @@ export const TeamJoinScreen = React.memo(function TeamJoinScreen(props: Readonly
         teamId: string,
     ): Promise<void> => {
         await destination.continueToHome(serverId, () => {
-            router.replace(teamDetailPath({
+            routerRef.current.replace(teamDetailPath({
                 serverId: resolveServerProfileScopeIdForIdentifier(serverId),
                 teamId,
             }));
         });
-    }, [destination.continueToHome, router]);
+    }, [destination.continueToHome]);
 
     React.useEffect(() => {
         navigation?.setOptions?.({ title: t('teams.title') });
@@ -301,7 +318,7 @@ export const TeamJoinScreen = React.memo(function TeamJoinScreen(props: Readonly
         );
     }
 
-    if (scopeResolution.kind === 'resolving') {
+    if (scopeResolution.kind === 'resolving' && !selection) {
         return (
             <TeamJoinStateShell stepId="resolving-account" onBack={exit}>
                 <SurfaceStateCard testID="team-join-resolving-account" kind="loading" title={t('common.loading')} accessibilitySemantics="status" />
@@ -343,15 +360,15 @@ export const TeamJoinScreen = React.memo(function TeamJoinScreen(props: Readonly
     if (completedAdmission) {
         return (
             <TeamJoinStateShell stepId="admission-complete" onBack={exit}>
-                <SurfaceStateCard
+                <TeamJoinedCard
                     testID="team-auth-entry-admission-complete"
-                    kind="empty"
-                    title={resolveTeamJoinPresentation(completedAdmission).title}
-                    action={{
-                        label: t('teams.join.openTeam', { team: completedAdmission.teamName }),
-                        onPress: () => openTeamOnExactHome(target.serverId, completedAdmission.teamId),
-                    }}
-                    accessibilitySemantics="status"
+                    result={completedAdmission}
+                    teamName={completedAdmission.teamName}
+                    accountScope={completedAdmission.accountId ? {
+                        serverId: resolveServerProfileScopeIdForIdentifier(target.serverId),
+                        accountId: completedAdmission.accountId,
+                    } : null}
+                    onOpenTeam={() => openTeamOnExactHome(target.serverId, completedAdmission.teamId)}
                 />
             </TeamJoinStateShell>
         );
@@ -375,7 +392,11 @@ export const TeamJoinScreen = React.memo(function TeamJoinScreen(props: Readonly
             </TeamJoinStateShell>
         );
     }
-    if (selection && selected && !matchingScope && tokenParse.success) {
+    if (selection && selected && tokenParse.success) {
+        // Credential adoption publishes resolving/bound before this flow's
+        // completion callback. The selected flow owns that continuation until
+        // it completes or the person leaves; scope publication must not unmount
+        // it and abort a fresh Account's already-committed Team admission.
         // Generic OAuth/mTLS pending custody must never retain the invitation
         // bearer. Recovery lands on the exact Team/Home entry; without a valid
         // server-held purpose-bound continuation, admission fails closed.
@@ -387,36 +408,40 @@ export const TeamJoinScreen = React.memo(function TeamJoinScreen(props: Readonly
             carrier: props.homeTarget,
         });
         return (
-            <HomeAuthenticationFlow
-                target={target.target}
-                actions={[selected]}
-                returnTo={returnTo}
-                teamAdmission={{
-                    teamId: selection.teamId,
-                    invitationToken: tokenParse.data,
-                    origin: selection.action.origin,
-                    accountSelection: recoveringIdentity ? 'another' : 'current',
-                }}
-                nativeAdmission={{ kind: 'team_invitation', token: tokenParse.data }}
-                invitationEmailVerificationRequired={selection.invitationEmailVerificationRequired === true}
-                onAuthenticated={(authenticatedHome) => {
-                    // Authentication is not admission for an existing Account.
-                    // Retain the mounted bearer and let credential-scope
-                    // resolution return to this same explicit Join surface.
-                    if (selected.execution.kind !== 'mtls'
-                        && authenticatedHome.teamId === selection.teamId) {
-                        setCompletedAdmission({
-                            outcome: 'joined',
-                            teamId: authenticatedHome.teamId,
-                            teamName: selection.teamName,
-                        });
-                        return;
-                    }
-                    setSelection(null);
-                    setRecoveringIdentity(false);
-                }}
-                onBack={() => setSelection(null)}
-            />
+            <TeamAuthenticationStep selection={selection} onBack={() => setSelection(null)}>
+                <HomeAuthenticationFlow
+                    target={target.target}
+                    actions={[selected]}
+                    openChosenAction
+                    returnTo={returnTo}
+                    teamAdmission={{
+                        teamId: selection.teamId,
+                        invitationToken: tokenParse.data,
+                        origin: selection.action.origin,
+                        accountSelection: recoveringIdentity ? 'another' : 'current',
+                    }}
+                    nativeAdmission={{ kind: 'team_invitation', token: tokenParse.data }}
+                    invitationEmailVerificationRequired={selection.invitationEmailVerificationRequired === true}
+                    onAuthenticated={(authenticatedHome) => {
+                        // Authentication is not admission for an existing Account.
+                        // Retain the mounted bearer and let credential-scope
+                        // resolution return to this same explicit Join surface.
+                        if (selected.execution.kind !== 'mtls'
+                            && authenticatedHome.teamId === selection.teamId) {
+                            setCompletedAdmission({
+                                outcome: 'joined',
+                                teamId: authenticatedHome.teamId,
+                                teamName: selection.teamName,
+                                accountId: accountIdFromToken(authenticatedHome.credentials.token),
+                            });
+                            return;
+                        }
+                        setSelection(null);
+                        setRecoveringIdentity(false);
+                    }}
+                    onBack={() => setSelection(null)}
+                />
+            </TeamAuthenticationStep>
         );
     }
 

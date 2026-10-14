@@ -4,7 +4,7 @@ import { SvgXml } from 'react-native-svg';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { AgentCatalogIdentityIcon } from '@/agents/presentation/AgentCatalogIdentityIcon';
-import { createAgentSettingsRoute } from '@/agents/catalog/agentSettingsRoutes';
+import { createAgentSettingsRoute, createCustomAcpAgentSettingsRoute } from '@/agents/catalog/agentSettingsRoutes';
 import { resolveConnectedServiceBrandIconXml } from '@/agents/registry/resolveConnectedServiceBrandIconXml';
 import {
     useProjectedConnectedServicesRegistry,
@@ -80,7 +80,7 @@ function useAgentsNeedingSignIn(): AttentionItem[] {
     return React.useMemo(() => collection.onMachine
         .filter((row) => row.trouble)
         .map((row) => ({
-            key: `agent:${row.entry.agentId}`,
+            key: `agent:${row.key}`,
             mark: (
                 <AgentCatalogIdentityIcon
                     entry={row.entry}
@@ -95,7 +95,7 @@ function useAgentsNeedingSignIn(): AttentionItem[] {
                 ? t('settingsOverview.agentNeedsSignIn', { agent: row.entry.title, machine: catalog.machineLabel })
                 : t('settingsOverview.agentNeedsSignInNoMachine', { agent: row.entry.title }),
             actionLabel: t('settingsOverview.signIn'),
-            onAction: () => router.push(createAgentSettingsRoute(row.entry) as never),
+            onAction: () => router.push((row.definition ? createCustomAcpAgentSettingsRoute(row.definition.id) : createAgentSettingsRoute(row.entry)) as never),
         })), [catalog.machineLabel, catalog.projectionCurrent, collection.onMachine, machine?.id, router, serverId, theme.colors.text.secondary]);
 }
 

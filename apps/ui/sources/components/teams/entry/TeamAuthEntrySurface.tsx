@@ -37,11 +37,12 @@ import {
 } from '@/components/teams/entry/teamAuthenticationFailure';
 import { resolveTeamJoinPresentation } from '@/components/teams/join/teamJoinOutcome';
 import { TeamInvitationPreviewDetails } from '@/components/teams/join/TeamInvitationPreviewDetails';
+import { TeamJoinedCard } from '@/components/teams/join/TeamJoinedCard';
 import { useTeamInvitationPreview, type TeamInvitationPreviewState } from '@/hooks/teams/useTeamInvitationPreview';
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { resolveFeatureAvailabilityArm } from '@/hooks/server/resolveFeatureAvailabilityArm';
 import { UnauthenticatedSplitShell } from '@/components/onboarding/unauthShell';
-import { Avatar } from '@/components/ui/avatar/Avatar';
+import { TEAM_ENTRY_LOGO_SIZE, TeamEntryIdentity, type TeamEntryLogo } from '@/components/teams/entry/TeamEntryIdentity';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -83,6 +84,8 @@ export type TeamAuthEntrySelection = Readonly<{
     action: TeamAuthenticationAction;
     teamId: string;
     teamName: string;
+    /** The Team's logo, so the chosen sign-in step keeps the same identity header. */
+    teamLogo?: TeamEntryLogo;
     /** Preserve the caller-supplied authority carrier instead of rebuilding it from the focused Home. */
     target: HomeTargetInput;
     /** Derived only from the Home's bounded invitation preview, never from the bearer shape. */
@@ -116,7 +119,23 @@ type AdmissionState =
      */
     | Readonly<{ kind: 'complete'; result: InvitationAdmissionSuccess }>;
 
-const TEAM_LOGO_SIZE = 52;
+
+/**
+ * An invitation is usually opened by someone new to the Home, so the Home's
+ * first sign-up journey leads its own methods, as it does on Welcome for a
+ * first-time visitor. Team connections keep their place ahead of them.
+ */
+function leadWithHomeSignUp(actions: readonly AuthEntryActionV1[]): readonly AuthEntryActionV1[] {
+    const isHome = (action: AuthEntryActionV1) => action.kind === 'authenticate' && action.origin === 'home';
+    const firstHome = actions.findIndex(isHome);
+    const firstSignUp = actions.findIndex((action) => isHome(action)
+        && action.kind === 'authenticate' && action.action === 'provision');
+    if (firstHome < 0 || firstSignUp <= firstHome) return actions;
+    const ordered = [...actions];
+    const [signUp] = ordered.splice(firstSignUp, 1);
+    ordered.splice(firstHome, 0, signUp!);
+    return ordered;
+}
 const NOOP = () => {};
 
 function accountServiceAddressLabel(canonicalServerUrl: string): string {
@@ -610,43 +629,18 @@ export const TeamAuthEntrySurface = React.memo(function TeamAuthEntrySurface(pro
             : null;
         const switchAccountOffered = projection.state === 'admission_required'
             && projection.actions.some((action) => action.kind === 'switch_account');
-        const firstRunnableAuthenticateIndex = projection.actions.findIndex((action) => action.kind === 'authenticate');
+        const entryActions = invitationProjection
+            ? leadWithHomeSignUp(projection.actions)
+            : projection.actions;
+        const firstRunnableAuthenticateIndex = entryActions.findIndex((action) => action.kind === 'authenticate');
         content = (
             <View testID="team-auth-entry-ready" style={styles.content}>
-                <View testID="team-auth-entry-lockup" style={styles.lockup}>
-                    <View
-                        testID="team-auth-entry-logo"
-                        accessibilityElementsHidden
-                        importantForAccessibility="no-hide-descendants"
-                    >
-                        <Avatar
-                            id={projection.team.teamId}
-                            square
-                            size={TEAM_LOGO_SIZE}
-                            imageUrl={projection.team.logo?.url ?? null}
-                            thumbhash={projection.team.logo?.thumbhash ?? null}
-                        />
-                    </View>
-                    <Text
-                        testID="team-auth-entry-team-name"
-                        accessibilityLabel={teamName}
-                        numberOfLines={2}
-                        style={styles.teamName}
-                    >
-                        {teamName}
-                    </Text>
-                </View>
-                <View>
-                    <Text
-                        testID="team-auth-entry-heading"
-                        accessibilityRole="header"
-                        accessibilityLabel={t('teams.entry.heading', { team: teamName })}
-                        numberOfLines={2}
-                        role="heading"
-                        style={styles.heading}
-                    >
-                        {t('teams.entry.heading', { team: teamName })}
-                    </Text>
+                <TeamEntryIdentity
+                    testIDPrefix="team-auth-entry"
+                    teamId={projection.team.teamId}
+                    teamName={teamName}
+                    logo={projection.team.logo ?? null}
+                >
                     <Text style={styles.subtitle}>
                         {t('teams.entry.onHome', {
                             home: homeDisplayName,
@@ -671,17 +665,14 @@ export const TeamAuthEntrySurface = React.memo(function TeamAuthEntrySurface(pro
                             {t('teams.entry.signedInTo', { home: homeDisplayName, account: accountLabel })}
                         </Text>
                     ) : null}
-                </View>
+                </TeamEntryIdentity>
                 {admissionComplete ? (
-                    <SurfaceStateCard
+                    <TeamJoinedCard
                         testID="team-auth-entry-admission-complete"
-                        kind="empty"
-                        title={resolveTeamJoinPresentation(admissionComplete).title}
-                        action={{
-                            label: t('teams.join.openTeam', { team: teamName }),
-                            onPress: () => { void props.onAdmissionComplete?.(admissionComplete); },
-                        }}
-                        accessibilitySemantics="status"
+                        result={admissionComplete}
+                        teamName={teamName}
+                        accountScope={accountScope ?? null}
+                        onOpenTeam={() => props.onAdmissionComplete?.(admissionComplete)}
                     />
                 ) : admissionTerminal && admissionTerminalPresentation ? (
                     <SurfaceStateCard
@@ -840,7 +831,7 @@ export const TeamAuthEntrySurface = React.memo(function TeamAuthEntrySurface(pro
                                         onPress={accountServiceEntry.retry}
                                     />
                                 ) : null}
-                                {projection.actions.map((action, index) => {
+                                {entryActions.map((action, index) => {
                                     if (action.kind === 'provider_unavailable') {
                                         /*
                                          * An accepted Team sign-in that cannot run right now is
@@ -879,25 +870,44 @@ export const TeamAuthEntrySurface = React.memo(function TeamAuthEntrySurface(pro
                                      * glyph. A hint this app ships no glyph for narrows away and the
                                      * shared entry icon still renders.
                                      */
+                                    const presentation = execution
+                                        ? describeHomeAuthenticationAction({
+                                            execution,
+                                            providerName: action.presentation.displayName,
+                                        })
+                                        : null;
                                     const iconName = asIconName(action.presentation.iconHint)
-                                        ?? (execution
-                                            ? describeHomeAuthenticationAction({
-                                                execution,
-                                                providerName: action.presentation.displayName,
-                                            }).iconName
-                                            : undefined);
+                                        ?? presentation?.iconName;
+                                    /*
+                                     * A Home publishes sign-in and sign-up as separate actions of
+                                     * one native method. The shared presentation owner names each
+                                     * journey ("New here?", "Use a key", "Create account"), so the
+                                     * page never shows one method twice under one label. External
+                                     * providers keep the Team wording: the same provider card
+                                     * both signs in and creates the Account.
+                                     */
+                                    const native = execution !== null && execution.kind !== 'oauth';
+                                    const sameMethodCount = entryActions.filter((other) => (
+                                        other.kind === 'authenticate' && other.methodId === action.methodId
+                                    )).length;
                                     return (
                                         <WelcomeActionCard
                                             key={`${action.origin}:${action.methodId}:${action.action}:${action.mode}`}
-                                            testID={`team-auth-entry-action:${action.methodId}`}
+                                            testID={sameMethodCount > 1
+                                                ? `team-auth-entry-action:${action.methodId}:${action.action}`
+                                                : `team-auth-entry-action:${action.methodId}`}
                                             primary={index === firstRunnableAuthenticateIndex && accountServiceHref === null}
-                                            title={t('teams.entry.continueWith', { method: action.presentation.displayName })}
+                                            title={native && presentation
+                                                ? presentation.title
+                                                : t('teams.entry.continueWith', { method: action.presentation.displayName })}
+                                            subtitle={native ? presentation?.description : undefined}
                                             {...(iconName ? { iconName } : {})}
                                             accentColor={action.presentation.connectButtonColor}
                                             onPress={() => props.onSelectAction({
                                                 action,
                                                 teamId: projection.team.teamId,
                                                 teamName: projection.team.name,
+                                                teamLogo: projection.team.logo ?? null,
                                                 target: props.target,
                                                 ...(invitation ? {
                                                     invitationEmailVerificationRequired:
@@ -1026,15 +1036,9 @@ const styles = StyleSheet.create((theme) => ({
         gap: 14,
         minWidth: 0,
     },
-    teamName: {
-        flex: 1,
-        minWidth: 0,
-        ...Typography.variant('heading'),
-        color: theme.colors.text.primary,
-    },
     logoPlaceholder: {
-        width: TEAM_LOGO_SIZE,
-        height: TEAM_LOGO_SIZE,
+        width: TEAM_ENTRY_LOGO_SIZE,
+        height: TEAM_ENTRY_LOGO_SIZE,
         backgroundColor: theme.colors.surface.elevated,
         borderRadius: 8,
     },
@@ -1043,10 +1047,6 @@ const styles = StyleSheet.create((theme) => ({
         height: 18,
         backgroundColor: theme.colors.surface.elevated,
         borderRadius: 6,
-    },
-    heading: {
-        ...Typography.variant('display'),
-        color: theme.colors.text.primary,
     },
     subtitle: {
         ...Typography.default(),

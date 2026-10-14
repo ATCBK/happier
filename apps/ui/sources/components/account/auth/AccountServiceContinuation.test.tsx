@@ -8,13 +8,16 @@ import { initializeTerminalRouteRuntimeForTests } from '@/__tests__/routes/(app)
 import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
 import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
-import { disconnectActiveServerConnection } from '@/sync/runtime/orchestration/connectionManager';
 import { createDirectoryHttpFixture } from '@/sync/ops/accountDirectory/accountDirectoryTestFixtures';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import {
     adoptHomeProfile,
+    listServerProfiles,
+    removeServerProfile,
+    resolveSelectedAccountServiceEndpoint,
     resolveServerProfileScopeId,
     setAccountServiceEndpoint,
+    setActiveServerId,
 } from '@/sync/domains/server/serverProfiles';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { AccountDirectorySession } from '@/sync/domains/accountDirectory/accountDirectorySession';
@@ -23,6 +26,9 @@ import { cancelPendingDirectoryHomeEnrollment, getPendingDirectoryHomeEnrollment
 import { ENROLLMENT_POLL_IDLE_DELAY_MS } from '@/auth/enrollment/enrollmentPollingBackoff';
 
 installTokenStorageWebPlatformMocks();
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 const boundary = vi.hoisted(() => ({ request: vi.fn<(endpoint: string, path: string, init?: RequestInit) => Promise<Response>>(
     async () => new Response('{}', { status: 404 }),
 ) }));
@@ -49,6 +55,7 @@ vi.mock('@/modal', async (importOriginal) => ({
 import { Modal } from '@/modal';
 
 await initializeTerminalRouteRuntimeForTests();
+const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
 // The terminal route helper also hoists its router boundary. Install this
 // screen's observer after that initialization, before importing the screen.
 vi.doMock('expo-router', async () => {
@@ -61,6 +68,7 @@ vi.doMock('expo-router', async () => {
 vi.doUnmock('@/text');
 await (await import('@/text')).preloadTranslations('en');
 const { AccountServiceContinuation } = await import('./AccountServiceContinuation');
+const { HomesJourneysSpecimen } = await import('@/components/dev/homesJourneys/HomesJourneysSpecimen');
 const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
 const { MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider');
@@ -153,6 +161,102 @@ describe('exact invoking-surface continuation', () => {
         await screen.unmount();
         screen = undefined;
         await expect(retainedActivation()).resolves.toBe(false);
+    });
+
+    it('publishes each dev-specimen Home continuation through the real current-card owner and retires the displaced command', async ({ onTestFinished }) => {
+        const initialProfileIds = new Set(listServerProfiles().map((profile) => profile.id));
+        const initialActiveProfile = listServerProfiles().find(
+            (profile) => resolveServerProfileScopeId(profile) === getActiveServerSnapshot().serverId,
+        ) ?? null;
+        const initialAccountServiceEndpoint = resolveSelectedAccountServiceEndpoint();
+        let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+        onTestFinished(async () => {
+            await screen?.unmount();
+            screen = undefined;
+            await connection?.dispose();
+            if (initialActiveProfile) await setActiveServerId(initialActiveProfile.id);
+            for (const profile of listServerProfiles()) {
+                if (!initialProfileIds.has(profile.id)) await removeServerProfile(profile.id);
+            }
+            await setAccountServiceEndpoint(initialAccountServiceEndpoint);
+        });
+        await adoptHomeProfile({ descriptor: fixture.home.connectionDescriptor,
+            source: 'account-directory', descriptorAuthority: 'current_connection_observation', suggestedName: fixture.home.label });
+        // The live QA Home advertises no Account Service. The dev specimen must therefore use the
+        // device's already-selected journey service without changing that Home's truthful policy.
+        await setAccountServiceEndpoint({ url: fixture.service.endpointUrl,
+            serverIdentityId: fixture.service.serverIdentityId, source: 'user' });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://home-a.test', accountId: 'alice',
+            request: async (url) => {
+                const path = new URL(String(url)).pathname;
+                if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+                if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+                if (path === '/v1/features') return Response.json({
+                    ...createRootLayoutFeaturesResponse({ capabilities: {
+                        serverIdentity: { serverIdentityId: 'srv_home_a' },
+                    } }),
+                    signInService: { v: 1, mode: 'disabled' },
+                });
+                if (path === '/v1/kv/bulk') return Response.json({ values: [] });
+                return Response.json({}, { status: 404 });
+            } });
+        const credentials = connection.credentials;
+        const request = async (url: RequestInfo | URL, init?: RequestInit) => {
+            const parsed = new URL(String(url));
+            if (parsed.origin === fixture.service.endpointUrl) {
+                return await fixture.request(parsed.origin, `${parsed.pathname}${parsed.search}`, init);
+            }
+            if (parsed.pathname === '/v1/auth/ping') return Response.json({});
+            if (parsed.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (parsed.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (parsed.pathname === '/v1/features') return Response.json({
+                ...createRootLayoutFeaturesResponse({ capabilities: {
+                    serverIdentity: { serverIdentityId: 'srv_home_a' },
+                } }),
+                signInService: { v: 1, mode: 'disabled' },
+            });
+            if (parsed.pathname === '/v1/kv/bulk') return Response.json({ values: [] });
+            if (parsed.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            return Response.json({}, { status: 404 });
+        };
+        setRuntimeFetch(request);
+        boundary.request.mockImplementation((endpoint, path, init) => request(`${endpoint}${path}`, init));
+        const tree = (frame: string) => <AuthProvider initialCredentials={credentials}>
+            <MainAppTabStateProvider><AppPaneProvider><CurrentUiContextProvider><CurrentUiContextActionHost />
+                <CurrentReaderProbe /><HomesJourneysSpecimen only={frame} />
+            </CurrentUiContextProvider></AppPaneProvider></MainAppTabStateProvider>
+        </AuthProvider>;
+        const cases = [
+            ['continuation-choose', 'choose'],
+            ['continuation-retry', 'retry'],
+            ['continuation-refresh', 'refresh'],
+            ['continuation-stop-waiting', 'stop_waiting'],
+            ['continuation-relink', 'relink'],
+            ['continuation-open', 'open'],
+        ] as const;
+        let retained: ReturnType<NonNullable<typeof currentReader>['resolveCurrentUiCommand']> = null;
+        for (const [frame, operation] of cases) {
+            if (!screen) screen = await renderFixtureScreen(tree(frame));
+            else await screen.update(tree(frame));
+            await vi.waitFor(async () => {
+                await act(async () => {});
+                const commands = currentReader?.readCurrentUiContext()?.commands ?? [];
+                expect(commands.some(({ id }) => {
+                    const command = currentReader?.resolveCurrentUiCommand(id)?.command;
+                    return command?.kind === 'accountHomeContinuation' && command.operation === operation;
+                }), JSON.stringify({ frame, operation, commands })).toBe(true);
+            });
+            if (retained) {
+                expect(retained.retirementSignal.aborted).toBe(true);
+                expect(currentReader?.resolveCurrentUiCommand(retained.id)).toBeNull();
+            }
+            const descriptor = currentReader?.readCurrentUiContext()?.commands.find(({ id }) => {
+                const command = currentReader?.resolveCurrentUiCommand(id)?.command;
+                return command?.kind === 'accountHomeContinuation' && command.operation === operation;
+            });
+            retained = descriptor ? currentReader?.resolveCurrentUiCommand(descriptor.id) ?? null : null;
+            expect(retained?.command).toMatchObject({ kind: 'accountHomeContinuation', operation });
+        }
     });
 
     it.each([

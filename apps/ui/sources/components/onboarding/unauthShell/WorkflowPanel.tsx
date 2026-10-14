@@ -24,6 +24,14 @@ import type { RelayRetentionDisclosureState } from './RelayRetentionDisclosure';
 // the logo in the identical spot across both mobile screens.
 const MOBILE_WORDMARK_INSET_PX = 24;
 const MOBILE_WORDMARK_HEIGHT_PX = 30;
+/**
+ * A later step that keeps the wordmark (a Team entry) centres it in the back
+ * row instead of the welcome corner, where it would sit under the back chevron
+ * and over the step's own heading; the column starts below that row.
+ */
+const MOBILE_ROW_WORDMARK_HEIGHT_PX = 24;
+const MOBILE_ROW_WORDMARK_TOP_PX = 4;
+const MOBILE_ROW_WORDMARK_CLEARANCE_PX = 24;
 
 /**
  * Matches the legacy WizardCardLayout card-width hint (`size: 'md'`, `width: 500`).
@@ -109,11 +117,14 @@ export const WorkflowPanel = React.memo(function WorkflowPanel(props: WorkflowPa
     // bottom (visual parity with the prior fixed-position layout); on short
     // screens the spacer collapses and the column scrolls — content and
     // footer always remain reachable instead of overlapping.
+    const showMobileWordmark = isMobile && (props.isWelcomeStep || props.showMobileWordmark === true);
+    const wordmarkInBackRow = showMobileWordmark && !props.isWelcomeStep;
     const contentPaddingStyle: ViewStyle = isMobile
         ? isFullBleed
             ? styles.contentMobileFullBleedPadding
             : {
-                paddingTop: WORKFLOW_MOBILE_TOP_PADDING + safeAreaInsets.top,
+                paddingTop: WORKFLOW_MOBILE_TOP_PADDING + safeAreaInsets.top
+                    + (wordmarkInBackRow ? MOBILE_ROW_WORDMARK_CLEARANCE_PX : 0),
                 paddingRight: WORKFLOW_MOBILE_HORIZONTAL_PADDING + safeAreaInsets.right,
                 paddingBottom: WORKFLOW_MOBILE_BOTTOM_PADDING + safeAreaInsets.bottom,
                 paddingLeft: WORKFLOW_MOBILE_HORIZONTAL_PADDING + safeAreaInsets.left,
@@ -127,7 +138,6 @@ export const WorkflowPanel = React.memo(function WorkflowPanel(props: WorkflowPa
     // back to flat canvas. Scoped to mobile + welcome so other steps stay
     // clean and desktop uses StagePane for the planet.
     const showMobileWelcomeBackdrop = isMobile && props.isWelcomeStep;
-    const showMobileWordmark = isMobile && (props.isWelcomeStep || props.showMobileWordmark === true);
     // When the planet backdrop renders, the underlying canvas color must
     // match the planet's top-edge color so any area not covered by the
     // oversized image blends seamlessly with it. Outside the welcome step
@@ -167,14 +177,21 @@ export const WorkflowPanel = React.memo(function WorkflowPanel(props: WorkflowPa
                     testID="welcome-mobile-wordmark"
                     style={[
                         styles.mobileWordmark,
-                        {
-                            top: MOBILE_WORDMARK_INSET_PX + safeAreaInsets.top,
-                            left: MOBILE_WORDMARK_INSET_PX + safeAreaInsets.left,
-                        },
+                        wordmarkInBackRow
+                            ? {
+                                top: MOBILE_ROW_WORDMARK_TOP_PX + safeAreaInsets.top,
+                                left: safeAreaInsets.left,
+                                right: safeAreaInsets.right,
+                                alignItems: 'center',
+                            }
+                            : {
+                                top: MOBILE_WORDMARK_INSET_PX + safeAreaInsets.top,
+                                left: MOBILE_WORDMARK_INSET_PX + safeAreaInsets.left,
+                            },
                     ]}
                     pointerEvents="box-none"
                 >
-                    <BrandWordmark height={MOBILE_WORDMARK_HEIGHT_PX} />
+                    <BrandWordmark height={wordmarkInBackRow ? MOBILE_ROW_WORDMARK_HEIGHT_PX : MOBILE_WORDMARK_HEIGHT_PX} />
                 </View>
             ) : null}
             {props.onBack && isFullBleed ? (

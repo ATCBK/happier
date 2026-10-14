@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
 import { Pressable, Platform, ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -120,7 +121,7 @@ export function SecretRequirementModal(props: SecretRequirementModalProps) {
         testID: 'secret-requirement:modal',
         closeButtonTestID: 'secret-requirement:close',
         dimensions: {
-            width: 560,
+            width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide,
             maxHeightRatio: 0.92,
             size: 'lg' as const,
         },

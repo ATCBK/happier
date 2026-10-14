@@ -38,6 +38,7 @@ function usageResult(overrides?: Readonly<{
     costIncomplete?: boolean;
     estimatedUsd?: number;
     reportedUsd?: number;
+    apiEquivalentUsd?: number;
     directRecordedUseOnly?: boolean;
     requestCountCoverage?: 'complete' | 'brokered_only';
     tokenCoverage?: 'complete' | 'partial' | 'unavailable';
@@ -54,7 +55,12 @@ function usageResult(overrides?: Readonly<{
             eventCount: 3,
             requestCount: overrides?.requestCount ?? 12,
             tokens: { ...NO_TOKENS, total: overrides?.totalTokens ?? 4200 },
-            cost: { ...NO_COST, estimatedUsd: overrides?.estimatedUsd ?? 0, reportedUsd: overrides?.reportedUsd ?? 0 },
+            cost: {
+                ...NO_COST,
+                estimatedUsd: overrides?.estimatedUsd ?? 0,
+                reportedUsd: overrides?.reportedUsd ?? 0,
+                ...(overrides?.apiEquivalentUsd === undefined ? {} : { apiEquivalentUsd: overrides.apiEquivalentUsd }),
+            },
         },
         coverage: {
             requestAdmissionCount: overrides?.requestCount ?? 12,
@@ -273,6 +279,26 @@ describe('TeamCredentialUsageScreen', () => {
         // A missing price is not a free request, so no zero amount may appear.
         expect(text).not.toContain('$0.00');
         expect(text).toContain('teams.credentials.usage.costIncomplete');
+    });
+
+    it('offers the API-equivalent cost mode when the totals carry it and asks the Home for it', async () => {
+        const serverId = await addHome();
+        harness.answer(serverId, USAGE_QUERY_PATH, {
+            body: usageResult({ reportedUsd: 2, apiEquivalentUsd: 9 }),
+        });
+
+        const screen = await renderUsage(serverId);
+        await waitForTestId(screen, 'team-credential-usage-cost-mode:api_equivalent');
+
+        harness.answer(serverId, USAGE_QUERY_PATH, { body: usageResult({ reportedUsd: 2, apiEquivalentUsd: 9 }) });
+        screen.pressByTestId('team-credential-usage-cost-mode:api_equivalent');
+        await vi.waitFor(() => {
+            expect(harness.requestsFor(USAGE_QUERY_PATH).at(-1)?.input).toMatchObject({ costMode: 'api_equivalent' });
+        });
+        await vi.waitFor(() => {
+            expect(screen.findAllByTestId('team-credential-usage-cost')[0]?.props.subtitle)
+                .toBe('usage.board.page.factApiEquivalent');
+        });
     });
 
     it('says whether a cost is reported or estimated and lets the reader ask for either', async () => {

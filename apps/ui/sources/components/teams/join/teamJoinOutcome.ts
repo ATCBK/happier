@@ -26,6 +26,8 @@ export type TeamJoinPresentation = Readonly<{
 
 export function resolveTeamJoinPresentation(
     result: TeamInvitationAcceptResultV1,
+    /** Names the Team in the joined title when the caller knows it. */
+    teamName?: string,
 ): TeamJoinPresentation {
     const base = {
         body: null,
@@ -41,7 +43,9 @@ export function resolveTeamJoinPresentation(
             // tell somebody their action did nothing when it just succeeded.
             return Object.freeze({
                 ...base,
-                title: t('teams.join.joinedTitle'),
+                title: teamName
+                    ? t('teams.join.joinedTeamTitle', { team: teamName })
+                    : t('teams.join.joinedTitle'),
                 openTeamId: result.teamId,
             });
         case 'already_member':
@@ -100,4 +104,21 @@ export function resolveTeamJoinPresentation(
                 askForNew: true,
             });
     }
+}
+
+/**
+ * Whether the joined-Team card asks for a name.
+ *
+ * Only a fresh `joined` asks, and only when the Account's synced profile on that
+ * Home is known and has no name of its own; a username does not count, because
+ * colleagues would otherwise see a handle. An unknown profile never asks, so a
+ * name already set elsewhere is never overwritten from a guess.
+ */
+export function shouldOfferTeamJoinName(params: Readonly<{
+    outcome: TeamInvitationAcceptResultV1['outcome'];
+    profile: Readonly<{ name: string | null }> | null;
+}>): boolean {
+    return params.outcome === 'joined'
+        && params.profile !== null
+        && !(params.profile.name ?? '').trim();
 }

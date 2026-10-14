@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { AutomationTriggerIdSchema } from '@happier-dev/protocol/automations/automationTriggerIdentity';
 import { deriveAccountMachineKeyFromRecoverySecret, openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext,
     deriveAutomationTriggerEvidenceEqualityKeyV1, type AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
-import { deriveAutomationOccurrenceKeyV1, deriveAutomationOccurrenceEvidenceEqualityTagV1 } from '@happier-dev/protocol/automations/automationOccurrenceV1';
+import { AutomationOccurrenceEvidenceV1Schema, deriveAutomationOccurrenceKeyV1, deriveAutomationOccurrenceEvidenceEqualityTagV1 } from '@happier-dev/protocol/automations/automationOccurrenceV1';
+import { AutomationStoredContentEnvelopeV1Schema } from '@happier-dev/protocol/automations/automationStoredContentEnvelopeV1';
 import { openAutomationTemplateStoredForMigrationV1 } from '@happier-dev/protocol/automations/automationTemplateStoredV1';
 import { serializeAutomationStoredDefinitionExecutionRecipeV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
 import { serializeAutomationStoredWorkflowDefinitionRecipeV2 } from '@happier-dev/protocol/automations/automationWorkflowRecipeV2';
@@ -32,12 +33,24 @@ describe('Account transition Automation recovery', () => {
         const evidence = { ...knownEvidence, retired: true };
         const triggerId = AutomationTriggerIdSchema.parse('trigger-a');
         const occurrenceKey = deriveAutomationOccurrenceKeyV1({ triggerId, evidence: knownEvidence });
-        const inventory: AccountEncryptionMigrateAutomationsInventoryResponse = { templates: [], runs: [{
+        const sealedInventory: AccountEncryptionMigrateAutomationsInventoryResponse = { templates: [], runs: [{
             runId: 'run-a', expectedRunRevision: 1, automationId: 'automation-a',
             occurrenceKey, triggerId,
-            summaryCiphertext: null, triggerEvidenceEnvelope: JSON.stringify({ t: 'plain', v: evidence }),
+            summaryCiphertext: null, triggerEvidenceEnvelope: JSON.stringify({ t: 'encrypted',
+                c: sealAccountScopedBlobCiphertext({ kind: 'automation_trigger_evidence', material: historicalMaterial,
+                    payload: knownEvidence, randomBytes: length => new Uint8Array(length).fill(9) }) }),
             occurrenceEvidenceEqualityTag: null, executionInputEnvelope: null, resultEnvelope: null,
             replyContextEnvelope: null, failureDetailEnvelope: null,
+        }] };
+        const produced = await buildAccountEncryptionMigrationAutomations({ accountId: 'account-a', fromMode: 'e2ee', toMode: 'plain',
+            inventory: sealedInventory, sourceCredentials: targetCredentials, targetCredentials: null,
+            sourceEncryption: null, targetEncryption: null });
+        if (produced.action !== 'migrate') throw new Error('Expected canonical migration producer output');
+        const stored = AutomationStoredContentEnvelopeV1Schema.parse(JSON.parse(produced.runs[0]!.triggerEvidenceEnvelope!));
+        if (stored.t !== 'plain') throw new Error('Expected canonical plain producer output');
+        const producedEvidence = AutomationOccurrenceEvidenceV1Schema.parse(stored.v);
+        const inventory = { ...sealedInventory, runs: [{ ...sealedInventory.runs[0]!,
+            triggerEvidenceEnvelope: JSON.stringify({ ...stored, v: { ...producedEvidence, retired: true } }),
         }] };
         const result = await buildAccountEncryptionMigrationAutomations({ accountId: 'account-a', fromMode: 'plain', toMode: 'e2ee',
             inventory, sourceCredentials: { token: 'source' }, targetCredentials,
@@ -96,9 +109,14 @@ describe('Account transition Automation recovery', () => {
                 commitTemplate: async (_id, _version, content) => { writes.push(content); },
             })).toEqual([{ automationId: 'automation-old', status: 'already_plain' }]);
         }
+        expect(await recoverAccountEncryptionMigrationAutomations({ templates: [row(JSON.stringify({ ...workflow, retired: true }))],
+            historicalMaterial, resolveSession: plainSession,
+            commitTemplate: async (_id, _version, next) => { writes.push(next); },
+        })).toEqual([{ automationId: 'automation-old', status: 'already_plain' }]);
+        expect(serializeAutomationStoredWorkflowDefinitionRecipeV2({ ...workflow, retired: true }).kind).toBe('contentInvalid');
         for (const content of [JSON.stringify({ ...definition, template: { t: 'encrypted', c: 'unavailable' } }),
             JSON.stringify({ ...workflow, workflow: { t: 'encrypted', c: 'unavailable' } }),
-            JSON.stringify({ ...workflow, unauthorized: true })]) {
+            JSON.stringify({ ...workflow, templateVersion: 'invalid' })]) {
             expect(await recoverAccountEncryptionMigrationAutomations({ templates: [row(content)], historicalMaterial,
                 resolveSession: plainSession, commitTemplate: async (_id, _version, next) => { writes.push(next); },
             })).toEqual([{ automationId: 'automation-old', status: 'locked' }]);

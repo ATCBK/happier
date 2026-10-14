@@ -9,6 +9,9 @@ const boundary = vi.hoisted(() => ({
     activeServerId: 'home-b',
     accountId: 'account-a',
     credentialsAccountId: 'account-b',
+    scopeKind: 'bound' as 'bound' | 'signed_out' | 'unavailable',
+    routeParams: { serverId: 'home-a', intent: 'email_password_connect', verificationToken: 'verify-home-a' } as Record<string, string>,
+    routerPush: vi.fn(),
     read: vi.fn(),
     createClient: vi.fn(),
     openAccountSecurityForHome: vi.fn(),
@@ -19,12 +22,8 @@ const boundary = vi.hoisted(() => ({
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({
-        params: {
-            serverId: 'home-a',
-            intent: 'email_password_connect',
-            verificationToken: 'verify-home-a',
-        },
-        router: { back: boundary.routerBack },
+        params: boundary.routeParams,
+        router: { back: boundary.routerBack, push: boundary.routerPush },
     }).module;
 });
 vi.mock('@/auth/context/AuthContext', () => ({
@@ -39,7 +38,7 @@ vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
 }));
 vi.mock('@/sync/domains/scope/useServerCredentialAccountScopes', () => ({
     useServerCredentialAccountScopeResolution: () => ({
-        kind: 'bound',
+        kind: boundary.scopeKind,
         scope: { serverId: 'home-a', accountId: boundary.accountId },
     }),
 }));
@@ -68,6 +67,9 @@ beforeEach(() => {
     boundary.activeServerId = 'home-b';
     boundary.accountId = 'account-a';
     boundary.credentialsAccountId = 'account-b';
+    boundary.scopeKind = 'bound';
+    boundary.routerPush.mockReset();
+    Object.assign(boundary.routeParams, { serverId: 'home-a', intent: 'email_password_connect', verificationToken: 'verify-home-a' });
     boundary.read.mockReset();
     boundary.read.mockResolvedValue({
         v: 1,
@@ -84,6 +86,18 @@ beforeEach(() => {
 });
 
 afterEach(() => standardCleanup());
+
+it('offers canonical Home recovery after credentials are revoked on an unqualified Security deep link', async () => {
+    for (const key of Object.keys(boundary.routeParams)) delete boundary.routeParams[key];
+    boundary.activeServerId = 'home-a';
+    boundary.scopeKind = 'signed_out';
+    const screen = await renderScreen(<AccountSecuritySettingsScreen />);
+    await vi.waitFor(() => expect(screen.findByTestId('settings-account-security-signed-out')).not.toBeNull());
+    expect(screen.findByTestId('settings-account-security-home-switching')).toBeNull();
+    expect(boundary.read).not.toHaveBeenCalled();
+    await screen.pressByTestIdAsync('settings-account-security-signed-out-action');
+    expect(boundary.routerPush).toHaveBeenCalledWith('/server');
+});
 
 it('does not mount Home B Account Security from a Home A security-notice link', async () => {
     const screen = await renderScreen(<AccountSecuritySettingsScreen />);

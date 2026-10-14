@@ -231,7 +231,7 @@ export const E2eePasswordRecoveryScreen = React.memo(function E2eePasswordRecove
             await destination.continueToHome(target.serverId);
         } catch (error) {
             if (!mountedRef.current || signal.aborted) return;
-            setProblem(describeEmailPasswordFailure(error));
+            setProblem(describeEmailPasswordFailure(error, { credentialField: 'accountKey' }));
         } finally {
             if (mountedRef.current && !signal.aborted) setBusy(false);
         }

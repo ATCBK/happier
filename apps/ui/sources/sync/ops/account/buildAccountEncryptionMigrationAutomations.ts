@@ -1,6 +1,6 @@
 import { AccountEncryptionMigrateAutomationsDirectiveSchema, type AccountEncryptionMigrateAutomationsDirective, type AccountEncryptionMigrateAutomationsInventoryResponse } from '@happier-dev/protocol/account/encryptionMigrate';
 import { AutomationStoredContentEnvelopeV1ReadSchema } from '@happier-dev/protocol/automations/automationStoredContentEnvelopeV1';
-import { AutomationOccurrenceEvidenceV1Schema, AutomationOccurrenceKeyV1Schema, deriveAutomationOccurrenceEvidenceEqualityTagV1 } from '@happier-dev/protocol/automations/automationOccurrenceV1';
+import { AutomationOccurrenceEvidenceV1ReadSchema, AutomationOccurrenceKeyV1Schema, deriveAutomationOccurrenceEvidenceEqualityTagV1 } from '@happier-dev/protocol/automations/automationOccurrenceV1';
 import { convertWorkflowRunAccountEncryptionV1 } from '@happier-dev/protocol/workflows/workflowRunAccountEncryptionV1';
 import { createAccountScopedCryptoMaterialSnapshotV1, deriveAutomationTriggerEvidenceEqualityKeyV1, openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext, type AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
@@ -217,7 +217,7 @@ export async function buildAccountEncryptionMigrationAutomations(params: Readonl
         let occurrenceEvidenceEqualityTag: string | null = null;
         if (row.triggerEvidenceEnvelope !== null && targetMaterial) {
             if (!row.automationId || !row.occurrenceKey) throw new Error('automation_occurrence_binding_unavailable');
-            const evidence = AutomationOccurrenceEvidenceV1Schema.parse(open(row.triggerEvidenceEnvelope, 'automation_trigger_evidence'));
+            const evidence = AutomationOccurrenceEvidenceV1ReadSchema.parse(open(row.triggerEvidenceEnvelope, 'automation_trigger_evidence'));
             const binding = { accountId: params.accountId, automationId: row.automationId,
                 occurrenceKey: AutomationOccurrenceKeyV1Schema.parse(row.occurrenceKey),
                 purposeSeparatedAccountKey: deriveAutomationTriggerEvidenceEqualityKeyV1({ material: targetMaterial.material }) };

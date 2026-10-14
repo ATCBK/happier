@@ -69,6 +69,7 @@ const COST_MODE_LABEL_KEYS = {
     auto: 'usage.auto',
     reported: 'usage.reported',
     estimated: 'usage.estimated',
+    api_equivalent: 'usage.board.page.factApiEquivalent',
 } as const satisfies Record<UsageCostMode, string>;
 
 /**

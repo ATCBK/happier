@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SavedSecretCatalogCorruptEntryV1, SavedSecretCatalogEntryV1 } from '@happier-dev/protocol';
+import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
+import { materializeSavedSecretResources } from '@/sync/engine/settings/materializeSavedSecretResources';
 
 import {
     applySavedSecretCatalogFailure,
@@ -8,6 +10,9 @@ import {
     applyAcknowledgedSavedSecretCatalogEntry,
     beginSavedSecretCatalogLoad,
     getSavedSecretCatalogSnapshot,
+    getMaterializedSavedSecret,
+    getMaterializedSavedSecrets,
+    getUsableSavedSecrets,
     invalidateSavedSecretCatalog,
     removeDeletedSavedSecretCatalogResource,
     resolveSavedSecretReference,
@@ -256,28 +261,48 @@ describe('savedSecretCatalogSnapshot', () => {
         });
     });
 
-    it('withdraws opened material at the start of every authorization refresh', () => {
+    it('keeps current opened material usable during an unchanged-revision refresh', async () => {
+        const entry = sharedEntry({ encryptionMode: 'plain' });
+        const materialized = await materializeSavedSecretResources({
+            resources: [{
+                resourceId: 'resource-a', encryptionMode: 'plain', entry,
+                storedContent: sealSavedSecretResourceStoredContentV1({ resourceId: 'resource-a', mode: 'plain',
+                    content: { v: 1, name: entry.name!, kind: 'apiKey', value: 'opened-value' } }),
+                recipientEnvelope: null,
+            }],
+            decryptDataKeyEnvelope: async () => null,
+        });
         applySavedSecretCatalogPage({
             scope,
-            entries: [sharedEntry()],
-            materializedSecrets: [{
-                id: 'happier:shared-secret:v1:resource-a',
-                name: 'Shared key',
-                kind: 'apiKey',
-                encryptedValue: { _isSecretValue: true, value: 'opened-value' },
-                createdAt: 1,
-                updatedAt: 1,
-            }],
+            ...materialized,
             observedAt: 10,
         });
 
+        const material = getMaterializedSavedSecrets(scope);
+        beginSavedSecretCatalogLoad(scope);
         beginSavedSecretCatalogLoad(scope);
 
         expect(getSavedSecretCatalogSnapshot(scope)).toMatchObject({
             status: 'refreshing',
-            materializedSecrets: [],
+            stale: false,
+            error: null,
+            materializedSecrets: material,
             data: [expect.objectContaining({ ref: 'happier:shared-secret:v1:resource-a' })],
         });
+        const ref = material[0]!.id;
+        expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'ready', secret: material[0], revision: 1 });
+        expect(getMaterializedSavedSecret(scope, ref)).toBe(material[0]);
+        expect(getMaterializedSavedSecrets(scope)).toBe(material);
+        expect(getUsableSavedSecrets(scope, [])).toEqual(material);
+        for (const otherScope of [{ ...scope, accountId: 'account-b' }, { ...scope, serverId: 'home-b' }]) {
+            expect(resolveSavedSecretReference(otherScope, [], ref).secret).toBeNull();
+            expect(getMaterializedSavedSecrets(otherScope)).toEqual([]);
+        }
+
+        applyAcknowledgedSavedSecretCatalogEntry(scope, sharedEntry({ revision: 2 }), true);
+        beginSavedSecretCatalogLoad(scope);
+        expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'temporarily_unavailable', revision: 2, secret: null });
+        expect(getMaterializedSavedSecrets(scope)).toEqual([]);
     });
 
     it('keeps unchanged entries referentially stable and replaces changed readiness', () => {
@@ -351,8 +376,9 @@ describe('savedSecretCatalogSnapshot', () => {
     });
 
     it.each([
-        ['refreshing', () => beginSavedSecretCatalogLoad(scope)],
         ['stale', () => invalidateSavedSecretCatalog(scope)],
+        ['failed refresh', () => applySavedSecretCatalogFailure({ scope, error: { kind: 'unreachable', retryable: true } })],
+        ['revoked', () => applySavedSecretCatalogFailure({ scope, error: { kind: 'unauthorized', retryable: false } })],
     ])('retains shared identity but fails closed while the catalog is %s', (_label, makeUnavailable) => {
         const ref = 'happier:shared-secret:v1:resource-a';
         applySavedSecretCatalogPage({
@@ -369,6 +395,7 @@ describe('savedSecretCatalogSnapshot', () => {
             observedAt: 10,
         });
         makeUnavailable();
+        beginSavedSecretCatalogLoad(scope);
 
         expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({
             kind: 'shared_resource',
@@ -376,6 +403,8 @@ describe('savedSecretCatalogSnapshot', () => {
             status: 'temporarily_unavailable',
             secret: null,
         });
+        expect(getMaterializedSavedSecrets(scope)).toEqual([]);
+        expect(getMaterializedSavedSecret(scope, ref)).toBeNull();
     });
 
     it('preserves terminal shared catalog status and does not cross Home scope', () => {

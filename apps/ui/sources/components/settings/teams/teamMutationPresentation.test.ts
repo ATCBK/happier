@@ -21,6 +21,13 @@ describe('teamReadFailureLabel', () => {
 });
 
 describe('teamMutationFailureLabel', () => {
+    it('distinguishes sign-in qualification from role permission for reads and mutations', () => {
+        const failure = { kind: 'forbidden' as const, retryable: false, code: 'team_authentication_required' };
+        expect(teamMutationFailureLabel(failure)).toBe('teams.errors.authenticationRequired');
+        expect(teamReadFailureLabel(failure)).toBe('teams.errors.authenticationRequired');
+        expect(teamMutationFailureLabel(failure, 'authentication_policy')).toBe('teams.authentication.policy.authenticationRequired');
+        expect(teamMutationFailureLabel({ ...failure, code: null })).toBe('teams.errors.forbidden');
+    });
     it('does not claim nothing changed when an Action outcome is unknown', () => {
         expect(teamMutationFailureLabel({ kind: 'outcome_unknown', retryable: true, code: null }))
             .toBe('teams.errors.outcomeUnknown');

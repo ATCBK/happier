@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -138,7 +139,7 @@ export function presentUseServiceAsHomeSheet(input: Readonly<{ serviceName: stri
             leading: <AccountServiceMark url={input.serviceUrl} size={36} />,
             title: t('homesJourneys.serviceAsHomeTitle', { service: input.serviceName }),
             subtitle: t(readViewportClass() === 'compact' ? 'homesJourneys.phone.serviceAsHomeLead' : 'homesJourneys.serviceAsHomeLead', { service: input.serviceName }),
-            dimensions: { width: 560 },
+            dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide },
             testID: 'use-service-as-home-sheet',
         },
     });

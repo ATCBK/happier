@@ -6,6 +6,7 @@ import { SecretKeyEntryForm } from '@/components/account/restore/SecretKeyEntryF
 import { Modal, type CustomModalInjectedProps, type IModal } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { t } from '@/text';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 type AccountRecoveryKeyEntryHost = Pick<IModal, 'show' | 'hide'>;
 
@@ -19,7 +20,7 @@ function AccountRecoveryKeyEntryModal(props: AccountRecoveryKeyEntryModalProps) 
         title: t('settingsAccount.secretKey'),
         testID: 'account-recovery-key-entry-modal',
         bodyScroll: 'auto' as const,
-        dimensions: { width: 420, maxHeightRatio: 0.9, size: 'dialog' as const },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.9, size: 'dialog' as const },
     }), []));
 
     return (

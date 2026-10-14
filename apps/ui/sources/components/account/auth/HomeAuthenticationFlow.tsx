@@ -44,6 +44,12 @@ export function HomeAuthenticationFlow(props: Readonly<{
     /** Mailbox this journey already proved, so the panel never asks for it a second time. */
     initialEmail?: string;
     signal?: AbortSignal;
+    /**
+     * The caller's own page already chose this single action. A method with a
+     * form opens it directly, and leaving the form leaves the flow, so the
+     * person is never asked to pick the same method twice.
+     */
+    openChosenAction?: boolean;
     onAuthenticated: (authenticatedHome: Readonly<{
         homeServerIdentityId: string;
         credentials: AuthCredentials;
@@ -55,8 +61,20 @@ export function HomeAuthenticationFlow(props: Readonly<{
 }>): React.ReactElement {
     const auth = useAuth();
     const router = useRouter();
-    const [keyRequest, setKeyRequest] = React.useState<WelcomeAuthenticationMethod | null>(null);
-    const [passwordRequest, setPasswordRequest] = React.useState<WelcomeAuthenticationMethod | null>(null);
+    const toRequest = ({ method, action, execution }: HomeAuthenticationAction): WelcomeAuthenticationMethod => ({
+        method,
+        action,
+        execution,
+        authority: { purpose: 'home', target: props.target },
+        intendedHome: props.target,
+    });
+    const chosenAction = props.openChosenAction && props.actions.length === 1 ? props.actions[0]! : null;
+    const [keyRequest, setKeyRequest] = React.useState<WelcomeAuthenticationMethod | null>(() => (
+        chosenAction?.execution.kind === 'key_entry' ? toRequest(chosenAction) : null
+    ));
+    const [passwordRequest, setPasswordRequest] = React.useState<WelcomeAuthenticationMethod | null>(() => (
+        chosenAction?.execution.kind === 'email_password' ? toRequest(chosenAction) : null
+    ));
     const [pendingActionId, setPendingActionId] = React.useState<string | null>(null);
     const inFlightRef = React.useRef(false);
     const abortRef = React.useRef(new AbortController());
@@ -84,6 +102,8 @@ export function HomeAuthenticationFlow(props: Readonly<{
         },
     }), [cancellation.signal, pendingActionId]);
 
+    const leave = () => { abortRef.current.abort(); props.onBack(); };
+
     if (arrival.state.kind !== 'idle') {
         const arrivalState = arrival.state;
         return <WelcomeActionList admission={admission}>
@@ -109,7 +129,7 @@ export function HomeAuthenticationFlow(props: Readonly<{
                 await props.onAuthenticated({ homeServerIdentityId: resolvedTarget.serverIdentityId, credentials });
             }} onSuccess={() => {}} />
             <WelcomeActionCard testID="home-auth-key-back" title={t('common.back')} iconName="arrow-left" escape
-                onPress={() => setKeyRequest(null)} />
+                onPress={() => chosenAction ? leave() : setKeyRequest(null)} />
         </WelcomeActionList>;
     }
 
@@ -160,24 +180,20 @@ export function HomeAuthenticationFlow(props: Readonly<{
                         },
                     });
                 }}
-                onBack={() => setPasswordRequest(null)}
+                onBack={() => chosenAction ? leave() : setPasswordRequest(null)}
             />
         </WelcomeActionList>;
     }
 
     return <WelcomeActionList admission={admission}>
-        {props.actions.map(({ method, action, execution }) => {
-            const request: WelcomeAuthenticationMethod = {
-                method,
-                action,
-                execution,
-                authority: { purpose: 'home', target: props.target },
-                intendedHome: props.target,
-            };
+        {props.actions.map((homeAction) => {
+            const { method, action, execution } = homeAction;
+            const request = toRequest(homeAction);
             const providerName = method.presentation?.displayName ?? getAuthProvider(method.id)?.displayName ?? method.id;
             const testID = `home-auth-${method.id}-${action.id}-${action.mode}`;
             const presentation = describeHomeAuthenticationAction({ execution, providerName });
-            return <WelcomeActionCard key={testID} testID={testID} title={presentation.title}
+            // A chosen action is the one thing this step is for.
+            return <WelcomeActionCard key={testID} testID={testID} title={presentation.title} primary={chosenAction !== null}
                 subtitle={presentation.description} iconName={presentation.iconName} accentColor={method.presentation?.connectButtonColor}
                 onPress={async () => {
                     if (execution.kind === 'key_entry') {

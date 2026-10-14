@@ -122,7 +122,7 @@ export function describeEmailPasswordFailure(
     context: Readonly<{
         homeLabel?: string;
         offline?: boolean;
-        credentialField?: 'password' | 'currentPassword';
+        credentialField?: 'password' | 'currentPassword' | 'accountKey';
     }> = {},
 ): EmailPasswordProblem {
     if (error instanceof Error && error.name === 'AbortError') {
@@ -212,6 +212,9 @@ export function describeEmailPasswordFailure(
         return { field: 'password', messageKey: 'settingsAccount.nativePassword.passwordRequirements' };
     }
     if (code === 'authentication_failed') {
+        if (context.credentialField === 'accountKey') {
+            return { field: 'form', messageKey: 'settingsAccount.nativePassword.accountVerificationFailed' };
+        }
         return { field: context.credentialField ?? 'password', messageKey: 'settingsAccount.nativePassword.signInFailed' };
     }
     // Only the transport's typed settlement establishes an unknown outcome.

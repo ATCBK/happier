@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
 
 import type { ProjectSourcesController } from '@/components/projects/sources/projectSourcesController';
@@ -33,7 +34,7 @@ export function showProjectSourceShareSheet(params: Readonly<{ controller: Proje
             title: t('shareSheet.documents.shareTitle', { name: params.name }),
             scrollHost: 'overlay',
             bodyScroll: 'none',
-            dimensions: { width: 560, maxHeightRatio: 0.92, size: 'md' },
+            dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92, size: 'md' },
         },
         closeOnBackdrop: true,
     });
