@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { createPlainSessionOwnerMetadataEnvelopeV1, sealSessionOwnerMetadataEnvelopeV1,
+  SessionOwnerMetadataV1Schema, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
+import { encodeBase64, encryptLegacy } from '@/api/encryption';
+import type { StoredCredentials } from '@/persistence';
 
 import type { RawSessionListRow } from '@/session/transport/http/sessionsHttp';
 
@@ -55,6 +59,26 @@ describe('resolveMemoryInventoryScopes', () => {
 });
 
 describe('refreshMemoryInventoryOnce', () => {
+  it.each(['plain', 'e2ee'] as const)('reads layout-one locality without opening shared presentation metadata (%s)', mode => {
+    const secret = new Uint8Array(32).fill(19);
+    const credentials: StoredCredentials = { token: 'test', encryption: mode === 'plain' ? null : { type: 'legacy', secret } };
+    const ownerMetadata = SessionOwnerMetadataV1Schema.parse({ v: 1, workspace: { machineId: 'here', path: '/workspace' } });
+    const shared = projectSessionSharedMetadataV1({ metadata: {} });
+    const metadata = mode === 'plain' ? JSON.stringify(shared) : encodeBase64(encryptLegacy(shared, secret));
+    const session = row('local', { encryptionMode: mode, metadataLayoutVersion: 1, dataEncryptionKey: null, share: null,
+      ownerMetadata: mode === 'plain' ? createPlainSessionOwnerMetadataEnvelopeV1(ownerMetadata)
+        : sealSessionOwnerMetadataEnvelopeV1({ ownerMetadata, material: { type: 'legacy', secret }, randomBytes: n => new Uint8Array(n).fill(7) }),
+    });
+    let sharedReads = 0;
+    Object.defineProperty(session, 'metadata', { enumerable: true, get() { sharedReads++; return metadata; } });
+    const input = { session, credentials, machineId: 'here', accountEncryptionMode: mode };
+    expect(isMemorySessionOnMachine(input)).toBe(true);
+    expect(sharedReads).toBe(0);
+    expect(isMemorySessionOnMachine({ ...input, machineId: 'elsewhere' })).toBe(false);
+    expect(isMemorySessionOnMachine({ ...input, session: { ...session, ownerMetadata: null, machineId: 'here' } })).toBe(false);
+    expect(isMemorySessionOnMachine({ ...input, accountEncryptionMode: mode === 'plain' ? 'e2ee' : 'plain' })).toBe(false);
+  });
+
   it('observes revisions of already-seen sessions without re-admitting them', async () => {
     const { fetchSessionsPage } = createFetcher({ active: [{ sessions: [row('seen', { seq: 8, updatedAt: 12 })],
       nextCursor: null, hasNext: false }] });

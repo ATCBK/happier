@@ -2,7 +2,8 @@ import type { MemorySettingsV1 } from '@happier-dev/protocol';
 
 import type { RawSessionListRow } from '@/session/transport/http/sessionsHttp';
 import type { StoredCredentials } from '@/persistence';
-import { readSessionOwnerLocality, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
+import { readSessionOwnerLocality, tryDecryptSessionOwnerMetadata, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
+import { SESSION_METADATA_LAYOUT_VERSION_V1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
 import { selectSessionsForBackfill } from './selectSessionsForBackfill';
 
@@ -13,9 +14,14 @@ export function isMemorySessionOnMachine(params: Readonly<{
   credentials: StoredCredentials;
   accountEncryptionMode: 'plain' | 'e2ee';
 }>): boolean {
-  const metadata = tryDecryptSessionOwnerMetadataView({
+  const input = {
     credentials: params.credentials, accountEncryptionMode: params.accountEncryptionMode, rawSession: params.session,
-  });
+  };
+  // Machine locality is owner-private; the shared presentation envelope is unrelated.
+  if (params.session.metadataLayoutVersion === SESSION_METADATA_LAYOUT_VERSION_V1) {
+    return tryDecryptSessionOwnerMetadata(input)?.workspace?.machineId === params.machineId;
+  }
+  const metadata = tryDecryptSessionOwnerMetadataView(input);
   return readSessionOwnerLocality({ metadata, rawSession: params.session })?.machineId === params.machineId;
 }
 
