@@ -23,7 +23,7 @@ For a few operations, use public `SelectionTiles variant="action"` with `onPress
 
 ## Cross-plugin integrations
 
-For broader public composition patterns, read `node_modules/@happier-dev/plugin-sdk/examples/public-authoring/` and `node_modules/@happier-dev/plugin-sdk/examples/advanced-package-root/`. Use only contribution and service families marked available in the capability matrix; an example demonstrates public package boundaries but does not create product availability. This beginner scaffold does not declare a feature integration.
+For broader public composition patterns, use the maintained repository examples linked from the [public quickstart](https://docs.happier.dev/plugins/quickstart), including public-authoring and advanced-package-root. Installed copies at `node_modules/@happier-dev/plugin-sdk/examples/public-authoring/` and `node_modules/@happier-dev/plugin-sdk/examples/advanced-package-root/` are release-owned snapshots. Use only contribution and service families marked available in the capability matrix; an example demonstrates public package boundaries but does not create product availability. This beginner scaffold does not declare a feature integration.
 
 ## Normal author loop
 
@@ -35,7 +35,7 @@ Exception — dependency refresh: that cold-start preparation materializes an au
 When deliberately preparing from an approved registry origin, pass `--sdk-registry <origin>` to `happier plugins dev`, `happier plugins dev install .`, or `happier plugins pack .`.
 3. Make the smallest source change, then use `happier plugins dev typecheck .`, `happier plugins dev build .`, and `happier plugins test .` for focused checks. Validate through the managed source-development lifecycle; do not create or install a local release archive as an additional feature-QA gate.
 4. Use `happier plugins doctor .` to diagnose an import or top-level evaluation issue; it evaluates once and does not prove repeated evaluation is pure.
-5. Use the installed `node_modules/@happier-dev/plugin-sdk/examples/` as public patterns, then adapt the smallest matching example through documented SDK exports. For a custom persistent Session Agent, start with `happier plugins create <name> --template session-agent`; `node_modules/@happier-dev/plugin-sdk/examples/session-agent/` remains the richer deterministic lifecycle reference. Use `node_modules/@happier-dev/plugin-sdk/examples/advanced-package-root/` only when the same package also needs External Sessions, a Provider, Connected Accounts, Resources, or background work.
+5. Adapt the smallest maintained repository example through documented SDK exports. Installed copies in `node_modules/@happier-dev/plugin-sdk/examples/` are release snapshots. For a custom persistent Session Agent, start with `happier plugins create <name> --template session-agent`; the maintained session-agent example is the richer deterministic lifecycle reference. Use advanced-package-root only when the same package also needs External Sessions, a Provider, Connected Accounts, Resources, or background work.
 
 The daemon owns prepared-change custody and activation. A failed in-process replacement keeps the incumbent plugin occurrence active only while that daemon lives. After a daemon restart, Happier rebuilds the current source; if it cannot build and activate, the development plugin is unavailable until corrected. Fix the source and let the normal development cycle retry; do not start another watcher or loader.
 
