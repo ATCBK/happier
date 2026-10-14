@@ -188,10 +188,11 @@ describe('createActionExecutor (session control)', () => {
       const context = { surface, authority: 'present_user' as const, actionCaller };
       for (const showToolCalls of [false, null]) {
         const input = { sessionId: 's1', showToolCalls };
-        expect(await executor.prepare('session.view.toolCalls.set', input, context))
-          .toMatchObject({ kind: 'ready' });
+        const prepared = await executor.prepare('session.view.toolCalls.set', input, context);
+        expect(prepared, JSON.stringify({ surface, prepared }))
+          .toMatchObject({ kind: 'settled', result: { ok: false, errorCode: 'action_disabled' } });
         expect(await executor.execute('session.view.toolCalls.set', input, context))
-          .toEqual({ ok: true, result: { ok: true } });
+          .toMatchObject({ ok: false, errorCode: 'action_disabled' });
       }
     }
     expect(await executor.execute('session.bot.set', { sessionId: 's1', bot: { kind: 'bot', role: 'admin' } }, { surface: 'cli' }))
