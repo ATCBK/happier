@@ -2,6 +2,7 @@ import { deriveConnectedServiceRunMaterializeToken } from './connectedServices/r
 import { classifyActionTransportFailure } from '@/api/client/classifyServerEndpointError';
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 import { armDeadlineTimer } from '@happier-dev/protocol/common/deadlineTimer';
+import { Agent } from 'undici';
 
 export type DaemonControlRequestOptions = {
   timeoutMs?: number | null;
@@ -15,6 +16,30 @@ type DaemonPostOptions = DaemonControlRequestOptions & {
   authScope?: 'daemon-control' | 'connected-service-run-materialize';
   authTokenOverride?: string;
 };
+
+/** The containing operation owns the deadline, including human approval waits. */
+export async function readDaemonControlHttpResponse(params: Readonly<{
+  httpPort: number;
+  path: string;
+  body: unknown;
+  headers: Readonly<Record<string, string>>;
+  signal?: AbortSignal;
+}>): Promise<Readonly<{ ok: boolean; status: number; body: string }>> {
+  params.signal?.throwIfAborted();
+  const dispatcher = new Agent({ connect: { timeout: 0 }, headersTimeout: 0, bodyTimeout: 0 });
+  try {
+    const options = {
+      method: 'POST', headers: params.headers, body: JSON.stringify(params.body),
+    };
+    // Node fetch consumes the package-owned dispatcher and the actual caller
+    // signal even when ambient Node/DOM declarations come from different graphs.
+    Object.assign(options, { dispatcher, ...(params.signal ? { signal: params.signal } : {}) });
+    const response = await fetch(`http://127.0.0.1:${params.httpPort}${params.path}`, options);
+    return { ok: response.ok, status: response.status, body: await response.text() };
+  } finally {
+    await dispatcher.close();
+  }
+}
 
 function positiveTimeout(raw: string | number | undefined, fallback: number, max: number): number {
   const parsed = typeof raw === 'number' ? raw : raw?.trim() ? Number.parseInt(raw, 10) : Number.NaN;
@@ -33,6 +58,10 @@ async function resolveTimeout(path: string, options: DaemonControlRequestOptions
   // Catalog preparation follows its request lifetime. A loaded daemon may
   // take longer than the generic control wait without being unavailable.
   if (path === '/plugins/catalog/read') return null;
+  // Applied Account/currentness reads serve the containing Session or Run
+  // operation. A generic control wait is not evidence of retired authority.
+  if (path === '/connected-service-run/applied-parent-selection'
+    || path === '/connected-service-run/generation-current') return null;
   if (path === '/spawn-session') {
     const { DEFAULT_SESSION_WEBHOOK_TIMEOUT_MS } = await import('@happier-dev/protocol');
     const raw = process.env.HAPPIER_DAEMON_SPAWN_HTTP_TIMEOUT;
@@ -71,14 +100,13 @@ export async function daemonPost(path: string, body?: unknown, options: DaemonPo
     const signal = options.signal && timeoutSignal ? AbortSignal.any([options.signal, timeoutSignal]) : options.signal ?? timeoutSignal ?? undefined;
     signal?.throwIfAborted();
     requestIssued = true;
-    const response = await fetch(`http://127.0.0.1:${state.httpPort}${path}`, {
-      method: 'POST', headers: {
+    const response = await readDaemonControlHttpResponse({ httpPort: state.httpPort, path, body: body || {}, headers: {
         ...buildDaemonControlHttpHeaders(authToken),
         ...(options.authorityCeiling ? { [AUTHORITY_CEILING_HEADER_V1]: options.authorityCeiling } : {}),
-      }, body: JSON.stringify(body || {}),
+      },
       ...(signal ? { signal } : {}),
     });
-    const raw = await response.text();
+    const raw = response.body;
     let parsed: unknown = null;
     if (raw.trim()) {
       try { parsed = JSON.parse(raw); } catch { parsed = raw; }
