@@ -1,13 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import type { MachineGuardLadderV1 } from '@happier-dev/protocol/machines/guard/guardViewV1';
+import { MachineGuardActivityListV1Schema } from '@happier-dev/protocol/machines/guard/activityV1';
+import { PileApplyResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
 
-import { buildResourceProposalNarrowedInput, describeResourceProposalRows, deriveResourceProposalDisplay, initialResourceProposalSelection, resourceProposalApprovedKeys, resolveResourceProposalOutcomes, selectGuardKeptForProposal } from './resourceProposalPresentation';
+import { buildResourceProposalNarrowedInput, describeResourceProposalRows, deriveResourceProposalDisplay, initialResourceProposalSelection, resourceProposalApprovedKeys, resolveResourceProposalOutcomes, selectGuardKeptForProposal, deriveResourceProposalTrashReceipt, resourceProposalDisplayWithTrashReceipt } from './resourceProposalPresentation';
 import { readResourceProposalApproval } from './readResourceProposalApproval';
 import { getActionSpec, type ApprovalRequest } from '@happier-dev/protocol';
 
 type Excluded = MachineGuardLadderV1['excluded'][number];
 const kept = (ref: string, processRef: string, reason: Excluded['reason'] = 'working'): Excluded => ({
     ref, processRef, kind: 'session', label: `Session ${ref}`, reason, footprintBytes: 1,
+});
+
+describe('correlated Trash receipts', () => {
+    it('adds later measured emptying to settled partial emptyAfter without requiring expired original Activity', () => {
+        const result = PileApplyResultV1Schema.parse({ batchId: 'batch', mode: 'trash', inTrashBytes: 2, freedBytes: 8,
+            outcomes: [{ itemId: 'first', status: 'moved' }, { itemId: 'second', status: 'moved' }], trashEntryIds: ['remaining'] });
+        const activity = MachineGuardActivityListV1Schema.parse({ entries: [{ v: 1, id: 'remaining-trash_emptied', at: 1,
+            kind: 'trash_emptied', rule: 'approved_proposal', outcome: 'done', freedBytes: 2, attribution: { kind: 'unknown' } }],
+            counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 2 });
+        const receipt = deriveResourceProposalTrashReceipt(result, [], activity.entries);
+        expect(resourceProposalDisplayWithTrashReceipt(result, receipt)).toEqual({ kind: 'emptied', count: 2, freedBytes: 10 });
+        expect(deriveResourceProposalTrashReceipt(result, [], [])).toMatchObject({ deletedCount: 1, unknownCount: 1, freedBytes: 8 });
+    });
 });
 
 describe('selectGuardKeptForProposal', () => {
@@ -44,7 +59,7 @@ describe('process set proposals', () => {
                 : { ended: [{ ref: 'process-2', freedBytes: 100 }], skipped: [{ ref: 'process-1', reason: 'owner_returned' }] } } } as ApprovalRequest;
         const approved = resourceProposalApprovedKeys(approval, model);
         expect([...approved]).toEqual(['process-2']);
-        const display = deriveResourceProposalDisplay(approval, model, check, null);
+        const display = deriveResourceProposalDisplay(approval, model, check);
         expect(display.kind).toBe('stopped');
         expect(resolveResourceProposalOutcomes(display, approved)?.get('process-2')).toEqual({ status: 'done', reasonCode: null });
         if (actionId === 'machines.processes.leftBehind.cleanUp') {

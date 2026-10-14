@@ -29,6 +29,7 @@ import { t } from '@/text';
 import type { TeamSectionContext } from '@/components/settings/teams/teamSectionContext';
 
 import type { HomeAdministrationContext } from './homeAdministrationContext';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 export type HomeInvitePeopleDialogProps = CustomModalInjectedProps & Readonly<{
     serverId: string;
@@ -96,7 +97,7 @@ function homeInvitePeopleChrome(text: Readonly<{ title: string; subtitle: string
         kind: 'card',
         title: text.title,
         subtitle: text.subtitle,
-        dimensions: { width: 480 },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default },
         phonePresentation: 'sheet',
         testID: 'home-invite-people-dialog',
     };

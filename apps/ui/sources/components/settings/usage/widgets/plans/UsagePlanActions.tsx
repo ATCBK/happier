@@ -82,7 +82,7 @@ export function UsageBillingButton(props: Readonly<{ account: UsagePlanAccount; 
     } catch { if (!controller.signal.aborted && lifetime.isCurrent()) setState('failed'); }
     finally { request.dispose(); if (pending.current === request) pending.current = null; }
   };
-  return <View>
+  return <View style={priceStyles.billing}>
     <RoundButton size="small" display="secondary" testID={props.testID} title={t('usage.board.plans.billingOpen')}
       loading={state === 'pending'} disabled={!machineId || !destinationKnown || state === 'pending'} onPress={() => { void open(); }} />
     {!machineId || !destinationKnown || state === 'failed' ? <Text style={priceStyles.note}>{t('usage.board.plans.billingUnavailable')}</Text> : null}
@@ -198,6 +198,8 @@ function SubscriptionPriceFields(props: React.ComponentProps<typeof UsageSubscri
 
 const priceStyles = StyleSheet.create((theme) => ({
   root: { gap: theme.space.s6 },
+  // A small secondary button hugs its label at the leading edge; its reason sits beneath it.
+  billing: { gap: theme.space.s6, alignItems: 'flex-start' },
   line: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-end', gap: theme.space.s12 },
   amount: { width: 160 },
   currency: { width: 96 },

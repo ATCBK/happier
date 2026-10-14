@@ -120,6 +120,14 @@ describe('Plans projection of admitted allowance reads', () => {
     expect(retained.accounts[0]).toMatchObject({ stale: true, state: { status: 'stale', errorCode: 'snapshot_read_failed' } });
     expect(retained.accounts[0]?.headline?.remainingFraction).toBe(0.6);
   });
+  it('gives an account that was never read no observation instant instead of the epoch placeholder', () => {
+    const read = quotaRead({ accountId: 'unread', meters: [] });
+    const neverRead = ConnectedServiceQuotaGetResultV1Schema.parse({
+      ...read,
+      current: { ...read.current, state: 'not_loaded', confidence: 'unknown', observedAtMs: 0, fetchedAtMs: 0 },
+    });
+    expect(projectUsagePlans([neverRead], NOW).accounts[0]).toMatchObject({ observedAtMs: null });
+  });
   it('keeps each Account fact unique while showing every qualified overlapping pool and standalone account', () => {
     const reads = ['work', 'personal', 'standalone'].map(accountId => quotaRead({ accountId, meters: [] }));
     const pools = [

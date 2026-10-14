@@ -41,7 +41,8 @@ function appendSafeSupportDetail(values: Set<string>, code: string | null | unde
  * Projects service-specific conflicts, availability and descriptor diagnostics.
  * Registry read failures belong to the page notice, never to each service.
  *
- * The primary row consumes only bounded state and read-diagnostic copy.
+ * The primary row is one message, the highest-priority fact, and consumes only bounded state and
+ * read-diagnostic copy.
  * The support disclosure contains the same bounded product-copy
  * projection, never boundary text.
  */
@@ -76,7 +77,9 @@ export function presentConnectedServiceIndexDiagnostics(params: Readonly<{
     appendSafeSupportDetail(details, reason);
   }
   return {
-    primary: [...primary].filter(Boolean).join(' · ') || null,
+    // One message per service: the first fact that needs the user (they are added in priority order).
+    // Every distinct fact stays in the support disclosure.
+    primary: [...primary].find(Boolean) ?? null,
     supportDetails: details.size > 0 ? [...details].join('\n') : null,
   };
 }

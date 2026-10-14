@@ -144,7 +144,11 @@ function getActionSettingsEntryStatusText(
     });
     return (
         listActionSettingsEntryStatusParts(statusSummary)
-            .map((part) => t(part.labelKey, { partial: part.partial }))
+            .map((part) => part.labelKey === 'settingsActions.status.allOff'
+                || part.labelKey === 'settingsActions.status.destructive'
+                || part.labelKey === 'settingsActions.status.external'
+                ? t(part.labelKey)
+                : t(part.labelKey, { partial: part.partial }))
             .join(' · ')
     );
 }
@@ -160,7 +164,6 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
     const memorySearchEnabled = useFeatureEnabled('memory.search');
     const voiceEnabled = useFeatureEnabled('voice');
     const sessionHandoffEnabled = useFeatureEnabled('sessions.handoff');
-    const mcpServersEnabled = useFeatureEnabled('mcp.servers');
     // Contributed actions are machine-local daemon declarations. The shared controller may
     // initialize one verified online machine, but host actions remain account-wide.
     const administrationTargetSelection = useMachineAdministrationTargetSelection(
@@ -194,9 +197,8 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
         memorySearchEnabled,
         voiceEnabled,
         sessionHandoffEnabled,
-        mcpServersEnabled,
         voiceShareDeviceInventory: voice?.privacy?.shareDeviceInventory !== false,
-    }), [executionRunsEnabled, memorySearchEnabled, voice?.privacy?.shareDeviceInventory, voiceEnabled, sessionHandoffEnabled, mcpServersEnabled]);
+    }), [executionRunsEnabled, memorySearchEnabled, voice?.privacy?.shareDeviceInventory, voiceEnabled, sessionHandoffEnabled]);
 
     const entries = React.useMemo(() => buildActionSettingsEntries({
         query: searchQuery,

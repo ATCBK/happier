@@ -1,3 +1,4 @@
+import { wasConnectedServiceQuotaObserved } from '@happier-dev/protocol/connect/quotaObservationTime';
 import type { ConnectedServiceQuotaGetResultV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import {
   deriveProviderAccountUsageEarlierWindowCurves,
@@ -240,7 +241,7 @@ export function projectUsagePlans(
       windows,
       headline: pickHeadline(windows),
       stale: stale || state.status === 'stale' || state.status === 'error',
-      observedAtMs: snapshot?.observedAtMs ?? null,
+      observedAtMs: snapshot && wasConnectedServiceQuotaObserved(snapshot) ? snapshot.observedAtMs : null,
       subscription: snapshot?.subscription ?? null,
       prices: projectProviderAccountSubscriptionMonetaryFacts({ subscription: snapshot?.subscription, nowMs, tier: snapshot?.planLabel }),
       recoveryCredits: snapshot?.recoveryCredits ?? null,

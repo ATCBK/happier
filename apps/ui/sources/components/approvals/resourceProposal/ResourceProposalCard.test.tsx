@@ -25,6 +25,8 @@ import type {
   PileApplyResultV1,
   PileReviewV1,
 } from '@happier-dev/protocol/storage/storageV1';
+import { MachineStorageCategoryListResultV1Schema, PileApplyResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
+import { MachineGuardActivityListV1Schema } from '@happier-dev/protocol/machines/guard/activityV1';
 import tweetnacl from 'tweetnacl';
 import { createMachineGuardViewFixture } from '@/sync/domains/machines/guard/guardViewFixtures';
 
@@ -81,7 +83,7 @@ vi.mock('expo-router', async () => {
 });
 vi.mock('@/text', async () => {
   const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-  return createTextModuleMock({ translate: (key) => key });
+  return createTextModuleMock();
 });
 vi.mock('@/components/ui/text/Text', () => ({
   Text: (props: any) => React.createElement('Text', props, props.children),
@@ -140,6 +142,7 @@ const size = (bytes: number) => ({
 let homeId: string;
 let webLocks: ReturnType<typeof installWebLockManagerMock> | undefined;
 let checkExpect: (itemId: string) => string;
+let uiMovedItems: string[];
 
 function signed(request: ApprovalRequestV2): ApprovalRequestV2 {
   const origin = request.executionOriginV1;
@@ -252,8 +255,8 @@ const calls = (method: string) =>
     .map(([call]) => call)
     .filter((call) => call.method === method);
 
-async function render(request: ApprovalRequestV2) {
-  await seed(request);
+async function render(request: ApprovalRequestV2, seedFirst = true) {
+  if (seedFirst) await seed(request);
   return renderWithSessionTranscriptSource(
     <ApprovalPromptCard
       artifact={{ id: 'approval-1', header: { title: null, serverId: homeId } }}
@@ -324,11 +327,13 @@ describe('resource proposal card', () => {
       machineListStatusByServerId: { [homeId]: 'idle' },
     });
     checkExpect = (itemId) => `claimed-${itemId}`;
+    uiMovedItems = [];
     daemonRpc.mockReset();
     daemonRpc.mockImplementation(async (call) => {
       const payload = (call.payload ?? {}) as {
         refs?: ReadonlyArray<{ itemId: string }>;
         items?: unknown[];
+        entryIds?: string[];
       };
       switch (call.method) {
         case RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK: {
@@ -352,15 +357,27 @@ describe('resource proposal card', () => {
           return { revision: 2, declinedCount: payload.items?.length ?? 0 };
         case RPC_METHODS.DAEMON_STORAGE_TRASH_MOVE: {
           const items = (payload.items ?? []) as Array<{ ref: { itemId: string } }>;
+          uiMovedItems = items.map(item => item.ref.itemId);
           return { batchId: 'batch-ui', mode: 'trash', inTrashBytes: items.length * GB, freedBytes: 0,
+            trashEntryIds: items.map(item => `entry-ui-${item.ref.itemId}`),
             outcomes: items.map((item) => ({ itemId: item.ref.itemId, status: 'moved' })) };
         }
         case RPC_METHODS.MACHINES_PROCESSES_START_AGAIN:
           return { status: 'started' };
         case RPC_METHODS.MACHINES_GUARD_GET:
           return createMachineGuardViewFixture();
+        case RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST:
+          return MachineGuardActivityListV1Schema.parse({ entries: [], counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 1 });
+        case RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST:
+          return MachineStorageCategoryListResultV1Schema.parse({ revision: 1, sizedAt: 1, categoryId: 'trash', items: [],
+            trashEntries: [...ids.slice(0, 5).map(itemId => ({ entryId: `entry-${itemId}`, batchId: 'batch-1', volumeId: 'disk',
+              originalPath: ref(itemId).path, title: itemId, size: size(GB), movedAt: 1,
+              movedBy: { accountId: 'account-1', kind: 'agent' }, emptiesAt: null, restorable: true })),
+              ...uiMovedItems.map(itemId => ({ entryId: `entry-ui-${itemId}`, batchId: 'batch-ui', volumeId: 'disk',
+                originalPath: ref(itemId).path, title: itemId, size: size(GB), movedAt: 1,
+                movedBy: { accountId: 'account-1', kind: 'person' }, emptiesAt: null, restorable: true }))] });
         case RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE:
-          return { outcomes: [{ entryId: 'entry-old-wt', status: 'restored' }] };
+          return { outcomes: (payload.entryIds ?? []).map(entryId => ({ entryId, status: 'restored' })) };
         case RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY:
           return {
             outcomes: ids
@@ -513,7 +530,115 @@ describe('resource proposal card', () => {
     );
     expect(
       calls(RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY)[0]!.payload,
-    ).toMatchObject({ machineId: MACHINE, batchId: 'batch-1' });
+    ).toMatchObject({ machineId: MACHINE, entryIds: ids.slice(0, 5).map(itemId => `entry-${itemId}`) });
+  });
+
+  it.each(['emptied', 'restored', 'mixed', 'mixed_closed', 'expired', 'older', 'page_failure', 'activity_failure'] as const)(
+    're-derives the %s receipt on remount from correlated Trash and Activity only', async (state) => {
+      const entryIds = ids.slice(0, 5).map(itemId => `entry-${itemId}`);
+      const result = PileApplyResultV1Schema.parse({ batchId: 'batch-remount', mode: 'trash', inTrashBytes: 5 * GB, freedBytes: 0,
+        outcomes: ids.slice(0, 5).map(itemId => ({ itemId, status: 'moved' })),
+        ...(state === 'older' ? {} : { trashEntryIds: entryIds }) });
+      const request = proposal({ status: 'executed', updatedAtMs: 3,
+        decision: { kind: 'approve', decidedAtMs: 2, authority: 'present_user' },
+        execution: { executedAtMs: 3, ok: true, result } });
+      const boundary = daemonRpc.getMockImplementation()!;
+      daemonRpc.mockImplementation(async call => {
+        if (call.method === RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST) {
+          const cursor = (call.payload as { cursor?: string }).cursor;
+          if (state === 'page_failure' && cursor) throw new Error('Second page unavailable');
+          const remaining = (state === 'mixed' || state === 'page_failure') && cursor ? [entryIds[4]!] : [];
+          return MachineStorageCategoryListResultV1Schema.parse({ revision: 1, sizedAt: 1, categoryId: 'trash', items: [],
+            ...(!cursor && (state === 'mixed' || state === 'page_failure') ? { nextCursor: 'page-2' } : {}),
+            trashEntries: remaining.map(entryId => ({ entryId, batchId: result.batchId, volumeId: 'disk',
+              originalPath: '/cache/current', title: 'Cache', size: size(GB), movedAt: 1,
+              movedBy: { accountId: 'account-1', kind: 'agent' }, emptiesAt: null, restorable: true })) });
+        }
+        if (call.method === RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST) {
+          if (state === 'activity_failure') throw new Error('Activity unavailable');
+          const deleted = state === 'emptied' ? entryIds : state === 'mixed' ? entryIds.slice(0, 2)
+            : state === 'mixed_closed' ? entryIds.slice(0, 3) : [];
+          const restored = state === 'restored' ? entryIds : state === 'mixed' ? [entryIds[2]!]
+            : state === 'mixed_closed' ? entryIds.slice(3) : [];
+          return MachineGuardActivityListV1Schema.parse({ entries: [
+            ...deleted.map(entryId => ({ v: 1, id: `${entryId}-trash_emptied`, kind: 'trash_emptied', at: 4,
+              rule: 'approved_proposal', outcome: 'done', attribution: { kind: 'unknown' }, freedBytes: GB / 2 })),
+            ...restored.map(entryId => ({ v: 1, id: `${entryId}-trash_moved`, kind: 'trash_moved', at: 1, undoneAt: 4,
+              rule: 'approved_proposal', outcome: 'done', attribution: { kind: 'unknown' } })),
+            { v: 1, id: 'unrelated-trash_emptied', kind: 'trash_emptied', at: 4, freedBytes: 99 * GB,
+              rule: 'approved_proposal', outcome: 'done', attribution: { kind: 'unknown' } },
+          ], counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 5 });
+        }
+        return boundary(call);
+      });
+      // Each mount gets the same durable approval, with no local follow-up state.
+      const first = await render(request);
+      await vi.waitFor(() => expect(calls(RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST)).toHaveLength(1));
+      await first.unmount();
+      const screen = await render(request, false);
+      await vi.waitFor(() => expect(calls(RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST)).toHaveLength(2));
+      if (state === 'emptied') {
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('machineStorage.pile.freed(amount=2.5 GB)'));
+        expect(screen.getTextContent()).not.toContain('machineStorage.pile.inTrash');
+      } else if (state === 'restored') {
+        await vi.waitFor(() => expect(screen.findByTestId('resource-proposal-restored')).toBeTruthy());
+      } else if (state === 'mixed') {
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('machineStorage.pile.inTrash(count=1)'));
+        expect(screen.getTextContent()).toContain('resourceProposal.receiptFreed(count=2,amount=1 GB)');
+        expect(screen.getTextContent()).toContain('resourceProposal.receiptRestored(count=1)');
+        expect(screen.getTextContent()).toContain('resourceProposal.receiptUnknown(count=1)');
+        await screen.pressByTestIdAsync('machine-storage-pile-undo');
+        expect(calls(RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE)[0]?.payload).toMatchObject({ entryIds: [entryIds[4]] });
+        expect(calls(RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE)[0]?.payload).not.toHaveProperty('batchId');
+      } else if (state === 'mixed_closed') {
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('resourceProposal.receiptFreed(count=3,amount=1.5 GB)'));
+        expect(screen.getTextContent()).toContain('resourceProposal.receiptRestored(count=2)');
+        expect(screen.getTextContent()).not.toContain('machineStorage.pile.inTrash');
+        expect(screen.findByTestId('resource-proposal-receipt-unavailable')).toBeNull();
+      } else {
+        await vi.waitFor(() => expect(screen.findByTestId('resource-proposal-receipt-unavailable')).toBeTruthy());
+        expect(screen.getTextContent()).not.toContain('machineStorage.pile.freed');
+        expect(screen.getTextContent()).not.toContain('machineStorage.pile.inTrash');
+      }
+      if (state !== 'mixed') {
+        expect(screen.findByTestId('machine-storage-pile-undo')).toBeNull();
+        expect(screen.findByTestId('machine-storage-pile-empty')).toBeNull();
+      }
+      expect(calls(RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST)[0]?.payload).toMatchObject({ range: '30d', filter: 'all' });
+    },
+  );
+
+  it('keeps partial Empty and Restore outcomes scoped to the remaining entries with only real freed bytes', async () => {
+    const entryIds = ['first', 'second', 'third'];
+    const result = PileApplyResultV1Schema.parse({ batchId: 'batch-partial', mode: 'trash', inTrashBytes: GB, freedBytes: 0, trashEntryIds: entryIds,
+      outcomes: ids.slice(0, 3).map(itemId => ({ itemId, status: 'moved' })) });
+    const boundary = daemonRpc.getMockImplementation()!;
+    daemonRpc.mockImplementation(async call => {
+      if (call.method === RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST) return MachineStorageCategoryListResultV1Schema.parse({
+        revision: 1, sizedAt: 1, categoryId: 'trash', items: [], trashEntries: entryIds.map(entryId => ({ entryId,
+          batchId: result.batchId, volumeId: 'disk', originalPath: `/cache/${entryId}`, title: entryId, size: size(GB),
+          movedAt: 1, movedBy: { accountId: 'account-1', kind: 'agent' }, emptiesAt: null, restorable: true })) });
+      if (call.method === RPC_METHODS.DAEMON_STORAGE_TRASH_EMPTY) return { freedBytes: GB / 2, outcomes: [
+        { entryId: 'first', status: 'deleted' }, { entryId: 'second', status: 'failed' }, { entryId: 'third', status: 'refused' }] };
+      if (call.method === RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE) return { outcomes: [
+        { entryId: 'second', status: 'restored' }, { entryId: 'third', status: 'failed' }] };
+      return boundary(call);
+    });
+    const screen = await render(proposal({ status: 'executed', updatedAtMs: 3,
+      decision: { kind: 'approve', decidedAtMs: 2, authority: 'present_user' }, execution: { executedAtMs: 3, ok: true, result } }));
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain('machineStorage.pile.inTrash(count=3)'));
+    expect(screen.getTextContent()).not.toContain('3 GB');
+    await screen.pressByTestIdAsync('machine-storage-pile-empty');
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain('machineStorage.pile.inTrash(count=2)'));
+    // Per-entry allocated sizes cannot prove a union after partial effects (hardlinks/clones).
+    expect(screen.getTextContent()).not.toContain('2 GB');
+    expect(screen.getTextContent()).toContain('resourceProposal.receiptFreed(count=1,amount=500 MB)');
+    await screen.pressByTestIdAsync('machine-storage-pile-undo');
+    expect(calls(RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE)[0]?.payload).toMatchObject({ entryIds: ['second', 'third'] });
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain('machineStorage.pile.inTrash(count=1)'));
+    expect(screen.findByTestId('resource-proposal-restored')).toBeNull();
+    expect(screen.getTextContent()).toContain('resourceProposal.receiptRestored(count=1)');
+    expect(screen.getTextContent()).toContain('resourceProposal.receiptFreed(count=1,amount=500 MB)');
   });
 
   it('keeps a declined proposal as one line; Reopen runs the same Action from the UI and the request stays rejected', async () => {
@@ -556,7 +681,84 @@ describe('resource proposal card', () => {
     const undoButtons = screen.findAll((node) => node.props.testID === 'machine-storage-pile-undo' && typeof node.props.onPress === 'function');
     await act(async () => { await undoButtons[undoButtons.length - 1]!.props.onPress(); });
     await vi.waitFor(() => expect(calls(RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE)).toHaveLength(1));
-    expect(calls(RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE)[0]!.payload).toMatchObject({ batchId: 'batch-ui' });
+    expect(calls(RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE)[0]!.payload).toMatchObject({ entryIds: ['entry-ui-old-wt'] });
+  });
+
+  it('retains the successful retry batch after Undo and a cold reopened failed-first proposal', async () => {
+    const args = { ...proposalArgs, items: [proposalArgs.items[5]!] };
+    const first = PileApplyResultV1Schema.parse({ batchId: 'batch-failed', mode: 'trash',
+      outcomes: [{ itemId: 'old-wt', status: 'failed', reason: { code: 'operation_failed' } }],
+      inTrashBytes: 0, freedBytes: 0, trashEntryIds: [] });
+    const retry = PileApplyResultV1Schema.parse({ batchId: 'batch-retry', mode: 'trash',
+      outcomes: [{ itemId: 'old-wt', status: 'moved' }], inTrashBytes: GB, freedBytes: 0,
+      trashEntryIds: ['entry-retry'] });
+    let moved = false;
+    let restored = false;
+    const incumbent = daemonRpc.getMockImplementation()!;
+    daemonRpc.mockImplementation(async call => {
+      if (call.method === RPC_METHODS.DAEMON_STORAGE_TRASH_MOVE) {
+        moved = true;
+        return retry;
+      }
+      if (call.method === RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST) {
+        return MachineStorageCategoryListResultV1Schema.parse({ revision: 1, sizedAt: 1,
+          categoryId: 'trash', items: [], trashEntries: moved && !restored ? [{ entryId: 'entry-retry',
+            batchId: retry.batchId, volumeId: 'disk', originalPath: ref('old-wt').path,
+            title: 'Old worktree', size: size(GB), movedAt: 4,
+            movedBy: { accountId: 'account-1', kind: 'person' }, emptiesAt: null, restorable: true }] : [] });
+      }
+      if (call.method === RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST) {
+        return MachineGuardActivityListV1Schema.parse({ entries: moved ? [{ v: 1,
+          id: 'entry-retry-trash_moved', kind: 'trash_moved', at: 4, rule: 'approved_proposal',
+          outcome: 'done', inTrashBytes: GB, freedBytes: 0, attribution: { kind: 'unknown' },
+          ...(restored ? { undoneAt: 5 } : {}) }] : [],
+          counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 5 });
+      }
+      if (call.method === RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE) {
+        restored = true;
+        return { outcomes: [{ entryId: 'entry-retry', status: 'restored' }] };
+      }
+      return incumbent(call);
+    });
+    const request = proposal({ actionArgs: args, status: 'executed', updatedAtMs: 3,
+      decision: { kind: 'approve', decidedAtMs: 2, authority: 'present_user', narrowedInput: StrictJsonValueSchema.parse(args) },
+      execution: { executedAtMs: 3, ok: true, result: first } });
+    const screen = await render(request);
+    await vi.waitFor(() => expect(screen.findByTestId('resource-proposal-retry-old-wt')).toBeTruthy());
+    await screen.pressByTestIdAsync('resource-proposal-retry-old-wt');
+    await vi.waitFor(() => expect(screen.findByTestId('resource-proposal-retry-receipt-batch-retry')).toBeTruthy());
+    await vi.waitFor(() => expect(screen.findByTestId('machine-storage-pile-undo')).toBeTruthy());
+    await screen.pressByTestIdAsync('machine-storage-pile-undo');
+    expect(calls(RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE)[0]?.payload).toMatchObject({ entryIds: ['entry-retry'] });
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain('resourceProposal.restored'));
+    await act(async () => screen.unmount());
+    const stored = ApprovalRequestV2Schema.parse(readApproval());
+    expect(stored.execution?.result).toEqual(first);
+    expect(stored.storageRetryResults).toEqual([retry]);
+    const reopened = await render(stored, false);
+    await vi.waitFor(() => expect(reopened.getTextContent()).toContain('resourceProposal.restored'));
+    expect(reopened.findByTestId('resource-proposal-retry-old-wt')).toBeNull();
+    expect(reopened.findByTestId('machine-storage-pile-undo')).toBeNull();
+    expect(reopened.findByTestId('resource-proposal-retry-receipt-batch-retry')).toBeTruthy();
+  });
+
+  it('keeps the real retry receipt and Undo when the history compare-and-set is refused', async () => {
+    const args = { ...proposalArgs, items: [proposalArgs.items[5]!] };
+    const request = proposal({ actionArgs: args, status: 'executed', updatedAtMs: 3,
+      decision: { kind: 'approve', decidedAtMs: 2 }, execution: { executedAtMs: 3, ok: true,
+        result: PileApplyResultV1Schema.parse({ batchId: 'first-failed', mode: 'trash', inTrashBytes: 0,
+          freedBytes: 0, trashEntryIds: [], outcomes: [{ itemId: 'old-wt', status: 'failed' }] }) } });
+    const screen = await render(request);
+    home.answer(homeId, 'POST /v1/artifacts/approval-1', { body: { success: false, error: 'version-mismatch' } });
+    const { Modal } = await import('@/modal');
+    vi.mocked(Modal.alert).mockClear();
+    await screen.pressByTestIdAsync('resource-proposal-retry-old-wt');
+    await vi.waitFor(() => expect(screen.findByTestId('machine-storage-pile-undo')).toBeTruthy());
+    expect(Modal.alert).toHaveBeenCalled();
+    expect(readApproval()).toEqual(request);
+    await screen.pressByTestIdAsync('machine-storage-pile-undo');
+    expect(calls(RPC_METHODS.DAEMON_STORAGE_TRASH_RESTORE)[0]?.payload).toMatchObject({ entryIds: ['entry-ui-old-wt'] });
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain('resourceProposal.restored'));
   });
 
   it('starts a stopped process again through the process owner’s Start again', async () => {

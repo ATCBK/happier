@@ -65,7 +65,7 @@ export function homeFeatureFamilyTitle(family: string): string {
 /**
  * A feature's limit or mode key (`homeFeatures.keys.<ENV_KEY>.title|description`). A key with no
  * label is not rendered: the console shows neither an env key nor a name guessed from one, and
- * `homeFeatureLabels.test.ts` fails when the server declares a features key this tree lacks.
+ * `homeFeatureLabels.composed.test.ts` fails when the server declares a features key this tree lacks.
  */
 function settingLabelKey(key: string, leaf: 'title' | 'description'): TranslationKeyNoParams | null {
     const node = labelNode('keys')?.[key];

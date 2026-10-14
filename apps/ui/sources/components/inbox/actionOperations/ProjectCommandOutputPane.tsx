@@ -14,6 +14,7 @@ import { useServerScopedMachine } from '@/sync/store/hooks';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { t } from '@/text';
 import { readActionOperationOutputAttachment } from './actionOperationDetailPresentation';
+import { useProjectCommandOutputDocked } from './projectCommandOutputHost';
 import { describeActionOperationStatusLabel, resolveActionOperationStatus } from './actionOperationPresentation';
 
 /**
@@ -74,6 +75,7 @@ export const ProjectCommandOutputPane = React.memo(
           : null,
       [attachment],
     );
+    const docked = useProjectCommandOutputDocked(attachment);
     if (!attachment) return null;
     if (!attachment.terminalId) {
       const status = resolveActionOperationStatus(props.operation.snapshot, props.operation.observation);
@@ -90,6 +92,19 @@ export const ProjectCommandOutputPane = React.memo(
     const machineName = machine
       ? getMachineDisplayName(machine)
       : attachment.machineId;
+    // The host's bottom terminal already shows this PTY; the page keeps one surface for it.
+    if (docked && props.onOpenInTerminal) {
+      return (
+        <SurfaceStateCard
+          size="line"
+          kind="empty"
+          title={joinHappierFacts(props.title, machineName)}
+          action={{ label: t('projects.scripts.output.openInTerminal'), onPress: props.onOpenInTerminal,
+            testID: 'project-command-output.openInTerminal' }}
+          testID="project-command-output.docked"
+        />
+      );
+    }
     return (
       <View
         testID="project-command-output"

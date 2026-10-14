@@ -5,11 +5,14 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock();
 });
 
-import { SETTINGS_PAGE_DECLARATIONS } from './settingsPageDeclarations';
 import { buildSettingHref, defineSettingsPage } from './settingDeclarations';
 import { SERVER_CONFIG_REGISTRY_BASE } from '@happier-dev/protocol/serverConfig/registry';
-import { HOME_SERVER_SETTINGS } from '@/components/settings/home/governance/homeServerSettings';
 import { readBuiltInSettingDeclarationV1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
+
+// Match the app's runtime-first composition, as the Providers declaration harness does.
+await import('./runtime/useResolvedSettingsPageCatalog');
+const { SETTINGS_PAGE_DECLARATIONS } = await import('./settingsPageDeclarations');
+const { HOME_SERVER_SETTINGS } = await import('@/components/settings/home/governance/homeServerSettings');
 
 function destination(anchor: string, pathname: string, params: Record<string, string | string[]>): string | null {
     const declaration = SETTINGS_PAGE_DECLARATIONS.find((page) => Object.values(page.settings).some((setting) => setting.anchor === anchor));

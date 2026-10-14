@@ -76,6 +76,7 @@ describe('experimental model approval on its original composer', () => {
         const artifactId = account.home.artifacts(serverId).list()[0]!.id;
         expect(navigation.spies.push).not.toHaveBeenCalled();
         expect(hook.getCurrent().pending).toBe(true);
+        expect(hook.getCurrent().pendingModelName).toBe(confirmation.modelName);
         expect(hook.getCurrent().pendingApproval).toEqual({ artifactId,
             href: `/inbox/approvals/${artifactId}?serverId=${encodeURIComponent(serverId)}` });
         expect(commit).not.toHaveBeenCalled();
@@ -83,6 +84,7 @@ describe('experimental model approval on its original composer', () => {
         await expect(decideApprovalAsInbox(serverId, artifactId, 'approve')).resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
         await waitForHomeGovernance(() => expect(settled).toBe(true));
         expect(commit).toHaveBeenCalledOnce();
+        expect(hook.getCurrent().pendingModelName).toBeNull();
         expect(row.writes).toBe(1);
         expect(row.catalog.experimentalBindingConfirmations).toEqual([expect.objectContaining({
             connectionId: confirmation.connectionId, agentTargetKey: confirmation.agentTargetKey,

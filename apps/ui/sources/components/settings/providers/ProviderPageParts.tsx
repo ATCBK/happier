@@ -50,8 +50,8 @@ export function ProviderApprovalPendingBanner(props: Readonly<{
     onOpen: () => void;
 } & (
     | { presentation?: 'banner'; providerName: string }
-    /** The compact form inside a picker, beside its other status lines. */
-    | { presentation: 'line' }
+    /** The compact form inside a picker, beside its other status lines; it names the choice that is waiting. */
+    | { presentation: 'line'; modelName?: string | null }
 )>) {
     const { theme } = useUnistyles();
     if (props.presentation === 'line') {
@@ -60,6 +60,7 @@ export function ProviderApprovalPendingBanner(props: Readonly<{
                 testID={props.testID}
                 iconName="info"
                 iconColor={theme.colors.text.secondary}
+                subject={props.modelName ?? undefined}
                 title={t('settingsProvidersCollection.approvalPendingTitle')}
                 action={{
                     testID: `${props.testID}.open`,

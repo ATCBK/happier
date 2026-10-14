@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildSettingHref, defineSettingsPage } from './settingDeclarations';
+import { SESSION_SETTINGS } from '@/components/settings/session/sessionSettings';
 
 describe('scoped setting links', () => {
+    it('projects the MCP failure policy from its Sessions declaration and links to that page', () => {
+        const setting = SESSION_SETTINGS.settings.mcpServersStrictMode;
+        expect(setting).toMatchObject({ anchor: 'session.mcpServersStrictMode',
+            storage: { scope: 'account', key: 'mcpServersStrictMode', access: 'read_write' } });
+        expect(SESSION_SETTINGS.sectionRefs.mcpServersReliability.id).toBe('session.mcpServersReliability');
+        expect(buildSettingHref('/settings/session', setting)).toBe('/settings/session?setting=session.mcpServersStrictMode');
+    });
     it('uses explicit route context and omits a setting when its destination is unavailable', () => {
         const ref = { anchor: 'teams.oidc.issuer' };
         const route = (context: Readonly<{ pathname: string; params: Readonly<Record<string, string | string[] | undefined>> }>) => (

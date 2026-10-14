@@ -135,6 +135,8 @@ export function ProviderPickerLine(props: Readonly<{
     iconName: IconName;
     iconColor: string;
     tooltip?: string;
+    /** What the line is about (a model); it truncates first, so the title always stays readable. */
+    subject?: string;
     title: string;
     action?: Readonly<{
         testID: string;
@@ -148,7 +150,16 @@ export function ProviderPickerLine(props: Readonly<{
     return (
         <View testID={props.testID} accessibilityLiveRegion="polite" style={lineStyles.line}>
             {props.tooltip ? <Tooltip testID={props.tooltipTestID} label={props.tooltip}>{icon}</Tooltip> : icon}
-            <Text numberOfLines={1} style={lineStyles.title}>{props.title}</Text>
+            {props.subject ? (
+                <View style={lineStyles.subjectAndTitle}>
+                    <Text testID={`${props.testID}.subject`} numberOfLines={1} style={[lineStyles.title, lineStyles.subject]}>
+                        {props.subject}
+                    </Text>
+                    <Text numberOfLines={1} style={[lineStyles.title, lineStyles.titleAfterSubject]}>{`· ${props.title}`}</Text>
+                </View>
+            ) : (
+                <Text numberOfLines={1} style={lineStyles.title}>{props.title}</Text>
+            )}
             {props.action ? (
                 <IconButton
                     testID={props.action.testID}
@@ -181,4 +192,8 @@ const lineStyles = StyleSheet.create((theme) => ({
         lineHeight: 16,
         color: theme.colors.text.secondary,
     },
+    subjectAndTitle: { flex: 1, minWidth: 0, flexDirection: 'row', gap: theme.space.s4 },
+    /** The subject gives way to the status that follows it. */
+    subject: { flexGrow: 0, flexShrink: 1, flexBasis: 'auto' },
+    titleAfterSubject: { flexGrow: 0, flexShrink: 0, flexBasis: 'auto' },
 }));

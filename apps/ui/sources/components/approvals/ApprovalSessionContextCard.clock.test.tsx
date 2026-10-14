@@ -32,7 +32,7 @@ describe('Approval context age leaf', () => {
         const screen = await renderScreen(<Parent />);
         expect(screen.getTextContent()).toContain('Last updated 1m');
         const before = paints.mock.calls.length;
-        await act(async () => vi.advanceTimersByTime(60_000));
+        await act(async () => { vi.advanceTimersByTime(60_000); });
         expect(screen.getTextContent()).toContain('Last updated 2m');
         expect(screen.getTextContent()).toContain('session.homeFreshness.offline');
         expect(paints.mock.calls.length).toBe(before);

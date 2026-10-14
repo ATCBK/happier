@@ -33,7 +33,9 @@ type ActionSettingsAudienceStatus = Readonly<{
 }>;
 
 export type ActionSettingsEntryStatusPart = Readonly<{
-    labelKey: Extract<TranslationKey, `settingsActions.status.${string}`>;
+    labelKey: Extract<TranslationKey,
+        `settingsActions.status.${ActionSettingsAudience}${'Allowed' | 'AskFirst' | 'Off'}`
+        | `settingsActions.status.${'allOff' | 'destructive' | 'external'}`>;
     partial: boolean;
 }>;
 

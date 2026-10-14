@@ -228,7 +228,6 @@ export function UsageDailyWidget(props: UsageBodyProps) {
         size={compact ? 'tile' : 'full'}
         viewportHeight={height}
         barGap={count > 45 ? 2 : count > 20 ? 4 : 6}
-        barMaxWidth={28}
         barMinHeight={0}
         axisTicks={axisTicks}
         {...(leads ? { leads } : {})}

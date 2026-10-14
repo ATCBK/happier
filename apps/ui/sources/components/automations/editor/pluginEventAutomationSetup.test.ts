@@ -410,6 +410,8 @@ function durablePushSetupParams(
 describe('Plugin Event Automation setup orchestration', () => {
     it('keys equality on the exact optional renderer projection and execution origin', () => {
         const original = eligibleEventWithSetupSurface();
+        const originalOrigin = original.setupSurface!.executionOrigin;
+        if (!('materializationRef' in originalOrigin)) throw new Error('Expected a materialized setup fixture');
         const replacement = Object.freeze({
             ...original,
             setupSurface: Object.freeze({
@@ -423,9 +425,9 @@ describe('Plugin Event Automation setup orchestration', () => {
                     }),
                 }),
                 executionOrigin: Object.freeze({
-                    ...original.setupSurface!.executionOrigin,
+                    ...originalOrigin,
                     materializationRef: Object.freeze({
-                        ...original.setupSurface!.executionOrigin.materializationRef,
+                        ...originalOrigin.materializationRef,
                         materializationId: 'github-materialization-b',
                     }),
                 }),

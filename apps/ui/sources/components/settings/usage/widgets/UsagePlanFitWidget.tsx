@@ -188,15 +188,16 @@ function PlanRow(
   const ending = subscription?.renewal === 'off';
   // One row per plan (lab p2sheet-D "Plan value"): who, the one figure, a verdict, and one quiet line;
   // the rest (pace, value basis, weather, headroom, billing, your price) waits behind Details.
-  const value = props.insights?.value.value;
+  const value = props.insights?.value;
   const multiple = value?.status === 'available' && value.priceMultiple.status === 'available' ? value.priceMultiple.multiple : null;
   const known = Boolean(price.entered || price.paid || price.list);
   const keyFact = multiple !== null
     ? `${multiple.toLocaleString(getPreferredLanguage(), { maximumFractionDigits: 1 })}×`
     : known ? priceText : '—';
   const verdict = fit.observed === 0 ? null : t('usage.board.plans.fitUsedUp', { count: fit.usedUp, total: fit.observed });
+  const renewalKnown = subscription?.status === 'subscribed' && end !== undefined && subscription.renewal !== 'unknown';
   const secondary = [
-    subscription?.status === 'subscribed' && end !== undefined && subscription.renewal !== 'unknown' ? periodText : null,
+    renewalKnown ? periodText : null,
     fitWindow, verdict ?? (fit.observed === 0 ? t('usage.board.plans.fitNoneEnded') : null),
   ].filter(Boolean).join(' · ');
   return (
@@ -224,13 +225,23 @@ function PlanRow(
       {props.compact ? null : (
         <UsagePlanDisclosure title={t('usage.board.plans.planDetails')} testID={`${props.testID}.details`}>
           <View style={styles.details}>
-            {paceText ? <Text style={[styles.fit, text.detail]}>{paceText}</Text> : null}
-            <Text style={[styles.fit, text.detail]}>{`${t('usage.board.plans.fitTitle')} · ${fitText}`}</Text>
-            <Text style={[styles.fit, text.detail]}>{[priceText, periodText].join(' · ')}</Text>
-            {props.insights ? <PlanExtras value={props.insights} compact={false} testID={props.testID} /> : null}
-            <UsageBillingButton account={account} serverId={props.serverId} testID={`${props.testID}.billing`} />
-            <UsageSubscriptionPriceEditor account={account} serverId={props.serverId}
-              testID={`${props.testID}.priceEditor`} onSettled={props.onSettled} />
+            {/* Terms first (what it costs, when it ends), then how it is being used, then what you can do. */}
+            <View style={styles.terms}>
+              <Text style={[known ? styles.fit : styles.quiet, text.detail]}>{priceText}</Text>
+              <Text style={[renewalKnown ? styles.fit : styles.quiet, text.detail]}>{periodText}</Text>
+            </View>
+            <View style={styles.usage}>
+              {paceText ? <Text style={[styles.fit, text.detail]}>{paceText}</Text> : null}
+              <Text style={[styles.fit, text.detail]}>
+                <Text style={styles.factLabel}>{t('usage.board.plans.fitTitle')}</Text>{` · ${fitText}`}
+              </Text>
+              {props.insights ? <PlanExtras value={props.insights} compact={false} testID={props.testID} /> : null}
+            </View>
+            <View style={styles.actions}>
+              <UsageBillingButton account={account} serverId={props.serverId} testID={`${props.testID}.billing`} />
+              <UsageSubscriptionPriceEditor account={account} serverId={props.serverId}
+                testID={`${props.testID}.priceEditor`} onSettled={props.onSettled} />
+            </View>
           </View>
         </UsagePlanDisclosure>
       )}
@@ -314,7 +325,16 @@ const styles = StyleSheet.create((theme) => ({
   },
   rowHead: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s16 },
   secondary: { ...Typography.default(), color: theme.colors.text.tertiary },
-  details: { gap: theme.space.s4 },
+  details: { gap: theme.space.s12 },
+  terms: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s16, rowGap: theme.space.s2 },
+  usage: { gap: theme.space.s4 },
+  actions: {
+    gap: theme.space.s8,
+    paddingTop: theme.space.s12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border.default,
+  },
+  factLabel: { ...Typography.default('semiBold'), color: theme.colors.text.primary },
   rowIdentity: { flex: 1, minWidth: 0 },
   rowFacts: {
     flexGrow: 1,
@@ -322,7 +342,7 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
     alignItems: 'flex-end',
   },
-  rowFit: { flexBasis: '100%', gap: theme.space.s2 },
+  rowFit: { gap: theme.space.s2 },
   fit: {
     ...Typography.default(),
     color: theme.colors.text.secondary,

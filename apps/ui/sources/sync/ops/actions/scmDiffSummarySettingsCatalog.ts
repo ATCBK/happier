@@ -5,7 +5,7 @@ import { getEnabledAgentIds } from '@/agents/catalog/enabled';
 import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { loadDaemonMergedProjectionCacheEntry, readReusableDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { buildScmDiffSummaryModelProfiles } from '@/settings/scmDiffSummary/models';
-import { decodeScmDiffSummaryModelOverride } from '@/settings/scmDiffSummary/settings';
+import { decodeScmDiffSummaryModelOverride, resolveScmDiffSummaryDefaultModelProfile } from '@/settings/scmDiffSummary/settings';
 import { buildDynamicModelProbeCacheKey } from '@/sync/domains/models/dynamicModelProbeCacheKey';
 import { readDynamicModelProbeCache } from '@/sync/domains/models/dynamicModelProbeCache';
 import { discoverMachineModels } from '@/sync/ops/modelDiscovery';
@@ -29,7 +29,7 @@ export function createScmDiffSummarySettingsCatalogReader(account: ActionAccount
         const { catalog } = await readAcpCatalogInContext(account);
         account.assertCurrent();
         const selected = decodeScmDiffSummaryModelOverride(storedValue);
-        if (!selected?.backendTargetKey) return null;
+        if (storedValue && !selected?.backendTargetKey) return null;
         const selectionKey = MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.sourceControl;
         const selectedMachine = storage.getState().settings.machineAdministrationTargetsLocalV1[selectionKey] ?? null;
         const executionTarget = resolveFreshMachineAdministrationExecutionTarget(selectedMachine);
@@ -39,13 +39,21 @@ export function createScmDiffSummarySettingsCatalogReader(account: ActionAccount
         const projection = machineId ? await loadDaemonMergedProjectionCacheEntry({ ...params, machineId, reuseFreshReady: true }) : null;
         account.assertCurrent();
         const inputs = projection?.kind === 'ready' ? projection.inputs : null;
-        const entry = getResolvedBackendCatalogEntries({
+        const entries = getResolvedBackendCatalogEntries({
             enabledAgentIds: getEnabledAgentIds({ backendEnabledByTargetKey: settings.backendEnabledByTargetKey }),
             acpCatalogSnapshot: catalog, backendEnabledByTargetKey: settings.backendEnabledByTargetKey,
             discoveredBackendIds: inputs?.discoveredBackendIds,
             mergedProviderProjectionById: inputs?.mergedProviderProjectionById,
             mergedBackendProjectionById: inputs?.mergedBackendProjectionById,
-        }).find(candidate => candidate.backendTargetKey === selected.backendTargetKey);
+        });
+        const staticProfiles = entries.flatMap(candidate => buildScmDiffSummaryModelProfiles({
+            backendTarget: readBackendTargetRefV2(candidate.backendTarget),
+            models: getAgentStaticModels(candidate.agentId, { catalogOnly: true }),
+            agentFormats: candidate.kind === 'builtInAgent' ? getAgentCore(candidate.agentId)?.structuredOutput?.formats : null,
+        }));
+        const selectedTargetKey = selected?.backendTargetKey
+            ?? resolveScmDiffSummaryDefaultModelProfile(staticProfiles)?.modelSelector?.backendTargetKey;
+        const entry = entries.find(candidate => candidate.backendTargetKey === selectedTargetKey);
         if (!entry) return null;
         // The configured-ACP row owns only configured targets, just as in the picker.
         if (entry.kind === 'configuredBackend' && catalog.status !== 'ready') return null;
@@ -59,9 +67,12 @@ export function createScmDiffSummarySettingsCatalogReader(account: ActionAccount
                 backendTarget, timeoutMs: NEW_SESSION_MODEL_PROBE_TIMEOUT_MS,
                 capabilityParams: { timeoutMs: NEW_SESSION_MODEL_PROBE_TIMEOUT_MS } }) : null;
         account.assertCurrent();
-        const models = probe?.kind === 'success' ? probe.value.availableModels : getAgentStaticModels(entry.agentId, { catalogOnly: true });
-        const profiles = buildScmDiffSummaryModelProfiles({ backendTarget, models,
+        const catalogModels = getAgentStaticModels(entry.agentId, { catalogOnly: true });
+        const models = probe?.kind === 'success' ? probe.value.availableModels : catalogModels;
+        const targetProfiles = buildScmDiffSummaryModelProfiles({ backendTarget, models, catalogModels,
             agentFormats: entry.kind === 'builtInAgent' ? core?.structuredOutput?.formats : null });
+        const profiles = storedValue ? targetProfiles : entries.flatMap(candidate => candidate.backendTargetKey === selectedTargetKey
+            ? targetProfiles : staticProfiles.filter(profile => profile.modelSelector?.backendTargetKey === candidate.backendTargetKey));
         return { profiles, isCurrent: current => {
             const cached = inputs && machineId ? readReusableDaemonMergedProjectionCacheEntry({ ...params, machineId }) : null;
             const currentProbe = probe && cacheKey ? readDynamicModelProbeCache(cacheKey) : null;

@@ -16,15 +16,17 @@ describe('buildActionSettingsEntries', () => {
             'github/pull-request/close',
             'github/pull-request/mark-ready',
         ] as const) {
-            const declaration = githubManifest.contributes.actions.find((action) => action.id === localId);
+            const declaration = githubManifest.contributes.actions?.find((action) => action.id === localId);
             if (!declaration) throw new Error(`GitHub Action ${localId} is not declared`);
             const dangerLevel = declaration.dangerLevel;
+            // The daemon's strict Action projection omits execution-only grants and schemas.
+            const { hostAccess, connectedAccountPurposeBindings, inputSchema, resultSchema, ...projectedDeclaration } = declaration;
             const projection = PluginProjectionV2Schema.parse({
                 v: 2, generation: 1,
                 installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'GitHub', enabled: true,
                     source: { kind: 'bundled', locator: '@happier-dev/plugin-scm-github' } } },
                 actionsById: { [`${pluginId}/${localId}`]: {
-                    ...declaration, pluginId, occurrenceId: 'github-occurrence',
+                    ...projectedDeclaration, pluginId, occurrenceId: 'github-occurrence',
                 } },
             });
             const inputs = adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(projection);
@@ -33,7 +35,7 @@ describe('buildActionSettingsEntries', () => {
             const entries = buildActionSettingsEntries({ query: '', settings, contributedActions:
                 buildActionSettingsContributedActions(inputs.pluginProjectionById), availability: {
                     executionRunsEnabled: true, memorySearchEnabled: true, voiceEnabled: true,
-                    sessionHandoffEnabled: true, mcpServersEnabled: true, voiceShareDeviceInventory: true,
+                    sessionHandoffEnabled: true, voiceShareDeviceInventory: true,
                 } });
             const entry = entries.find((candidate) => candidate.actionId === actionId);
             if (!entry) throw new Error('GitHub Action was not projected');
@@ -74,7 +76,6 @@ describe('buildActionSettingsEntries', () => {
                 memorySearchEnabled: true,
                 voiceEnabled: true,
                 sessionHandoffEnabled: true,
-                mcpServersEnabled: true,
                 voiceShareDeviceInventory: true,
             },
         });
@@ -100,7 +101,6 @@ describe('buildActionSettingsEntries', () => {
                 memorySearchEnabled: true,
                 voiceEnabled: true,
                 sessionHandoffEnabled: true,
-                mcpServersEnabled: true,
                 voiceShareDeviceInventory: false,
             },
         });
@@ -138,7 +138,6 @@ describe('buildActionSettingsEntries', () => {
                 memorySearchEnabled: true,
                 voiceEnabled: true,
                 sessionHandoffEnabled: true,
-                mcpServersEnabled: true,
                 voiceShareDeviceInventory: true,
             },
         });
@@ -164,7 +163,6 @@ describe('buildActionSettingsEntries', () => {
                 memorySearchEnabled: true,
                 voiceEnabled: true,
                 sessionHandoffEnabled: true,
-                mcpServersEnabled: true,
                 voiceShareDeviceInventory: true,
             },
         });
@@ -185,7 +183,6 @@ describe('buildActionSettingsEntries', () => {
                 memorySearchEnabled: true,
                 voiceEnabled: true,
                 sessionHandoffEnabled: true,
-                mcpServersEnabled: true,
                 voiceShareDeviceInventory: true,
             },
         });
@@ -213,7 +210,6 @@ describe('buildActionSettingsEntries', () => {
                 memorySearchEnabled: true,
                 voiceEnabled: true,
                 sessionHandoffEnabled: true,
-                mcpServersEnabled: true,
                 voiceShareDeviceInventory: true,
             },
             contributedActions: [{
@@ -260,7 +256,6 @@ describe('buildActionSettingsEntries', () => {
                 memorySearchEnabled: true,
                 voiceEnabled: true,
                 sessionHandoffEnabled: true,
-                mcpServersEnabled: true,
                 voiceShareDeviceInventory: true,
             },
             contributedActions: [{
@@ -298,7 +293,6 @@ describe('buildActionSettingsEntries', () => {
                 memorySearchEnabled: true,
                 voiceEnabled: true,
                 sessionHandoffEnabled: true,
-                mcpServersEnabled: true,
                 voiceShareDeviceInventory: true,
             },
         });
@@ -316,7 +310,6 @@ describe('buildActionSettingsEntries', () => {
                 memorySearchEnabled: true,
                 voiceEnabled: true,
                 sessionHandoffEnabled: true,
-                mcpServersEnabled: true,
                 voiceShareDeviceInventory: true,
             },
             translate: (key) => {
@@ -341,7 +334,6 @@ describe('buildActionSettingsEntries', () => {
                 memorySearchEnabled: true,
                 voiceEnabled: true,
                 sessionHandoffEnabled: true,
-                mcpServersEnabled: true,
                 voiceShareDeviceInventory: true,
             },
         });
@@ -371,7 +363,6 @@ describe('buildActionSettingsEntries', () => {
                 memorySearchEnabled: true,
                 voiceEnabled: true,
                 sessionHandoffEnabled: true,
-                mcpServersEnabled: true,
                 voiceShareDeviceInventory: true,
             },
         });
@@ -399,7 +390,6 @@ describe('buildActionSettingsEntries', () => {
                 memorySearchEnabled: true,
                 voiceEnabled: true,
                 sessionHandoffEnabled: true,
-                mcpServersEnabled: true,
                 voiceShareDeviceInventory: true,
             },
         });
@@ -435,7 +425,6 @@ describe('buildActionSettingsEntries', () => {
                 memorySearchEnabled: true,
                 voiceEnabled: true,
                 sessionHandoffEnabled: true,
-                mcpServersEnabled: true,
                 voiceShareDeviceInventory: true,
             },
         });

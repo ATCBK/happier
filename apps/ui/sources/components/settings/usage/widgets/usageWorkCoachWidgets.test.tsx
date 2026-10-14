@@ -35,6 +35,8 @@ import { WidgetPresentationProvider } from '@happier-dev/plugin-ui';
 import { resolveUsageHowYouWork } from '@happier-dev/protocol/usage/resolveUsageHowYouWork';
 import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { projectProviderAccountUsageQuotaReadV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
+import { createProjectAccountRowsSync } from '@/sync/engine/projects/projectAccountRowsSync';
 
 const query = normalizeUsageQuery({
   period: { startMs: 0, endMs: 1000 },
@@ -155,6 +157,42 @@ const model: UsageWidgetBodyModel = {
 const props = { model, slice, query, serverId: 'home' };
 
 describe('Work and Coach widget bodies', () => {
+  it.each(['plain', 'e2ee'] as const)('names Work from the admitted protected Project producer and retires it on Account loss (%s)', async mode => {
+    const previous = storage.getState();
+    const scope = { serverId: 'home', accountId: 'work-label-account' };
+    const cipher = createProjectAccountRowCipherV1({ mode,
+      material: mode === 'plain' ? null : { type: 'legacy', secret: new Uint8Array(32).fill(5) },
+      randomBytes: length => new Uint8Array(length).fill(3) });
+    // Native/owner-root accounting has an organization label without fabricating
+    // a checkout that would retain a private path (the observed live Work producer).
+    const rowKey = { kind: 'project-organization' as const, serverId: 'producer-cli-profile', projectKey: 'p1' };
+    const content = cipher.seal({ key: rowKey, value: { label: 'Human project' } });
+    const owner = createProjectAccountRowsSync({ scope, cipher, isCurrent: () => true,
+      transport: { list: async () => ({ status: 'listed', coverage: 'complete', rows: [{ key: rowKey, revision: 1, content }] }),
+        mutate: async () => { throw new Error('Label read must not mutate Project rows'); } },
+      apply: snapshot => storage.getState().applyProjectAccountRowsForScope(scope, snapshot) });
+    try {
+      storage.setState({ profileScope: scope });
+      storage.getState().activateProjectAccountRowsScope(scope);
+      await owner.refresh();
+      const screen = await renderScreen(<UsageProjectLedgerWidget {...props} id="usage_project_ledger" testID="label-ledger" />);
+      expect(screen.getTextContent()).toContain('Human project');
+      await act(async () => storage.getState().setProjectAccountRowsStatusForScope(scope, 'locked'));
+      expect(screen.getTextContent()).not.toContain('Human project');
+      await act(async () => storage.getState().setProjectAccountRowsStatusForScope(scope, 'ready'));
+      expect(screen.getTextContent()).toContain('Human project');
+      await act(async () => storage.setState({ profileScope: { ...scope, serverId: 'other-home' } }));
+      expect(screen.getTextContent()).not.toContain('Human project');
+      await act(async () => storage.setState({ profileScope: scope }));
+      expect(screen.getTextContent()).toContain('Human project');
+      await act(async () => storage.setState({ profileScope: { ...scope, accountId: 'other-account' } }));
+      expect(screen.getTextContent()).not.toContain('Human project');
+      await screen.unmount();
+    } finally {
+      storage.setState({ profileScope: previous.profileScope, projectAccountRows: previous.projectAccountRows,
+        pinnedWorkspaceRefIds: previous.pinnedWorkspaceRefIds });
+    }
+  });
   it('projects the measured growing request into Coach Why after a later zero-input observation', async () => {
     const rows = [100, 200, 300, 200, 0].map((input, index) => {
       const categories = { input, cacheRead: 0, cacheWrite: 0, output: 10, reasoning: 0, total: input + 10 };

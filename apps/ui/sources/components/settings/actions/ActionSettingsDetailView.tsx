@@ -160,7 +160,6 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
     const memorySearchEnabled = useFeatureEnabled('memory.search');
     const voiceEnabled = useFeatureEnabled('voice');
     const sessionHandoffEnabled = useFeatureEnabled('sessions.handoff');
-    const mcpServersEnabled = useFeatureEnabled('mcp.servers');
     const needsMachineProjection = props.actionId === 'capture.view'
         || parseQualifiedPluginActionId(props.actionId) !== null;
     const administrationTargetSelection = useMachineAdministrationTargetSelection(
@@ -199,12 +198,10 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
         memorySearchEnabled,
         voiceEnabled,
         sessionHandoffEnabled,
-        mcpServersEnabled,
         voiceShareDeviceInventory,
     }), [
         executionRunsEnabled,
         memorySearchEnabled,
-        mcpServersEnabled,
         sessionHandoffEnabled,
         voiceEnabled,
         voiceShareDeviceInventory,

@@ -4,7 +4,7 @@ import { renderHook, standardCleanup, flushHookEffects, createDeferred } from '@
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { invalidateUsageQueryResources } from '@/sync/api/account/usageQueryResource';
+import { decodeUsageQueryResource, invalidateUsageQueryResources } from '@/sync/api/account/usageQueryResource';
 import { normalizeUsageQuery, getUsageQueryKey, type UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import type { UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
 import { useUsageWidgetResource, useUsageWidgetBodyModel } from './useUsageWidgetResource';
@@ -28,6 +28,28 @@ async function mountHome(route: Parameters<typeof serveAccountHomes>[0]['route']
 afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); invalidateUsageQueryResources(); await home?.dispose(); home = undefined; });
 
 describe('Usage widget shared Resource selection', () => {
+    it('exposes source-only initial progress to page chrome while bodies retain their first-read placeholder', async () => {
+        const held = createDeferred<Response>();
+        const credentials = await mountHome(request => request.path === '/v2/usage/query'
+            ? held.promise.then(response => response.clone()) : undefined);
+        const queryPlan = plan(normalizeUsageQuery({ period: { startMs: 1000 }, includeSessionEvidence: true, includeWorkEvidence: false }));
+        const hook = await renderHook(() => {
+            const resource = useUsageWidgetResource({ credentials, enabled: true, plan: queryPlan });
+            return { resource, model: useUsageWidgetBodyModel(resource, 'first') };
+        });
+        try {
+            await expect.poll(() => hook.getCurrent().resource.entry?.getSnapshot().value !== undefined).toBe(true);
+            const content = hook.getCurrent().resource.entry!.getSnapshot().value!;
+            expect(decodeUsageQueryResource(content).results[0]?.sources).toEqual(expect.arrayContaining([
+                { source: 'accounting', status: 'pending' }, { source: 'how_you_work', status: 'pending' },
+            ]));
+            expect(hook.getCurrent().model.slice).toBeNull();
+            expect(hook.getCurrent().model.pending).toBe(true);
+            await act(async () => { held.resolve(Response.json(accounting)); });
+            await flushHookEffects({ cycles: 30 });
+            expect(hook.getCurrent().model.slice?.accounting?.totals).toEqual(accounting.totals);
+        } finally { held.resolve(Response.json(accounting)); }
+    });
     it('does not relabel a foreign Account query intent as the current Account read', async () => {
         const credentials = await mountHome(request => request.path === '/v2/usage/query' ? Response.json(accounting) : undefined);
         const queryPlan = plan(normalizeUsageQuery({ period: { startMs: 1000 }, granularity: 'day' }));

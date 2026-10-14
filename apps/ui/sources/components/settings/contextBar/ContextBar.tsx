@@ -77,7 +77,7 @@ export const ContextBar = React.memo(function ContextBar(props: ContextBarProps)
                     selectedId={props.machine.selectedId}
                     onSelect={props.machine.onSelect}
                     itemTrigger={{
-                        title: props.machine.title ?? t('promptLibrary.externalAssetsMachine'),
+                        title: props.machine.title ?? t('contextBar.machine'),
                         subtitle: props.machine.subtitle,
                     }}
                     rowKind="item"
@@ -88,7 +88,7 @@ export const ContextBar = React.memo(function ContextBar(props: ContextBarProps)
 
             {showWorkspace && props.workspace ? (
                 <Item
-                    title={t('promptLibrary.externalAssetsProjectDirectory')}
+                    title={t('contextBar.projectDirectory')}
                     accessoryLayout="stacked"
                     showChevron={false}
                     rightElement={(
@@ -98,7 +98,7 @@ export const ContextBar = React.memo(function ContextBar(props: ContextBarProps)
                                 style={styles.workspaceInput}
                                 value={props.workspace.value}
                                 onChangeText={props.workspace.onChange}
-                                accessibilityLabel={t('promptLibrary.externalAssetsProjectDirectory')}
+                                accessibilityLabel={t('contextBar.projectDirectory')}
                                 placeholder={props.workspace.placeholder}
                                 autoCapitalize="none"
                                 monospace

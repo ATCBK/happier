@@ -64,6 +64,8 @@ import { getEnabledAgentIds } from '@/agents/catalog/enabled';
 import { readLocalConversationVoiceSettings, writeLocalConversationVoiceSettings, readVoiceDiagnosticsSettings, writeVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
 import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { activateStorageAccountScope } from '@/dev/testkit/mocks/storage';
+import type { Machine } from '@/sync/domains/state/storageTypes';
 import { projectBundledVoiceManifestContributions } from '@/voice/registry/bundledVoiceManifestProjection';
 import { resolveVoiceConversationLanguageSetting } from '@/voice/settings/voiceSettingsDeclarations';
 import { t } from '@/text';
@@ -178,7 +180,7 @@ describe('Home atmosphere picture and Project mutations', () => {
             current = false;
             return new Response(new Blob(['retired-account']));
         }));
-        onTestFinished(() => vi.unstubAllGlobals());
+        onTestFinished(() => { vi.unstubAllGlobals(); });
         const { pictureStore } = await import('@/components/atmosphere/pictureStore.web');
         const before = await pictureStore.list();
         const owner = createOwner(undefined, false, true, settingsDefaults, undefined, undefined, undefined,
@@ -291,6 +293,15 @@ describe('Home atmosphere picture and Project mutations', () => {
 
 // Preload the real scope/consent owners after the declaration graph is initialized.
 const { storage } = await import('@/sync/domains/state/storage');
+async function installVoiceMachineFixture(machines: Readonly<Record<string, Machine>>) {
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    const serverId = getActiveServerSnapshot().serverId;
+    const scope = await activateStorageAccountScope({ serverId, accountId: 'test-account' });
+    onTestFinished(() => { scope.dispose(); });
+    storage.setState({ machines: { ...machines }, machineListByServerId: {
+        ...storage.getState().machineListByServerId, [serverId]: Object.values(machines),
+    } });
+}
 await import('@/voice/settings/panels/realtime/confirmRealtimeProviderSettingChange');
 const { voiceSettingsDeclarationRegistry } = await import('@/voice/settings/voiceContributedSettingsDeclarations');
 const { prepareSpeechEndpointSettingChange } = await import('@/voice/settings/panels/bundledSpeech/prepareEndpointSettingChange');
@@ -333,7 +344,7 @@ function createOwner(host: { os: 'web' | 'ios'; desktop: boolean } = { os: 'web'
     const openedInteractions: string[] = [];
     const readScmDiffSummaryCatalog: ReturnType<typeof createScmDiffSummarySettingsCatalogReader> = async (settings, storedValue) => {
         const captured = await readSummaryCatalogAccount();
-        return createScmDiffSummarySettingsCatalogReader({ ...captured, readLiveSettings: () => account })(settings, storedValue);
+        return createScmDiffSummarySettingsCatalogReader(captured)(settings, storedValue);
     };
     // These ports substitute only the persisted Account and device storage boundaries.
     const action = createSettingsDeclarationAction({
@@ -391,7 +402,7 @@ describe('Voice public privacy policy destination', () => {
     it('refuses retired Account and arbitrary operation input before opening the policy', async () => {
         const open = vi.fn();
         vi.stubGlobal('open', open);
-        onTestFinished(() => vi.unstubAllGlobals());
+        onTestFinished(() => { vi.unstubAllGlobals(); });
         let current = true;
         const owner = createOwner(undefined, true, true, settingsDefaults, undefined, undefined, undefined,
             { isCurrent: () => current });
@@ -408,6 +419,28 @@ describe('Voice public privacy policy destination', () => {
 });
 
 describe('keyed machine offline Account consent', () => {
+    it('admits the offline Ask prompt through the registered Settings Action and publishes only its machine to the strict remote-alert consumer', async () => {
+        const { deriveMachineResourceSuggestions } = await import('@/components/machines/resources/ask/machineResourceSuggestions');
+        const { SettingsDeclarationActionInputSchemasV1 } = await import('@happier-dev/protocol/actions/settingsDeclarationActionFamily');
+        const { deriveAccountRemoteAlertPolicyV1 } = await import('@happier-dev/protocol/account/settings/accountRemoteAlertPolicy');
+        const { AccountRemoteAlertPolicyV1Schema } = await import('@happier-dev/protocol');
+        const machine = { serverId: 'home-a', machineId: 'studio-"quoted', name: 'Studio', directory: '' };
+        const suggestion = deriveMachineResourceSuggestions({ machine, online: false }).find(entry => entry.kind === 'notifyWhenBack')!;
+        const input = SettingsDeclarationActionInputSchemasV1['settings.set'].parse(JSON.parse(suggestion.fill.text.split('\nsettings.set ')[1]!));
+        const owner = createOwner(undefined, false, true, settingsParse({ machineOfflineAlertsV1: { machineIds: ['peer'] } }));
+        const executor = throughActionExecutor(owner.action, () => owner.account().actionsSettingsV1);
+        const context = { surface: 'ui', authority: 'present_user', presentUserConfirmation: { actionId: 'settings.set' } } as const;
+        expect(await executor.execute('settings.set', input, context)).toMatchObject({ ok: true, result: {
+            anchor: 'notifications.machineOffline', value: true,
+        } });
+        const policy = AccountRemoteAlertPolicyV1Schema.parse(deriveAccountRemoteAlertPolicyV1(owner.account()));
+        expect(policy).toMatchObject({ machineOffline: { machineIds: ['peer', machine.machineId] },
+            events: { machine_offline: { enabled: true } } });
+        expect(await executor.execute('settings.get', { anchor: input.anchor, key: machine.machineId }, context))
+            .toMatchObject({ ok: true, result: { value: true } });
+        expect(owner.openedInteractions).toEqual([]);
+    });
+
     it('changes only the selected machine and preserves concurrently added consent without a session feature gate', async () => {
         const owner = createOwner(undefined, false, true, settingsParse({ machineOfflineAlertsV1: { machineIds: ['peer'] } }),
             undefined, current => settingsParse({ ...current, machineOfflineAlertsV1: { machineIds: [...new Set([...current.machineOfflineAlertsV1.machineIds, 'concurrent'])] } }));
@@ -789,6 +822,14 @@ describe('navigation placement Settings Actions', () => {
             installableKey: 'tool', patch: { autoInstallWhenNeeded: true },
         } } })).toMatchObject({ ok: false, errorCode: 'setting_key_required' });
     });
+    it('refuses a native undefined installable policy member as invalid Action output', async () => {
+        const owner = createOwner(undefined, true, true, settingsParse({ ...settingsDefaults,
+            installablesPolicyByMachineId: { machine: { tool: { autoInstallWhenNeeded: undefined } } },
+        }));
+        expect(await owner.action({ actionId: 'settings.get', input: {
+            anchor: 'machines.installables.policy', key: 'machine',
+        } })).toEqual({ ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' });
+    });
     it('refuses an unrepresentable prototype-named installable policy key without claiming a saved override', async () => {
         const owner = createOwner();
         const anchor = 'machines.installables.policy';
@@ -1051,6 +1092,7 @@ describe('declared settings owner', () => {
             featureToggles: { voice: true, 'voice.agent': true, 'voice.daemonInference': true, 'execution.runs': true },
             voice: { ...settingsDefaults.voice, executionMachine: { mode: 'fixed' as const, machineId: 'voice-machine' } } }, settingsDefaults));
         storage.setState({ settings: account, machines: { 'voice-machine': createMachineFixture({ id: 'voice-machine', activeAt: Date.now() }) } });
+        await installVoiceMachineFixture(storage.getState().machines);
         primeServerFeaturesSnapshot({ serverId: getActiveServerSnapshot().serverId,
             snapshot: { status: 'ready', features: FeaturesResponseSchema.parse({ features: { voice: { enabled: true }, execution: { runs: { enabled: true } } }, capabilities: {} }) } });
         const packId = 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17';
@@ -1099,6 +1141,7 @@ describe('declared settings owner', () => {
         const account = applySettings(settingsDefaults, normalizeVoiceSettingsLocalDelta({ voice: { ...voice, providerId: 'local_conversation',
             executionMachine: { mode: 'fixed' as const, machineId } } }, settingsDefaults));
         storage.setState({ settings: account, machines: machineId ? { [machineId]: createMachineFixture({ id: machineId, activeAt: Date.now() }) } : {} });
+        await installVoiceMachineFixture(storage.getState().machines);
         const owner = createOwner(undefined, true, true, account);
         expect(await throughActionExecutor(owner.action).execute('settings.invoke', { anchor: 'voiceConversations.readiness' }, { surface: 'agent', authority: 'account_automation' }))
             .toMatchObject({ ok: true, result: { status: 'completed', value: { providerId: 'local_conversation', machineId,
@@ -1179,6 +1222,7 @@ describe('declared settings owner', () => {
         }, settingsDefaults));
         storage.setState({ settings: account, settingsScope: { serverId, accountId: 'test-account' },
             machines: { 'voice-machine': createMachineFixture({ id: 'voice-machine', activeAt: Date.now() }) } });
+        await installVoiceMachineFixture(storage.getState().machines);
         // The page prioritizes the selected missing model before a missing heavy-audio route.
         const featureSnapshot: ServerFeaturesSnapshot = { status: 'ready', features: FeaturesResponseSchema.parse({
             features: { voice: { enabled: true }, execution: { runs: { enabled: true } },
@@ -1242,6 +1286,7 @@ describe('declared settings owner', () => {
         onTestFinished(() => { storage.setState(before, true); settingsMachineRpc.mockReset(); });
         const account = applySettings(settingsDefaults, { voiceSettingsV1: { ...settingsDefaults.voice, executionMachine: { mode: 'fixed', machineId: 'voice-machine' } } });
         storage.setState({ settings: account, machines: { 'voice-machine': createMachineFixture({ id: 'voice-machine', activeAt: Date.now() }) } });
+        await installVoiceMachineFixture(storage.getState().machines);
         const owner = createOwner(undefined, true, true, account);
         const status = { ok: true, root: '/private/voice/diagnostics', settings: readVoiceDiagnosticsSettings(account.voice), artifacts: [],
             health: { captureFailure: false, cleanup: { status: 'healthy', code: null, ownedEntryCount: 0 } },
@@ -1318,7 +1363,7 @@ describe('declared settings owner', () => {
         expect(await owner.action({ actionId: 'settings.invoke', input: { anchor: 'voiceConversations.ttsPreviewStop' } }))
             .toEqual({ anchor: 'voiceConversations.ttsPreviewStop', status: 'completed', value: { stopped: false } });
         const { localNeuralTtsPreviewController } = await import('@/voice/settings/panels/localTts/providers/localNeural/previewLocalNeuralTts');
-        onTestFinished(() => localNeuralTtsPreviewController.stop());
+        onTestFinished(() => { localNeuralTtsPreviewController.stop(); });
         const attempt = localNeuralTtsPreviewController.begin('af_heart');
         const nativeStop = vi.fn();
         // The native media target is the real controller's system boundary.
@@ -1424,7 +1469,9 @@ describe('declared settings owner', () => {
     });
     it('refuses enabling preparation after turns when no supported Summary model is selected', async () => {
         await offeredSummaryProfiles();
-        const owner = createOwner(undefined, true);
+        const owner = createOwner(undefined, true, true, applySettings(settingsDefaults, {
+            'scm.diffSummary.modelProfileOverride': 'unavailable-model',
+        }));
         expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'sourceControl.prepareAfterTurn', value: true } }))
             .toMatchObject({ ok: false, errorCode: 'setting_value_unavailable' });
         expect(owner.account()['scm.diffSummary.prefetch']).toBe(false);
@@ -1452,23 +1499,24 @@ describe('declared settings owner', () => {
             .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
         expect(rebased.account()['scm.diffSummary.prefetch']).toBe(false);
     });
-    it('changes material presets, group blur/opacity and toolbar visibility through existing settings Actions', async () => {
-        const owner = createOwner();
+    it('changes material presets, surface modes, shared blur/tint and toolbar visibility through existing settings Actions', async () => {
+        const owner = createOwner({ os: 'web', desktop: true });
         expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.glassPreset', value: 'everywhere' } }))
             .toEqual({ anchor: 'appearance.glassPreset', value: 'everywhere' });
-        for (const group of ['Chrome', 'Sidebar', 'Content', 'Floating']) {
-            expect(await owner.action({ actionId: 'settings.set', input: { anchor: `appearance.glass${group}Blur`, value: 'strong' } }))
-                .toEqual({ anchor: `appearance.glass${group}Blur`, value: 'strong' });
-            expect(await owner.action({ actionId: 'settings.set', input: { anchor: `appearance.glass${group}Opacity`, value: 0 } }))
-                .toEqual({ anchor: `appearance.glass${group}Opacity`, value: 0 });
+        for (const group of ['Chrome', 'Sidebar', 'Window', 'Elements', 'Floating']) {
+            const anchor = `appearance.glass${group}`;
+            expect(await owner.action({ actionId: 'settings.set', input: { anchor, value: 'solid' } }))
+                .toEqual({ anchor, value: 'solid' });
+            expect(await owner.action({ actionId: 'settings.get', input: { anchor } }))
+                .toEqual({ anchor, value: 'solid' });
+            expect(await owner.action({ actionId: 'settings.set', input: { anchor, value: 'glass' } }))
+                .toEqual({ anchor, value: 'glass' });
         }
-        expect(owner.account().glassSurfaceMaterials).toEqual({
-            chrome: { blur: 'strong', opacity: 0 }, sidebar: { blur: 'strong', opacity: 0 },
-            content: { blur: 'strong', opacity: 0 }, floating: { blur: 'strong', opacity: 0 },
-        });
         await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.glassIntensity', value: 'light' } });
-        expect(owner.account().glassSurfaceMaterials?.content).toEqual({ blur: 'light', opacity: 0 });
-        expect(owner.account().glassSurfaceMaterials?.floating).toEqual({ blur: 'light', opacity: 0 });
+        expect(owner.account().glassSurfaceMaterials).toMatchObject({ chrome: { blur: 'light' },
+            sidebar: { blur: 'light' }, content: { blur: 'light' }, card: { blur: 'strong' }, floating: { blur: 'strong' } });
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.glassTint', value: 'strong' } }))
+            .toEqual({ anchor: 'appearance.glassTint', value: 'strong' });
         expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.glassPreset', value: 'custom' } }))
             .toMatchObject({ errorCode: 'invalid_setting_value' });
         await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.themeToggle', value: false } });
@@ -1556,6 +1604,7 @@ describe('declared settings owner', () => {
             'machine-a': createMachineFixture({ id: 'machine-a', activeAt: 0 }),
             'machine-b': createMachineFixture({ id: 'machine-b', activeAt: 0 }),
         } });
+        await installVoiceMachineFixture(storage.getState().machines);
         const providerId = 'happier.voice.openai-compat/stt';
         const entry = voiceSettingsDeclarationRegistry.get(providerId);
         const descriptor = entry?.providerSettings;

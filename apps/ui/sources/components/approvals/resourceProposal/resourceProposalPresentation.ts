@@ -6,11 +6,12 @@ import {
   type MachineProcessesActionResultV1,
 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 import {
-  PileApplyResultV1Schema,
+  PileApplyResultStoredV1Schema,
   type PileApplyResultV1,
+  type TrashEntryV1,
   type StorageReasonV1,
-  type TrashEmptyResultV1,
 } from '@happier-dev/protocol/storage/storageV1';
+import type { MachineGuardActivityRowV1 } from '@happier-dev/protocol/machines/guard/activityV1';
 
 import type {
   ResourceProposalItem,
@@ -264,12 +265,12 @@ export function resourceProposalDeclinedOperands(
     .map(refreshed);
 }
 
-// ── Display state (A7): derived from the approval's lifecycle, the check and a local Trash result ──
+// ── Display state (A7): approval lifecycle plus canonical Trash/Activity receipts ──
 
 export type ResourceProposalDisplay =
   | Readonly<{ kind: 'ask'; stale: boolean; checking: boolean }>
   | Readonly<{ kind: 'executing'; count: number; bytes: number }>
-  | Readonly<{ kind: 'trashed'; result: PileApplyResultV1 }>
+  | Readonly<{ kind: 'trashed'; result: PileApplyResultV1; receipt?: ResourceProposalTrashReceipt }>
   | Readonly<{ kind: 'emptied'; count: number; freedBytes: number }>
   | Readonly<{ kind: 'stopped'; result: MachineProcessesActionResultV1 }>
   | Readonly<{ kind: 'declined' }>
@@ -288,6 +289,59 @@ function readExecutionResult<T>(
     if (nested.success) return nested.data;
   }
   return null;
+}
+
+export function readResourceProposalPileResult(raw: unknown): PileApplyResultV1 | null {
+  return readExecutionResult(raw, value => PileApplyResultStoredV1Schema.safeParse(value));
+}
+
+export type ResourceProposalTrashReceipt =
+  | Readonly<{ kind: 'checking' }>
+  | Readonly<{ kind: 'unavailable' }>
+  | Readonly<{ kind: 'ready'; remaining: readonly TrashEntryV1[]; deletedCount: number;
+      restoredCount: number; unknownCount: number; freedBytes: number }>;
+
+/** Missing manifests are not proof of deletion: only the Trash owner's settled Activity receipts are. */
+export function deriveResourceProposalTrashReceipt(result: PileApplyResultV1, entries: readonly TrashEntryV1[],
+  activity: readonly MachineGuardActivityRowV1[]): ResourceProposalTrashReceipt {
+  const ids = result.trashEntryIds ? new Set(result.trashEntryIds) : null;
+  const remaining = entries.filter(entry => entry.batchId === result.batchId && (!ids || ids.has(entry.entryId)));
+  const present = new Set(remaining.map(entry => entry.entryId));
+  const movedCount = result.outcomes.filter(outcome => outcome.status === 'moved').length;
+  let deletedCount = ids ? Math.max(0, movedCount - ids.size) : 0;
+  let restoredCount = 0;
+  let freedBytes = result.freedBytes;
+  // trashStore owns these durable ids; Activity projects restored move receipts with undoneAt.
+  for (const entryId of ids ?? []) {
+    if (present.has(entryId)) continue;
+    const emptied = activity.find(row => row.id === `${entryId}-trash_emptied` && row.kind === 'trash_emptied'
+      && row.outcome === 'done' && row.freedBytes !== undefined);
+    const moved = activity.find(row => row.id === `${entryId}-trash_moved` && row.kind === 'trash_moved'
+      && row.outcome === 'done' && row.undoneAt !== undefined);
+    if (emptied && !moved) { deletedCount += 1; freedBytes += emptied.freedBytes!; }
+    else if (moved && !emptied) restoredCount += 1;
+  }
+  return { kind: 'ready', remaining, deletedCount, restoredCount,
+    unknownCount: Math.max(0, movedCount - remaining.length - deletedCount - restoredCount), freedBytes };
+}
+
+export function resourceProposalDisplayWithTrashReceipt(result: PileApplyResultV1,
+  receipt: ResourceProposalTrashReceipt): ResourceProposalDisplay {
+  if (receipt.kind === 'ready' && receipt.remaining.length === 0 && receipt.unknownCount === 0) {
+    if (receipt.deletedCount > 0 && receipt.restoredCount === 0) return {
+      kind: 'emptied', count: receipt.deletedCount, freedBytes: receipt.freedBytes,
+    };
+    if (receipt.restoredCount > 0 && receipt.deletedCount === 0) return { kind: 'restored' };
+  }
+  return { kind: 'trashed', result, receipt };
+}
+
+/** Per-entry allocations can overlap; only the unchanged full receipt proves their union. */
+export function resourceProposalTrashBytes(result: PileApplyResultV1,
+  receipt: Extract<ResourceProposalTrashReceipt, { kind: 'ready' }>): number | null {
+  const originalCount = result.trashEntryIds?.length ?? result.outcomes.filter(outcome => outcome.status === 'moved').length;
+  if (receipt.remaining.length === originalCount) return result.inTrashBytes;
+  return receipt.remaining.length === 1 ? receipt.remaining[0]!.size.allocatedBytes : null;
 }
 
 /** Items the approval actually carried into execution: the person's narrowed set, else the request. */
@@ -326,7 +380,6 @@ export function deriveResourceProposalDisplay(
   approval: ApprovalRequest,
   model: ResourceProposalModel,
   check: ResourceProposalCheck,
-  emptied: TrashEmptyResultV1 | null,
 ): ResourceProposalDisplay {
   switch (approval.status) {
     case 'open':
@@ -352,21 +405,9 @@ export function deriveResourceProposalDisplay(
           ? { kind: 'stopped', result }
           : { kind: 'failed', error: null };
       }
-      const result = readExecutionResult(approval.execution?.result, (value) =>
-        PileApplyResultV1Schema.safeParse(value),
-      );
+      const result = readResourceProposalPileResult(approval.execution?.result);
       if (!result) return { kind: 'failed', error: null };
       // "Freed" only when it is true: deleted outright, or the Trash was emptied (R25).
-      if (emptied) {
-        const deleted = emptied.outcomes.filter(
-          (outcome) => outcome.status === 'deleted',
-        ).length;
-        return {
-          kind: 'emptied',
-          count: deleted,
-          freedBytes: emptied.freedBytes,
-        };
-      }
       if (
         result.mode === 'delete' ||
         (result.inTrashBytes === 0 && result.freedBytes > 0)

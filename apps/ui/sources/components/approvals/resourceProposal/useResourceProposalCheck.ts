@@ -1,14 +1,18 @@
 import * as React from 'react';
-import type { ApprovalRequest } from '@happier-dev/protocol';
-import type { MachineStorageTrashMoveInputV1, PileApplyResultV1, TrashEmptyResultV1 } from '@happier-dev/protocol/storage/storageV1';
+import { ApprovalRequestV2Schema, approvalArtifactBodyMatchesHeaderV1, type ApprovalRequest, type ApprovalRequestV2 } from '@happier-dev/protocol';
+import type { MachineStorageTrashMoveInputV1, PileApplyResultV1, TrashEntryV1 } from '@happier-dev/protocol/storage/storageV1';
 
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { writeApprovalRequestArtifact } from '@/sync/ops/actions/approvalArtifactWriter';
+import { Modal } from '@/modal';
+import { t } from '@/text';
 import { executeMachineProcessesActionV1, executeMachineProcessesStartAgainV1 } from '@/sync/domains/machines/processes/machineProcessesActions';
 import { createFrontDoorRuntimeActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
-import { fetchMachineGuardViewViaAction } from '@/sync/domains/machines/guard/machineGuardRpc';
+import { fetchMachineGuardActivityViaAction, fetchMachineGuardViewViaAction } from '@/sync/domains/machines/guard/machineGuardRpc';
 import type { StoragePileBar } from '@/components/machines/storage/storagePileModel';
 import {
   checkMachineStorageItemsViaAction,
+  fetchMachineStorageCategoryViaAction,
   emptyMachineStorageTrashViaAction,
   moveMachineStorageToTrashViaAction,
   restoreMachineStorageTrashViaAction,
@@ -35,6 +39,11 @@ import {
   selectAllSafeResourceProposal,
   toggleResourceProposalSelectAll,
   readResourceProposalProcessResult,
+  readResourceProposalPileResult,
+  deriveResourceProposalTrashReceipt,
+  resourceProposalDisplayWithTrashReceipt,
+  resourceProposalTrashBytes,
+  type ResourceProposalTrashReceipt,
   type ResourceProposalCheck,
   type ResourceProposalDisplay,
   type ResourceProposalItemFacts,
@@ -91,6 +100,23 @@ type CheckClients = Readonly<{
   serverId: string | null;
   signal: AbortSignal;
 }>;
+
+async function readProposalTrashEntries(scope: Readonly<{ machineId: string; serverId: string; expectedAccountId: string; signal: AbortSignal }>): Promise<readonly TrashEntryV1[] | null> {
+  const entries: TrashEntryV1[] = [];
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  let revision: number | undefined;
+  do {
+    const page = await fetchMachineStorageCategoryViaAction({ ...scope, categoryId: 'trash', ...(cursor ? { cursor } : {}) });
+    if (!page.ok || page.value.trashEntries === undefined || (revision !== undefined && revision !== page.value.revision)) return null;
+    revision = page.value.revision;
+    entries.push(...page.value.trashEntries);
+    cursor = page.value.nextCursor;
+    if (cursor && cursors.has(cursor)) return null;
+    if (cursor) cursors.add(cursor);
+  } while (cursor && !scope.signal.aborted);
+  return scope.signal.aborted ? null : entries;
+}
 
 async function checkStorage(
   model: ResourceProposalModel,
@@ -243,6 +269,7 @@ async function checkProcesses(
 export function useResourceProposalCheck(
   approval: ApprovalRequest | null,
   serverIdHint: string | null,
+  artifactId?: string,
 ): ResourceProposalController | null {
   const model = React.useMemo(
     () => (approval ? readResourceProposalApproval(approval) : null),
@@ -263,16 +290,72 @@ export function useResourceProposalCheck(
   const [confirmedKeep, setConfirmedKeep] = React.useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const [emptied, setEmptied] = React.useState<TrashEmptyResultV1 | null>(null);
-  const [restored, setRestored] = React.useState(false);
   const [reopened, setReopened] = React.useState(false);
   const [localRun, setLocalRun] = React.useState<ResourceProposalLocalRun | null>(null);
   const localRunRef = React.useRef(localRun);
   localRunRef.current = localRun;
   const [retried, setRetried] = React.useState<ReadonlyMap<string, ResourceProposalOutcome>>(() => new Map());
-  const [retryReceipts, setRetryReceipts] = React.useState<readonly RetryReceiptState[]>([]);
+  const [localRetryReceipts, setRetryReceipts] = React.useState<readonly RetryReceiptState[]>([]);
+  const storedRetryResults = approval?.v === 2 ? approval.storageRetryResults : undefined;
+  const retryReceipts = React.useMemo(() => [...new Map([
+    ...(storedRetryResults ?? []).map(result => [result.batchId, { result }] as const),
+    ...localRetryReceipts.map(receipt => [receipt.result.batchId, receipt] as const),
+  ]).values()], [storedRetryResults, localRetryReceipts]);
+  const retriedOutcomes = React.useMemo(() => {
+    const outcomes = new Map(retried);
+    for (const receipt of retryReceipts) {
+      for (const [key, value] of readRetriedOutcomes({ kind: 'trashed', result: receipt.result },
+        new Set(receipt.result.outcomes.map(outcome => outcome.itemId)))) outcomes.set(key, value);
+    }
+    return outcomes;
+  }, [retried, retryReceipts]);
   const [startedAgain, setStartedAgain] = React.useState<ReadonlySet<string>>(() => new Set());
   const runRef = React.useRef<AbortController | null>(null);
+  const pileResult = React.useMemo(() => model?.kind === 'storage' && approval?.status === 'executed'
+    ? readResourceProposalPileResult(approval.execution?.result) : null,
+  [model?.kind, approval?.status, approval?.execution?.result]);
+  const receiptResults = React.useMemo(() => [
+    ...(localRun?.kind === 'trashed' ? [localRun.result] : pileResult ? [pileResult] : []),
+    ...retryReceipts.map(receipt => receipt.result),
+  ], [localRun, pileResult, retryReceipts]);
+  const [trashReceipts, setTrashReceipts] = React.useState<ReadonlyMap<string, ResourceProposalTrashReceipt>>(() => new Map());
+  React.useEffect(() => {
+    if (!model || receiptResults.length === 0) return;
+    // A retry adds its own receipt; do not overwrite settled follow-ups on an earlier batch.
+    const pendingResults = receiptResults.filter(result => !trashReceipts.has(result.batchId)
+      || trashReceipts.get(result.batchId)?.kind === 'checking');
+    if (pendingResults.length === 0) return;
+    const controller = new AbortController();
+    setTrashReceipts(current => new Map([...current, ...pendingResults.filter(result => !current.has(result.batchId))
+      .map(result => [result.batchId, { kind: 'checking' } as ResourceProposalTrashReceipt] as const)]));
+    const read = async () => {
+      if (!serverId) throw new Error('Proposal Home unavailable');
+      const account = await captureLazyActionAccountContext(serverId, controller.signal);
+      try {
+        account.assertCurrent();
+        const scope = { machineId: model.machineId, serverId: account.serverId,
+          expectedAccountId: account.accountId, signal: account.invocationSignal ?? controller.signal };
+        const values = await Promise.all([
+          readProposalTrashEntries(scope),
+          fetchMachineGuardActivityViaAction({ ...scope, range: '30d', filter: 'all' }),
+        ]);
+        account.assertCurrent();
+        return values;
+      } finally {
+        account.dispose();
+      }
+    };
+    void read().then(([entries, activity]) => {
+      if (controller.signal.aborted) return;
+      setTrashReceipts(current => new Map([...current, ...pendingResults.map(result => [result.batchId,
+        entries && activity.ok ? deriveResourceProposalTrashReceipt(result, entries, activity.value.entries)
+          : { kind: 'unavailable' } as ResourceProposalTrashReceipt] as const)]));
+    }, () => {
+      if (!controller.signal.aborted) setTrashReceipts(current => new Map([...current,
+        ...pendingResults.map(result => [result.batchId, { kind: 'unavailable' } as ResourceProposalTrashReceipt] as const)]));
+    });
+    return () => controller.abort();
+  }, [model?.machineId, serverId, receiptResults]);
 
   const runCheck = React.useCallback(
     (acknowledged: boolean) => {
@@ -398,34 +481,67 @@ export function useResourceProposalCheck(
   if (!approval || !model) return null;
   const settledDeclined = approval.status === 'rejected' || approval.status === 'canceled';
   let display: ResourceProposalDisplay;
-  if (restored) display = { kind: 'restored' };
-  else if (localRun?.kind === 'trashed') {
-    display = emptied
-      ? { kind: 'emptied', count: emptied.outcomes.filter((outcome) => outcome.status === 'deleted').length, freedBytes: emptied.freedBytes }
-      : { kind: 'trashed', result: localRun.result };
-  } else if (localRun?.kind === 'stopped') display = { kind: 'stopped', result: localRun.result };
+  if (localRun?.kind === 'trashed') display = { kind: 'trashed', result: localRun.result };
+  else if (localRun?.kind === 'stopped') display = { kind: 'stopped', result: localRun.result };
   // Reopen (AGW-8): the declined request stays rejected; the person reviews it again and runs it here.
   else if (reopened && settledDeclined) display = { kind: 'ask', stale: false, checking: check.kind === 'checking' };
-  else display = deriveResourceProposalDisplay(approval, model, check, emptied);
+  else display = deriveResourceProposalDisplay(approval, model, check);
+  if (display.kind === 'trashed') display = resourceProposalDisplayWithTrashReceipt(display.result,
+    trashReceipts.get(display.result.batchId) ?? { kind: 'checking' });
   const selectedCount = rows.filter((row) => row.selected).length;
   const stale = display.kind === 'ask' && display.stale;
-  const batchId = display.kind === 'trashed' ? display.result.batchId : null;
   const scope = {
     machineId: model.machineId,
     ...(serverId ? { serverId } : {}),
+  };
+  const trashActions = (result: PileApplyResultV1) => {
+    const receipt = trashReceipts.get(result.batchId);
+    const entries = receipt?.kind === 'ready' ? receipt.remaining : [];
+    const update = (entryIds: ReadonlySet<string>, kind: 'deleted' | 'restored', freedBytes: number) => {
+      setTrashReceipts(current => {
+        const prior = current.get(result.batchId);
+        if (prior?.kind !== 'ready') return current;
+        const acted = prior.remaining.filter(entry => entryIds.has(entry.entryId)).length;
+        return new Map(current).set(result.batchId, { ...prior,
+          remaining: prior.remaining.filter(entry => !entryIds.has(entry.entryId)),
+          deletedCount: prior.deletedCount + (kind === 'deleted' ? acted : 0),
+          restoredCount: prior.restoredCount + (kind === 'restored' ? acted : 0),
+          freedBytes: prior.freedBytes + freedBytes });
+      });
+    };
+    const restoreIds = entries.filter(entry => entry.restorable).map(entry => entry.entryId);
+    return {
+      undo: restoreIds.length ? async () => {
+        const outcome = await restoreMachineStorageTrashViaAction({ ...scope, entryIds: restoreIds });
+        if (!outcome.ok) return false;
+        const restored = new Set(outcome.value.outcomes.filter(value => value.status === 'restored' && restoreIds.includes(value.entryId)).map(value => value.entryId));
+        update(restored, 'restored', 0);
+        return restored.size === restoreIds.length;
+      } : null,
+      emptyNow: entries.length ? async () => {
+        const entryIds = entries.map(entry => entry.entryId);
+        const outcome = await emptyMachineStorageTrashViaAction({ ...scope, entryIds });
+        if (!outcome.ok) return false;
+        const deleted = new Set(outcome.value.outcomes.filter(value => value.status === 'deleted' && entryIds.includes(value.entryId)).map(value => value.entryId));
+        update(deleted, 'deleted', outcome.value.freedBytes);
+        return deleted.size === entryIds.length;
+      } : null,
+    };
   };
   const approveWithheld = selectedCount === 0 || stale || check.kind !== 'ready';
   const runFromUi = async (keys: ReadonlySet<string> | null): Promise<boolean> => {
     const selectedRows = rowsRef.current.filter((row) => (keys ? keys.has(row.item.key) && row.selectable : row.selected));
     const input = buildResourceProposalNarrowedInput(model, selectedRows.map((row) => ({ ...row, selected: true })));
     if (!input) return false;
-    const outcome = await runResourceProposalFromUi(model, input, serverId);
+    const outcome = await runResourceProposalFromUi(model, input, serverId,
+      keys && localRunRef.current === null && artifactId && approval.v === 2 && approval.status === 'executed'
+        ? { artifactId, approval } : undefined);
     if (!outcome) return false;
     if (keys && localRunRef.current === null) {
       // A retried item reports beside the original receipt; the receipt's totals stay the real ones.
       setRetried((current) => new Map([...current, ...readRetriedOutcomes(outcome, keys)]));
       // Its own receipt, from that retry's settled result (its own Trash batch, Undo and Empty now).
-      if (outcome.kind === 'trashed') setRetryReceipts((current) => [...current, { result: outcome.result, emptied: null, restored: false }]);
+      if (outcome.kind === 'trashed') setRetryReceipts((current) => [...current, { result: outcome.result }]);
       return true;
     }
     setLocalRun(outcome);
@@ -453,7 +569,7 @@ export function useResourceProposalCheck(
     runFromUi: reopened && settledDeclined && !localRun && !approveWithheld ? () => runFromUi(null) : null,
     retryItem: display.kind === 'trashed' || display.kind === 'stopped'
       ? (key: string) => runFromUi(new Set([key])) : null,
-    retried,
+    retried: retriedOutcomes,
     startAgain: model.actionId === 'machines.processes.stop' && endedKeys.length > 0 && serverId
       ? async (key: string) => {
           const started = await startResourceProposalProcessAgain(model.machineId, key, serverId);
@@ -462,51 +578,24 @@ export function useResourceProposalCheck(
         }
       : null,
     startedAgain,
-    retryReceipts: retryReceipts.map((receipt, index): ResourceProposalRetryReceipt => {
-      const update = (patch: Partial<RetryReceiptState>) =>
-        setRetryReceipts((current) => current.map((entry, at) => (at === index ? { ...entry, ...patch } : entry)));
-      const batch = { ...scope, batchId: receipt.result.batchId };
+    retryReceipts: retryReceipts.map((receipt): ResourceProposalRetryReceipt => {
+      const current = trashReceipts.get(receipt.result.batchId);
+      const display = resourceProposalDisplayWithTrashReceipt(receipt.result, current ?? { kind: 'checking' });
       const acted = receipt.result.outcomes.filter((outcome) => outcome.status === 'moved' || outcome.status === 'deleted').length;
       return {
         batchId: receipt.result.batchId,
-        restored: receipt.restored,
-        bar: receipt.emptied
-          ? { kind: 'freed', count: receipt.emptied.outcomes.filter((outcome) => outcome.status === 'deleted').length, freedBytes: receipt.emptied.freedBytes }
-          : { kind: 'held', batchId: receipt.result.batchId, count: acted, inTrashBytes: receipt.result.inTrashBytes,
-            notActed: receipt.result.outcomes.length - acted, emptiesAt: null },
-        undo: receipt.emptied || receipt.restored ? null : async () => {
-          const result = await restoreMachineStorageTrashViaAction(batch);
-          if (result.ok) update({ restored: true });
-          return result.ok;
-        },
-        emptyNow: receipt.emptied || receipt.restored || receipt.result.inTrashBytes === 0 ? null : async () => {
-          const result = await emptyMachineStorageTrashViaAction(batch);
-          if (result.ok) update({ emptied: result.value });
-          return result.ok;
-        },
+        restored: display.kind === 'restored',
+        bar: display.kind === 'emptied'
+          ? { kind: 'freed', count: display.count, freedBytes: display.freedBytes }
+          : current?.kind === 'ready' && current.remaining.length > 0
+          ? { kind: 'held', batchId: receipt.result.batchId, count: current.remaining.length,
+            inTrashBytes: resourceProposalTrashBytes(receipt.result, current),
+            notActed: receipt.result.outcomes.length - acted, emptiesAt: null }
+          : { kind: 'hidden' },
+        ...trashActions(receipt.result),
       };
     }),
-    emptyNow:
-      batchId && display.kind === 'trashed' && display.result.inTrashBytes > 0
-        ? async () => {
-            const result = await emptyMachineStorageTrashViaAction({
-              ...scope,
-              batchId,
-            });
-            if (result.ok) setEmptied(result.value);
-            return result.ok;
-          }
-        : null,
-    undo: batchId
-      ? async () => {
-          const result = await restoreMachineStorageTrashViaAction({
-            ...scope,
-            batchId,
-          });
-          if (result.ok) setRestored(true);
-          return result.ok;
-        }
-      : null,
+    ...(display.kind === 'trashed' ? trashActions(display.result) : { undo: null, emptyNow: null }),
   };
 }
 
@@ -519,13 +608,40 @@ async function runResourceProposalFromUi(
   model: ResourceProposalModel,
   input: Readonly<Record<string, unknown>>,
   serverId: string | null,
+  retryReceipt?: Readonly<{ artifactId: string; approval: ApprovalRequestV2 }>,
 ): Promise<ResourceProposalLocalRun | null> {
   if (model.kind === 'storage') {
-    const result = await moveMachineStorageToTrashViaAction({
-      ...(input as MachineStorageTrashMoveInputV1),
-      ...(serverId ? { serverId } : {}),
-    });
-    return result.ok ? { kind: 'trashed', result: result.value } : null;
+    if (!serverId) return null;
+    const account = await captureLazyActionAccountContext(serverId);
+    try {
+      const result = await moveMachineStorageToTrashViaAction({
+        ...(input as MachineStorageTrashMoveInputV1), serverId: account.serverId, expectedAccountId: account.accountId,
+      });
+      if (!result.ok) return null;
+      if (retryReceipt) {
+        try {
+          const full = await account.fetchArtifact(retryReceipt.artifactId);
+          const stored = full?.header && typeof full.body === 'string'
+            ? approvalArtifactBodyMatchesHeaderV1(full.header, full.body) : null;
+          if (stored?.family !== 'built_in' || stored.request.v !== 2
+            || stored.request.executionOriginV1.requestId !== retryReceipt.approval.executionOriginV1.requestId) {
+            throw new Error('approval_request_subject_mismatch');
+          }
+          const next = ApprovalRequestV2Schema.parse({ ...stored.request, updatedAtMs: Date.now(),
+            storageRetryResults: [...(stored.request.storageRetryResults ?? []), result.value] });
+          const written = await writeApprovalRequestArtifact({ artifactId: retryReceipt.artifactId, request: next,
+            read: id => account.fetchArtifact(id),
+            write: (basis, header, body) => account.updateArtifact(retryReceipt.artifactId, header, body, basis) });
+          if (!written.ok) throw new Error(written.error);
+        } catch {
+          // The effect already settled. Keep its real local receipt/Undo and surface the failed history write.
+          Modal.alert(t('common.error'), t('approvals.decisionError'));
+        }
+      }
+      return { kind: 'trashed', result: result.value };
+    } finally {
+      account.dispose();
+    }
   }
   if (!serverId) return null;
   const account = await captureLazyActionAccountContext(serverId);
@@ -574,7 +690,7 @@ async function startResourceProposalProcessAgain(machineId: string, ref: string,
   }
 }
 
-type RetryReceiptState = Readonly<{ result: PileApplyResultV1; emptied: TrashEmptyResultV1 | null; restored: boolean }>;
+type RetryReceiptState = Readonly<{ result: PileApplyResultV1 }>;
 
 export type ResourceProposalRetryReceipt = Readonly<{
   batchId: string;

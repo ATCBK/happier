@@ -39,6 +39,7 @@ import { resolveApiTokenOperationErrorMessageKey } from './apiTokenSettingsPrese
 import { ApiTokenGrantEditor, ApiTokenGrantPickerDone, useApiTokenGrantPicker } from './grant/ApiTokenGrantEditor';
 import { API_TOKEN_LIMITED_GRANT_START_V1, areApiTokenGrantsEqual, isApiTokenGrantDraftSendable } from './grant/apiTokenGrantDraft';
 import { useApiTokenSettingsControllerState } from './useApiTokenSettingsControllerState';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 
 const stylesheet = StyleSheet.create((theme) => ({
@@ -216,7 +217,7 @@ function ApiTokenCreateContent(props: Readonly<{ controller: ApiTokenSettingsCon
         // The form keeps one height while its steps change; the one-time reveal is a short final
         // step, so the card fits it instead of leaving an empty void under the warning (lab T8).
         scrollHost: reveal ? 'overlay' as const : 'body' as const,
-        dimensions: { width: 600, maxHeightRatio: 0.9, size: 'md' as const },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.9, size: 'md' as const },
         footer,
     }), [draft.label, footer, onAccessStage, props.revealCopy?.title, reveal]));
 
@@ -470,7 +471,7 @@ function ApiTokenEditAccessContent(props: Readonly<{ controller: ApiTokenSetting
         closeButtonTestID: 'settings-api-tokens-edit-close',
         phonePresentation: 'sheet' as const,
         scrollHost: 'body' as const,
-        dimensions: { width: 600, maxHeightRatio: 0.9, size: 'md' as const },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.9, size: 'md' as const },
         footer,
     }), [footer, token?.label]));
 

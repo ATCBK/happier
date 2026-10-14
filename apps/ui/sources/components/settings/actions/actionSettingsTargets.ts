@@ -1,5 +1,3 @@
-import type { ActionSettingsTargetId } from './actionSettingsTargetDefinitions';
-
 export {
     getActionSettingsTargetContext,
     getActionSettingsTargetDefinition,
@@ -36,7 +34,3 @@ export {
     type ActionSettingsTargetControlKind,
     type ActionSettingsTargetControlState,
 } from './resolveActionSettingsControlState';
-
-export function isMcpTarget(targetId: ActionSettingsTargetId): boolean {
-    return targetId === 'mcp';
-}

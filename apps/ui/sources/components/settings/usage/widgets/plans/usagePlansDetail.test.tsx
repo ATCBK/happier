@@ -374,6 +374,8 @@ it('shows attributed API-equivalent account value and a qualified price multiple
   }).results[0]!;
   const { UsagePlanFitWidget } = await import('../UsagePlanFitWidget');
   const screen = await renderScreen(wrap(<UsagePlanFitWidget {...base} slice={slice} model={{ ...base.model, slice }} id="usage_plan_fit" testID="fit" />));
+  // The row's one key figure is the qualified multiple ($4.00 observed against the $2.00 entered price).
+  expect(screen.getTextContent()).toContain('2×');
   await screen.pressByTestIdAsync('fit.plan.work.details-header');
   const value = screen.findHostByTestId('fit.plan.work.value');
   expect(value).toBeTruthy();

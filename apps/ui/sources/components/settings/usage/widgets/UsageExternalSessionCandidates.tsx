@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 import { matchesUsageSourceAccountingScope, type UsageSourceV1 } from '@happier-dev/protocol/usage/usageSources';
 import type { UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
@@ -19,6 +20,14 @@ import { isMachineSelectableForFleet } from '@/sync/domains/machines/administrat
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { useUsageSourcesController } from './useUsageSources';
+
+/**
+ * A page that lists several Sources asks for browsing once: each Source registers while it waits for an
+ * explicit browse, and one request opens every waiting Source in the page's own scope. A Source whose
+ * root or consent changes later waits again, so the request never reaches a scope the user did not see.
+ */
+type OutsideBrowseRequests = Readonly<{ request: number; register: (key: string) => () => void }>;
+const OutsideBrowseContext = React.createContext<OutsideBrowseRequests | null>(null);
 
 /** Vendor-backed candidate titles require consent or an explicit browse; linking never enables capture. */
 export function UsageExternalSessionCandidates(props: Readonly<{
@@ -43,6 +52,18 @@ export function UsageExternalSessionCandidates(props: Readonly<{
         props.source.machineId, props.source.root.kind, props.source.root.path, props.source.consent, props.lifetime]);
     const [browseIntent, setBrowseIntent] = React.useState<typeof browseScope | null>(null);
     const historyAllowed = props.source.consent === 'enabled' || browseIntent === browseScope;
+    const pageBrowse = React.useContext(OutsideBrowseContext);
+    const awaitingBrowse = !!target && !historyAllowed && props.online;
+    const pageRegister = pageBrowse?.register;
+    const registryKey = `${props.source.machineId}:${props.source.sourceId}`;
+    React.useEffect(() => awaitingBrowse ? pageRegister?.(registryKey) : undefined, [awaitingBrowse, pageRegister, registryKey]);
+    const handledRequest = React.useRef(pageBrowse?.request ?? 0);
+    const pageRequest = pageBrowse?.request ?? 0;
+    React.useEffect(() => {
+        if (pageRequest === handledRequest.current) return;
+        handledRequest.current = pageRequest;
+        if (awaitingBrowse && props.lifetime.isCurrent()) setBrowseIntent(browseScope);
+    }, [pageRequest]);
     const listing = useExternalSessionBrowseCandidates({ machineId: props.source.machineId,
         serverId: props.lifetime.scope.serverId, providerId: target?.agentId ?? null, source: target?.source ?? null,
         accountLifetime: props.lifetime, enabled: !!target && historyAllowed && props.online && props.lifetime.isCurrent() });
@@ -59,13 +80,13 @@ export function UsageExternalSessionCandidates(props: Readonly<{
     const execute = React.useMemo(() => createFrontDoorActionExecute(), []);
     const router = useRouter();
     if (!target || !props.lifetime.isCurrent()) return null;
-    if (!historyAllowed) return <RoundButton size="small" display="inverted" title={t('externalSessions.browseTitle')}
-        testID={`${props.testID}.browse`} disabled={!props.online}
+    if (!historyAllowed) return pageBrowse ? null : <View style={styles.action}><RoundButton size="small" display="inverted"
+        title={t('externalSessions.browseTitle')} testID={`${props.testID}.browse`} disabled={!props.online}
         onPress={() => {
             if (current.current.browseScope === browseScope && props.lifetime.isCurrent()) {
                 setBrowseIntent(browseScope);
             }
-        }} />;
+        }} /></View>;
     const outside = listing.candidates.filter(candidate => !candidate.linkedSessionId);
     if (!outside.length) return null;
     return <View testID={props.testID}>
@@ -89,8 +110,8 @@ export function UsageExternalSessionCandidates(props: Readonly<{
                     }); }} />
             </View>;
         })}
-        {listing.nextCursor ? <RoundButton size="small" display="inverted" title={t('common.next')}
-            loading={listing.loadingMore} onPress={() => { void listing.loadMore(); }} /> : null}
+        {listing.nextCursor ? <View style={styles.action}><RoundButton size="small" display="inverted" title={t('common.next')}
+            loading={listing.loadingMore} onPress={() => { void listing.loadMore(); }} /></View> : null}
     </View>;
 }
 
@@ -116,8 +137,26 @@ export function UsageOutsideSessions(props: Readonly<{ serverId: string; query: 
     // These filters require accounting/session evidence candidates cannot establish; never broaden them.
     if (!lifetime || props.query.session !== null
         || props.query.projects.length || props.query.workspaceIds.length || props.query.modelIds.length || props.query.backendModes.length) return null;
-    return <View testID={props.testID}>{machines.filter(machine => !machine.revokedAt &&
+    return <OutsideBrowsePage testID={props.testID}>{machines.filter(machine => !machine.revokedAt &&
         (!props.query.machines.length || props.query.machines.includes(machine.id))).map(machine =>
         <OutsideMachine key={machine.id} machineId={machine.id} online={lifetime.isCurrent() && isMachineSelectableForFleet(lifetime.scope, machine, nowMs)} lifetime={lifetime}
-            query={props.query} testID={`${props.testID}.${machine.id}`} />)}</View>;
+            query={props.query} testID={`${props.testID}.${machine.id}`} />)}</OutsideBrowsePage>;
 }
+
+function OutsideBrowsePage(props: Readonly<{ testID: string; children: React.ReactNode }>) {
+    const [waiting, setWaiting] = React.useState<ReadonlySet<string>>(() => new Set());
+    const [request, setRequest] = React.useState(0);
+    const register = React.useCallback((key: string) => {
+        setWaiting(previous => new Set(previous).add(key));
+        return () => setWaiting(previous => { const next = new Set(previous); next.delete(key); return next; });
+    }, []);
+    const requests = React.useMemo(() => ({ request, register }), [request, register]);
+    return <View testID={props.testID}>
+        {waiting.size > 0 ? <View style={styles.action}><RoundButton size="small" display="inverted"
+            title={t('externalSessions.browseTitle')} testID={`${props.testID}.browse`}
+            onPress={() => setRequest(count => count + 1)} /></View> : null}
+        <OutsideBrowseContext.Provider value={requests}>{props.children}</OutsideBrowseContext.Provider>
+    </View>;
+}
+
+const styles = StyleSheet.create({ action: { alignSelf: 'flex-start' } });

@@ -5,6 +5,7 @@ import type { AutomationV3Settings } from '@happier-dev/protocol/automations/aut
 import { executeAutomationSettingDeclaration } from '@happier-dev/protocol/actions';
 import type { FeatureId } from '@happier-dev/protocol/features/catalog';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
+import type { ActionApprovalRequestCreatedResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { isAccountSettingActionSurfaceAllowedV1 } from '@happier-dev/protocol/actions/accountSettingDeclarations';
 
 import { getSettingsPageDeclarations } from '@/components/settings/catalog/settingsPageDeclarations';
@@ -72,7 +73,7 @@ function refuse(errorCode: string) {
 
 class RejectedSettingMutation extends Error {}
 type SettingsDeclarationActionResult = z.output<(typeof SettingsDeclarationActionOutputSchemasV1)[SettingsDeclarationActionIdV1]>
-    | ReturnType<typeof refuse>;
+    | ReturnType<typeof refuse> | ActionApprovalRequestCreatedResult;
 class ConditionalSettingConflict extends Error {}
 const CapturedSettingMutationSchema = z.object({
     beforeVersion: SettingsDeclarationMutationReversalV1Schema.shape.beforeVersion,
@@ -269,7 +270,10 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             if (!key.success) return refuse('setting_key_required');
             if (actionId === 'settings.get') {
                 const settings = await owner.readAccountSettings();
-                return { anchor: parsed.anchor, value: readMachineInstallablePolicySetting(settings, key.data) };
+                const output = SettingsDeclarationActionOutputSchemasV1['settings.get'].safeParse({
+                    anchor: parsed.anchor, value: readMachineInstallablePolicySetting(settings, key.data),
+                });
+                return output.success ? output.data : refuse('invalid_action_output');
             }
             const requested = SettingsDeclarationActionInputSchemasV1['settings.set'].parse(input);
             const change = MachineInstallablePolicyChangeSchema.safeParse(requested.value);
@@ -363,14 +367,16 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
                 services: owner.mutationServices,
                 isFeatureEnabled: owner.isFeatureEnabled,
                 readSettings: owner.readAccountSettings,
-                mutateSettings: async (mutate) => owner.mutateAccountSettings((raw) => {
-                    throwIfAborted(context?.signal);
-                    if (!isCurrent()) throw new RejectedSettingMutation();
-                    const settings = settingsParse(raw);
-                    const delta = mutate(settings);
-                    if (!delta) throw new RejectedSettingMutation();
-                    return { ...raw, ...normalizeVoiceSettingsLocalDelta(delta, settings) };
-                }),
+                mutateSettings: async (mutate) => {
+                    await owner.mutateAccountSettings((raw) => {
+                        throwIfAborted(context?.signal);
+                        if (!isCurrent()) throw new RejectedSettingMutation();
+                        const settings = settingsParse(raw);
+                        const delta = mutate(settings);
+                        if (!delta) throw new RejectedSettingMutation();
+                        return { ...raw, ...normalizeVoiceSettingsLocalDelta(delta, settings) };
+                    });
+                },
             });
             return { anchor: ref.anchor, ...result };
         }
@@ -465,8 +471,10 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
                 if (!result) return refuse('setting_conditional_mutation_unsupported');
                 if (result.status !== 'applied') return refuse(`account_settings_mutation_${result.status === 'conflict' ? 'conflict' : 'outcome_unknown'}`);
                 const restored = settingsParse('unset' in before ? {} : { [key]: before.value })[key];
-                if (restored === undefined) return { anchor: ref.anchor, unset: true as const };
-                return { anchor: ref.anchor, value: binding.invertBoolean ? !restored : restored };
+                const output = SettingsDeclarationActionOutputSchemasV1['settings.set'].safeParse(restored === undefined
+                    ? { anchor: ref.anchor, unset: true }
+                    : { anchor: ref.anchor, value: binding.invertBoolean ? !restored : restored });
+                return output.success ? output.data : refuse('invalid_action_output');
             }
             if (binding.allowedValues && !binding.allowedValues.some(allowed => allowed === requested.value)) return refuse('invalid_setting_value');
             if (binding.invertBoolean && typeof requested.value !== 'boolean') return refuse('invalid_setting_value');
@@ -553,8 +561,10 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             const snapshot = await owner.readAccountSettingsSnapshot();
             if (!isCurrent()) return refuse('setting_not_bound');
             const value = settingsParse(snapshot.raw)[binding.key];
-            if (value === undefined) return { anchor: ref.anchor, unset: true as const, settingsVersion: snapshot.version };
-            return { anchor: ref.anchor, value: binding.invertBoolean ? !value : value, settingsVersion: snapshot.version };
+            const output = SettingsDeclarationActionOutputSchemasV1['settings.get'].safeParse(value === undefined
+                ? { anchor: ref.anchor, unset: true, settingsVersion: snapshot.version }
+                : { anchor: ref.anchor, value: binding.invertBoolean ? !value : value, settingsVersion: snapshot.version });
+            return output.success ? output.data : refuse('invalid_action_output');
         }
         const current = !('key' in binding)
             ? binding.kind === 'localOwner' ? binding.read(owner.readLocalSettings()) : binding.read(await owner.readAccountSettings())

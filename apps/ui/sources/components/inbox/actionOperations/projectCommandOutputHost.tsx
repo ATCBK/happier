@@ -3,7 +3,7 @@ import * as React from 'react';
 import { parseProjectPaneScopeId } from '@/components/projects/detail/projectPaneScope';
 import { parseSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
 import { EMPTY_TERMINAL_WORKSPACE } from '@/components/sessions/terminal/sessionTerminalWorkspace';
-import { readSessionTerminalWorkspaceForScope } from '@/components/sessions/terminal/sessionTerminalWorkspaceRuntime';
+import { readSessionTerminalWorkspaceForScope, subscribeSessionTerminalWorkspace } from '@/components/sessions/terminal/sessionTerminalWorkspaceRuntime';
 import { useSessionTerminalActionExecute } from '@/components/sessions/terminal/useSessionTerminalWorkspace';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -50,6 +50,40 @@ function scopeServerId(scopeId: string): string | null {
   );
 }
 
+type OutputTerminalRef = Readonly<{ terminalId?: string | null; machineId: string }>;
+
+/** The host's bottom terminal tab that already shows this command's PTY, if any. */
+function findOutputTerminalInHost(scopeId: string, attachment: OutputTerminalRef) {
+  const workspace = readSessionTerminalWorkspaceForScope(
+    scopeId,
+    parseProjectPaneScopeId(scopeId) ? EMPTY_TERMINAL_WORKSPACE : undefined,
+  );
+  return workspace?.tabs
+    .flatMap((tab) => tab.terminals)
+    .find(
+      (member) =>
+        member.target.kind === 'terminal_view' &&
+        member.target.terminalId === attachment.terminalId &&
+        member.target.machineId === attachment.machineId,
+    );
+}
+
+/**
+ * Whether the host's bottom terminal already shows this command's PTY. One PTY has one surface on a
+ * page: while the host tab shows it, inline output points there instead of mounting a second view.
+ */
+export function useProjectCommandOutputDocked(attachment: OutputTerminalRef | null): boolean {
+  const scopeId = React.useContext(ProjectCommandOutputHostContext);
+  const terminalId = attachment?.terminalId ?? null;
+  const machineId = attachment?.machineId ?? null;
+  const subscribe = subscribeSessionTerminalWorkspace;
+  const read = React.useCallback(
+    () => Boolean(scopeId && terminalId && machineId && findOutputTerminalInHost(scopeId, { terminalId, machineId })),
+    [machineId, scopeId, terminalId],
+  );
+  return React.useSyncExternalStore(subscribe, read, read);
+}
+
 /**
  * Opens a project command's output where its host shows terminals: the same PTY as a borrowed,
  * read-only bottom terminal tab, focused when it is already open there. Opening or closing the tab
@@ -70,20 +104,7 @@ export function useProjectCommandOutputOpener() {
         const server = scopeId ? scopeServerId(scopeId) : null;
         if (scopeId && !phone && attachment?.terminalId && server
           && areServerProfileIdentifiersEquivalent(server, attachment.serverId)) {
-          const workspace = readSessionTerminalWorkspaceForScope(
-            scopeId,
-            parseProjectPaneScopeId(scopeId)
-              ? EMPTY_TERMINAL_WORKSPACE
-              : undefined,
-          );
-          const open = workspace?.tabs
-            .flatMap((tab) => tab.terminals)
-            .find(
-              (member) =>
-                member.target.kind === 'terminal_view' &&
-                member.target.terminalId === attachment.terminalId &&
-                member.target.machineId === attachment.machineId,
-            );
+          const open = findOutputTerminalInHost(scopeId, attachment);
           const result = open
             ? await execute('session.terminals.focus', { terminalId: open.id })
             : await execute('session.terminals.open', {

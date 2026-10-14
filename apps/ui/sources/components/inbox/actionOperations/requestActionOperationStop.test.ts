@@ -113,6 +113,7 @@ describe('requestActionOperationStop', () => {
     it('returns canonical deferred approval custody without dispatching Stop', async () => {
         const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test',
             accountId: 'alice', serverIdentityId: 'origin-identity' });
+        await harness.requireUiApproval(serverId, 'action.operations.cancel');
         const result = await requestActionOperationStop(operation(serverId));
         expect(result).toMatchObject({ kind: 'approval_request_created', actionId: 'action.operations.cancel' });
         expect(rpc.machine).not.toHaveBeenCalled();
@@ -140,6 +141,7 @@ describe('requestActionOperationStop', () => {
 
     it('holds the real row Stop through deferred approval without opening detail', async () => {
         const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
+        await harness.requireUiApproval(serverId, 'action.operations.cancel');
         let opened = false;
         const screen = await renderScreen(React.createElement(ActionOperationLedgerView, {
             operations: [operation(serverId)], onOpenOperation: () => { opened = true; },
@@ -213,6 +215,7 @@ describe('requestActionOperationStop', () => {
 
     it('never adopts the replacement Account when retirement occurs during approval creation', async () => {
         const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
+        await harness.requireUiApproval(serverId, 'action.operations.cancel');
         const responseGate = createDeferred<void>();
         const answer = { respondAfter: responseGate.promise, body: undefined as unknown };
         harness.answer(serverId, 'POST /v1/artifacts', answer);
@@ -290,6 +293,7 @@ describe('requestActionOperationStop', () => {
 
     it('requests contextual Work Stop before output exists and joins approval without opening or settling the row', async () => {
         const serverId = await addOriginHome({ name: 'Origin', serverUrl: 'https://origin.test', accountId: 'alice' });
+        await harness.requireUiApproval(serverId, 'action.operations.cancel');
         const accepted: ActionOperationProjection = {
             ...operation(serverId),
             snapshot: {

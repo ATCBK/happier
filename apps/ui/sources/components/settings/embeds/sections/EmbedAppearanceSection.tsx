@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 import type { EmbedStyleV1 } from '@happier-dev/protocol/embed';
 
 import { EmbeddedChatPreview } from '@/components/settings/session/SessionSettingPreviews';
@@ -48,6 +49,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     reset: {
         alignItems: 'flex-start',
         paddingTop: theme.space.s8,
+        // On the sheets' text edge, level with the page's closing review below it.
+        marginHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx,
     },
 }));
 

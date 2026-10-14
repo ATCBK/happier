@@ -72,8 +72,8 @@ vi.mock('@/utils/platform/desktopHost', async (importOriginal) => ({
     isDesktopHost: () => settingsState.tauriDesktop,
 }));
 
-// Initialize the declarations before the real store's app-context import graph.
-await import('../settingsPageDeclarations');
+// Enter through the real runtime consumer before its declarations reach the app-context cycle.
+await import('./useResolvedSettingsPageCatalog');
 const { storage } = await import('@/sync/domains/state/storage');
 const { settingsDefaults } = await import('@/sync/domains/settings/settings');
 const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
@@ -409,17 +409,48 @@ describe('useResolvedSettingsPageCatalog', () => {
         }
     });
 
-    it('filters feature-gated pages out of the visible tree', async () => {
-        featureGateState.enabled = (featureId: string) => featureId !== 'mcp.servers';
+    it('keeps MCP servers in the visible tree when feature decisions are disabled', async () => {
+        featureGateState.enabled = () => false;
 
         const { useResolvedSettingsPageCatalog } = await import('./useResolvedSettingsPageCatalog');
         const hook = await renderHook(() => useResolvedSettingsPageCatalog());
 
         const current = hook.getCurrent();
         const ids = flattenIds(current.tree);
-        expect(ids).not.toContain('mcp');
+        expect(ids).toContain('mcp');
+        expect(current.search('capabilities.mcp.foundOnMachines')).toContainEqual(expect.objectContaining({
+            id: 'mcp', route: '/settings/mcp/found?setting=mcp.found',
+            setting: expect.objectContaining({ anchor: 'mcp.found' }),
+        }));
+        expect(current.search('capabilities.skillsFound.title').some(result => result.setting?.anchor === 'skills.found')).toBe(false);
 
         await hook.unmount();
+    });
+
+    it('finds Skills destinations and MCP Found through the registered declarations and their real routes', async () => {
+        const { useResolvedSettingsPageCatalog } = await import('./useResolvedSettingsPageCatalog');
+        const { matchWorkspaceDestinationRoute, workspaceRouteFiles } = await import('@/components/appShell/workspace/workspaceRoutes');
+        const hook = await renderHook(() => useResolvedSettingsPageCatalog());
+        try {
+            for (const [id, query, anchor, pathname] of [
+                ['skills', 'capabilities.skillsUpdates.updates.title', 'skills.updates', '/settings/skills/updates'],
+                ['skills', 'capabilities.skillsFound.title', 'skills.found', '/settings/skills/found'],
+                ['skills', 'capabilities.skills.home.choose', 'skills.choose', '/settings/skills/choose'],
+                ['mcp', 'capabilities.mcp.foundOnMachines', 'mcp.found', '/settings/mcp/found'],
+                ['mcp', 'settings.mcpServersDetectedDirectoryTitle', 'mcp.found.mcpServersDetectedDirectory', '/settings/mcp/found'],
+            ] as const) {
+                expect(hook.getCurrent().search(query), anchor).toContainEqual(expect.objectContaining({
+                    id, route: `${pathname}?setting=${anchor}`,
+                    setting: expect.objectContaining({ anchor }),
+                }));
+                const matched = matchWorkspaceDestinationRoute(pathname);
+                expect(matched?.routeKey, pathname).toBe(pathname.slice(1));
+                expect(workspaceRouteFiles[pathname.slice(1)]).toBe(`./(app)${pathname}.tsx`);
+            }
+            expect(hook.getCurrent().search('promptLibrary.skills').some(result => result.setting?.anchor === 'prompts.skills')).toBe(false);
+        } finally {
+            await hook.unmount();
+        }
     });
 
     it('keeps the generic Machine Pool chooser discoverable without borrowing the focused Home feature decision', async () => {
@@ -469,22 +500,20 @@ describe('useResolvedSettingsPageCatalog', () => {
         await disabledHook.unmount();
     });
 
-    it('offers the prompt registries and external assets pages only while their features are on', async () => {
+    it('keeps retired prompt asset and registry entries out of navigation and search', async () => {
         const { useResolvedSettingsPageCatalog } = await import('./useResolvedSettingsPageCatalog');
-
-        featureGateState.enabled = (featureId: string) => featureId === 'prompts.library'
-            || featureId === 'prompts.assets.external';
-        const enabledHook = await renderHook(() => useResolvedSettingsPageCatalog());
-        expect(flattenIds(enabledHook.getCurrent().tree)).toEqual(expect.arrayContaining(['promptsRegistries', 'promptsAssets']));
-        await enabledHook.unmount();
-
-        featureGateState.enabled = (featureId: string) => featureId === 'prompts.library';
-        const disabledHook = await renderHook(() => useResolvedSettingsPageCatalog());
-        const ids = flattenIds(disabledHook.getCurrent().tree);
-        expect(ids).toContain('prompts');
-        expect(ids).not.toContain('promptsRegistries');
-        expect(ids).not.toContain('promptsAssets');
-        await disabledHook.unmount();
+        const hook = await renderHook(() => useResolvedSettingsPageCatalog());
+        try {
+            const ids = flattenIds(hook.getCurrent().tree);
+            expect(ids).toEqual(expect.arrayContaining(['prompts', 'skills', 'mcp', 'promptsTemplates', 'promptsFolders', 'promptsLibrary']));
+            expect(ids).not.toContain('promptsRegistries');
+            expect(ids).not.toContain('promptsAssets');
+            for (const query of ['registries', 'external assets']) {
+                expect(hook.getCurrent().search(query).some(result => ['promptsRegistries', 'promptsAssets'].includes(result.id))).toBe(false);
+            }
+        } finally {
+            await hook.unmount();
+        }
     });
 
     it('uses the canonical pets companion feature decision for navigation and search', async () => {

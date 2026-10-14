@@ -192,7 +192,7 @@ describe('useActionApprovalContinuation', () => {
             expect(isWriting).toBe(true);
             expect(layout!.failedIntent).toBeUndefined();
             expect(layout!.layout.hidden).not.toContain('setup');
-            const artifactId = harness.artifacts(serverId).list().find(artifact => harness.artifacts(serverId).readPlainBody(artifact.id).includes('"actionId"'))!.id;
+            const artifactId = harness.artifacts(serverId).list().find(artifact => harness.artifacts(serverId).readPlainBody(artifact.id)?.includes('"actionId"'))!.id;
             if (kind === 'visibility') {
                 const path = `/v1/artifacts/${artifactId}`;
                 harness.answer(serverId, `GET ${path}`, { dispatchThenFail: true });

@@ -51,6 +51,20 @@ describe('Connected service index read diagnostics', () => {
         expect(index.sheets[0]).toMatchObject({ statusLine: result.primary, supportDetails: result.supportDetails, canAdd: false });
     });
 
+    it('speaks one message per service: a conflict is not joined to the read-failure notice the page already shows', () => {
+        const entry: ConnectedServiceRegistryEntry = {
+            serviceId: 'custom-service', service: { pluginId: 'acme.service', localId: 'custom-service' },
+            connectCommand: '', supportsOauth: false, executable: false, projectionStatus: 'stale',
+            projectionConflicts: [{ kind: 'identity_divergence', descriptorIdentity: 'owner-id', serviceIds: ['custom-service'] }],
+            availability: { state: 'blocked', reason: 'unresolved' }, diagnostics: ['plugin_unavailable'],
+        };
+        const result = presentConnectedServiceIndexDiagnostics({ entry });
+        expect(result.primary).toBe(t('connectedServicesSettings.identityConflict'));
+        expect(result.primary).not.toContain(' · ');
+        // The disclosure keeps every distinct fact; the headline is only the one that needs the user first.
+        expect(result.supportDetails).toContain(presentConnectedServiceRegistryReadFailure(null));
+    });
+
     it('keeps an ordinary saved identity quiet while no machine has supplied a descriptor', () => {
         expect(presentConnectedServiceIndexDiagnostics({ entry: {
             serviceId: 'custom-service', connectCommand: '', supportsOauth: false,

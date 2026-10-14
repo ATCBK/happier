@@ -396,7 +396,7 @@ function resolveCostSource(cost: ProtocolUsageAnalyticsTotals['cost'], mode: Usa
 /**
  * The cost modes a total can honestly be read in: always the automatic
  * per-event precedence, plus a reported-only or estimate-only view when the
- * total actually carries that component. Team credential usage offers the same
+ * total actually carries that component (reported, estimated or API-equivalent). Team credential usage offers the same
  * choices from its own totals.
  */
 export function resolveAvailableCostModes(cost: ProtocolUsageAnalyticsTotals['cost'], legacyOnly = false): UsageCostMode[] {
@@ -411,6 +411,9 @@ export function resolveAvailableCostModes(cost: ProtocolUsageAnalyticsTotals['co
     }
     if (cost.estimatedUsd > 0) {
         modes.push('estimated');
+    }
+    if ((cost.apiEquivalentUsd ?? 0) > 0) {
+        modes.push('api_equivalent');
     }
 
     return modes;

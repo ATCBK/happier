@@ -5,6 +5,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import { Text } from '@/components/ui/text/Text';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
+import { WidgetLayoutFragmentActionIdV1Schema } from '@happier-dev/protocol/widgets';
 
 type ApprovalSummaryInput = Readonly<{ actionId: string; actionArgs: unknown }>;
 
@@ -17,6 +18,10 @@ export function readApprovalPreviewSummary(preview: unknown, request?: ApprovalS
     if (!storedSummary) return null;
     const actionId = request ? ActionIdSchema.safeParse(request.actionId) : null;
     if (actionId?.success) {
+        // The library owner captured this name before the mutation. Raw delete
+        // operands contain only an id and cannot re-derive that description.
+        if (WidgetLayoutFragmentActionIdV1Schema.safeParse(actionId.data).success
+            && 'widgetLibraryName' in preview && typeof preview.widgetLibraryName === 'string' && preview.widgetLibraryName.trim()) return storedSummary;
         const spec = getActionSpec(actionId.data);
         const summary = spec.approvalPresentation && spec.inputSchema.safeParse(request?.actionArgs).success
             ? spec.approvalPresentation?.summary(request?.actionArgs) : null;
@@ -39,7 +44,7 @@ export const ApprovalPreviewCard = React.memo(function ApprovalPreviewCard(props
 const styles = StyleSheet.create((theme) => ({
     // Sheet content of the approval's "Request" section: the section owns the chrome.
     card: {
-        gap: 4,
+        gap: theme.space.s4,
     },
     summary: {
         fontSize: 14,

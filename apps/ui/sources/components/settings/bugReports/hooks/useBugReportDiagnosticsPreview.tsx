@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
 
 import { Modal } from '@/modal';
@@ -68,7 +69,7 @@ export function useBugReportDiagnosticsPreview(input: {
           kind: 'card',
           title: t('bugReports.composer.diagnostics.preview.title'),
           testID: 'bug-report-diagnostics-preview-modal',
-          dimensions: { size: 'md', width: 560, maxHeightRatio: 0.92 },
+          dimensions: { size: 'md', width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92 },
         },
         closeOnBackdrop: true,
       });

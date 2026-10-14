@@ -291,7 +291,6 @@ export const SETTINGS_PAGE_CATALOG: readonly SettingsPageNode[] = [
                         subtitleKey: 'settings.mcpServersSubtitle',
                         route: SETTINGS_ROUTES.mcp,
                         keywordsKey: 'settingsSearchKeywords.mcp',
-                        gate: { featureId: 'mcp.servers' },
                         icon: ({ theme }) => <Icon name="puzzle-piece" size={16} color={theme.colors.text.secondary} />,
                     },
                     {
@@ -314,9 +313,7 @@ export const SETTINGS_PAGE_CATALOG: readonly SettingsPageNode[] = [
                             { id: 'promptsTemplates', titleKey: 'promptLibrary.templates', route: SETTINGS_ROUTES.promptsTemplates, keywordsKey: 'settingsSearchKeywords.promptsTemplates', icon: ({ theme }) => <Icon name="lightning" size={16} color={theme.colors.text.secondary} /> },
                             { id: 'promptsFolders', titleKey: 'promptLibrary.folders', route: SETTINGS_ROUTES.promptsFolders, keywordsKey: 'settingsSearchKeywords.promptsFolders', icon: ({ theme }) => <Icon name="folder" size={16} color={theme.colors.text.secondary} /> },
                             { id: 'promptsStacks', titleKey: 'contextPages.account.title', route: SETTINGS_ROUTES.promptsStacks, keywordsKey: 'settingsSearchKeywords.promptsStacks', icon: ({ theme }) => <Icon name="stack-simple" size={16} color={theme.colors.text.secondary} /> },
-                            { id: 'promptsRegistries', titleKey: 'promptLibrary.registries', route: SETTINGS_ROUTES.promptsRegistries, keywordsKey: 'settingsSearchKeywords.promptsRegistries', icon: ({ theme }) => <Icon name="globe" size={16} color={theme.colors.text.secondary} /> },
                             { id: 'promptsLibrary', titleKey: 'promptLibrary.prompts', route: SETTINGS_ROUTES.promptsLibrary, keywordsKey: 'settingsSearchKeywords.promptsLibrary', icon: ({ theme }) => <Icon name="books" size={16} color={theme.colors.text.secondary} /> },
-                            { id: 'promptsAssets', titleKey: 'promptLibrary.externalAssets', route: SETTINGS_ROUTES.promptsAssets, keywordsKey: 'settingsSearchKeywords.promptsAssets', icon: ({ theme }) => <Icon name="cloud" size={16} color={theme.colors.text.secondary} /> },
                         ],
                     },
                     {
