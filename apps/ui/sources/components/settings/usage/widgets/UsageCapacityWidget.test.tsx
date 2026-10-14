@@ -1,6 +1,9 @@
 import * as React from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol';
+import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { t } from '@/text';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
@@ -79,7 +82,7 @@ it('keeps each reset and renewal as an exact point when the shared plot cannot f
   expect(screen.getTextContent()).toContain('Monthly');
 });
 
-it('holds the headline row while the first allowance is still being read, and drops it once nothing is pending', async () => {
+it('names only pending accounts once in the held headline row, and drops it once nothing is pending', async () => {
   const service = { pluginId: 'happier.agent.claude', localId: 'claude-subscription' };
   const query = normalizeUsageQuery({});
   const recordKey = { providerId: 'anthropic', accountSubjectId: 'work', subjectKind: 'account', quotaScope: 'account' } as const;
@@ -92,13 +95,20 @@ it('holds the headline row while the first allowance is still being read, and dr
     pace: [], targets: [], waitingWork: { status: 'unavailable', reason: 'unsupported' },
   });
   const settled = resolveUsagePageAggregation({ queries: [query], quota: { status: 'available', value: [read] } }).results[0]!;
-  const reading = { ...settled, sources: [...settled.sources, { source: 'quota:work', status: 'pending' as const }] };
+  const pending = ['personal', 'shared'].map(accountId => ({ source: `quota:${createCanonicalJsonSigningInput({
+    bindingKind: 'account', ref: { service, accountId },
+  })}`, status: 'pending' as const }));
+  const reading = { ...settled, sources: [...settled.sources, ...pending] };
   const { UsageCapacityWidget } = await import('./UsageCapacityWidget');
   const render = (slice: typeof settled) => renderScreen(<InjectedAuthProvider credentials={null}>
     <UsageCapacityWidget id="usage_capacity" slice={slice} query={query} serverId="home" testID="capacity"
       model={{ requestedQuery: null, shownQuery: null, slice, pending: false, error: null, freshness: 'fresh',
         updatingPreviousPeriod: false, refreshing: false, refresh: async () => {} } satisfies UsageWidgetBodyModel} />
   </InjectedAuthProvider>);
-  expect((await render(reading)).findByTestId('capacity.reading')).not.toBeNull();
+  const screen = await render(reading);
+  expect(screen.findByTestId('capacity.reading')).not.toBeNull();
+  expect.soft(screen.getTextContent()).toContain(t('usage.board.plans.capacityReading', { count: 2 }));
+  // The headline owns first-load progress; a second polite footer must stay quiet.
+  expect.soft(screen.findAllByType(SurfaceFreshnessLine)).toHaveLength(0);
   expect((await render(settled)).findByTestId('capacity.reading')).toBeNull();
 });

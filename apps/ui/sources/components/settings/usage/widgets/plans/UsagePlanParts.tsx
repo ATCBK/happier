@@ -12,6 +12,7 @@ import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import {
   HAPPIER_PRESS_FEEDBACK_V1,
+  HAPPIER_FRESHNESS_LINE_METRICS,
   HappierDisclosureChevron,
   HappierPressable,
 } from '@happier-dev/plugin-ui/presentation';
@@ -49,6 +50,11 @@ function planAccountReadKind(account: UsagePlanAccount): PlanAccountReadKind | n
   return 'partial';
 }
 
+/** The same outstanding-account count for a plan headline and its read-state line. */
+export function readPendingPlanAccountCount(accounts: readonly UsagePlanAccount[]): number {
+  return accounts.filter(account => planAccountReadKind(account) === 'pending').length;
+}
+
 /**
  * A plan body's accounts usually share one read: four columns each saying "Partial … Retry" say one
  * thing four times. This folds every affected account into one statement: a failure leads, "Still
@@ -65,7 +71,7 @@ export function readPlanAccountsStatement(
   if (affected.length === 0) return null;
   const kind: PlanAccountReadKind = affected.some((entry) => entry.kind === 'failed') ? 'failed'
     : affected.every((entry) => entry.kind === 'pending') ? 'pending' : 'partial';
-  const sources = kind === 'pending' ? t('connectedServices.purposeTargets.poolAccounts', { count: affected.length })
+  const sources = kind === 'pending' ? t('connectedServices.purposeTargets.poolAccounts', { count: readPendingPlanAccountCount(accounts) })
     : affected.length === accounts.length && accounts.length > 1
     ? usageSourceTitle('quota')
     : affected.map((entry) => nameOf(entry.account).title).join(', ');
@@ -120,9 +126,14 @@ export function UsagePlanAccountStates(props: Readonly<{
   replacesContent?: boolean;
   /** The shape the body's skeleton holds while it reads (a list of meters), when it is known. */
   readingShape?: UsageReadingShape;
+  /** The headline already names this pending read; hold the footer's room quietly. */
+  pendingInHeadline?: boolean;
 }>) {
   const pageHasDetail = useUsageWidgetPageHasCoverageDetail();
   const statement = readPlanAccountsStatement(props.accounts, props.nameOf);
+  if (statement?.kind === 'pending' && props.pendingInHeadline) {
+    return <View style={{ minHeight: HAPPIER_FRESHNESS_LINE_METRICS.minHeightPx }} />;
+  }
   if (!statement) {
     return <UsageCoverageLine slice={props.slice} sources={['quota']} onRetry={props.onRetry} testID={`${props.testID}.coverage`} />;
   }

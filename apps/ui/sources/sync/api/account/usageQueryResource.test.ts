@@ -669,7 +669,10 @@ describe('usage query captured Resource adapter', () => {
       expect(screen.findByTestId('quota-capacity.cell.ready')).toBeTruthy();
       expect(screen.findByTestId('quota-capacity.cell.slow')).toBeTruthy();
       expect(screen.findByTestId('quota-fit.plan.slow')).toBeTruthy();
-      if (!failureFirst) expect(screen.findHostByTestId('quota-capacity.state')).toBeTruthy();
+      if (!failureFirst) {
+        expect(screen.findByTestId('quota-capacity.reading')).toBeTruthy();
+        expect(screen.findHostByTestId('quota-capacity.state')).toBeNull();
+      }
       slow.resolve(Response.json({ error: 'snapshot_read_failed' }, { status: 503 }));
       await expect.poll(slowState).toMatchObject({ status: 'error', errorCode: 'snapshot_read_failed' });
       await screen.update(body());

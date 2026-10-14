@@ -14,7 +14,6 @@ import {
   type UsageResetCelebrationWindow,
 } from './UsageResetCelebration';
 import {
-  readUsageCoverageGaps,
   useUsagePluginTheme,
   type UsageBodyProps,
 } from './usageBodyKit';
@@ -34,6 +33,7 @@ import {
   UsagePlansNothingRead,
   UsagePlanIdentity,
   UsagePlanAccountStates,
+  readPendingPlanAccountCount,
   usePlanText,
 } from './plans/UsagePlanParts';
 import { UsagePoolQueue, UsagePoolSteps } from './plans/UsagePoolOrder';
@@ -166,8 +166,8 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
   const cellCount = projection.accounts.length;
   // Until the first allowance answers there is no tightest to name, but the headline's room is held: the
   // figure it will be and one quiet line ("Reading 5 accounts…"), so its arrival moves nothing below it.
-  const reading = tightest === null
-    && readUsageCoverageGaps(props.slice, ['quota']).some(gap => gap.status === 'pending' || gap.status === 'not_loaded');
+  const pendingAccounts = readPendingPlanAccountCount(projection.accounts);
+  const reading = tightest === null && pendingAccounts > 0;
   // Equal cells while they fit; a narrow frame (a phone) wraps them two-up rather than shrinking them.
   const cellBasis =
     width !== null && width / cellCount < CELL_MIN_WIDTH_PX ? ('46%' as const) : undefined;
@@ -211,7 +211,7 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
           </Text>
         </View>
       ) : reading ? (
-        <CapacityHeroReading count={cellCount} testID={`${props.testID}.reading`} />
+        <CapacityHeroReading count={pendingAccounts} testID={`${props.testID}.reading`} />
       ) : null}
       <View style={styles.bar} accessibilityRole="list">
         {runs.map((run) => (
@@ -265,6 +265,7 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
         slice={props.slice}
         onRetry={props.model.refresh}
         testID={`${props.testID}.state`}
+        pendingInHeadline={reading}
       />
     </View>
   );
