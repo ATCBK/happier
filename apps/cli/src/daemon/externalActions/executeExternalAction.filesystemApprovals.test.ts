@@ -27,6 +27,53 @@ const repository = { provider: { id: 'github', kind: 'github' as const, displayN
   repository: { nameWithOwner: 'happier-dev/happier', cloneUrl: 'https://github.com/happier-dev/happier.git' }, protocol: 'https' as const };
 
 describe('Machine filesystem approval continuity from UI and paired terminal', () => {
+  it.each([
+    ['projects.script.run', false], ['projects.script.run', true],
+    ['projects.compute.exec', false], ['projects.compute.exec', true],
+  ] as const)('executes signed portable worker %s through the installed factory (replay=%s)', async (actionId, replay) => {
+    const h = await createHarness(actionId, replay ? 'ask' : 'allowed', false, 'srv_portableHome', undefined, true);
+    try {
+      const workspace = { serverId: h.ref.serverId, workspaceId: h.ref.id, machineId: h.ref.machineId, rootPath: h.rootPath };
+      const input = { workspace, choice: { kind: 'workers', destination: { kind: 'machine', machineId: h.workerRef.machineId } },
+        ...(actionId === 'projects.script.run' ? { selection: { kind: 'named', name: 'lint' } }
+          : { executable: { kind: 'systemTool', id: 'make' }, argv: ['check'], cwd: h.rootPath }) };
+      const result = await h.run(input, 'ui', false, 'present_user');
+      if (replay) {
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+        expect(await h.decide('approve')).toMatchObject({ ok: true });
+      }
+      const accepted = replay ? (await h.approval()).execution : result;
+      expect(accepted, JSON.stringify(accepted)).toMatchObject({ ok: true });
+      const output = ProjectCommandActionOutputV1Schema.parse(accepted?.result);
+      expect(output.operation.domainRef).toMatchObject({ machineId: h.workerRef.machineId, workspaceRefId: h.workerRef.id,
+        sourceWorkspace: workspace });
+      await expect.poll(() => h.spawned.length).toBe(1);
+      expect(h.copies()).toBe(1);
+      expect(h.networkPaths).toContain('POST /v1/actions/projects.inspect');
+      h.spawned[0]!.exit(0);
+      expect(await h.waitForTerminal(output.operation.operationId)).toMatchObject({ kind: 'found', operation: { state: 'succeeded' } });
+    } finally { await h.close(); }
+  });
+
+  it.each(['foreign Source Account', 'retired requester'] as const)('refuses portable worker execution for %s through installed requester custody', async reason => {
+    const h = await createHarness('projects.script.run', 'allowed', false, 'srv_portableHome', undefined, true);
+    try {
+      if (reason === 'foreign Source Account') h.foreignSource(); else h.retireAfterCopy();
+      const result = await h.run({ workspace: { serverId: h.ref.serverId, workspaceId: h.ref.id, machineId: h.ref.machineId, rootPath: h.rootPath },
+        selection: { kind: 'named', name: 'lint' }, choice: { kind: 'workers', destination: { kind: 'machine', machineId: h.workerRef.machineId } } },
+        'ui', false, 'present_user');
+      if (reason === 'foreign Source Account') {
+        expect(result).toMatchObject({ ok: false, errorCode: 'project_requester_credentials_unavailable' });
+        expect(h.copies()).toBe(0);
+      } else {
+        expect(result).toMatchObject({ ok: true });
+        const operation = ProjectCommandActionOutputV1Schema.parse(result.ok ? result.result : null).operation;
+        await expect.poll(() => h.readOperation(operation.operationId)).toMatchObject({ kind: 'found', operation: { state: 'failed' } });
+        expect(h.copies()).toBe(1);
+      }
+      expect(h.spawned).toEqual([]);
+    } finally { await h.close(); }
+  });
   it.each([false, true])('runs reviewed This time setup and resumes the held script without remembered trust through the installed executor (unsigned UI: %s)', async unsignedUi => {
     const h = await createHarness('projects.script.run', 'allowed', true, unsignedUi ? 'srv_portableHome' : 'srv_n2');
     let operationId: string | undefined;

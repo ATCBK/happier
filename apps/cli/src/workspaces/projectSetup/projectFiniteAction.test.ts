@@ -2,7 +2,7 @@ import axios from 'axios';
 import { mkdtemp, mkdir, rm, writeFile, readFile, access, cp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWorkspaceExecutionConfigClientV1 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigClientV1';
 import type { WorkerDestinationV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 import type { MachinePoolViewV1 } from '@happier-dev/protocol/machines/pools/v1';
@@ -22,6 +22,7 @@ import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { registerProjectFiniteRpcHandlers } from '@/rpc/handlers/projects/registerProjectFiniteRpcHandlers';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ProjectCommandActionOutputV1Schema } from '@happier-dev/protocol/actions/actionCompletion';
 import { bindExternalActionExecutionAuthorizationHttpPathV1, ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema, ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { ProjectWorkerStatusInputV1Schema } from '@happier-dev/protocol/actions/specs/projectWorkers';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
@@ -36,6 +37,7 @@ import { createProjectFiniteAction, type ProjectFiniteActionRuntime } from './pr
 import { createProjectNativeEnvironmentIoForHost } from '@/plugins/runtime/invocation/services/exec';
 import * as processTreeBoundary from '@/processes/terminate/terminateProcessTree';
 import { admitRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalActionExecutionAuthorization';
 import nacl from 'tweetnacl';
 import { ApiMachineClient } from '@/api/apiMachine';
@@ -48,12 +50,14 @@ import { reloadConfiguration } from '@/configuration';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 import { readProjectAccountRows } from '@/workspaces/projectAccountRows';
 import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
-import { inspectProjectSetupReadinessFromRuntime } from './projectSetupReadiness';
+import { inspectProjectSetupFromRuntime } from './projectSetupReadiness';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { assertActionOutputContract } from '@/testkit/actionOutputContract';
 import { executeWaitActionV1 } from '../../../../../packages/protocol/src/actions/executor/waitAction';
 import { executeActionOperationActionV1 } from '../../../../../packages/protocol/src/actions/executor/actionOperationActions';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { TerminalStreamReadResponseSchema, decodeTerminalStreamBytesFrame } from '@happier-dev/protocol/terminal/stream';
+import { ACTION_OPERATION_PROGRESS_LABEL_MAX_LENGTH_V1, ActionOperationSnapshotV1Schema } from '@happier-dev/protocol/actions/operations/v1';
 
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 // The Home HTTP boundary publishes this fixture Account identity; it is not caller-supplied Action authority.
@@ -64,20 +68,23 @@ class BoundaryPty implements PtyProcess {
     readonly pid = 3456;
     readonly ownedProcessGroupId = 3456;
     private readonly exits = new Set<(event: PtyExitEvent) => void>();
-    private readonly data = new Set<(data: string) => void>();
+    private readonly data = new Set<(data: string | Buffer) => void>();
     write() {}
     resize() {}
     kill() {}
-    onData(listener: (data: string) => void) { this.data.add(listener); return { dispose: () => this.data.delete(listener) }; }
-    output(data: string) { for (const listener of this.data) listener(data); }
+    onData(listener: (data: string) => void) { const receive = (data: string | Buffer) => listener(String(data)); this.data.add(receive); return { dispose: () => this.data.delete(receive) }; }
+    onDataBytes(listener: (data: string | Buffer) => void) { this.data.add(listener); return { dispose: () => this.data.delete(listener) }; }
+    output(data: string | Buffer) { for (const listener of this.data) listener(data); }
     onExit(listener: (event: PtyExitEvent) => void) { this.exits.add(listener); return { dispose: () => this.exits.delete(listener) }; }
     exit(exitCode: number) { for (const listener of this.exits) listener({ exitCode }); }
 }
 
 describe('authenticated finite Project Action owner', () => {
+    let channel: Awaited<ReturnType<typeof createRequesterCurrentnessSocketHarness>>;
+    beforeEach(async () => { channel = await createRequesterCurrentnessSocketHarness(); });
     const roots: string[] = [];
     const managers: Array<ReturnType<typeof createTerminalPtySessionManager>> = [];
-    afterEach(async () => { managers.splice(0).forEach(manager => manager.dispose()); vi.restoreAllMocks(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+    afterEach(async () => { managers.splice(0).forEach(manager => manager.dispose()); await channel.close(); vi.restoreAllMocks(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
     async function harness(manifest?: unknown, runAtMost: number | null = null, sourceMachineId = 'machine', credentialToken = 'requester', runtimeProfileId = 'home', homeId = 'home') {
         const root = await mkdtemp(join(tmpdir(), 'happier-project-finite-'));
         roots.push(root);
@@ -342,8 +349,8 @@ describe('authenticated finite Project Action owner', () => {
                 await updateSettings(settings => ({ ...settings, activeServerId: profileId, servers: { [profileId]: profile } }));
                 const h = await harness(undefined, null, 'machine', ownerToken, profileId, serverId);
                 h.waiveSetupApproval();
-                expect.soft(await inspectProjectSetupReadinessFromRuntime({ runtime: h.runtime, ingress: h.context,
-                    workspace: h.address, context: { serverId } })).toMatchObject({ kind: 'notRequired' });
+                expect.soft(await inspectProjectSetupFromRuntime({ runtime: h.runtime, ingress: h.context,
+                    workspace: h.address, context: { serverId } })).toMatchObject({ setupReadiness: { kind: 'notRequired' } });
                 const selection = { kind: 'native', source: { kind: 'native', tool: 'make', file: 'Makefile', target: 'check' } } as const;
                 expect(await h.rpcInvoke('projects.script.run', { workspace: h.address, selection }))
                     .toMatchObject({ operation: { operationId: 'operation', state: 'accepted', domainRef: { sourceWorkspace: h.address } } });
@@ -403,8 +410,8 @@ describe('authenticated finite Project Action owner', () => {
                     expect(await h.rpcInvoke('projects.script.run', { workspace: h.address, selection }))
                         .toMatchObject({ ok: false, errorCode: 'target_mismatch' });
                     await expect(preparation.resolveWorkerTarget({ source, signal })).rejects.toMatchObject({ code: 'target_mismatch' });
-                    expect(await inspectProjectSetupReadinessFromRuntime({ runtime: h.runtime, ingress: h.context,
-                        workspace: h.address, context: { serverId } })).toMatchObject({ kind: 'unknown', code: 'target_mismatch' });
+                    expect(await inspectProjectSetupFromRuntime({ runtime: h.runtime, ingress: h.context,
+                        workspace: h.address, context: { serverId } })).toMatchObject({ setupReadiness: { kind: 'unknown', code: 'target_mismatch' } });
                 }
                 worker.retireCredentials();
                 await expect(preparation.resolveWorkerTarget({ source, signal }))
@@ -416,10 +423,13 @@ describe('authenticated finite Project Action owner', () => {
 
     it.each(['projects.prepare', 'projects.script.run', 'projects.compute.exec'] as const)(
         'emits registered %s, operation, Wait and output contracts through real preparation/runner/byte-ring owners', async actionId => {
+        let clock = Date.now();
+        vi.spyOn(Date, 'now').mockImplementation(() => clock);
         const source = { kind: 'native', tool: 'make', file: 'Makefile', target: 'check' } as const;
         const h = await harness(actionId === 'projects.prepare'
             ? { version: 1, workspace: { setup: [source] } } : undefined);
         if (actionId === 'projects.prepare') {
+            h.waiveSetupApproval();
             const workspace = h.workspaceRefs[0]!;
             const review = await reviewProjectSetupEffect({ workspace,
                 projectAssociation: { workspace, project: { serverId: 'home', projectId: 'project' } },
@@ -433,11 +443,25 @@ describe('authenticated finite Project Action owner', () => {
         const input = actionId === 'projects.prepare' ? { workspace: h.address, phase: 'setup' }
             : actionId === 'projects.script.run' ? { workspace: h.address, selection: { kind: 'native', source } }
             : { workspace: h.address, executable: '/installed/echo', argv: ['', '界🚀'.repeat(700)], cwd: h.root };
-        const accepted = await h.invoke(actionId, input);
+        const accepted = await h.rpcInvoke(actionId, input);
         assertActionOutputContract(actionId, accepted);
         expect(accepted).toMatchObject({ operation: { operationId: 'operation', state: 'accepted' } });
         await expect.poll(() => h.spawned.length).toBe(1);
-        h.spawned[0]!.pty.output('世界🚀\u0000\n');
+        const runningOutput = async () => {
+            const value = await h.operationRuntime.handlers.getV2({ operationId: 'operation' }, h.context);
+            assertActionOutputContract('action.operations.get', value);
+            return value;
+        };
+        h.spawned[0]!.pty.output(Buffer.from('older line\r\n\u001b[32mchecking '));
+        h.spawned[0]!.pty.output(Buffer.from('世界🚀\u001b[0m\r\n'));
+        expect(await runningOutput()).toMatchObject({ operation: {
+            state: 'running', progress: { kind: 'indeterminate', label: 'checking 世界🚀' },
+        } });
+        h.spawned[0]!.pty.output(Buffer.from('x'.repeat(ACTION_OPERATION_PROGRESS_LABEL_MAX_LENGTH_V1 + 1) + '\n'));
+        expect(await runningOutput()).toMatchObject({ operation: {
+            progress: { kind: 'indeterminate', label: 'x'.repeat(ACTION_OPERATION_PROGRESS_LABEL_MAX_LENGTH_V1) },
+        } });
+        h.spawned[0]!.pty.output(Buffer.from('世界🚀\u0000\n'));
         h.spawned[0]!.pty.exit(actionId === 'projects.script.run' ? 7 : 0);
         const scope = { accountId: 'owner', machineId: 'machine' };
         const terminal = await h.operationRuntime.runner.waitForTerminal(scope, 'operation');
@@ -451,6 +475,7 @@ describe('authenticated finite Project Action owner', () => {
         });
         assertActionOutputContract('wait', waited);
         expect(waited.disposition).toBe('matched');
+        clock += 600_001;
         const output = await executeActionOperationActionV1({ actionId: 'projects.execution.output.read',
             input: { ...address, byteOffset: 0 }, transport: async request => {
                 if (request.method === 'actionOperation.get.v2') return await h.operationRuntime.handlers.getV2(request.payload, h.context);
@@ -460,6 +485,11 @@ describe('authenticated finite Project Action owner', () => {
             } });
         assertActionOutputContract('projects.execution.output.read', output);
         expect(output).toMatchObject({ ok: true, terminalId: expect.any(String) });
+        const replay = TerminalStreamReadResponseSchema.parse(output);
+        if (!replay.ok) throw new Error(replay.code);
+        expect(Buffer.concat(replay.frames.flatMap(frame => frame.t === 'bytes' ? [decodeTerminalStreamBytesFrame(frame)] : [])).toString('utf8')).toBe(
+            'older line\r\n\u001b[32mchecking 世界🚀\u001b[0m\r\n' + 'x'.repeat(ACTION_OPERATION_PROGRESS_LABEL_MAX_LENGTH_V1 + 1) + '\n世界🚀\u0000\n');
+        expect(replay.done).toBe(true);
     });
 
     it('runs a detected native source without importing a manifest and observes the real nonzero process outcome', async () => {
@@ -626,6 +656,77 @@ describe('authenticated finite Project Action owner', () => {
         } finally { scope.restore(); reloadConfiguration(); }
     });
 
+    it.each(['projects.inspect', 'projects.script.run'] as const)('observes requester encryption once through real socket custody and HTTP on %s', async actionId => {
+        const h = await harness();
+        const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-proof', binding: {
+            accountId: 'bob', principalId: 'bob', credentialId: 'pat', custodianAccountId: 'owner', accountEncryptionMode: 'plain',
+            serverIdentityId: 'stable-home', machineId: 'machine', installationId: 'installation', actionId,
+            requestId: 'request', requestEnvelopeDigest: 'a'.repeat(43), target: { kind: 'machine', machineId: 'machine' },
+            grant: { v: 1, actions: { families: [], ids: [actionId] }, targets: { sessions: [], machines: ['machine'] },
+                approve: false, origins: [], models: null, permissionModes: null, create: null },
+        } });
+        // Only Home HTTP is substituted for these custody/read decisions; all
+        // admission, private projections, signing, rows and Action owners are real.
+        h.get.mockImplementation(async (url: string) => {
+            if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'bob' } };
+            if (url.endsWith('/v2/account/settings')) return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+            if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+            throw new Error(`Unexpected requester read ${url}`);
+        });
+        const rowPost = h.post.getMockImplementation()!;
+        h.post.mockImplementation(async (url, body, options) => String(url).endsWith('/verify')
+            ? { status: 200, data: { ok: true } } : rowPost(url, body, options));
+        const admitted = await admitRequesterAccountActionContext({ authorization, credentials: { token: 'bob', encryption: null },
+            serverId: 'home', serverIdentityId: 'stable-home', serverHttpBaseUrl: 'https://home.example', isCurrent: h.runtime.isCurrent! });
+        if (!admitted) throw new Error('Requester custody not admitted');
+        const carrier = await projectExternalActionRequesterHttpAuthorization({ authorization: admitted.authorization,
+            serverId: 'home', serverIdentityId: 'stable-home', serverHttpBaseUrl: 'https://home.example', target: authorization.binding.target,
+            installationId: 'installation', privateKey: nacl.sign.keyPair().secretKey, isCurrent: admitted.isCurrent });
+        if (!carrier) throw new Error('Requester HTTP custody not admitted');
+        expect(h.get.mock.calls.filter(([url]) => String(url).endsWith('/currentness'))).toHaveLength(1);
+        expect(ExternalActionExecutionAuthorizationV1Schema.parse(carrier)).toEqual(authorization);
+        const { credentials: _owner, ...ports } = h.runtime;
+        const runtime: ProjectFiniteActionRuntime = { ...ports, accountId: 'bob', accountAuthorization: carrier, isCurrent: admitted.isCurrent };
+        const ingress: RpcHandlerContext = { ...h.context, callerInputAuthorization: carrier,
+            callerInputConstraints: { models: null, permissionModes: null },
+            machineAdmission: { ...h.context.machineAdmission!, actorAccountId: 'bob' } };
+        h.get.mockClear(); h.post.mockClear();
+        try {
+            if (actionId === 'projects.inspect') {
+                const client: ApiMachineClient = Object.assign(Object.create(ApiMachineClient.prototype), {
+                    machine: { id: 'machine' }, machineRpcWorkingDirectory: h.root,
+                    filesystemAccessPolicy: { kind: 'restrictedRoots', roots: [h.root] },
+                    rpcLifecycleRegistrations: [{ resolveProjectFiniteRuntime: async () => runtime }],
+                });
+                const inspect = client.createProjectDefinitionAction('home', ingress);
+                const output = await inspect({ actionId, input: { workspace: h.address }, context: { serverId: 'home' } });
+                expect(ProjectDefinitionInspectOutputSchema.parse(output)).toMatchObject({ setupReadiness: { kind: 'notRequired' } });
+                expect(h.spawned).toEqual([]);
+            } else {
+                const result = await createProjectFiniteAction(runtime, ingress)({ actionId, input: { workspace: h.address,
+                    selection: { kind: 'native', source: { kind: 'native', tool: 'make', file: 'Makefile', target: 'check' } } },
+                    context: { serverId: 'home', authority: 'account_automation', actionRequestId: 'request' } });
+                expect(result, JSON.stringify(result)).toMatchObject({ operation: { scope: { accountId: 'bob' } } });
+                expect(ProjectCommandActionOutputV1Schema.safeParse(result).success).toBe(true);
+                await expect.poll(() => h.spawned.length).toBe(1);
+            }
+            const counts = { encryption: h.get.mock.calls.filter(([url]) => String(url).endsWith('/currentness')).length,
+                verify: h.post.mock.calls.filter(([url]) => String(url).endsWith('/verify')).length };
+            console.info('Requester decision HTTP reads', actionId, counts);
+            if (actionId === 'projects.inspect') expect(counts).toEqual({ encryption: 0, verify: 6 });
+            else expect(counts).toEqual({ encryption: 0, verify: 16 });
+        } finally {
+            h.spawned.forEach(({ pty }) => pty.exit(0));
+            const operationScope = { accountId: 'bob', machineId: 'machine' };
+            if (actionId === 'projects.script.run' && h.operationRuntime.store.get(operationScope, 'operation')) {
+                h.operationRuntime.runner.cancel(operationScope, 'operation');
+                await h.operationRuntime.runner.waitForTerminal(operationScope, 'operation');
+            }
+            await admitted.dispose();
+        }
+    });
+
     it('uses the installed readiness owner for current bytes and withdraws readiness on requester retirement', async () => {
         const h = await harness();
         const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-proof', binding: {
@@ -724,6 +825,51 @@ describe('authenticated finite Project Action owner', () => {
         expect(JSON.stringify(result)).not.toContain('requester'); expect(JSON.stringify(result)).not.toContain('successBasis');
         expect(h.spawned).toEqual([]);
         expect(h.post.mock.calls.filter(([url]) => String(url).endsWith('/project-trust/mutate'))).toEqual([]);
+    });
+
+    it('satisfies the held same-digest setup after This time completion without a second native setup and leaves a different digest held', async () => {
+        const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner', tokenEpoch: 1,
+            provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.signature`;
+        const manifest = { version: 1, workspace: { setup: [{ kind: 'command', command: 'echo setup' }] } };
+        const h = await harness(manifest, null, 'machine', token);
+        const scope = { accountId: 'owner', machineId: 'machine' };
+        const input = { workspace: h.address, phase: 'setup' };
+        const held = ProjectCommandActionOutputV1Schema.parse(await h.invoke('projects.prepare', input));
+        await expect.poll(() => h.operationRuntime.store.get(scope, held.operation.operationId)?.setupReview?.code)
+            .toBe('project_setup_consent_required');
+        const reviewed = ProjectSetupConsentFailureDetailsV1Schema.parse(h.operationRuntime.store.get(scope, held.operation.operationId)!.setupReview);
+        await writeFile(join(h.root, '.happier/project.json'), JSON.stringify({ version: 1,
+            workspace: { setup: [{ kind: 'command', command: 'echo different setup' }] } }));
+        const different = ProjectCommandActionOutputV1Schema.parse(await h.invoke('projects.prepare', input,
+            { ...h.context, transportRequestId: 'different-effect' }));
+        await expect.poll(() => h.operationRuntime.store.get(scope, different.operation.operationId)?.setupReview?.code)
+            .toBe('project_setup_consent_required');
+        const differentReview = ProjectSetupConsentFailureDetailsV1Schema.parse(h.operationRuntime.store.get(scope, different.operation.operationId)!.setupReview);
+        expect(differentReview.reviewedEffectDigest).not.toBe(reviewed.reviewedEffectDigest);
+        await writeFile(join(h.root, '.happier/project.json'), JSON.stringify(manifest));
+        // The authenticated user's invocation policy allows this RPC; only the
+        // exact This time decision authorizes its setup effect, never Trust.
+        h.waiveSetupApproval();
+        try {
+            const oneTime = ProjectCommandActionOutputV1Schema.parse(await h.rpcInvoke('projects.prepare', {
+                ...input, expectedEffectDigest: reviewed.reviewedEffectDigest, consentScope: 'thisTime',
+            }, { ...h.context, transportRequestId: 'this-time' }));
+            await expect.poll(() => h.spawned.length).toBe(1);
+            expect(h.operationRuntime.store.get(scope, held.operation.operationId)).toHaveProperty('setupReview');
+            h.spawned[0]!.pty.exit(0);
+            await expect.poll(() => h.operationRuntime.store.get(scope, oneTime.operation.operationId)?.state).toBe('succeeded');
+            await expect.poll(() => h.operationRuntime.store.get(scope, held.operation.operationId)?.state).toBe('succeeded');
+            const satisfied = ActionOperationSnapshotV1Schema.parse(h.operationRuntime.store.get(scope, held.operation.operationId));
+            expect(satisfied).not.toHaveProperty('setupReview');
+            expect(satisfied).toMatchObject({ result: { kind: 'success', reviewedEffectDigest: reviewed.reviewedEffectDigest } });
+            expect(h.operationRuntime.store.get(scope, different.operation.operationId)).toMatchObject({ state: 'accepted', setupReview: differentReview });
+            // Exact original replay can observe completion but cannot execute it again.
+            expect(ProjectCommandActionOutputV1Schema.parse(await h.invoke('projects.prepare', input)).operation.state).toBe('succeeded');
+            expect(h.spawned).toHaveLength(1);
+            expect(h.post.mock.calls.filter(([url]) => String(url).endsWith('/project-trust/mutate'))).toEqual([]);
+        } finally {
+            await h.operationRuntime.runner.retireProjectFiniteOperations();
+        }
     });
 
     it('honours a setup policy waiver on the authenticated finite Run without granting remembered trust', async () => {
@@ -1129,7 +1275,8 @@ describe('authenticated finite Project Action owner', () => {
             const sourcePublished = MachinePublishedRowV1Schema.parse({ ...published,
                 id: 'source-machine', installationId: 'source-installation' });
             h.get.mockImplementation(async url => {
-                if (String(url) === 'https://home.example/v1/machines') return { status: 200, data: [installed] };
+                if (String(url) === 'https://home.example/v1/machines') return { status: 200, data: [installed,
+                    { ...installed, id: sourcePublished.id, installationId: sourcePublished.installationId }] };
                 if (String(url) === 'https://home.example/v1/machines/machine') return { status: 200, data: { machine: published } };
                 if (String(url) === 'https://home.example/v1/machines/source-machine') return { status: 200, data: { machine: sourcePublished } };
                 return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
@@ -1137,17 +1284,30 @@ describe('authenticated finite Project Action owner', () => {
             const homePost = h.post.getMockImplementation();
             if (!homePost) throw new Error('Expected existing Home HTTP fixture');
             h.post.mockImplementation(async (url, body, config) => {
-                if (String(url) === `https://home.example${bindExternalActionExecutionAuthorizationHttpPathV1('projects.script.run')}`) {
+                const inspected = String(url) === `https://home.example${bindExternalActionExecutionAuthorizationHttpPathV1('projects.inspect')}`;
+                if (inspected || String(url) === `https://home.example${bindExternalActionExecutionAuthorizationHttpPathV1('projects.script.run')}`) {
                     expect(config?.headers).toMatchObject({ Authorization: `Bearer ${token}` });
                     const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
-                    expect(request.machineId).toBe(installed.id);
+                    const targetMachine = inspected ? sourcePublished : installed;
+                    expect(request.machineId).toBe(targetMachine.id);
                     const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-issued-finite-authorization',
                         binding: { accountId: 'owner', authentication: { kind: 'account', tokenEpoch: 1 }, serverIdentityId,
-                            machineId: installed.id, custodianAccountId: 'owner', installationId: installed.installationId,
-                            accountEncryptionMode: 'plain', actionId: 'projects.script.run', requestId: request.envelope.requestId,
+                            machineId: targetMachine.id, custodianAccountId: 'owner', installationId: targetMachine.installationId,
+                            accountEncryptionMode: 'plain', actionId: inspected ? 'projects.inspect' : 'projects.script.run', requestId: request.envelope.requestId,
                             requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope), target: request.envelope.target,
                         } });
                     return { status: 200, data: authorization };
+                }
+                if (String(url) === 'https://home.example/v1/actions/projects.inspect') {
+                    const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+                    expect(request.executionAuthorization?.binding).toMatchObject({ serverIdentityId,
+                        machineId: sourcePublished.id, installationId: sourcePublished.installationId,
+                        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope) });
+                    const raw = await createProjectDefinitionAction({ serverId: 'home', machineId: sourcePublished.id, workingDirectory: h.root,
+                        accessPolicy: { kind: 'restrictedRoots', roots: [h.root] }, nativeIo: h.runtime.nativeIo })({
+                        actionId: 'projects.inspect', input: request.envelope.input, context: { serverId: 'home' } });
+                    return { status: 200, data: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.inspect',
+                        requestId: request.envelope.requestId, execution: { ok: true, result: raw } }) };
                 }
                 if (String(url) !== 'https://home.example/v1/actions/projects.script.run') return await homePost(url, body, config);
                 expect(config?.headers).toMatchObject({ Authorization: `Bearer ${token}` });
@@ -1166,12 +1326,6 @@ describe('authenticated finite Project Action owner', () => {
                 credentials: h.runtime.credentials, serverHttpBaseUrl: h.runtime.serverHttpBaseUrl,
                 admission: h.runtime.workerAdmission, isFiniteExecutionLive: h.isFiniteExecutionLive });
             vi.spyOn(machineRpcTransport, 'callExactMachineRpc').mockImplementation(async request => {
-                if (request.method === 'daemon.projects.inspect.v1') {
-                    expect(request.machineId).toBe('source-machine');
-                    return await createProjectDefinitionAction({ serverId: 'home', machineId: 'source-machine', workingDirectory: h.root,
-                        accessPolicy: { kind: 'restrictedRoots', roots: [h.root] }, nativeIo: h.runtime.nativeIo })({
-                        actionId: 'projects.inspect', input: request.request, context: { serverId: 'home', signal: request.signal } });
-                }
                 expect(request.machineId).toBe('machine');
                 if (request.method === 'projects.worker.status') return await worker({ actionId: 'projects.worker.status', input: ProjectWorkerStatusInputV1Schema.parse(request.request),
                     signal: request.signal, context: { surface: 'rpc', serverId: 'home', runtimeAccountId: 'owner', authority: 'account_automation' } });

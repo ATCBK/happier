@@ -1,6 +1,6 @@
 import { expect, vi } from 'vitest';
 import axios from 'axios';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, type ActionExecuteResult, type ActionId,
@@ -37,13 +37,10 @@ import { verifyExternalActionExecutionAuthorizationCurrent, resolveExternalActio
 import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { executeExternalAction } from './executeExternalAction';
 import { createDaemonApprovalExecutionOriginCurrentness, createDaemonExternalActionTargetResolver } from './daemonExternalActionTargetResolver';
-import { resolveAdmittedRequesterAccountReadRuntime, readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
-import { createAccountServerWorkspaceWorkerPreferenceClient } from '@/api/workspaces/workspaceWorkerPreferences';
 import { createProjectWorkerAdmission } from '@/workspaces/execution/projectWorkerAdmission';
 import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
 import { createProjectNativeIo } from '@/workspaces/projectSetup/projectNativeIo';
 import { reviewProjectSetupEffect } from '@/workspaces/projectSetup/projectSetupPreparation';
-import { createWorkspaceExecutionConfigClientV1 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigClientV1';
 import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { WORKSPACE_EXECUTION_CONFIG_ROUTE_V1 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigRowV1';
 import { LocalServiceLauncherSnapshotV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
@@ -51,6 +48,15 @@ import { createTerminalPtySessionManager } from '@/terminal/pty/sessions';
 import { readDaemonTerminalPtyConfig } from '@/terminal/pty/config';
 import type { PtyProcess, PtyExitEvent } from '@/terminal/pty/provider';
 import { ProjectCommandActionOutputV1Schema } from '@happier-dev/protocol/actions/actionCompletion';
+import { createInstalledProjectFiniteRuntime } from '@/daemon/startup/createInstalledProjectFiniteRuntime';
+import { createProjectDefinitionAction, registerProjectDefinitionHandlers } from '@/rpc/handlers/projectDefinitions';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeWorkspaceSyncPolicyDigest } from '@happier-dev/protocol';
+import { WorkspaceSyncRelationshipV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
+import { prepareWorkspaceSyncBetween } from '@/workspaces/sync/workspaceSyncPreparation';
 
 // OS process boundary only; the installed operation, preparation, success and PTY owners stay real.
 class SetupBoundaryPty implements PtyProcess {
@@ -84,16 +90,16 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
     token: string;
     mintAuthorization(actionId: ActionId, envelope: ExternalActionRequestEnvelopeV1): Promise<ExternalActionExecutionAuthorizationV1>;
     request(input: Readonly<{ method: 'GET' | 'POST'; path: string; body?: unknown; headers: Record<string, string> }>): Promise<{ status: number; data: unknown }>;
-  }>) {
+  }>, worker = false) {
   const directory = await mkdtemp(join(tmpdir(), 'happier-action-composition-'));
   const rootPath = join(directory, 'accepted');
   await mkdir(rootPath); await writeFile(join(rootPath, 'original'), bytes);
-  if (actionId === 'projects.script.run') {
+  if (actionId === 'projects.script.run' || worker) {
     await writeFile(join(rootPath, 'Makefile'), 'check:\n\t@echo replay-admitted\n');
     await mkdir(join(rootPath, '.happier'));
     await writeFile(join(rootPath, '.happier/project.json'), JSON.stringify({ version: 1,
       ...(setup ? { workspace: { setup: [{ kind: 'command', command: 'echo setup-reviewed' }] } } : {}),
-      scripts: { lint: { source: { kind: 'native', tool: 'make', file: 'Makefile', target: 'check' } } } }));
+      scripts: { lint: { ...(worker ? { execution: 'portable' } : {}), source: { kind: 'native', tool: 'make', file: 'Makefile', target: 'check' } } } }));
   }
   if (actionId === 'localServices.launcher.start') {
     await mkdir(join(rootPath, '.happier'));
@@ -122,7 +128,15 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
   const privateKey = Buffer.from(installation.privateKey, 'base64url');
   const publicKey = Buffer.from(installation.publicKey, 'base64url');
   const target = { kind: 'machine' as const, machineId: 'machine' };
-  const ref = { id: 'workspace', serverId: homeId, machineId: target.machineId, rootPath, projectKey: 'project', createdAtMs: 1 };
+  const ref = { id: 'workspace', serverId: homeId, machineId: worker ? 'source-machine' : target.machineId, rootPath, projectKey: 'project', createdAtMs: 1 };
+  const workerRoot = join(directory, 'worker');
+  if (worker) await mkdir(workerRoot);
+  const workerRef = { ...ref, id: 'worker-ref', machineId: target.machineId, rootPath: workerRoot };
+  const basePolicy = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
+  const relationship = WorkspaceSyncRelationshipV1Schema.parse({ v: 1, relationshipId: 'source-worker', controllerMachineId: ref.machineId,
+    alphaWorkspaceRefId: ref.id, betaWorkspaceRefId: workerRef.id, mode: 'keep_synced', enabled: true,
+    provenance: { kind: 'worker_clean_copy', sourceWorkspaceRefId: ref.id, targetWorkspaceRefId: workerRef.id },
+    contentPolicy: { ...basePolicy, policyDigest: computeWorkspaceSyncPolicyDigest(basePolicy) }, createdAtMs: 1, updatedAtMs: 1 });
   const refKey = { kind: 'workspace-ref' as const, serverId: homeId, id: ref.id };
   const organizationKey = { kind: 'project-organization' as const, serverId: homeId, projectKey: 'project' };
   const rows: ProjectAccountRowV1[] = [
@@ -130,6 +144,17 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
     { key: organizationKey, revision: 2, content: { t: 'plain', v: { key: organizationKey, value: { hidden: false, pinned: false,
       promptStack: [{ id: 'context-entry', enabled: true, placement: 'system_append', ref: { kind: 'doc', artifactId: 'context-doc' } }] } } } },
   ].map(row => ProjectAccountRowV1Schema.parse(row));
+  if (worker) {
+    const key = { kind: 'workspace-ref' as const, serverId: homeId, id: workerRef.id };
+    rows.push(ProjectAccountRowV1Schema.parse({ key, revision: 1, content: { t: 'plain', v: { key, value: workerRef } } }));
+    const graphKey = { kind: 'relationship-graph' as const };
+    rows.push(ProjectAccountRowV1Schema.parse({ key: graphKey, revision: 1, content: { t: 'plain', v: { key: graphKey, value: { relationships: [relationship] } } } }));
+  }
+  let sourceAccountId = 'account';
+  let encryptionVersion = 1;
+  let copies = 0;
+  let afterCopy: (() => void) | undefined;
+  const sourceHandlers = new Map<string, (input: unknown, context?: import('@/api/rpc/types').RpcHandlerContext) => Promise<unknown>>();
   const accountSettings = { actionsSettingsV1: { v: 1, actions: approval === 'ask'
     ? { [actionId]: { approvalRequiredSurfaces: ['ui', 'rpc', 'cli'] } } : {},
     ...(approval === 'allowed' ? { approvalWaivedSurfaces: { [actionId]: ['ui', 'rpc', 'cli'] } } : {}) } };
@@ -156,11 +181,15 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
     }) };
     if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
     if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
-      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: encryptionVersion } };
     if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: accountSettings }, version: 1 } };
     if (path === '/v1/artifacts') return { status: 200, data: artifact ? [artifact] : [] };
     if (artifact && path === '/v1/artifacts/' + artifact.id) return { status: 200, data: artifact };
     if (path === '/v1/account/authoring-memory') return { status: 200, data: { rows: [] } };
+    if (worker && path === '/v1/machines/source-machine') return { status: 200, data: { machine: { id: ref.machineId,
+      kind: 'persistent', active: true, storageMode: 'plain', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
+      installationId: 'source-installation', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, revokedAt: null, replacedByMachineId: null,
+      access: { custodian: { accountId: sourceAccountId, displayName: 'Source Account' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } } } };
     if (path === '/v1/machines/machine') return { status: 200, data: { machine: { id: 'machine', kind: 'persistent', active: true, storageMode: 'plain',
       metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
       installationId: installation.installationId, installationPublicKey: publicKey.toString('base64'),
@@ -190,15 +219,22 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
       return { status: 200, data: home ? await home.mintAuthorization('projects.inspect', request.envelope)
         : ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'inspection-home-root', binding: {
           accountId: 'account', custodianAccountId: 'account', authentication: { kind: 'account', tokenEpoch: 1 },
-          accountEncryptionMode: 'plain', serverIdentityId: homeId, machineId: target.machineId,
-          installationId: installation.installationId, actionId: 'projects.inspect', requestId: request.envelope.requestId,
-          target, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope),
+          accountEncryptionMode: 'plain', serverIdentityId: homeId, machineId: request.machineId,
+          installationId: request.machineId === target.machineId ? installation.installationId : 'source-installation', actionId: 'projects.inspect', requestId: request.envelope.requestId,
+          target: request.envelope.target, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope),
         } }) };
     }
     if (path === '/v1/actions/projects.inspect') {
       const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
       const authorization = request.executionAuthorization;
       if (!authorization || !('authentication' in authorization.binding)) throw new Error('Missing inspection Account admission');
+      if (worker && request.machineId === ref.machineId) {
+        const handler = sourceHandlers.get(getActionSpec('projects.inspect').bindings!.rpcMethod!);
+        if (!handler) throw new Error('Missing real SOURCE registrar');
+        const result = await handler(request.envelope.input, { signal: new AbortController().signal, callerAuthority: 'present_user' });
+        return { status: 200, data: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.inspect',
+          requestId: request.envelope.requestId, execution: { ok: true, result } }) };
+      }
       const result = await executeExternalAction({ actionId: 'projects.inspect', envelope: request.envelope,
         principal: { accountId: 'account', authority: 'present_user', authentication: authorization.binding.authentication },
         surface: 'ui', executionAuthorization: authorization, currentMachineId: target.machineId, currentServerId: 'srv_n2',
@@ -287,7 +323,7 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
   const nativeIo = createProjectNativeIo();
   const spawned: SetupBoundaryPty[] = [];
   const spawnWaiters = new Map<number, (pty: SetupBoundaryPty) => void>();
-  const setupTerminals = setup ? createTerminalPtySessionManager({
+  const setupTerminals = setup || worker ? createTerminalPtySessionManager({
     ptyProvider: { spawn() {
       const index = spawned.length;
       const pty = new SetupBoundaryPty(3456 + index);
@@ -297,37 +333,32 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
     config: readDaemonTerminalPtyConfig({}).sessionManager,
     env: {}, platform: 'linux', stopProcessTree: async () => {}, probeProcessGroup: () => 'absent',
   }) : undefined;
-  const workspaceConfig = createWorkspaceExecutionConfigClientV1({ mode: 'plain', material: null, isCurrent: () => true,
-    randomBytes: length => new Uint8Array(length), transport: {
-      read: async () => ({ status: 'absent' }), mutate: async () => { throw new Error('Unexpected config mutation'); },
-    } });
   const client = new ApiMachineClient(token, { id: target.machineId, encryptionMode: 'plain', metadata: null,
     metadataVersion: 0, daemonState: null, daemonStateVersion: 0 }, undefined, {
       createProjectFiniteRuntime: async (ports, ingress) => {
-        const requester = await resolveAdmittedRequesterAccountReadRuntime({ ingress, serverId: 'srv_n2',
-          machineId: target.machineId, installationId: installation.installationId,
-          // Match the installed daemon's real credential currentness boundary;
-          // an invocation must not mutate the credentials this owner retains.
-          isInstalledCurrent: async () => sameStoredCredentials(credentials, await readStoredCredentialsForServerId('srv_n2')) });
-        if (!requester) return null;
-        finiteIngress.push({ accountId: requester.accountId, homeId: requester.accountAuthorization.binding.serverIdentityId,
-          installationId: ingress.machineAdmission!.installationId, current: await requester.isCurrent() });
-        return { ...ports, ...requester, workerAdmission, nativeIo: nativeIo.commandIo, successHomeDir: join(directory, 'setup-success'),
-          ...(setupTerminals ? { terminalSessions: setupTerminals,
-            nativeIo: { ...nativeIo.commandIo, resolveTool: async tool => ({ executablePath: `/managed/${tool}`, version: '1' }) } } : {}),
-          environmentIo: nativeIo.environmentIo, resolveWorkspaceExecutionConfig: async (context, currentIngress, actionId) => {
-            if (!home) return workspaceConfig;
-            const authorization = currentIngress.callerInputAuthorization;
-            if (!authorization) return null;
-            const account = readRequesterAccountActionContext(authorization);
-            return createAccountServerWorkspaceWorkerPreferenceClient({ token, credentials, serverHttpBaseUrl: requester.serverHttpBaseUrl,
-              context: { ...context, externalActionExecutionAuthorization: authorization }, actionId, signal: currentIngress.signal,
-              isCredentialCurrent: requester.isCurrent, ...(account ? { operationContext: account.savedSecretOperationContext } : {}),
-              resolveRequestHeaders: request => authorization.requesterHttpProjection!.createRequestHeaders({
-                effectActionId: request.effectActionId, method: request.method, path: request.path,
-                ...(request.body === undefined ? {} : { body: request.body }), signal: currentIngress.signal }),
-            });
-          } };
+        const runtime = await createInstalledProjectFiniteRuntime({ api, credentials, externalActionAccountId: 'account',
+          finiteServerId: 'srv_n2', finiteServerHttpBaseUrl: 'https://home.example.test', registeredMachineId: target.machineId,
+          admission: workerAdmission, nativeIo: { ...nativeIo,
+            ...(setupTerminals ? { commandIo: { ...nativeIo.commandIo, resolveTool: async tool => ({ executablePath: `/managed/${tool}`, version: '1' }) } } : {}) },
+          successHomeDir: join(directory, 'setup-success'), resolveCurrentMachineExecutionOriginContext: resolveOrigin,
+          isCurrent: async () => sameStoredCredentials(credentials, await readStoredCredentialsForServerId('srv_n2')),
+          prepareBetween: async (request, signal) => {
+            if (!worker) throw new Error('Unexpected worker copy');
+            return await prepareWorkspaceSyncBetween({ ...request, serverId: homeId, signal,
+              readCurrent: async () => ({ workspaceRefs: [ref, workerRef], relationships: [relationship] }),
+              // Only the remote controller's completed filesystem transfer is substituted.
+              flush: async () => { copies++; await cp(rootPath, workerRoot, { recursive: true }); afterCopy?.();
+                return { relationshipId: relationship.relationshipId, controllerMachineId: ref.machineId, state: 'watching',
+                  alphaPath: rootPath, betaPath: workerRoot, mode: relationship.mode,
+                  endpointStates: { alpha: { connected: true, scanned: true, scanProblemCount: 0, transitionProblemCount: 0 },
+                    beta: { connected: true, scanned: true, scanProblemCount: 0, transitionProblemCount: 0 } },
+                  conflictCount: 0, lastCycleObservedAtMs: 5, lastCleanSyncAtMs: 5 };
+              } });
+          },
+        })({ ...ports, ...(setupTerminals ? { terminalSessions: setupTerminals } : {}) }, ingress);
+        if (runtime) finiteIngress.push({ accountId: runtime.accountId, homeId: runtime.accountAuthorization?.binding.serverIdentityId ?? homeId,
+          installationId: ingress.machineAdmission!.installationId, current: await runtime.isCurrent!() });
+        return runtime;
       },
     });
   const manager: unknown = Reflect.get(client, 'rpcHandlerManager');
@@ -387,6 +418,13 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
     resolveCurrentMachineExecutionOriginContext: resolveOrigin, resolveTarget, listAccountApiTokens: async () => ({ tokens: [] }),
     externalActionMachinePublicKey: publicKey, verifyExternalExecutionAuthorization: verifyRoot });
   const api = await ApiClient.create(credentials);
+  if (worker) registerProjectDefinitionHandlers({ machineId: ref.machineId,
+    rpcHandlerManager: { registerHandler: (method, handler) => { sourceHandlers.set(method, handler); } },
+    actionExecutor: createActionExecutor(createCliActionDeps({ token, credentials, serverId: 'srv_n2',
+      serverHttpBaseUrl: 'https://home.example.test', sessionId: 'source', mode: 'plain', ctx: null,
+      projectDefinitionAction: createProjectDefinitionAction({ serverId: 'srv_n2', machineId: ref.machineId,
+        workingDirectory: rootPath, accessPolicy: { kind: 'restrictedRoots', roots: [rootPath] }, nativeIo: {
+          ...nativeIo.commandIo, resolveTool: async tool => ({ executablePath: `/managed/${tool}`, version: '1' }) } }) })) });
   const features = actionId === 'localServices.launcher.start' ? await api.getServerFeaturesSnapshot({ refresh: true }) : undefined;
   api.setServerFeaturesSnapshotProvider(() => features);
   const runtimeActionExecute = api.createBrowserRuntimeActionExecutor();
@@ -434,7 +472,8 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
     const parsed = ProjectCommandActionOutputV1Schema.safeParse(value);
     if (parsed.success) ownOperations.add(parsed.data.operation.operationId);
   };
-  const harness = { rootPath, directory, ref, rows, rpcOutcomes, networkPaths, finiteIngress, spawned, installation,
+  const harness = { rootPath, directory, ref, workerRef, rows, rpcOutcomes, networkPaths, finiteIngress, spawned, installation,
+    copies: () => copies, foreignSource: () => { sourceAccountId = 'foreign'; }, retireAfterCopy: () => { afterCopy = () => { encryptionVersion++; }; },
     disconnectInstalledMachine: () => installedSocket?.disconnect(),
     source: () => source, hasApproval: () => artifact !== undefined,
     reviewSetup: () => reviewProjectSetupEffect({ workspace: ref,
