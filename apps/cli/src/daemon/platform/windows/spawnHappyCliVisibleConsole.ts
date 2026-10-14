@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { observeProcessLaunch } from '@/processes/launchNotification';
 import { classifySpawnFailure, spawnFailureMessage, type SpawnFailure, type SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
 import type { CancelStartupLaunch } from '../../spawn/startupLaunchCancellation';
 import { createExactWindowsProcessCancellation } from './windowsProcessCustody';
@@ -48,6 +49,7 @@ export async function startHappySessionInVisibleWindowsConsole(params: {
       safeResolve({ ok: false, spawnFailure, errorMessage: spawnFailureMessage(spawnFailure, 'Failed to spawn PowerShell') });
       return;
     }
+    observeProcessLaunch(child);
     let stdout = '';
     let stderr = '';
 

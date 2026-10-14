@@ -19,6 +19,8 @@ import type { HostRuntimeLimitMeasurementRecorder } from '@/agent/runtime/state/
 import { classifySpawnFailure, spawnFailureMessage, type SpawnFailure, type SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
 import type { OwnerRemainderPort } from '@/daemon/processes/endOwnerRemainder';
 import { parseProcessOwnerTag, PROCESS_OWNER_ENV_KEY, type ProcessOwnerRef } from '@/processes/ownerTag';
+import { observeProcessLaunch } from '@/processes/launchNotification';
+import { logger } from '@/ui/logger';
 
 type DisposeReason = Extract<PluginProcessTerminationRequest, { kind: 'dispose' }>['reason'];
 
@@ -200,12 +202,20 @@ export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcess
         ),
     );
     const recordRuntimeLimitMeasurement = input.recordRuntimeLimitMeasurement;
+    const spawnStartedAt = performance.now();
     const child = spawn(input.command, [...input.args], {
         cwd: input.cwd,
         env: input.env,
         stdio: ['pipe', 'pipe', 'pipe'],
         ...input.spawnOptions,
     });
+    observeProcessLaunch(child);
+    child.once('spawn', () => logger.infoFile('[PluginExec] Process launched', {
+        phase: 'launcher_spawn',
+        pid: child.pid,
+        ...(processOwner ? { owner: processOwner } : {}),
+        durationMs: Math.round(performance.now() - spawnStartedAt),
+    }));
     let rootExitCapture = input.rootExitObservation && child.pid
         ? input.rootExitObservation.ownerRemainder.captureTree(input.rootExitObservation.owner, { pid: child.pid })
         : undefined;

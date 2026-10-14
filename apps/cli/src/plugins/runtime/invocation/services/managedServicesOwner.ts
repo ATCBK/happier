@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { invalidateProcessLaunchDiscovery } from '@/processes/launchNotification';
 import type { DaemonLocalServiceLauncherStartRequestV1, LocalServiceLaunchTargetV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 import { Buffer } from 'node:buffer';
 import { isAbsolute, join } from 'node:path';
@@ -275,6 +276,7 @@ function translateError(error: unknown): never {
             error.code.startsWith('plugin_managed_service_')
             || error.code === 'plugin_managed_server_termination_incomplete'
             || error.code === 'plugin_operation_aborted'
+            || error.code === 'native_tool_unavailable'
         ) return error.code;
         switch (error.code) {
             case 'plugin_managed_server_id_invalid':
@@ -4038,6 +4040,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                 })().finally(() => {
                     entry.establishmentSettled = true;
                     notifyActivity();
+                    invalidateProcessLaunchDiscovery();
                 }).catch((error) => {
                     entry.terminal = true;
                     if (
@@ -4286,6 +4289,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
         })().finally(() => {
             entry.establishmentSettled = true;
             notifyActivity();
+            invalidateProcessLaunchDiscovery();
         }).catch((error) => {
             entry.terminal = true;
             if (!entry.processHandle && !entry.establishmentCleanup) {

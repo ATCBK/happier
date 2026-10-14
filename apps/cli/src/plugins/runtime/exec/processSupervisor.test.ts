@@ -13,8 +13,27 @@ import { createProcessOwnershipRuntime } from '@/daemon/processes/ownership/proc
 import { readProcessCensus } from '@/processes/census/processCensus';
 import { resolveProcessOwnership } from '@/daemon/processes/ownership/resolveProcessOwnership';
 import type { HappierProcessRoot } from '@/daemon/processes/ownership/types';
+import { logger } from '@/ui/logger';
 
 describe('spawnSupervisedPluginProcess', () => {
+    it('records OS launch timing without logging command arguments or environment', async () => {
+        const fileLog = vi.spyOn(logger, 'infoFile');
+        const supervised = spawnSupervisedPluginProcess({ command: process.execPath,
+            args: ['-e', 'process.stdout.write("private-output")'], env: { PRIVATE_TOKEN: 'private-secret' } });
+        try {
+            await supervised.handle.wait();
+            const launches = fileLog.mock.calls.filter(([name]) => name === '[PluginExec] Process launched');
+            expect(launches).toEqual([[expect.any(String), expect.objectContaining({
+                phase: 'launcher_spawn', pid: supervised.child.pid, durationMs: expect.any(Number),
+            })]]);
+            expect(JSON.stringify(launches)).not.toContain('private');
+            expect(JSON.stringify(launches)).not.toContain(process.execPath);
+        } finally {
+            await supervised.dispose();
+            fileLog.mockRestore();
+        }
+    });
+
     it('awaits native cleanup beyond five seconds without rejecting the next turn preparation', async () => {
         let releaseNativeCleanup!: () => void;
         const nativeCleanup = new Promise<void>(resolve => { releaseNativeCleanup = resolve; });
@@ -89,13 +108,19 @@ describe('spawnSupervisedPluginProcess', () => {
         }
     }, 15_000);
     it('preserves an asynchronous spawn errno in the existing failed diagnostic', async () => {
+        const fileLog = vi.spyOn(logger, 'infoFile');
         const supervised = spawnSupervisedPluginProcess({ command: 'happier-nonexistent-spawn-fixture', args: [], env: {} });
-        await expect(supervised.handle.wait()).resolves.toMatchObject({
-            termination: { observed: { kind: 'failed', diagnostic: {
-                code: 'PLUGIN_EXEC_PROCESS_FAILED', details: { errorCode: 'ENOENT', spawnFailure: { reason: 'other', errno: 'ENOENT' } },
-            } } },
-        });
-        await supervised.waitForSettlement();
+        try {
+            await expect(supervised.handle.wait()).resolves.toMatchObject({
+                termination: { observed: { kind: 'failed', diagnostic: {
+                    code: 'PLUGIN_EXEC_PROCESS_FAILED', details: { errorCode: 'ENOENT', spawnFailure: { reason: 'other', errno: 'ENOENT' } },
+                } } },
+            });
+            await supervised.waitForSettlement();
+            expect(fileLog.mock.calls.filter(([name]) => name === '[PluginExec] Process launched')).toHaveLength(0);
+        } finally {
+            fileLog.mockRestore();
+        }
     });
     it('lets an admitted activation clean up before terminating its owned descendants', async () => {
         if (process.platform === 'win32') return;

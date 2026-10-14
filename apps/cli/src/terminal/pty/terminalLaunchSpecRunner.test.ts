@@ -35,7 +35,7 @@ function createRunnerScriptHarness() {
     if (id === 'node:child_process') return { spawn };
     if (id === 'node:fs/promises' || id === 'node:fs') return require(id);
     if (id === 'node:path') return require(id);
-    if (id === './process_tree.cjs') return createRequire(scriptPath)(id);
+    if (id === './process_tree.cjs' || id === './native_process_exit.cjs') return createRequire(scriptPath)(id);
     throw new Error(`unexpected require: ${id}`);
   }, { main: {} });
 

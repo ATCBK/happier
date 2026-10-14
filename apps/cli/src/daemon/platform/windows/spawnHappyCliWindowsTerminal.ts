@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { observeProcessLaunch } from '@/processes/launchNotification';
 import { classifySpawnFailure, spawnFailureMessage, type SpawnFailure, type SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
 
 import { resolveWindowsCommandOnPath } from '@happier-dev/cli-common/process';
@@ -78,6 +79,7 @@ export async function startHappySessionInWindowsTerminal(params: {
         errorMessage: spawnFailureMessage(spawnFailure, 'Windows Terminal dispatcher could not be started') });
       return;
     }
+    observeProcessLaunch(child);
     const custodyPid =
       Number.isInteger(child.pid) && (child.pid ?? 0) > 0
         ? child.pid!

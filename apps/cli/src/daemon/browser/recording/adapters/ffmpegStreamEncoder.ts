@@ -1,4 +1,5 @@
 import { spawn as spawnProcess, type SpawnOptions } from 'node:child_process';
+import { observeProcessLaunch } from '@/processes/launchNotification';
 import { withProcessOwnerEnvironment } from '@/processes/ownerTag';
 import { randomUUID } from 'node:crypto';
 import { mkdir, rm, stat } from 'node:fs/promises';
@@ -43,7 +44,9 @@ function defaultSpawnFfmpeg(
   args: readonly string[],
   options: SpawnOptions,
 ): BrowserRecordingFfmpegProcess {
-  return spawnProcess(binaryPath, [...args], options) as BrowserRecordingFfmpegProcess;
+  const child = spawnProcess(binaryPath, [...args], options);
+  observeProcessLaunch(child);
+  return child as BrowserRecordingFfmpegProcess;
 }
 
 function sanitizeRecordingIdSegment(value: string): string {

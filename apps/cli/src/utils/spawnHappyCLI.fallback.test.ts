@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, onTestFailed, vi } from 'vitest';
 import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import {
   constants,
   existsSync,
@@ -554,6 +555,11 @@ describe('spawnHappyCLI fallback invocation', () => {
       phase = 'current dist fixture creation';
       const entrypoint = writeTinyDist(root);
       writeTinyRuntimeAssets(root);
+      // Stage the real consumer and its authored modules, independently of the
+      // snapshot owner's sidecar list, so an omitted runtime dependency fails live.
+      for (const name of ['terminal_launch_spec_runner.cjs', 'process_tree.cjs', 'native_process_exit.cjs']) {
+        writeFileSync(join(root, 'scripts', name), readFileSync(join(__dirname, '../../scripts', name)));
+      }
       const fingerprint = writeDistBuildManifest(entrypoint);
       const runtimeStatePath = join(root, 'stack.runtime.json');
       writeStackRuntimeFingerprint(runtimeStatePath, fingerprint);
@@ -595,6 +601,13 @@ describe('spawnHappyCLI fallback invocation', () => {
         expect(existsSync(join(snapshotRoot, ...relativeAssetPath))).toBe(true);
       }
       expect(existsSync(join(snapshotRoot, 'scripts', 'env-wrapper.cjs'))).toBe(false);
+
+      phase = 'copied terminal runtime execution';
+      const native = spawnSync(process.execPath, ['-e', [
+        'const { runLaunchSpec } = require(process.argv[1]);',
+        'runLaunchSpec({ command: process.execPath, args: ["-e", "process.exit(7)"], cwd: process.cwd(), env: {} }).then(code => process.exit(code));',
+      ].join('\n'), join(snapshotRoot, 'scripts', 'terminal_launch_spec_runner.cjs')], { cwd: root, encoding: 'utf8' });
+      expect({ status: native.status, stderr: native.stderr }).toEqual({ status: 7, stderr: '' });
 
       phase = 'complete immutable closure reuse';
       const reused = mod.buildHappyCliSubprocessInvocation(['claude', '--started-by', 'daemon']);
@@ -1031,7 +1044,11 @@ describe('spawnHappyCLI fallback invocation', () => {
       });
       expect(successorFingerprint).not.toBe(lastGreenFingerprint);
       patchFreshDistEnv(entrypoint, runtimeStatePath, successorFingerprint);
-      envScope.patch({ HAPPIER_STACK_REPO_DIR: root });
+      envScope.patch({
+        HAPPIER_STACK_REPO_DIR: root,
+        // This case owns the no-publication-lease environment, independently of its test runner.
+        HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: undefined,
+      });
 
       const startup = mod.buildHappyCliSubprocessInvocation(
         ['daemon', 'start-sync'],

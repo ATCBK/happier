@@ -13,17 +13,24 @@ import { createLocalServiceInventoryRoutes } from '@/daemon/local/services/inven
 import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
 import { MachineProcessesWatchResultV1Schema, type MachineProcessesWatchResultV1 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 import { spawnSupervisedPluginProcess } from '@/plugins/runtime/exec/processSupervisor';
+import { spawn } from 'node:child_process';
+import { createManagedChildProcess } from '@/subprocess/supervision/managedChildProcess';
 import { once } from 'node:events';
 import { createDaemonControlApp } from '@/daemon/controlServer';
 import { writeDaemonState, clearDaemonStateForTestTeardown } from '@/persistence';
 import { configuration } from '@/configuration';
+import { createTerminalProcessRegistry } from '@/daemon/local/services/inventory/terminalRegistry';
+import { listHappierProcessRoots } from '../roots/listHappierProcessRoots';
+import { formatProcessOwnerTag, resolveProcessOwnerScopeKey } from '@/processes/ownerTag';
+import { PROCESS_LAUNCH_NOTIFICATION_PATH, ProcessLaunchNotificationResultSchema } from '@/processes/launchNotification';
+import { createProcessCustodySamplingInvoker } from '@/subprocess/supervision/processCustody';
 
 // Native census and vitals I/O are system boundaries; the sampler and every domain owner are real.
 const boundary = vi.hoisted(() => ({ read: vi.fn<(input: ProcessCensusInput) => Promise<ProcessCensusSnapshot>>() }));
 vi.mock('@/processes/census/processCensus', () => ({ readProcessCensus: boundary.read }));
 afterEach(() => { vi.useRealTimers(); boundary.read.mockReset(); });
-it('discovers a real Happier launch in a parked watch before either sampling cadence and stops discovery when disposed', async () => {
-    vi.useFakeTimers(); vi.setSystemTime(1000);
+it.each(['plugin supervisor', 'managed child'])('discovers a real %s launch before either sampling cadence and stops discovery when disposed', async launchOwner => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] }); vi.setSystemTime(1000);
     let childPid: number | undefined;
     boundary.read.mockImplementation(async () => ({ status: 'ok', capturedAtMs: Date.now(), logicalCpus: 2, rows: [
         { pid: 100, ppid: 1, start: { startTimeMs: 100 }, principal: { kind: 'uid', value: '1000' }, name: 'daemon',
@@ -56,7 +63,26 @@ it('discovers a real Happier launch in a parked watch before either sampling cad
     const parked = view.watch({ machineId: 'm', scope: 'happier', view: 'tree', since: initial.changed ? initial.answer.capturedAtMs : 0 },
         requester, cancellation.signal).then(value => { answer = value; });
     await vi.advanceTimersByTimeAsync(1);
-    const launched = spawnSupervisedPluginProcess({ command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], env: {} });
+    const readsBeforeRejectedNotification = boundary.read.mock.calls.length;
+    expect((await app.inject({ method: 'POST', url: PROCESS_LAUNCH_NOTIFICATION_PATH, payload: {} })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'POST', url: PROCESS_LAUNCH_NOTIFICATION_PATH,
+        headers: { 'x-happier-daemon-token': 'private-spawn-fixture' }, payload: { pid: 123 } })).statusCode).toBe(400);
+    // Native sampling uses its real cli-common exec boundary, outside managed
+    // workload launch. Sampling itself must not invalidate the demanded view.
+    if (process.platform !== 'linux') {
+        const nativeSample = await createProcessCustodySamplingInvoker()({ command: 'process-census', sampledAt: Date.now(),
+            args: [`--caller-pid=${process.pid}`, `--pids=${process.pid}`, '--identity-only=true'] });
+        expect(nativeSample.state).toBe('ready');
+        await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(boundary.read.mock.calls.length).toBe(readsBeforeRejectedNotification);
+    const launched = launchOwner === 'plugin supervisor'
+        ? spawnSupervisedPluginProcess({ command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], env: process.env })
+        : (() => {
+            const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { env: process.env, stdio: 'pipe' });
+            const managed = createManagedChildProcess(child);
+            return { child, handle: { wait: managed.waitForTermination } };
+        })();
     childPid = launched.child.pid;
     try {
         await once(launched.child, 'spawn');
@@ -64,9 +90,12 @@ it('discovers a real Happier launch in a parked watch before either sampling cad
         expect(Date.now()).toBeLessThan(2000);
         expect(answer?.changed && answer.answer.owners.flatMap(owner => owner.members).map(row => row.pid)).toContain(childPid);
         expect(MachineProcessesWatchResultV1Schema.safeParse(answer).success).toBe(true);
+        const response = await app.inject({ method: 'POST', url: PROCESS_LAUNCH_NOTIFICATION_PATH,
+            headers: { 'x-happier-daemon-token': 'private-spawn-fixture' }, payload: {} });
+        expect(ProcessLaunchNotificationResultSchema.parse(response.json())).toEqual({ accepted: true });
         const reads = boundary.read.mock.calls.length;
         view.dispose();
-        const next = spawnSupervisedPluginProcess({ command: process.execPath, args: ['-e', 'process.exit(0)'], env: {} });
+        const next = spawnSupervisedPluginProcess({ command: process.execPath, args: ['-e', 'process.exit(0)'], env: process.env });
         await once(next.child, 'spawn');
         await next.handle.wait();
         await vi.advanceTimersByTimeAsync(1);
@@ -78,6 +107,105 @@ it('discovers a real Happier launch in a parked watch before either sampling cad
         await launched.handle.wait();
         vi.useRealTimers(); await sampler.stop();
         await app.close(); await clearDaemonStateForTestTeardown();
+    }
+});
+it('drains roots registered during a census and discovers idle registrations on re-arm even in the same millisecond', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(1000);
+    const terminalRegistry = createTerminalProcessRegistry();
+    const home = '/process-discovery-fixture';
+    let pids: number[] = [];
+    let releaseRead: (() => void) | undefined;
+    let pauseNextRead = false;
+    boundary.read.mockImplementation(async () => {
+        const snapshot: ProcessCensusSnapshot = { status: 'ok', capturedAtMs: Date.now(), logicalCpus: 2, rows: [
+            { pid: 100, ppid: 1, start: { startTimeMs: 100 }, principal: { kind: 'uid', value: '1000' }, name: 'daemon', memory: null, cpuTimeUs: 0 },
+            ...pids.map(pid => ({ pid, ppid: 100, start: { startTimeMs: 900 }, principal: { kind: 'uid' as const, value: '1000' },
+                name: 'shell', memory: { bytes: 30, kind: 'rss' as const }, cpuTimeUs: 0,
+                ownerTag: formatProcessOwnerTag({ happierHomeDir: home, platform: 'darwin', owner: { kind: 'terminal', terminalId: `t${pid}` } }) })),
+        ] };
+        if (pauseNextRead) {
+            pauseNextRead = false;
+            await new Promise<void>(resolve => { releaseRead = resolve; });
+        }
+        return snapshot;
+    });
+    const runtime = createProcessOwnershipRuntime({ selfPid: 100, platform: 'darwin', daemonScopeKey: resolveProcessOwnerScopeKey(home, 'darwin'),
+        listRoots: snapshot => listHappierProcessRoots({ snapshot, selfPid: 100, platform: 'darwin', happierHomeDir: home, terminalRegistry }) });
+    const pass = createLeftBehindPass({ processOwnershipRuntime: runtime });
+    const sampler = createMachineVitalsSampler({ readers: { read: async () => { throw new Error('No sampler tick expected'); } },
+        historyStore: { read: async () => [], append: async () => true, prune: async () => undefined,
+            appendAlert: async () => undefined, minutes: () => [], alerts: () => [] } });
+    const view = createMachineProcessesView({ processOwnershipRuntime: runtime, leftBehind: pass, machineVitals: sampler,
+        platform: 'darwin', selfPid: 100, allProcessesVisible: () => false, requesterForOwner: () => ({ accountId: 'a' }) });
+    const requester = { accountId: 'a', custodianAccountId: 'a' };
+    const initial = await view.watch({ machineId: 'm', scope: 'happier', view: 'tree' }, requester);
+    const cancellation = new AbortController();
+    const parked = view.watch({ machineId: 'm', scope: 'happier', view: 'tree', since: initial.changed ? initial.answer.capturedAtMs : 0 }, requester, cancellation.signal);
+    try {
+        await vi.advanceTimersByTimeAsync(0);
+        pids = [20]; pauseNextRead = true;
+        terminalRegistry.registerTerminalProcesses({ terminalKey: 't20', terminalId: 't20', workspacePath: '/repo', pids: [20] });
+        expect(releaseRead).toBeTypeOf('function');
+        pids = [20, 30];
+        terminalRegistry.registerTerminalProcesses({ terminalKey: 't30', terminalId: 't30', workspacePath: '/repo', pids: [30] });
+        releaseRead?.();
+        const answer = await parked;
+        expect(answer.changed && answer.answer.owners.filter(owner => owner.owner.kind === 'terminal').flatMap(owner => owner.members.map(row => row.pid))).toEqual([20, 30]);
+        expect(MachineProcessesWatchResultV1Schema.safeParse(answer).success).toBe(true);
+        expect(Date.now()).toBe(1000);
+        const reads = boundary.read.mock.calls.length;
+        pids.push(40);
+        terminalRegistry.registerTerminalProcesses({ terminalKey: 't40', terminalId: 't40', workspacePath: '/repo', pids: [40] });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(boundary.read.mock.calls.length).toBe(reads);
+        const rearmed = await view.watch({ machineId: 'm', scope: 'happier', view: 'tree', since: answer.changed ? answer.answer.capturedAtMs : 0 }, requester);
+        expect(rearmed.changed && rearmed.answer.owners.flatMap(owner => owner.members.map(row => row.pid))).toContain(40);
+    } finally {
+        releaseRead?.(); cancellation.abort(); await parked;
+        view.dispose(); pass.dispose(); vi.useRealTimers(); await sampler.stop();
+    }
+});
+it('shares discovery across concurrent watch opens so a stale capture cannot overwrite a launch discovered by the other reader', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(1000);
+    const terminalRegistry = createTerminalProcessRegistry();
+    const home = '/concurrent-process-discovery-fixture';
+    let launched = false;
+    let releaseRead: (() => void) | undefined;
+    let pause = true;
+    boundary.read.mockImplementation(async () => {
+        const snapshot: ProcessCensusSnapshot = { status: 'ok', capturedAtMs: Date.now(), logicalCpus: 2, rows: [
+            { pid: 100, ppid: 1, start: { startTimeMs: 100 }, principal: { kind: 'uid', value: '1000' }, name: 'daemon', memory: null, cpuTimeUs: 0 },
+            ...(launched ? [{ pid: 20, ppid: 100, start: { startTimeMs: 900 }, principal: { kind: 'uid' as const, value: '1000' },
+                name: 'shell', memory: { bytes: 30, kind: 'rss' as const }, cpuTimeUs: 0,
+                ownerTag: formatProcessOwnerTag({ happierHomeDir: home, platform: 'darwin', owner: { kind: 'terminal', terminalId: 't20' } }) }] : []),
+        ] };
+        if (pause) { pause = false; await new Promise<void>(resolve => { releaseRead = resolve; }); }
+        return snapshot;
+    });
+    const runtime = createProcessOwnershipRuntime({ selfPid: 100, platform: 'darwin', daemonScopeKey: resolveProcessOwnerScopeKey(home, 'darwin'),
+        listRoots: snapshot => listHappierProcessRoots({ snapshot, selfPid: 100, platform: 'darwin', happierHomeDir: home, terminalRegistry }) });
+    const pass = createLeftBehindPass({ processOwnershipRuntime: runtime });
+    const sampler = createMachineVitalsSampler({ readers: { read: async () => { throw new Error('No sampler tick expected'); } },
+        historyStore: { read: async () => [], append: async () => true, prune: async () => undefined,
+            appendAlert: async () => undefined, minutes: () => [], alerts: () => [] } });
+    const view = createMachineProcessesView({ processOwnershipRuntime: runtime, leftBehind: pass, machineVitals: sampler,
+        platform: 'darwin', selfPid: 100, allProcessesVisible: () => false, requesterForOwner: () => ({ accountId: 'a' }) });
+    const requester = { accountId: 'a', custodianAccountId: 'a' };
+    const request = { machineId: 'm', scope: 'happier' as const, view: 'tree' as const };
+    const first = view.watch(request, requester);
+    await vi.advanceTimersByTimeAsync(0);
+    launched = true;
+    terminalRegistry.registerTerminalProcesses({ terminalKey: 't20', terminalId: 't20', workspacePath: '/repo', pids: [20] });
+    const second = view.watch(request, requester);
+    try {
+        await vi.advanceTimersByTimeAsync(0);
+        releaseRead?.();
+        for (const answer of await Promise.all([first, second])) {
+            expect(answer.changed && answer.answer.owners.flatMap(owner => owner.members.map(row => row.pid))).toContain(20);
+        }
+    } finally {
+        releaseRead?.(); view.dispose(); await Promise.all([first, second]);
+        pass.dispose(); vi.useRealTimers(); await sampler.stop();
     }
 });
 it('samples only while watched, retaining CPU/history across re-arm until the shared watch window expires', async () => {

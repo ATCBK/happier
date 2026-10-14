@@ -5,6 +5,7 @@ import {
 } from 'node:child_process';
 import { basename } from 'node:path';
 import { withProcessOwnerEnvironment } from '@/processes/ownerTag';
+import { observeProcessLaunch } from '@/processes/launchNotification';
 
 import type {
     IosSimulatorAdapterHealthV1,
@@ -170,6 +171,7 @@ export function createIosSimulatorHelperProcessStarter(
             windowsHide: true,
             shell: false,
         });
+        observeProcessLaunch(child);
         const exited = new Promise<IosSimulatorHelperProcessExit>((resolve) => {
             child.once('exit', (exitCode: number | null, signal: string | null) => {
                 resolve({ exitCode, signal });

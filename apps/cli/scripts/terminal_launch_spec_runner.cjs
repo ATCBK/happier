@@ -5,6 +5,7 @@ const fsSync = require('node:fs');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const { terminateProcessTree } = require('./process_tree.cjs');
+const { reportNativeProcessExited } = require('./native_process_exit.cjs');
 
 const terminalSignalNames = ['SIGINT', 'SIGQUIT'];
 
@@ -219,7 +220,8 @@ function runLaunchSpec(spec, controllerSignal, controllerChannel) {
             reportNativeSpawnResult('failed');
             settle(() => reject(error));
         });
-        child.on('close', (code, signal) => {
+        child.on('close', async (code, signal) => {
+            if (controllerChannel) await reportNativeProcessExited(process, code, signal);
             if (typeof code === 'number') {
                 settle(() => resolve(code));
                 return;

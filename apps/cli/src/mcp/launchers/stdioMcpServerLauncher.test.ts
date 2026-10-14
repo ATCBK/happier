@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 import { deserializeMessage, serializeMessage } from '@modelcontextprotocol/sdk/shared/stdio.js';
+import { StdioMcpServerStartupFailureSchema } from './stdioMcpServerStartupFailure';
 
 import { projectPath } from '@/projectPath';
 import { removeWrittenMcpRuntimeConfigFile, writeSecureMcpRuntimeConfigFile } from '@/mcp/runtime/writeSecureMcpRuntimeConfigFile';
@@ -37,7 +38,7 @@ function resolveLauncherInvocation(options: Readonly<{ forceSource?: boolean }> 
 
   return {
     command: process.execPath,
-    args: ['--no-warnings', '--no-deprecation', '--import', pathToFileURL(tsxHook).href, sourceEntrypoint],
+    args: ['--conditions=happier-source', '--no-warnings', '--no-deprecation', '--import', pathToFileURL(tsxHook).href, sourceEntrypoint],
     env: {
       TSX_TSCONFIG_PATH: resolveCliTsxTsconfigPath(),
     },
@@ -45,6 +46,43 @@ function resolveLauncherInvocation(options: Readonly<{ forceSource?: boolean }> 
 }
 
 describe('stdioMcpServerLauncher', () => {
+  it('returns a typed failure when a real child closes stdin before initialize', async () => {
+    const configPath = await writeSecureMcpRuntimeConfigFile({ prefix: 'happier-mcp-closed-stdin', tmpDir: null,
+      payload: { command: process.execPath, args: ['-e', "require('node:fs').closeSync(0); process.stderr.write('stdin-closed\\n'); setTimeout(() => process.exit(0), 1000);"] } });
+    const invocation = resolveLauncherInvocation({ forceSource: true });
+    const child = spawn(invocation.command, invocation.args, { env: { ...resolveEnvRecord(), ...invocation.env,
+      HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE: configPath }, stdio: ['pipe', 'pipe', 'pipe'] });
+    let output = '';
+    let stderr = '';
+    let sent = false;
+    const closed = new Promise<number | null>((resolve, reject) => {
+      child.once('error', reject); child.once('close', resolve);
+    });
+    child.stdout.on('data', chunk => { output += String(chunk); });
+    child.stderr.on('data', chunk => {
+      stderr += String(chunk);
+      if (!sent && stderr.includes('stdin-closed')) {
+        sent = true;
+        child.stdin.end(serializeMessage({ jsonrpc: '2.0', id: 8, method: 'initialize', params: {} }));
+      }
+    });
+    try {
+      expect(await closed).toBe(1);
+      expect(stderr).not.toContain('Unhandled');
+      expect(output, stderr).not.toBe('');
+      const response = deserializeMessage(output.trim());
+      expect(response).toMatchObject({ id: 8, error: { code: -32603 } });
+      if (!('error' in response)) throw new Error('Expected MCP startup failure');
+      expect(StdioMcpServerStartupFailureSchema.parse(response.error.data)).toMatchObject({
+        t: 'happier-mcp-stdio-spawn-failure-v1', code: 'EPIPE',
+      });
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+      await closed;
+      removeWrittenMcpRuntimeConfigFile(configPath, true);
+    }
+  });
+
   it('reports a spawn failure when initialize framing finishes after the child error', async () => {
     const configPath = await writeSecureMcpRuntimeConfigFile({ prefix: 'happier-mcp-delayed-initialize', tmpDir: null,
       payload: { command: 'happier-fixture-missing-command', args: [] } });

@@ -1,17 +1,19 @@
 import { chmodSync, existsSync, readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { createRequire, isBuiltin } from 'node:module';
 import { spawn, spawnSync, ChildProcess, type SpawnOptions } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it, onTestFailed, onTestFinished, vi } from 'vitest';
-import { bundleWorkspacePackagesWithRuntimeDependencies } from '@happier-dev/cli-common/workspaces';
 import { build } from 'esbuild';
+import { createWorkspaceSourceResolver, packageNameOfSpecifier, readWorkspacePackages } from '@happier-dev/cli-common/sourceRuntimeEntries';
+import { resolveInstalledRuntimePackage } from '@happier-dev/cli-common/workspaceRuntimeDependencies';
 import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
 
 import { launchBorrowedTerminalProcess } from './borrowedTerminalProcess';
+import { createTerminalLauncherFixture } from '@/testkit/process/terminalLauncher';
 import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import { isPidAlive, waitForProcessExit } from '@/testkit/process/spawn';
 import { bindProcessLogger, Logger } from '@/ui/logger';
@@ -19,6 +21,75 @@ import { waitForCondition } from '@/testkit/async/waitFor';
 import { resolveProcessCustodySupportExecutable } from '@/subprocess/supervision/processCustody';
 
 describe('launchBorrowedTerminalProcess', () => {
+  it.each(['closed', 'empty'] as const)('drains private IPC before deciding native closure proof (%s)', async (proof) => {
+    const directory = await mkdtemp(join(tmpdir(), 'happier-borrowed-exit-drain-'));
+    // The OS child boundary deliberately delivers its IPC packet after its exit event.
+    const launcher = createTerminalLauncherFixture();
+    const child = Object.assign(launcher.child, { connected: true });
+    let completePhysicalStop!: () => void;
+    const physicalStop = new Promise<void>((resolve) => { completePhysicalStop = resolve; });
+    const launched = await launchBorrowedTerminalProcess({
+      spawnArgv: ['/native/agent'], workingDirectory: directory, spawnEnv: {},
+      spawnProcess: launcher.spawnProcess,
+      terminateProcess: async () => await physicalStop,
+    });
+    try {
+      const stopping = launched.terminate();
+      let settled = false;
+      void launched.whenExited.then(() => { settled = true; });
+      child.emit('exit', 0, null);
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      child.emit('message', { type: 'terminal-native-exited', code: proof === 'closed' ? 0 : null, signal: null });
+      child.emit('disconnect');
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      completePhysicalStop();
+      await stopping;
+      const result = await launched.whenExited;
+      expect(result).toMatchObject({ code: 0, signal: null });
+      if (proof === 'closed') expect(result).toHaveProperty('nativeExited', true);
+      else expect(result).not.toHaveProperty('nativeExited');
+    } finally {
+      completePhysicalStop();
+      child.emit('disconnect');
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps wrapper SIGKILL separate from a still-live native provider', async () => {
+    if (process.platform === 'win32') return; // The OS signal distinction is POSIX-specific.
+    const directory = await mkdtemp(join(tmpdir(), 'happier-borrowed-wrapper-exit-'));
+    const pidPath = join(directory, 'native.pid');
+    let launcher: ChildProcess | undefined;
+    let nativePid: number | undefined;
+    let launched: Awaited<ReturnType<typeof launchBorrowedTerminalProcess>> | undefined;
+    try {
+      launched = await launchBorrowedTerminalProcess({
+        spawnArgv: [process.execPath, '-e', 'require("node:fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)', pidPath],
+        workingDirectory: directory,
+        spawnEnv: { PATH: process.env.PATH ?? '' },
+        spawnProcess: (command, args, options) => {
+          launcher = spawn(command, [...args], options); // Real OS boundary; preserve the production IPC path.
+          return launcher;
+        },
+      });
+      await waitForCondition(() => existsSync(pidPath), { timeoutMs: 10_000, label: 'native provider startup' });
+      nativePid = Number(await readFile(pidPath, 'utf8'));
+      launcher!.kill('SIGKILL');
+      const result = await launched.whenExited;
+      expect(result).toMatchObject({ code: null, signal: 'SIGKILL' });
+      expect(result).not.toHaveProperty('nativeExited');
+      expect(isPidAlive(nativePid)).toBe(true);
+    } finally {
+      if (!nativePid && existsSync(pidPath)) nativePid = Number(await readFile(pidPath, 'utf8'));
+      if (nativePid) await terminateProcessTree({ pid: nativePid });
+      if (launcher?.pid && isPidAlive(launcher.pid)) await terminateProcessTree(launcher);
+      await launched?.whenExited.catch(() => undefined);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('exposes the actual launcher process generation only after native startup admission', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'happier-terminal-launcher-custody-'));
     let launcherPid: number | undefined;
@@ -175,14 +246,16 @@ describe('launchBorrowedTerminalProcess', () => {
   describe('controller lifetime', () => {
     let assetsDirectory: string;
     let runnerPath: string;
+    let borrowedControllerUrl: string;
+    let attachControllerUrl: string;
     let fixtureHelperPath: string | undefined;
     beforeAll(async () => {
-      // All runtime pairs consume the same read-only current-source assets. Copying
-      // their identical dependency closure per case adds no isolation or coverage.
+      // All runtime pairs consume the same read-only current-source assets;
+      // each case owns its controller and native process tree.
       assetsDirectory = await mkdtemp(join(tmpdir(), 'happier-borrowed-assets-'));
       const scriptsDirectory = join(assetsDirectory, 'scripts');
       await mkdir(scriptsDirectory);
-      for (const filename of ['terminal_launch_spec_runner.cjs', 'process_tree.cjs']) {
+      for (const filename of ['terminal_launch_spec_runner.cjs', 'process_tree.cjs', 'native_process_exit.cjs']) {
         await cp(resolve('scripts', filename), join(scriptsDirectory, filename));
       }
       const nodeModulesDirectory = join(assetsDirectory, 'node_modules');
@@ -190,11 +263,23 @@ describe('launchBorrowedTerminalProcess', () => {
         type: 'module', imports: { '#process-census': './src/process-census.mjs' },
       }));
       await mkdir(join(assetsDirectory, 'src'));
-      await build({
-        entryPoints: [resolve('src/processes/census/processCensus.ts')],
-        outfile: join(assetsDirectory, 'src', 'process-census.mjs'), bundle: true, platform: 'node', format: 'esm',
-        external: ['@happier-dev/*'], alias: { '@': resolve('src') },
+      // These OS lifetime tests consume current owner logic, independently of the development TS loader.
+      const repoRoot = resolve('../..');
+      const workspacePackages = await readWorkspacePackages(repoRoot);
+      const fixtureBuild = await build({
+        entryPoints: {
+          'process-census': resolve('src/processes/census/processCensus.ts'),
+          'borrowed-controller': resolve('src/terminal/host/borrowedTerminalProcess.ts'),
+          'attach-controller': resolve('src/session/attach/providerCliAttach.ts'),
+        },
+        outdir: join(assetsDirectory, 'src'), outExtension: { '.js': '.mjs' },
+        bundle: true, platform: 'node', format: 'esm', packages: 'external', metafile: true,
+        banner: { js: "import { createRequire as fixtureCreateRequire } from 'node:module'; const require = fixtureCreateRequire(import.meta.url);" },
+        external: ['#process-census'], alias: { '@': resolve('src') },
+        plugins: [createWorkspaceSourceResolver({ workspacePackages, requireFromProject: createRequire(resolve('package.json')) })],
       });
+      borrowedControllerUrl = pathToFileURL(join(assetsDirectory, 'src', 'borrowed-controller.mjs')).href;
+      attachControllerUrl = pathToFileURL(join(assetsDirectory, 'src', 'attach-controller.mjs')).href;
       if (process.platform === 'darwin' || process.platform === 'win32') {
         const helper = resolveProcessCustodySupportExecutable();
         if (!helper) throw new Error('Native process census helper must be staged before the source lifetime fixture');
@@ -203,14 +288,31 @@ describe('launchBorrowedTerminalProcess', () => {
         fixtureHelperPath = join(supportDirectory, basename(helper));
         await cp(helper, fixtureHelperPath);
       }
-      bundleWorkspacePackagesWithRuntimeDependencies({ bundles: [{
-        packageName: '@happier-dev/cli-common',
-        srcDir: resolve('../../packages/cli-common'),
-        destDir: join(nodeModulesDirectory, '@happier-dev/cli-common'),
-      }] });
-      const census = await import(pathToFileURL(join(assetsDirectory, 'src', 'process-census.mjs')).href) as typeof import('@/processes/census/processCensus');
-      const snapshot = await census.readProcessCensus({ freshness: 'fresh' });
-      if (snapshot.status !== 'ok') throw new Error(`Source lifetime census unavailable: ${snapshot.reason}`);
+      // Resolve the emitted dependencies from the actual CLI installation, including
+      // package-local dependencies. The raw cleanup sidecar also consumes cli-common.
+      if (!fixtureBuild.metafile) throw new Error('The fixture build did not return its runtime import graph');
+      const dependencyNames = new Set(['@happier-dev/cli-common', ...Object.values(fixtureBuild.metafile.outputs)
+        .flatMap(output => output.imports)
+        .filter(entry => entry.external && !isBuiltin(entry.path) && !entry.path.startsWith('#'))
+        .map(entry => packageNameOfSpecifier(entry.path))]);
+      await Promise.all([...dependencyNames].map(async packageName => {
+        const installed = resolveInstalledRuntimePackage({
+          packageName, resolveFromPackageJsonPath: resolve('package.json'), dereferenceRootDir: repoRoot,
+        });
+        const linkPath = join(nodeModulesDirectory, ...packageName.split('/'));
+        await mkdir(dirname(linkPath), { recursive: true });
+        await symlink(installed.packageDir, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+      }));
+      // Validate with a real Node reader: Vitest's resolver can reach packages outside the fixture.
+      const processOwnerUrl = pathToFileURL(createRequire(join(assetsDirectory, 'package.json')).resolve('@happier-dev/cli-common/process')).href;
+      const censusUrl = pathToFileURL(join(assetsDirectory, 'src', 'process-census.mjs')).href;
+      const closureAdmission = spawnSync(process.execPath, ['--input-type=module', '-e', `
+        await import(${JSON.stringify(processOwnerUrl)});
+        const census = await import(${JSON.stringify(censusUrl)});
+        const snapshot = await census.readProcessCensus({ freshness: 'fresh', pids: [process.pid], fields: [] });
+        if (snapshot.status !== 'ok') throw new Error('Source lifetime census unavailable: ' + snapshot.reason);
+      `], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '' } });
+      expect(closureAdmission.status, closureAdmission.stderr).toBe(0);
       runnerPath = join(scriptsDirectory, 'terminal_launch_spec_runner.cjs');
     });
     afterAll(async () => {
@@ -323,7 +425,7 @@ describe('launchBorrowedTerminalProcess', () => {
       if (process.platform === 'win32') return; // This controller-only SIGKILL proof is POSIX-specific.
       const directory = await mkdtemp(join(tmpdir(), 'happier-borrowed-lifetime-'));
       const readyPath = join(directory, 'ready.json');
-      const ownerUrl = pathToFileURL(resolve('src/terminal/host/borrowedTerminalProcess.ts')).href;
+      const ownerUrl = borrowedControllerUrl;
       const descendant = 'process.send(process.pid); setInterval(() => {}, 1000);';
       const provider = `
         const { spawn } = require('node:child_process');
@@ -334,7 +436,7 @@ describe('launchBorrowedTerminalProcess', () => {
         setInterval(() => {}, 1000);
       `;
       const source = nativeAttach ? `
-        const { createProviderCliAttachSurface } = await import(${JSON.stringify(pathToFileURL(resolve('src/session/attach/providerCliAttach.ts')).href)});
+        const { createProviderCliAttachSurface } = await import(${JSON.stringify(attachControllerUrl)});
         const { spawn } = await import('node:child_process');
         const cancellation = new AbortController();
         process.on('message', message => { if (message === 'force-detach') { process.send('detach-request-observed'); cancellation.abort(); } });
@@ -347,19 +449,15 @@ describe('launchBorrowedTerminalProcess', () => {
           spawnProcess: (command, args, options) => spawn(command, args[0]?.endsWith('terminal_launch_spec_runner.cjs') ? [${JSON.stringify(runnerPath)}, ...args.slice(1)] : args, options),
         });
         await surface.attachManaged({ sessionId: 'harmless-fixture', metadata: { path: ${JSON.stringify(directory)} }, signal: cancellation.signal, onAttached: async () => { process.send('native-attach-ready'); } });
-        ${forcedDetach ? "setInterval(() => {}, 1000);" : ''}
+        ${forcedDetach ? "process.send('native-attach-finished'); setInterval(() => {}, 1000);" : ''}
       ` : lifetime ? `
-        process.stderr.write('test phase: importing current borrowed owner\\n');
         const { launchBorrowedTerminalProcess } = await import(${JSON.stringify(ownerUrl)});
-        process.stderr.write('test phase: borrowed owner imported\\n');
         const { spawn } = await import('node:child_process');
         process.send('source-owner-ready');
         const launched = await launchBorrowedTerminalProcess({ spawnArgv: [${JSON.stringify(process.execPath)}, '-e', ${JSON.stringify(provider)}], spawnEnv: { PATH: process.env.PATH, TEST_SECRET: 'private-native-value' }, workingDirectory: ${JSON.stringify(directory)},
           spawnProcess: (command, args, options) => {
-            process.stderr.write('test phase: spawning native launcher\\n');
             return spawn(command, [${JSON.stringify(runnerPath)}, ...args.slice(1)], options);
           } });
-        process.stderr.write('test phase: native launcher started\\n');
         await launched.whenExited;
       ` : `
         const { spawn } = await import('node:child_process');
@@ -371,12 +469,18 @@ describe('launchBorrowedTerminalProcess', () => {
         command: process.execPath, args: ['-e', provider], cwd: directory,
         env: { PATH: process.env.PATH ?? '', TEST_SECRET: 'private-native-value' },
       }));
-      const controllerArgs = controllerRuntime === bunPath ? ['-e', source] : ['--import', 'tsx', '--input-type=module', '-e', source];
+      const controllerArgs = controllerRuntime === bunPath ? ['-e', source] : ['--input-type=module', '-e', source];
       const controller = spawn(controllerRuntime, controllerArgs, {
         stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
         serialization: 'json',
         env: { ...process.env, NODE_PATH: '', HERDR_ENV: 'must-not-return', HAPPIER_JS_RUNTIME_PATH: launcherRuntime },
       });
+      // Only the owned launcher/provider inherit this stderr pipe. 'exit' reports
+      // controller death; 'close' waits for their runner to finish its cleanup.
+      const controllerClosed = new Promise<void>(resolve => controller.once('close', () => resolve()));
+      const attachmentFinished = new Promise<void>(resolve => controller.on('message', message => {
+        if (message === 'native-attach-finished') resolve();
+      }));
       let stderr = '';
       const observations: unknown[] = [];
       let independentServicePid: number | undefined;
@@ -433,8 +537,12 @@ describe('launchBorrowedTerminalProcess', () => {
           await expect(waitForProcessExit(controller.pid!, { timeoutMs: 10_000 })).resolves.toBe(true);
         }
         if (lifetime) {
-          await expect(waitForProcessExit(tree!.provider, { timeoutMs: forcedDetach ? 10_000 : 3_000 })).resolves.toBe(true);
-          await expect(waitForProcessExit(tree!.descendant, { timeoutMs: 3_000 })).resolves.toBe(true);
+          // The owner's grace budget begins after discovery and signal checks;
+          // the unchanged whole-test budget bounds this actual completion wait.
+          if (forcedDetach) await attachmentFinished;
+          else await controllerClosed;
+          expect(isPidAlive(tree!.provider)).toBe(false);
+          expect(isPidAlive(tree!.descendant)).toBe(false);
         } else {
           await expect(waitForProcessExit(tree!.provider, { timeoutMs: 3_000 })).resolves.toBe(false);
           expect(isPidAlive(tree!.descendant)).toBe(true);
@@ -452,12 +560,13 @@ describe('launchBorrowedTerminalProcess', () => {
     });
   });
 
-  it('observes normal native close without ending its controller or retaining a private handoff', async () => {
+  it.each([process.execPath, ...(bunPath ? [bunPath] : [])])('observes normal native close without ending its controller or retaining a private handoff (launcher=%s)', async (launcherRuntime) => {
     const launched = await launchBorrowedTerminalProcess({
       spawnArgv: [process.execPath, '-e', 'process.exit(0)'],
       spawnEnv: {}, workingDirectory: tmpdir(),
+      spawnProcess: (_command, args, options) => spawn(launcherRuntime, [...args], options),
     });
-    await expect(launched.whenExited).resolves.toEqual({ code: 0, signal: null });
+    await expect(launched.whenExited).resolves.toEqual({ code: 0, signal: null, nativeExited: true });
   });
 
   it('does not acknowledge a successfully spawned launcher when the native executable is missing', async () => {
