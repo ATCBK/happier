@@ -1,61 +1,52 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 import { SessionCapabilitySelectionV1Schema, type SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
 import type { AgentInputExtraActionChipRenderContext } from '@/components/sessions/agentInput/agentInputContracts';
 import { AgentInputContentPopover } from '@/components/sessions/agentInput/components/AgentInputContentPopover';
-import { useNewSessionMcpSelection } from '@/components/sessions/new/hooks/useNewSessionMcpSelection';
+import { useNewSessionCapabilitiesChip } from '@/components/sessions/capabilities/useSessionCapabilitiesChip';
 
 import type { SessionAuthoringMcpContext } from './sessionAuthoringFieldControls';
 
 /**
- * The controlled MCP selection for an authoring value.
- *
- * The chip, its preview against the exact Machine and folder, and the
- * selection content are the incumbent New Session MCP owner's, so a workflow
- * default or step override edits exactly what New Session edits. This
- * component only adapts the controlled value to that owner's state contract
- * and hosts the chip's content popover, which the composer bar's overlay
- * controller would otherwise own.
+ * The controlled "This session gets" selection for an authoring value (workflow default, step override,
+ * trigger). The chip, its preview against the exact Machine and folder, and the sheet are the composer's
+ * own (`useNewSessionCapabilitiesChip`), so a workflow or trigger edits exactly what New Session edits.
+ * This component adapts the controlled value to that draft owner and hosts the chip's content popover,
+ * which the composer bar's overlay controller would otherwise own.
  */
 
 /** An omitted or explicit-automatic selection is previewed as the canonical default policy. */
-const AUTOMATIC_MCP_SELECTION: SessionCapabilitySelectionV1 = SessionCapabilitySelectionV1Schema.parse({});
+const AUTOMATIC_SELECTION: SessionCapabilitySelectionV1 = SessionCapabilitySelectionV1Schema.parse({});
 
-export function SessionAuthoringMcpSelectionField(props: Readonly<{
+export function SessionAuthoringCapabilitiesField(props: Readonly<{
     agentId: string;
     context: SessionAuthoringMcpContext;
     value: SessionCapabilitySelectionV1 | null | undefined;
     onChange: (value: SessionCapabilitySelectionV1) => void;
     chipRenderContext: AgentInputExtraActionChipRenderContext;
     testID: string;
-}>): React.ReactElement | null {
+}>): React.ReactElement {
     const { onChange } = props;
-    const router = useRouter();
-    const selection = props.value ?? AUTOMATIC_MCP_SELECTION;
+    const selection = props.value ?? AUTOMATIC_SELECTION;
     const selectionRef = React.useRef(selection);
     selectionRef.current = selection;
-    // The owner's contract is a state setter; a functional update reads the
-    // controlled value rather than a private copy of it.
+    // The draft owner's contract is a state setter; a functional update reads the controlled value.
     const setSelection = React.useCallback<React.Dispatch<React.SetStateAction<SessionCapabilitySelectionV1>>>((next) => {
         onChange(typeof next === 'function' ? next(selectionRef.current) : next);
     }, [onChange]);
-    const onOpenSettings = React.useCallback(() => {
-        // `router.push` expects the public route; group segments are not valid on web.
-        router.push('/settings/mcp' as never);
-    }, [router]);
 
-    const { mcpChip } = useNewSessionMcpSelection({
-        selectedMachineId: props.context.machineId,
-        selectedPath: props.context.directory,
-        selectedMachineName: props.context.machineName,
-        agentType: props.agentId,
-        targetServerId: props.context.serverId,
-        capabilitySelection: selection,
-        setCapabilitySelection: setSelection,
-        onOpenSettings,
+    const { chip } = useNewSessionCapabilitiesChip({
+        draft: {
+            machineId: props.context.machineId,
+            directory: props.context.directory,
+            agentId: props.agentId,
+            targetServerId: props.context.serverId,
+            selection,
+            setSelection,
+        },
+        machineName: props.context.machineName ?? '',
     });
 
     const [open, setOpen] = React.useState(false);
@@ -66,17 +57,19 @@ export function SessionAuthoringMcpSelectionField(props: Readonly<{
         toggleCollapsedPopover: () => setOpen((current) => !current),
     }), [props.chipRenderContext]);
 
-    if (mcpChip === null) return null;
-    const popover = mcpChip.collapsedContentPopover;
+    const popover = chip.collapsedContentPopover;
     return (
         <View testID={props.testID} style={{ alignSelf: 'flex-start' }}>
-            {mcpChip.render(renderContext)}
+            {chip.render(renderContext)}
             {popover === undefined ? null : (
                 <AgentInputContentPopover
                     open={open}
                     anchorRef={anchorRef}
                     content={popover.renderContent}
                     onRequestClose={() => setOpen(false)}
+                    {...(popover.header === undefined ? {} : { header: popover.header })}
+                    {...(popover.phonePresentation === undefined ? {} : { phonePresentation: popover.phonePresentation })}
+                    {...(popover.keyboardShouldPersistTaps === undefined ? {} : { keyboardShouldPersistTaps: popover.keyboardShouldPersistTaps })}
                     {...(popover.maxHeightCap === undefined ? {} : { maxHeightCap: popover.maxHeightCap })}
                     {...(popover.maxWidthCap === undefined ? {} : { maxWidthCap: popover.maxWidthCap })}
                     {...(popover.scrollEnabled === undefined ? {} : { scrollEnabled: popover.scrollEnabled })}

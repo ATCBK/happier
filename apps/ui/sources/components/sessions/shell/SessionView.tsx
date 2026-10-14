@@ -71,7 +71,8 @@ import {
     type PluginContributedActionOpenOutcome,
 } from '@/components/plugins/actions/pluginContributedActionController';
 import { useSessionConnectedServicesAuthSwitch } from '@/components/sessions/agentInput/hooks/useSessionConnectedServicesAuthSwitch';
-import { useExistingSessionMcpSelection } from '@/components/sessions/agentInput/hooks/useExistingSessionMcpSelection';
+import { useExistingSessionCapabilitiesChip } from '@/components/sessions/capabilities/useSessionCapabilitiesChip';
+import { executeSessionLifecycleAction } from '@/components/sessions/actions/sessionActionExecution';
 import {
     type SessionConnectedServiceAuthSwitchResult,
     setSessionConnectedServiceAuthBinding,
@@ -434,9 +435,7 @@ import {
     buildStaleSessionRunnerNoticePresentation,
     type StaleSessionRunnerOperationStatus,
 } from '@/components/sessions/sessionRunner/staleSessionRunnerNoticePresentation';
-import { buildMcpSelectionRestartNoticePresentation, type McpSelectionRestartOperationStatus } from '@/components/sessions/mcp/mcpSelectionRestartNoticePresentation';
 import {
-    readSessionRunnerRuntimeStateForTarget,
     readStaleSessionRunnerRuntimeState,
 } from '@/sync/domains/sessionRunnerRuntime/sessionRunnerRuntimeStatus';
 import {
@@ -446,7 +445,6 @@ import {
 } from '@/sync/domains/sessionRunnerRuntime/sessionRunnerRuntimeStatusRetention';
 import {
     getSessionRunnerRuntimeStatusSnapshot,
-    restartSessionRunnerForConfigurationChange,
     restartSessionRunnerForProviderBindingChange,
     restartSessionRunnerOnCurrentRuntime,
 } from '@/sync/ops/sessionRunnerRestart';
@@ -463,6 +461,7 @@ import { createGoalActionChip } from '@/components/sessions/agentInput/definitio
 import {
     resolveSessionActionDefaultBackend,
     resolveSessionActionDefaultTarget,
+    resolveSessionActionDefaultTargetKey,
 } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
 import { resolveSessionActionDefaultBackendTitle } from '@/sync/domains/session/resolveSessionActionDefaultBackendTitle';
 import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
@@ -3241,9 +3240,7 @@ function SessionViewLoadedContent({
         selectionIntentPresent: providerModelSelectionIntent !== null,
         launchBinding: providerLaunchBinding,
     });
-    const providerAgentTargetKey = agentId
-        ? resolveBackendTargetKeyV2(resolveSessionActionDefaultTarget(sessionActionDefaultBackend) ?? { kind: 'builtInAgent', agentId })
-        : null;
+    const providerAgentTargetKey = resolveSessionActionDefaultTargetKey(sessionActionDefaultBackend);
     const [providerModelPickerDemanded, setProviderModelPickerDemanded] = React.useState(false);
     const providerModelProjection = useProviderModelProjection({
         enabled: providersFeatureEnabled && providerAgentTargetKey !== null,
@@ -3701,7 +3698,6 @@ function SessionViewLoadedContent({
     // account-level "remember" preference decides between session-scoped and device-persisted state.
     const usageLimitRecoveryBanner = useComposerBannerCollapse('usageLimitRecovery');
     const staleSessionRunnerBanner = useComposerBannerCollapse('staleSessionRunner');
-    const mcpSelectionRestartRequiredBanner = useComposerBannerCollapse('mcpSelectionRestartRequired');
     const authRecoveryBanner = useComposerBannerCollapse('authRecovery');
     const externalTranscriptSnapshotBanner = useComposerBannerCollapse('externalTranscriptSnapshot');
     const agentTransitionOutcomeBanner = useComposerBannerCollapse('agentTransitionOutcome');
@@ -3742,10 +3738,6 @@ function SessionViewLoadedContent({
     const [staleSessionRunnerOperationStatus, setStaleSessionRunnerOperationStatus] = React.useState<Readonly<{
         fingerprint: string;
         status: StaleSessionRunnerOperationStatus;
-    }> | null>(null);
-    const [mcpSelectionRestartOperation, setMcpSelectionRestartOperation] = React.useState<Readonly<{
-        fingerprint: string;
-        status: Exclude<McpSelectionRestartOperationStatus, null>;
     }> | null>(null);
     const hasWriteAccess = hasSessionWriteAccess(session.access);
     // Changing the model is its own capability: text submission, or an embed credential that grants
@@ -4166,14 +4158,6 @@ function SessionViewLoadedContent({
         }),
         [sessionId, staleSessionRunnerMachineId, staleSessionRunnerMetadata],
     );
-    const mcpSelectionRestartRuntimeState = React.useMemo(
-        () => readSessionRunnerRuntimeStateForTarget({
-            metadata: staleSessionRunnerMetadata,
-            sessionId,
-            machineId: staleSessionRunnerMachineId,
-        }),
-        [sessionId, staleSessionRunnerMachineId, staleSessionRunnerMetadata],
-    );
     const usageLimitRecoveryResetAtMs = React.useMemo(() => readUsageLimitRecoveryResetAtMs({
         issue: session.lastRuntimeIssue ?? null,
         recoveryState: usageLimitRecoveryState,
@@ -4473,55 +4457,6 @@ function SessionViewLoadedContent({
         staleSessionRunnerPresentation,
         t,
     ]);
-    const mcpSelectionRestartBasePresentation = React.useMemo(
-        () => buildMcpSelectionRestartNoticePresentation({
-            sessionActive: session.active === true,
-            metadata: ownerMetadata,
-            operationStatus: null,
-            translate: tLoose,
-        }),
-        [ownerMetadata, session.active],
-    );
-    React.useEffect(() => {
-        if (!mcpSelectionRestartOperation) return;
-        if (mcpSelectionRestartOperation.fingerprint === mcpSelectionRestartBasePresentation?.fingerprint) return;
-        setMcpSelectionRestartOperation(null);
-    }, [mcpSelectionRestartBasePresentation?.fingerprint, mcpSelectionRestartOperation]);
-    const activeMcpSelectionRestartOperationStatus = mcpSelectionRestartOperation
-        && mcpSelectionRestartOperation.fingerprint === mcpSelectionRestartBasePresentation?.fingerprint
-        ? mcpSelectionRestartOperation.status
-        : null;
-    const mcpSelectionRestartPresentation = React.useMemo(
-        () => buildMcpSelectionRestartNoticePresentation({
-            sessionActive: session.active === true,
-            metadata: ownerMetadata,
-            operationStatus: activeMcpSelectionRestartOperationStatus,
-            translate: tLoose,
-        }),
-        [activeMcpSelectionRestartOperationStatus, ownerMetadata, session.active],
-    );
-    const visibleMcpSelectionRestartPresentation = mcpSelectionRestartRequiredBanner.collapsed
-        ? null
-        : mcpSelectionRestartPresentation;
-    const mcpSelectionRestartBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => {
-        if (!mcpSelectionRestartPresentation) return [];
-        return [{
-            ...mcpSelectionRestartPresentation.statusBadge,
-            ...buildComposerBannerBadgeAccessibility({
-                statusLabel: mcpSelectionRestartPresentation.statusBadge.label,
-                collapsed: mcpSelectionRestartRequiredBanner.collapsed,
-                expandHint: t('session.mcpRestartRequired.actions.showBanner'),
-                collapseHint: t('session.mcpRestartRequired.actions.hideBanner'),
-            }),
-            icon: (tint) => <Icon name="arrow-clockwise" size={14} color={tint} />,
-            onPress: mcpSelectionRestartRequiredBanner.toggle,
-        }];
-    }, [
-        mcpSelectionRestartPresentation,
-        mcpSelectionRestartRequiredBanner.collapsed,
-        mcpSelectionRestartRequiredBanner.toggle,
-        t,
-    ]);
     const usageLimitRecoveryBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => {
         if (!usageLimitRecoveryPresentation) return [];
         return [{
@@ -4635,9 +4570,8 @@ function SessionViewLoadedContent({
     const sessionStatusBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => [
         ...usageLimitRecoveryBadges,
         ...staleSessionRunnerBadges,
-        ...mcpSelectionRestartBadges,
         ...sessionWorkStateBadges,
-    ], [mcpSelectionRestartBadges, sessionWorkStateBadges, staleSessionRunnerBadges, usageLimitRecoveryBadges]);
+    ], [sessionWorkStateBadges, staleSessionRunnerBadges, usageLimitRecoveryBadges]);
     React.useEffect(() => {
         if (shouldRetainSessionActivityStatusBadge({
             activeStatusBadgeKey,
@@ -4651,12 +4585,10 @@ function SessionViewLoadedContent({
         })) return;
         if (usageLimitRecoveryPresentation && activeStatusBadgeKey === SESSION_USAGE_LIMIT_RECOVERY_BADGE_KEY) return;
         if (staleSessionRunnerPresentation && activeStatusBadgeKey === STALE_SESSION_RUNNER_STATUS_BADGE_KEY) return;
-        if (mcpSelectionRestartPresentation && activeStatusBadgeKey === 'session-mcp-selection-restart-required') return;
         setActiveStatusBadgeKey(null);
     }, [
         activeStatusBadgeKey,
         canEditSessionGoals,
-        mcpSelectionRestartPresentation,
         primaryWorkStateItem,
         sessionManagedWorkflowSignal,
         sessionWorkflowActivity.activeRuns.length,
@@ -4695,38 +4627,6 @@ function SessionViewLoadedContent({
         sessionRouteServerId,
         staleSessionRunnerPresentation,
         staleSessionRunnerRuntimeState,
-    ]);
-    const handleMcpSelectionRestart = React.useCallback(async () => {
-        if (!hasWriteAccess) {
-            Modal.alert(t('common.error'), t('session.sharing.noEditPermission'));
-            return;
-        }
-        if (
-            !mcpSelectionRestartRuntimeState
-            || !mcpSelectionRestartPresentation
-            || mcpSelectionRestartOperation?.status === 'pending'
-        ) return;
-
-        const fingerprint = mcpSelectionRestartPresentation.fingerprint;
-        setMcpSelectionRestartOperation({ fingerprint, status: 'pending' });
-        const result = await restartSessionRunnerForConfigurationChange({
-            runtimeState: mcpSelectionRestartRuntimeState,
-            serverId: sessionRouteServerId,
-        });
-        if (result.status === 'restarted') {
-            setMcpSelectionRestartOperation({ fingerprint, status: 'restarted' });
-            onSessionRunnerRuntimeStatusInvalidated();
-            void sync.refreshSessions();
-            return;
-        }
-        setMcpSelectionRestartOperation({ fingerprint, status: 'failed' });
-    }, [
-        hasWriteAccess,
-        mcpSelectionRestartOperation?.status,
-        mcpSelectionRestartPresentation,
-        mcpSelectionRestartRuntimeState,
-        onSessionRunnerRuntimeStatusInvalidated,
-        sessionRouteServerId,
     ]);
     const markUsageLimitRecoveryIssueResolved = React.useCallback(() => {
         const issueFingerprint = usageLimitRecoveryPresentation?.issueFingerprint
@@ -6647,6 +6547,22 @@ function SessionViewLoadedContent({
         providerSettings,
         { providersFeatureEnabled },
     ), [providersFeatureEnabled, providerSettings]);
+    const modelPickerPresentation = React.useMemo(() => (
+        providersFeatureEnabled && providerAgentTargetKey && existingSessionSelectedModelRef?.providerConnectionId
+            ? {
+                agentTargetKey: providerAgentTargetKey,
+                nativeModels: existingSessionNativeModels,
+                providerGroups: providerModelProjection.data?.groups ?? EMPTY_SESSION_MODEL_PROJECTION_GROUPS,
+                hiddenNativeModelKeys: existingSessionHiddenNativeModelKeys,
+                providerProjectionAuthoritative: providerModelProjection.status === 'success',
+                selected: existingSessionSelectedModelRef,
+                currentSelectionRecovery: providerModelProjection.data?.currentSelectionRecovery,
+                fallbackLabel: t('agentInput.model.unavailable'),
+                fieldLabel: t('newSession.selectModelTitle'),
+            }
+            : undefined
+    ), [existingSessionHiddenNativeModelKeys, existingSessionNativeModels, existingSessionSelectedModelRef,
+        providerAgentTargetKey, providerModelProjection.data, providerModelProjection.status, providersFeatureEnabled]);
     const resolveSessionModelDiscoveryContext = React.useCallback((): SessionModelDiscoveryContext => {
         const target = resolveSessionActionDefaultTarget(sessionActionDefaultBackend);
         const backendTarget = target ? resolveNewSessionOperationalBackendTarget({
@@ -7742,16 +7658,6 @@ function SessionViewLoadedContent({
             });
         }, [composerPluginActionController, composerPluginActionScopeSignal, openSessionComposerContributedAction]);
         const composerPluginActionChips = composerPluginPresentation.extraActionChips;
-        const sessionMcpChip = useExistingSessionMcpSelection({
-            sessionId,
-            sessionMetadata: ownerMetadata,
-            machineId: controlMachineTarget?.machineId ?? machineId ?? null,
-            directory: liveAuthoringContext.snapshot.directory,
-            agentId,
-            serverId: sessionRouteServerId,
-            isReadOnly,
-            sessionActive: session.active === true,
-        });
         const routingControls = useSessionAgentInputRoutingControls({
             isReadOnly,
             participantTargets,
@@ -7761,6 +7667,23 @@ function SessionViewLoadedContent({
             sessionStatus.state === 'thinking'
             || sessionStatus.state === 'permission_required'
             || sessionStatus.state === 'action_required';
+        // "This session gets" (P8 U8.3): the capabilities chip and its one apply line share one P2 owner.
+        const sessionCapabilitiesTarget = React.useMemo(() => ({
+            kind: 'session' as const, sessionId, serverId: sessionRouteServerId ?? null, readOnly: isReadOnly,
+        }), [sessionId, sessionRouteServerId, isReadOnly]);
+        const stopSessionForCapabilities = React.useCallback(async () => (
+            await executeSessionLifecycleAction('session.stop', sessionId, { serverId: sessionRouteServerId })
+        ).success, [sessionId, sessionRouteServerId]);
+        const resumeSessionForCapabilities = React.useCallback(() => handleResumeSession({ silent: true }), [handleResumeSession]);
+        const sessionCapabilities = useExistingSessionCapabilitiesChip({
+            target: sessionCapabilitiesTarget,
+            machineName: getMachineDisplayName(sessionMachineRecord) ?? t('common.machine'),
+            machineOnline: isMachineReachable,
+            turnSettled: !isRuntimeFreshActiveTurn,
+            stop: stopSessionForCapabilities,
+            resume: resumeSessionForCapabilities,
+        });
+        const sessionCapabilitiesChip = agentId ? sessionCapabilities.chip : null;
         const intentionalRestartRecoveryEvidenceAtMs = React.useMemo(() => (
             resolveSessionIntentionalRestartRecoveryEvidenceAtMs({
                 activeAt: sessionRuntimeStatusSource.activeAt,
@@ -8235,8 +8158,10 @@ function SessionViewLoadedContent({
                 {existingSessionModelPicker}
             </SessionModelNativeSourceLabelContext.Provider>
         ) : undefined, [existingSessionModelPicker, sessionNativeSourceLabel]);
+        const sessionCapabilitiesApplyBadge = sessionCapabilities.applyBadge;
         const agentInputStatusBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => [
             ...sessionStatusBadges,
+            ...(sessionCapabilitiesApplyBadge ? [sessionCapabilitiesApplyBadge] : []),
             ...sessionConnectedServicesAuthSwitch.statusBadges,
             ...(draftSyncStatusBadge ? [draftSyncStatusBadge] : []),
             ...(draftConflictBanner.statusBadge ? [draftConflictBanner.statusBadge] : []),
@@ -8384,6 +8309,7 @@ function SessionViewLoadedContent({
             sessionConnectedServicesAuthSwitch.connectedServicesAuthChip,
             sessionConnectedServicesAuthSwitch.statusBadges,
             sessionStatusBadges,
+            sessionCapabilitiesApplyBadge,
             t,
         ]);
         // AgentInput goal chip (D4): the first-goal entry point on a fresh active goal-capable session
@@ -8428,7 +8354,7 @@ function SessionViewLoadedContent({
                             ),
                             composerPluginActionChips,
                         ),
-                        !armedContinuationTarget && sessionMcpChip ? [sessionMcpChip] : undefined,
+                        !armedContinuationTarget && sessionCapabilitiesChip ? [sessionCapabilitiesChip] : undefined,
                     ),
                     sessionConnectedServicesAuthSwitch.connectedServicesAuthChip
                         ? [sessionConnectedServicesAuthSwitch.connectedServicesAuthChip]
@@ -8441,7 +8367,7 @@ function SessionViewLoadedContent({
                 sessionGoalActionChips,
                 composerPluginActionChips,
                 armedContinuationTarget,
-                sessionMcpChip,
+                sessionCapabilitiesChip,
                 sessionConnectedServicesAuthSwitch.connectedServicesAuthChip,
                 routingControls.extraActionChips,
                 embedded,
@@ -8641,25 +8567,6 @@ function SessionViewLoadedContent({
                     />
                 </ComposerAuxiliaryFrame>
             ) : null}
-            {visibleMcpSelectionRestartPresentation ? (
-                <ComposerAuxiliaryFrame>
-                    <WarningActionBanner
-                        testID={visibleMcpSelectionRestartPresentation.banner.testID}
-                        actionTestID={visibleMcpSelectionRestartPresentation.banner.actionTestID}
-                        title={visibleMcpSelectionRestartPresentation.banner.title}
-                        body={visibleMcpSelectionRestartPresentation.banner.body}
-                        actionLabel={visibleMcpSelectionRestartPresentation.banner.actionLabel}
-                        actionAccessibilityLabel={visibleMcpSelectionRestartPresentation.banner.actionAccessibilityLabel}
-                        actionBusy={visibleMcpSelectionRestartPresentation.banner.actionBusy}
-                        disabled={
-                            visibleMcpSelectionRestartPresentation.banner.disabled
-                            || !hasWriteAccess
-                            || !mcpSelectionRestartRuntimeState
-                        }
-                        onActionPress={handleMcpSelectionRestart}
-                    />
-                </ComposerAuxiliaryFrame>
-            ) : null}
             {externalTranscriptAuthority?.kind === 'server_snapshot' && !externalTranscriptSnapshotBanner.collapsed ? (
                 <ComposerAuxiliaryFrame>
                     <WarningActionBanner
@@ -8766,6 +8673,7 @@ function SessionViewLoadedContent({
                 onAcpSessionModeChange={!embedded && sessionModePickerControl ? updateAcpSessionModeOverride : undefined}
                 onAcpConfigOptionChange={embeddedComposerControlsOnly ? undefined : updateAcpConfigOptionOverride}
                 modelMode={modelMode}
+                modelPickerPresentation={modelPickerPresentation}
                 sessionActive={isSessionActive}
                 agentTargetKey={providerAgentTargetKey}
                 currentRunnerProcessIdentity={currentRunnerProcessIdentity}

@@ -35,7 +35,7 @@ import {
     type SessionAuthoringFieldOption,
 } from './sessionAuthoringFieldControls';
 import { SessionAuthoringConnectedServicesField } from './SessionAuthoringConnectedServicesField';
-import { SessionAuthoringMcpSelectionField } from './SessionAuthoringMcpSelectionField';
+import { SessionAuthoringCapabilitiesField } from './SessionAuthoringCapabilitiesField';
 import { useSessionAuthoringControls } from './useSessionAuthoringControls';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { useSessionAuthoringEnginePicker } from './useSessionAuthoringEnginePicker';
@@ -307,7 +307,7 @@ function SessionAuthoringFieldControl(props: Readonly<{
 
         case 'mcp':
             return (
-                <SessionAuthoringMcpSelectionField
+                <SessionAuthoringCapabilitiesField
                     agentId={control.agentId}
                     context={control.context}
                     value={values.capabilitySelection}

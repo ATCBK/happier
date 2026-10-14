@@ -8,7 +8,7 @@ import type { CapabilityCost } from '@/components/capabilities/facts/CapabilityF
 import { pickMostBlockingCapabilityStatus, presentCapabilityStatus, type CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
 import { shortWhereItsOn, type WhereItsOnNames } from '@/components/capabilities/where/whereItsOnPresentation';
 import { t } from '@/text';
-import { sessionCapabilityApplyNotice, type SessionCapabilityChange } from './sessionCapabilityApplyNotice';
+import { sessionCapabilityApplyNotice, type SessionCapabilityApplyNotice, type SessionCapabilityApplyChange } from './sessionCapabilityApplyNotice';
 
 export type SessionCapabilitiesViewInput = Extract<SpawnCapabilitiesPreviewOutputV1 | SessionCapabilitiesGetOutputV1, { ok: true }>;
 export type SessionCapabilityRowModel = Readonly<{
@@ -26,6 +26,8 @@ export type SessionCapabilitiesModel = Readonly<{
     groups: readonly Readonly<{ kind: 'skills' | 'mcp'; title: string; trailing: string;
         rows: readonly SessionCapabilityRowModel[]; nativeRow: Readonly<{ machineName: string; agentName: string; rows: readonly SessionCapabilityRowModel[] }> | null }>[];
     addItems: readonly SessionCapabilityAddItem[];
+    /** The one apply line (`sessionCapabilityApplyNotice`); `pendingNote` is its text. */
+    applyNotice: SessionCapabilityApplyNotice | null;
     pendingNote: string | null; costLine: string; costKnown: boolean;
     state: 'resolving' | 'ready' | 'machine_unreachable' | 'error';
 }>;
@@ -35,12 +37,17 @@ export type SessionCapabilitiesModelInput = Readonly<{
     skillPlan?: SessionSkillPlanV1 | null;
     mcpStatus(serverId: string): readonly CapabilityStatus[];
     skillStatus(skillId: string): readonly CapabilityStatus[];
-    rules(kind: 'skill' | 'mcp_server', id: string): ReachRulesV1;
+    /** Null means the catalog has no known value yet, rather than a known empty rules list. */
+    rules(kind: 'skill' | 'mcp_server', id: string): ReachRulesV1 | null;
     cost?: (kind: 'skill' | 'mcp_server', id: string) => CapabilityCost | null;
     names: WhereItsOnNames; readOnly: boolean;
     nativeSkills?: Readonly<{ items: readonly Readonly<{ name: string; path: string }>[]; canDisable: boolean; machineName: string; agentName: string;
         applyTiming: CapabilityApplyTimingV1 }>;
-    change?: SessionCapabilityChange | null; machineOnline?: boolean; machineName?: string; turnSettled?: boolean;
+    applyState?: Readonly<{
+        pendingApply: Extract<SessionCapabilitiesGetOutputV1, { ok: true }>['pendingApply'];
+        applyTiming: Readonly<{ mcp: CapabilityApplyTimingV1; skills: CapabilityApplyTimingV1 }> | null;
+    }>;
+    change?: SessionCapabilityApplyChange | null; machineOnline?: boolean; machineName?: string; turnSettled?: boolean;
 }>;
 
 function formatTokenCount(value: number): string {
@@ -56,8 +63,8 @@ export function buildSessionCapabilitiesModel(input: SessionCapabilitiesModelInp
         const rules = input.rules(item.kind, item.id);
         const override = input.selection ? readSessionCapabilityOverrideV1(input.selection, item.kind, item.id)
             : item.sessionOverride === 'added' ? 'on' : item.sessionOverride === 'removed' ? 'off' : 'inherit';
-        const reach = input.selection && input.context ? resolveReachV1(rules, input.context) : null;
-        const selected = input.selection && reach ? applySessionSelectionV1({ reach,
+        const reach = input.selection && input.context && rules !== null ? resolveReachV1(rules, input.context) : null;
+        const selected = input.selection ? applySessionSelectionV1({ reach: reach ?? { enabled: item.selected, decidedBy: item.decidedBy },
             selectable: item.selectable, forceIncluded: override === 'on', forceExcluded: override === 'off',
             managedEnabled: item.kind !== 'mcp_server' || input.selection.mcp?.managedServersEnabled !== false }).selected : item.selected;
         const timing = input.view?.applyTiming[item.kind === 'mcp_server' ? 'mcp' : 'skills'];
@@ -77,11 +84,12 @@ export function buildSessionCapabilitiesModel(input: SessionCapabilitiesModelInp
         if (selected && item.kind === 'mcp_server') { if (cost?.tokensPerTurn === undefined) costKnown = false; else perTurn += cost.tokensPerTurn; }
         const change = override === 'on' ? 'added' : override === 'off' ? 'turned_off' : null;
         const decidedBy = reach ? reach.decidedBy : item.decidedBy;
-        const decidingRule = decidedBy ? rules.find(rule => rule.id === decidedBy.ruleId) : null;
+        const decidingRule = decidedBy ? rules?.find(rule => rule.id === decidedBy.ruleId) : null;
         const row: SessionCapabilityRowModel = { key: `${item.kind}:${item.id}`, id: item.id, kind: item.kind, title: item.title ?? item.name,
             mark: item.kind === 'mcp_server' ? { mcpServerId: item.id } : 'none',
             line2: status ? { kind: 'status', status } : change ? { kind: 'change', change } : cost ? { kind: 'cost', cost } : null,
-            scope: override === 'on' ? t('capabilities.session.thisSession') : shortWhereItsOn(decidingRule ? [decidingRule] : [], input.names),
+            scope: override === 'on' ? t('capabilities.session.thisSession') : rules === null || (decidedBy && !decidingRule) ? ''
+                : shortWhereItsOn(decidingRule ? [decidingRule] : [], input.names),
             action: readOnlyReason ? { kind: 'none' } : status?.fix ? { kind: 'fix', status } : selected ? { kind: 'remove' } : { kind: 'turn_on' },
             dimmed: !selected, readOnlyReason };
         (item.kind === 'skill' ? skills : mcp).push(row);
@@ -100,11 +108,12 @@ export function buildSessionCapabilitiesModel(input: SessionCapabilitiesModelInp
             dimmed: off, readOnlyReason,
             action: readOnlyReason ? { kind: 'none' } : { kind: off ? 'turn_on' : 'remove' } };
     });
-    const pendingApply = input.view && 'pendingApply' in input.view ? input.view.pendingApply : { mcp: false, skills: false };
-    // The view's skills timing describes library reload. Native overlays use
-    // their separate P2 timing, even on an Agent that reloads library skills live.
-    const applyTiming = input.view && input.change?.kind === 'native_skill' && input.nativeSkills
-        ? { ...input.view.applyTiming, skills: input.nativeSkills.applyTiming } : input.view?.applyTiming ?? null;
+    const pendingApply = input.applyState?.pendingApply ?? (input.view && 'pendingApply' in input.view ? input.view.pendingApply : { mcp: false, skills: false });
+    const timing = input.applyState?.applyTiming ?? input.view?.applyTiming ?? null;
+    // The view's skills timing describes library reload. Native overlays and MCP
+    // share P2's launch-owned timing even before the native catalog is loaded.
+    const applyTiming = timing && input.change?.kind === 'native_skill'
+        ? { ...timing, skills: input.nativeSkills?.applyTiming ?? timing.mcp } : timing;
     const notice = sessionCapabilityApplyNotice({ pendingApply, applyTiming,
         change: input.change ?? null, machineOnline: input.machineOnline !== false, machineName: input.machineName ?? '', turnSettled: input.turnSettled === true });
     return { chipLabel: t('capabilities.session.counts', { skills: skillCount, mcp: mcpCount }), counts: { skills: skillCount, mcp: mcpCount }, attention,
