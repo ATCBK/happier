@@ -266,7 +266,9 @@ export function projectUsagePlans(
     }
   }
   let tightest: UsagePlansProjection['tightest'] = null;
-  for (const account of accounts) {
+  // A partial arrival cannot establish which account has the least capacity.
+  // Keep each account's admitted cells while the outstanding reads settle.
+  for (const account of accounts.some(account => account.state.status === 'pending' || account.state.status === 'not_loaded') ? [] : accounts) {
     const window = account.headline;
     if (window?.remainingFraction == null) continue;
     if (
