@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const EPHEMERAL_RUNNER_ACTION_IDS_V1 = [
   'sessions.runner.activation.create',

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { PluginJsonSchemaV2 } from '../contributions/publicTypes.js';
 import { PluginIdJsonSchema, PluginIdSchema } from '../pluginId.js';
@@ -9,20 +9,14 @@ import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
  * Cycle-free portable identity for one installed plugin materialization. It
  * intentionally excludes server identity; Administration composes that fact.
  */
-export const PluginMachineMaterializationMachineIdV1Schema = lazyZodSchema(() => z.string()
-  .trim()
-  .min(1)
-  .max(256));
-export const PluginMachineMaterializationIdV1Schema = lazyZodSchema(() => z.string()
-  .trim()
-  .min(1)
-  .max(256));
+export const PluginMachineMaterializationMachineIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
+export const PluginMachineMaterializationIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 
-export const PluginMachineMaterializationRefV1Schema = lazyZodSchema(() => z.object({
+export const PluginMachineMaterializationRefV1Schema = lazyZodSchema(() => z.strictObject({
     machineId: PluginMachineMaterializationMachineIdV1Schema,
     materializationId: PluginMachineMaterializationIdV1Schema,
     pluginId: asProtocolZod(PluginIdSchema),
-}).strict());
+}));
 export type PluginMachineMaterializationRefV1 = z.infer<
     typeof PluginMachineMaterializationRefV1Schema
 >;

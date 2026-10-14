@@ -1,10 +1,10 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { CapabilitySupportSchema } from '../providers/capabilities/v1.js';
 import { ProviderModelIdSchema } from '../providers/ids.js';
 
-export const AgentModelOptionValueIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(256));
+export const AgentModelOptionValueIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 export type AgentModelOptionValueId = string;
 
 /**
@@ -41,10 +41,10 @@ export type AgentModelOption = Readonly<{
  * `.strict()` because an agent must not author an undeclared field: the owner-metadata envelopes
  * are strict too, and would reject the entire session metadata rather than strip it.
  */
-export const AgentModelOptionOverrideRuleSchema = z.object({
-  optionIds: z.array(z.string().trim().min(1).max(128)).min(1).max(32),
-  forcedValue: AgentModelOptionValueIdSchema.optional(),
-}).strict() satisfies z.ZodType<AgentModelOptionOverrideRule>;
+export const AgentModelOptionOverrideRuleSchema = z.strictObject({
+  optionIds: z.array(z.string().check(z.trim(), z.minLength(1), z.maxLength(128))).check(z.minLength(1), z.maxLength(32)),
+  forcedValue: z.optional(AgentModelOptionValueIdSchema),
+}) satisfies z.ZodMiniType<AgentModelOptionOverrideRule>;
 
 /**
  * The READ side of the same rule, and the single owner of the unknown-key policy for reading one
@@ -58,21 +58,21 @@ export const AgentModelOptionOverrideRuleSchema = z.object({
  */
 export const AgentModelOptionOverrideRuleReadSchema = z.object(
   AgentModelOptionOverrideRuleSchema.shape,
-) satisfies z.ZodType<AgentModelOptionOverrideRule>;
+) satisfies z.ZodMiniType<AgentModelOptionOverrideRule>;
 
-export const AgentModelOptionSchema = z.object({
-  id: z.string().trim().min(1).max(128),
-  name: z.string().trim().min(1).max(256),
-  description: z.string().max(1024).optional(),
-  type: z.string().trim().min(1).max(128),
+export const AgentModelOptionSchema = z.strictObject({
+  id: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+  name: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+  description: z.optional(z.string().check(z.maxLength(1024))),
+  type: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
   currentValue: AgentModelOptionValueIdSchema,
-  options: z.array(z.object({
+  options: z.optional(z.array(z.strictObject({
     value: AgentModelOptionValueIdSchema,
-    name: z.string().trim().min(1).max(256),
-    description: z.string().max(1024).optional(),
-  }).strict()).max(128).optional(),
-  overridesWhenOn: AgentModelOptionOverrideRuleSchema.optional(),
-}).strict() satisfies z.ZodType<AgentModelOption>;
+    name: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    description: z.optional(z.string().check(z.maxLength(1024))),
+  })).check(z.maxLength(128))),
+  overridesWhenOn: z.optional(AgentModelOptionOverrideRuleSchema),
+}) satisfies z.ZodMiniType<AgentModelOption>;
 
 export type ProviderModelDescriptorV1 = Readonly<{
   id: string;
@@ -92,21 +92,21 @@ export type ProviderModelDescriptorV1 = Readonly<{
   }>;
 }>;
 
-export const ProviderModelDescriptorV1Schema = z.object({
+export const ProviderModelDescriptorV1Schema = z.strictObject({
   id: ProviderModelIdSchema,
-  name: z.string().trim().min(1).max(256),
-  costTier: z.enum(['low', 'standard', 'premium']).optional(),
-  aliases: z.array(ProviderModelIdSchema).max(64).optional(),
-  description: z.string().max(1024).optional(),
-  contextWindowTokens: z.number().int().positive().max(100_000_000).optional(),
-  extendedContextModelId: ProviderModelIdSchema.optional(),
-  modelOptions: z.array(AgentModelOptionSchema).max(64).optional(),
-  capabilities: z.object({
-    toolRoundTrips: CapabilitySupportSchema.optional(),
-    reasoningControls: CapabilitySupportSchema.optional(),
-    structuredOutput: CapabilitySupportSchema.optional(),
-  }).strict().optional(),
-}).strict().superRefine((value, context) => {
+  name: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+  costTier: z.optional(z.enum(['low', 'standard', 'premium'])),
+  aliases: z.optional(z.array(ProviderModelIdSchema).check(z.maxLength(64))),
+  description: z.optional(z.string().check(z.maxLength(1024))),
+  contextWindowTokens: z.optional(z.number().check(z.int(), z.positive(), z.maximum(100_000_000))),
+  extendedContextModelId: z.optional(ProviderModelIdSchema),
+  modelOptions: z.optional(z.array(AgentModelOptionSchema).check(z.maxLength(64))),
+  capabilities: z.optional(z.strictObject({
+    toolRoundTrips: z.optional(CapabilitySupportSchema),
+    reasoningControls: z.optional(CapabilitySupportSchema),
+    structuredOutput: z.optional(CapabilitySupportSchema),
+  })),
+}).check(z.superRefine((value, context) => {
   if (value.aliases) {
     if (new Set(value.aliases).size !== value.aliases.length) {
       context.addIssue({ code: 'custom', path: ['aliases'], message: 'Model aliases must be unique' });
@@ -115,7 +115,7 @@ export const ProviderModelDescriptorV1Schema = z.object({
       context.addIssue({ code: 'custom', path: ['aliases'], message: 'A canonical model id cannot alias itself' });
     }
   }
-}) satisfies z.ZodType<ProviderModelDescriptorV1>;
+})) satisfies z.ZodMiniType<ProviderModelDescriptorV1>;
 
 export type AgentModelDescriptor = ProviderModelDescriptorV1;
 

@@ -1,8 +1,8 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export type PluginContributionFamilyDescriptorV2<
   TFamily extends string = string,
-  TSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  TSchema extends z.ZodMiniType = z.ZodMiniType,
 > = Readonly<{
   family: TFamily;
   schema: TSchema;
@@ -11,7 +11,7 @@ export type PluginContributionFamilyDescriptorV2<
 
 export function definePluginContributionFamilyV2<
   const TFamily extends string,
-  TSchema extends z.ZodTypeAny,
+  TSchema extends z.ZodMiniType,
 >(
   descriptor: PluginContributionFamilyDescriptorV2<TFamily, TSchema>,
 ): PluginContributionFamilyDescriptorV2<TFamily, TSchema> {
@@ -21,8 +21,8 @@ export function definePluginContributionFamilyV2<
 type PluginContributionFamilyShapeV2<
   TDescriptors extends readonly PluginContributionFamilyDescriptorV2[],
 > = {
-  [TDescriptor in TDescriptors[number] as TDescriptor['family']]: z.ZodDefault<
-    z.ZodArray<TDescriptor['schema']>
+  [TDescriptor in TDescriptors[number] as TDescriptor['family']]: z.ZodMiniDefault<
+    z.ZodMiniArray<TDescriptor['schema']>
   >;
 };
 
@@ -30,15 +30,16 @@ export function buildPluginContributionFamilySchemaV2<
   const TDescriptors extends readonly PluginContributionFamilyDescriptorV2[],
 >(
   descriptors: TDescriptors,
-): z.ZodObject<PluginContributionFamilyShapeV2<TDescriptors>> {
-  const shape: Record<string, z.ZodDefault<z.ZodArray<z.ZodTypeAny>>> = {};
+): z.ZodMiniObject<PluginContributionFamilyShapeV2<TDescriptors>> {
+  const shape: Record<string, z.ZodMiniDefault<z.ZodMiniArray<z.ZodMiniType>>> = {};
   for (const descriptor of descriptors) {
     const items = z.array(descriptor.schema);
-    shape[descriptor.family] = (
-      descriptor.maxItems === undefined ? items : items.max(descriptor.maxItems)
-    ).default([]);
+    shape[descriptor.family] = z._default(
+      descriptor.maxItems === undefined ? items : items.check(z.maxLength(descriptor.maxItems)),
+      [],
+    );
   }
-  return z.object(shape).strict() as unknown as z.ZodObject<
+  return z.strictObject(shape) as unknown as z.ZodMiniObject<
     PluginContributionFamilyShapeV2<TDescriptors>
   >;
 }

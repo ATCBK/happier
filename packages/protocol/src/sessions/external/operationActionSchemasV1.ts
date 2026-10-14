@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
 
 import { SessionIdSchema } from '../idsV1.js';
@@ -13,59 +13,53 @@ import {
   projectExternalSessionOperationSharedPresentationV1,
 } from './operationV1.js';
 
-const OperationIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(256));
-const OperationRevisionSchema = lazyZodSchema(() => z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
-const PublicOperationSessionIdSchema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(191)
-  .refine((value) => value === value.trim(), 'Session id must already be trimmed.'));
-const PublicOperationIdSchema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(256)
-  .refine((value) => value === value.trim(), 'Operation id must already be trimmed.'));
+const OperationIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
+const OperationRevisionSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
+const PublicOperationSessionIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(191), z.refine((value) => value === value.trim(), 'Session id must already be trimmed.')));
+const PublicOperationIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(256), z.refine((value) => value === value.trim(), 'Operation id must already be trimmed.')));
 
-const ExternalSessionMaterializeStartIntentRequestV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionMaterializeStartIntentRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   idempotencyKey: OperationIdSchema,
   sessionId: asProtocolZod(SessionIdSchema),
   plan: z.literal('materialize'),
   targetStorageMode: z.literal('external-linked'),
   targetRuntimeMode: z.null(),
-}).strict());
+}));
 
 /**
  * Public materialization intent. The linked source identity and all lifecycle
  * generations are daemon-owned and are captured immediately before the
  * durable semantic operation is created.
  */
-export const ExternalSessionMaterializeStartInputV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionMaterializeStartInputV1Schema = lazyZodSchema(() => z.strictObject({
   request: ExternalSessionMaterializeStartIntentRequestV1Schema,
-}).strict());
+}));
 export type ExternalSessionMaterializeStartInputV1 = z.infer<
   typeof ExternalSessionMaterializeStartInputV1Schema
 >;
 
-const ExternalSessionMaterializeActionIntentRequestV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionMaterializeActionIntentRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   idempotencyKey: PublicOperationIdSchema,
   sessionId: PublicOperationSessionIdSchema,
   plan: z.literal('materialize'),
   targetStorageMode: z.literal('external-linked'),
   targetRuntimeMode: z.null(),
-}).strict());
+}));
 
-export const ExternalSessionMaterializeActionInputV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionMaterializeActionInputV1Schema = lazyZodSchema(() => z.strictObject({
   request: ExternalSessionMaterializeActionIntentRequestV1Schema,
-}).strict());
+}));
 
-const ExternalSessionTakeoverStartIntentSourceV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionTakeoverStartIntentSourceV1Schema = lazyZodSchema(() => z.strictObject({
   machineId: OperationIdSchema,
-  remoteSessionId: NonBlankOpaqueIdentifierSchema.max(2_000),
+  remoteSessionId: NonBlankOpaqueIdentifierSchema.check(z.maxLength(2_000)),
   qualifiedIdentity: LinkedExternalSessionQualifiedIdentityV1Schema,
-  linkGeneration: z.string().trim().min(1).max(256),
-}).strict());
+  linkGeneration: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+}));
 
-const ExternalSessionTakeoverStartIntentRequestV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionTakeoverStartIntentRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   idempotencyKey: OperationIdSchema,
   sessionId: asProtocolZod(SessionIdSchema),
@@ -74,17 +68,17 @@ const ExternalSessionTakeoverStartIntentRequestV1Schema = lazyZodSchema(() => z.
   targetStorageMode: z.enum(['external-linked', 'persisted']),
   targetDirectory: ExternalSessionTakeoverTargetDirectoryV1Schema,
   targetRuntimeMode: z.literal('terminal'),
-  terminal: SpawnSessionTerminalSchema.optional(),
-}).strict());
+  terminal: z.optional(SpawnSessionTerminalSchema),
+}));
 
 /**
  * Public takeover intent. Generation fences owned by the machine/plugin
  * lifecycle are intentionally absent: the daemon re-reads and persists them
  * from the canonical linked session and active contribution.
  */
-export const ExternalSessionTakeoverStartInputV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionTakeoverStartInputV1Schema = lazyZodSchema(() => z.strictObject({
   request: ExternalSessionTakeoverStartIntentRequestV1Schema,
-}).strict());
+}));
 export type ExternalSessionTakeoverStartInputV1 = z.infer<
   typeof ExternalSessionTakeoverStartInputV1Schema
 >;
@@ -93,20 +87,20 @@ export type ExternalSessionTakeoverStartInputV1 = z.infer<
  * Public-safe descriptive reference. The owner machine resolves the private
  * claim from its canonical operation row and revalidates the exact revision.
  */
-export const ExternalSessionOperationReferenceV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionOperationReferenceV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: PublicOperationSessionIdSchema,
   operationId: PublicOperationIdSchema,
   revision: OperationRevisionSchema,
-}).strict());
+}));
 export type ExternalSessionOperationReferenceV1 = z.infer<
   typeof ExternalSessionOperationReferenceV1Schema
 >;
 
-export const ExternalSessionOperationTransportReferenceV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionOperationTransportReferenceV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: asProtocolZod(SessionIdSchema),
   operationId: OperationIdSchema,
   revision: OperationRevisionSchema,
-}).strict());
+}));
 
 /**
  * The status input has no intent field, so merely hydrating it cannot be
@@ -158,24 +152,24 @@ export type ExternalSessionOperationActionErrorCodeV1 = z.infer<
   typeof ExternalSessionOperationActionErrorCodeV1Schema
 >;
 
-export const ExternalSessionOperationActionErrorV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionOperationActionErrorV1Schema = lazyZodSchema(() => z.strictObject({
   code: ExternalSessionOperationActionErrorCodeV1Schema,
-  message: z.string().trim().min(1).max(2_000),
-}).strict());
+  message: z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000)),
+}));
 export type ExternalSessionOperationActionErrorV1 = z.infer<
   typeof ExternalSessionOperationActionErrorV1Schema
 >;
 
 export const ExternalSessionOperationActionResponseV1Schema =
   lazyZodSchema(() => z.discriminatedUnion('ok', [
-    z.object({
+    z.strictObject({
       ok: z.literal(true),
       progress: ExternalSessionOperationProgressV1Schema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       ok: z.literal(false),
       error: ExternalSessionOperationActionErrorV1Schema,
-    }).strict(),
+    }),
   ]));
 export type ExternalSessionOperationActionResponseV1 = z.infer<
   typeof ExternalSessionOperationActionResponseV1Schema
@@ -193,14 +187,14 @@ export type ExternalSessionOperationActionResponseV1 = z.infer<
  */
 export const ExternalSessionMaterializeActionResultV1Schema =
   lazyZodSchema(() => z.discriminatedUnion('ok', [
-    z.object({
+    z.strictObject({
       ok: z.literal(true),
       operation: ExternalSessionOperationReferenceV1Schema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       ok: z.literal(false),
       error: ExternalSessionOperationActionErrorV1Schema,
-    }).strict(),
+    }),
   ]));
 export type ExternalSessionMaterializeActionResultV1 = z.infer<
   typeof ExternalSessionMaterializeActionResultV1Schema
@@ -208,16 +202,16 @@ export type ExternalSessionMaterializeActionResultV1 = z.infer<
 
 export const ExternalSessionOperationActionResultV1Schema =
   lazyZodSchema(() => z.discriminatedUnion('ok', [
-    z.object({
+    z.strictObject({
       ok: z.literal(true),
       operation: ExternalSessionOperationReferenceV1Schema,
       presentation: ExternalSessionOperationSharedPresentationV1Schema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       ok: z.literal(false),
       error: ExternalSessionOperationActionErrorV1Schema,
-    }).strict(),
-  ]).superRefine((result, context) => {
+    }),
+  ]).check(z.superRefine((result, context) => {
     if (
       result.ok
       && (
@@ -231,7 +225,7 @@ export const ExternalSessionOperationActionResultV1Schema =
         message: 'Operation presentation must match its public reference.',
       });
     }
-  }));
+  })));
 export type ExternalSessionOperationActionResultV1 = z.infer<
   typeof ExternalSessionOperationActionResultV1Schema
 >;

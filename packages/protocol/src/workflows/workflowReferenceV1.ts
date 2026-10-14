@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { StrictJsonValueSchema, type JsonValue } from '../json/strictJsonValue.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
@@ -27,12 +27,12 @@ export const WorkflowBlockIdSchema = asProtocolZod(WorkflowBlockIdProtocolSchema
  */
 
 /** Declared workflow input names use identifier syntax so they can be named in evidence bindings. */
-export const WorkflowInputNameSchema = lazyZodSchema(() => z.string().regex(/^[A-Za-z][A-Za-z0-9_]*$/));
+export const WorkflowInputNameSchema = lazyZodSchema(() => z.string().check(z.regex(/^[A-Za-z][A-Za-z0-9_]*$/)));
 
 export const WorkflowReferenceScopeSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('current') }).strict(),
-  z.object({ kind: z.literal('previous_iteration'), loopBlockId: WorkflowBlockIdSchema }).strict(),
-  z.object({ kind: z.literal('outer'), levels: z.number().int().positive().safe() }).strict(),
+  z.strictObject({ kind: z.literal('current') }),
+  z.strictObject({ kind: z.literal('previous_iteration'), loopBlockId: WorkflowBlockIdSchema }),
+  z.strictObject({ kind: z.literal('outer'), levels: z.number().check(z.int(), z.positive(), z.int()) }),
 ]));
 export type WorkflowReferenceScope = z.infer<typeof WorkflowReferenceScopeSchema>;
 
@@ -79,22 +79,21 @@ export function selectWorkflowLexicalScope(
  * it names the authored block plus the scope that selects which occurrence of
  * that block the consumer means.
  */
-export const WorkflowAuthoredProducerRefSchema = lazyZodSchema(() => z.object({
+export const WorkflowAuthoredProducerRefSchema = lazyZodSchema(() => z.strictObject({
   blockId: WorkflowBlockIdSchema,
-  scope: WorkflowReferenceScopeSchema.default({ kind: 'current' }),
-}).strict());
+  scope: z._default(WorkflowReferenceScopeSchema, { kind: 'current' }),
+}));
 export type WorkflowAuthoredProducerRef = z.infer<typeof WorkflowAuthoredProducerRefSchema>;
 
-export const WorkflowResultPathSchema = lazyZodSchema(() => z
-  .array(z.union([z.string(), z.number().int().nonnegative().safe()]))
-  .default([]));
+export const WorkflowResultPathSchema = lazyZodSchema(() => z._default(z
+  .array(z.union([z.string(), z.number().check(z.int(), z.nonnegative(), z.int())])), []));
 
-export const WorkflowAuthoredResultReferenceSchema = lazyZodSchema(() => z.object({
+export const WorkflowAuthoredResultReferenceSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('result'),
   producer: WorkflowAuthoredProducerRefSchema,
   path: WorkflowResultPathSchema,
-  optional: z.literal(true).optional(),
-}).strict());
+  optional: z.optional(z.literal(true)),
+}));
 export type WorkflowAuthoredResultReference = z.infer<typeof WorkflowAuthoredResultReferenceSchema>;
 
 /**
@@ -102,20 +101,20 @@ export type WorkflowAuthoredResultReference = z.infer<typeof WorkflowAuthoredRes
  * The definition keeps the scoped producer reference; runtime resolves that
  * reference to the private row-local descriptor before materializing input.
  */
-export const WorkflowAuthoredWorkspaceReferenceSchema = lazyZodSchema(() => z.object({
+export const WorkflowAuthoredWorkspaceReferenceSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('workspace'),
   producer: WorkflowAuthoredProducerRefSchema,
   field: z.enum(['directory', 'checkoutRootPath']),
-}).strict());
+}));
 export type WorkflowAuthoredWorkspaceReference = z.infer<typeof WorkflowAuthoredWorkspaceReferenceSchema>;
 
 /** Count consecutive matching results in the nearest loop's committed history. */
-export const WorkflowLoopTrailingCountReferenceSchema = lazyZodSchema(() => z.object({
+export const WorkflowLoopTrailingCountReferenceSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('loop_trailing_count'),
   producer: WorkflowAuthoredProducerRefSchema,
   path: WorkflowResultPathSchema,
   equals: StrictJsonValueSchema,
-}).strict());
+}));
 export type WorkflowLoopTrailingCountReference = z.infer<typeof WorkflowLoopTrailingCountReferenceSchema>;
 
 export type WorkflowValueReference =
@@ -142,22 +141,22 @@ export function readWorkflowValuePathV1(value: JsonValue, path: readonly (string
   return selected;
 }
 
-export const WorkflowValueReferenceSchema: z.ZodType<WorkflowValueReference> = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('literal'), value: StrictJsonValueSchema }).strict(),
-  z.object({ kind: z.literal('input'), name: WorkflowInputNameSchema }).strict(),
+export const WorkflowValueReferenceSchema: z.ZodMiniType<WorkflowValueReference> = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('literal'), value: StrictJsonValueSchema }),
+  z.strictObject({ kind: z.literal('input'), name: WorkflowInputNameSchema }),
   WorkflowAuthoredResultReferenceSchema,
   WorkflowAuthoredWorkspaceReferenceSchema,
   WorkflowLoopTrailingCountReferenceSchema,
-  z.object({ kind: z.literal('session_context'), recentTurns: z.number().int().nonnegative().safe() }).strict(),
-  z.object({ kind: z.literal('session_context_field'), field: z.enum(['usage.tokensUsed', 'goal.tokenBudget']) }).strict(),
-  z.object({ kind: z.literal('item'), field: z.enum(['value', 'index', 'position', 'count']),
-    path: WorkflowResultPathSchema.unwrap().optional() }).strict().superRefine((reference, ctx) => {
+  z.strictObject({ kind: z.literal('session_context'), recentTurns: z.number().check(z.int(), z.nonnegative(), z.int()) }),
+  z.strictObject({ kind: z.literal('session_context_field'), field: z.enum(['usage.tokensUsed', 'goal.tokenBudget']) }),
+  z.strictObject({ kind: z.literal('item'), field: z.enum(['value', 'index', 'position', 'count']),
+    path: z.optional(WorkflowResultPathSchema._zod.def.innerType) }).check(z.superRefine((reference, ctx) => {
       if (reference.path !== undefined && reference.field !== 'value') {
         ctx.addIssue({ code: 'custom', path: ['path'], message: 'Only the item value has a field path' });
       }
-    }),
-  z.object({ kind: z.literal('iteration'), field: z.enum(['index', 'position', 'count', 'stopReason']) }).strict(),
-]) as unknown as z.ZodType<WorkflowValueReference>;
+    })),
+  z.strictObject({ kind: z.literal('iteration'), field: z.enum(['index', 'position', 'count', 'stopReason']) }),
+]) as unknown as z.ZodMiniType<WorkflowValueReference>;
 
 export const WORKFLOW_COMPARE_OPERATORS = ['eq', 'neq', 'lt', 'lte', 'gt', 'gte'] as const;
 export type WorkflowCompareOperator = (typeof WORKFLOW_COMPARE_OPERATORS)[number];
@@ -174,17 +173,17 @@ export type WorkflowCondition =
   | Readonly<{ kind: 'any'; conditions: readonly WorkflowCondition[] }>
   | Readonly<{ kind: 'not'; condition: WorkflowCondition }>;
 
-function createWorkflowConditionSchema(stored = false): z.ZodType<WorkflowCondition> {
-  const exists = z.object({ kind: z.literal('exists'), value: WorkflowValueReferenceSchema }).strict();
-  const compare = z.object({
+function createWorkflowConditionSchema(stored = false): z.ZodMiniType<WorkflowCondition> {
+  const exists = z.strictObject({ kind: z.literal('exists'), value: WorkflowValueReferenceSchema });
+  const compare = z.strictObject({
     kind: z.literal('compare'),
     operator: z.enum(WORKFLOW_COMPARE_OPERATORS),
     left: WorkflowValueReferenceSchema,
     right: WorkflowValueReferenceSchema,
-  }).strict();
-  const all = z.object({ kind: z.literal('all'), conditions: z.array(z.unknown()).min(1) }).strict();
-  const any = z.object({ kind: z.literal('any'), conditions: z.array(z.unknown()).min(1) }).strict();
-  const not = z.object({ kind: z.literal('not'), condition: z.unknown() }).strict();
+  });
+  const all = z.strictObject({ kind: z.literal('all'), conditions: z.array(z.unknown()).check(z.minLength(1)) });
+  const any = z.strictObject({ kind: z.literal('any'), conditions: z.array(z.unknown()).check(z.minLength(1)) });
+  const not = z.strictObject({ kind: z.literal('not'), condition: z.unknown() });
   const canonicalShallow = z.discriminatedUnion('kind', [exists, compare, all, any, not]);
   const shallow = stored ? createStoredReadSchema(canonicalShallow) : canonicalShallow;
   // Conditions have no authored depth cap. Parse their recursive edges with an
@@ -195,7 +194,7 @@ function createWorkflowConditionSchema(stored = false): z.ZodType<WorkflowCondit
     for (let cursor = path; cursor; cursor = cursor.parent) segments.push(cursor.segment);
     return segments.reverse();
   };
-  const schema = z.unknown().transform((value, context): WorkflowCondition => {
+  const schema = z.pipe(z.unknown(), z.transform((value, context): WorkflowCondition => {
     let output: unknown;
     let failed = false;
     const ancestors = new WeakSet<object>();
@@ -206,7 +205,7 @@ function createWorkflowConditionSchema(stored = false): z.ZodType<WorkflowCondit
       if ('finish' in task) { ancestors.delete(task.finish); continue; }
       if (task.value !== null && typeof task.value === 'object') {
         if (ancestors.has(task.value)) {
-          context.addIssue({ code: 'custom', path: issuePath(task.path), message: 'Workflow conditions cannot contain cycles' });
+          context.issues.push({ code: 'custom', path: issuePath(task.path), message: 'Workflow conditions cannot contain cycles', input: context.value });
           failed = true;
           continue;
         }
@@ -216,7 +215,7 @@ function createWorkflowConditionSchema(stored = false): z.ZodType<WorkflowCondit
       const parsed = shallow.safeParse(task.value);
       if (!parsed.success) {
         failed = true;
-        for (const issue of parsed.error.issues) context.addIssue({ ...issue, path: [...issuePath(task.path), ...issue.path] });
+        for (const issue of parsed.error.issues) context.issues.push({ ...issue, path: [...issuePath(task.path), ...issue.path], input: ('input' in issue ? issue.input ?? context.value : context.value) });
         continue;
       }
       const node = parsed.data;
@@ -234,14 +233,14 @@ function createWorkflowConditionSchema(stored = false): z.ZodType<WorkflowCondit
     }
     // All nodes and value references have passed their canonical field schemas.
     return failed ? z.NEVER : output as WorkflowCondition;
-  });
+  }));
   // Export the same recursive declaration graph to Action/SDK JSON Schema
   // consumers, without making it a competing recursive runtime parser.
-  const projection: z.ZodType<WorkflowCondition> = z.lazy(() => z.discriminatedUnion('kind', [exists, compare,
-    all.extend({ conditions: z.array(schema).min(1) }),
-    any.extend({ conditions: z.array(schema).min(1) }),
-    not.extend({ condition: schema }),
-  ])) as z.ZodType<WorkflowCondition>;
+  const projection: z.ZodMiniType<WorkflowCondition> = z.lazy(() => z.discriminatedUnion('kind', [exists, compare,
+    z.extend(all, { conditions: z.array(schema).check(z.minLength(1)) }),
+    z.extend(any, { conditions: z.array(schema).check(z.minLength(1)) }),
+    z.extend(not, { condition: schema }),
+  ])) as z.ZodMiniType<WorkflowCondition>;
   schema._zod.processJSONSchema = (context, _json, params) => {
     context.reused = 'ref';
     z.core.process(projection, context, params);
@@ -259,15 +258,15 @@ export const WorkflowConditionSchema = defineStoredReadProjection(createWorkflow
  * sharing a workspace never implies sharing history.
  */
 export const WorkflowConversationSelectionSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('shared_run') }).strict(),
-  z.object({ kind: z.literal('fresh') }).strict(),
-  z.object({ kind: z.literal('origin_session') }).strict(),
-  z.object({ kind: z.literal('from_step'), producer: WorkflowAuthoredProducerRefSchema }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('shared_run') }),
+  z.strictObject({ kind: z.literal('fresh') }),
+  z.strictObject({ kind: z.literal('origin_session') }),
+  z.strictObject({ kind: z.literal('from_step'), producer: WorkflowAuthoredProducerRefSchema }),
+  z.strictObject({
     kind: z.literal('existing_session'),
-    sessionId: z.string().min(1),
-    machineId: z.string().min(1),
-  }).strict(),
+    sessionId: z.string().check(z.minLength(1)),
+    machineId: z.string().check(z.minLength(1)),
+  }),
 ]));
 export type WorkflowConversationSelection = z.infer<typeof WorkflowConversationSelectionSchema>;
 

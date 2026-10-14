@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { TerminalStreamReadRequestSchema, TerminalStreamReadOkResponseSchema } from '../../terminal/stream.js';
@@ -15,31 +15,31 @@ export const ACTION_OPERATION_ACTION_IDS_V1 = [
 export type ActionOperationActionIdV1 = typeof ACTION_OPERATION_ACTION_IDS_V1[number];
 export const ActionOperationActionIdV1Schema = lazyZodSchema(() => z.enum(ACTION_OPERATION_ACTION_IDS_V1));
 
-const homeMachine = { serverId: z.string().trim().min(1), machineId: z.string().trim().min(1) };
-export const ActionOperationAddressV1Schema = lazyZodSchema(() => z.object({
+const homeMachine = { serverId: z.string().check(z.trim(), z.minLength(1)), machineId: z.string().check(z.trim(), z.minLength(1)) };
+export const ActionOperationAddressV1Schema = lazyZodSchema(() => z.strictObject({
   ...homeMachine, operationId: ActionOperationGetV1RequestSchema.shape.operationId,
-}).strict());
+}));
 export const ActionOperationListActionInputV1Schema = lazyZodSchema(() =>
-  ActionOperationListV1RequestSchema.safeExtend(homeMachine).strict());
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(ActionOperationListV1RequestSchema, homeMachine)));
 export const ActionOperationGetActionInputV1Schema = lazyZodSchema(() =>
-  ActionOperationGetV2RequestSchema.safeExtend(homeMachine).strict());
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(ActionOperationGetV2RequestSchema, homeMachine)));
 
 // The terminal owner defines every cursor, credit and byte boundary. Only its
 // terminal address is replaced by a qualified operation address at this seam.
 export const ProjectExecutionOutputReadInputV1Schema = lazyZodSchema(() => {
   const { terminalId: _terminalId, ...cursor } = TerminalStreamReadRequestSchema.shape;
-  return ActionOperationAddressV1Schema.extend(cursor).strict().superRefine((input, ctx) => {
+  return (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ActionOperationAddressV1Schema, cursor)).check(z.superRefine((input, ctx) => {
     const { serverId: _serverId, machineId: _machineId, operationId, ...request } = input;
     const parsed = TerminalStreamReadRequestSchema.safeParse({ ...request, terminalId: operationId });
     if (!parsed.success) for (const issue of parsed.error.issues) {
       ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message });
     }
-  });
+  }));
 });
-export const ProjectExecutionOutputOpenResultV1Schema = lazyZodSchema(() => z.object({ kind: z.literal('opened') }).strict());
-export const ProjectExecutionOutputCopyResultV1Schema = lazyZodSchema(() => z.object({
+export const ProjectExecutionOutputOpenResultV1Schema = lazyZodSchema(() => z.strictObject({ kind: z.literal('opened') }));
+export const ProjectExecutionOutputCopyResultV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.enum(['copied', 'bytes']), output: TerminalStreamReadOkResponseSchema,
-}).strict());
+}));
 export const ActionOperationActionInputSchemasV1 = {
   'action.operations.list': ActionOperationListActionInputV1Schema,
   'action.operations.get': ActionOperationGetActionInputV1Schema,
@@ -47,7 +47,7 @@ export const ActionOperationActionInputSchemasV1 = {
   'projects.execution.output.read': ProjectExecutionOutputReadInputV1Schema,
   'projects.execution.output.open': ActionOperationAddressV1Schema,
   'projects.execution.output.copy': ProjectExecutionOutputReadInputV1Schema,
-} as const satisfies Record<ActionOperationActionIdV1, z.ZodTypeAny>;
+} as const satisfies Record<ActionOperationActionIdV1, z.ZodMiniType>;
 export const ActionOperationActionOutputSchemasV1 = {
   'action.operations.list': ActionOperationListV1ResponseSchema,
   'action.operations.get': ActionOperationGetV1ResponseSchema,
@@ -55,7 +55,7 @@ export const ActionOperationActionOutputSchemasV1 = {
   'projects.execution.output.read': TerminalStreamReadOkResponseSchema,
   'projects.execution.output.open': ProjectExecutionOutputOpenResultV1Schema,
   'projects.execution.output.copy': ProjectExecutionOutputCopyResultV1Schema,
-} as const satisfies Record<ActionOperationActionIdV1, z.ZodTypeAny>;
+} as const satisfies Record<ActionOperationActionIdV1, z.ZodMiniType>;
 export type ActionOperationActionInputV1 = z.infer<typeof ActionOperationActionInputSchemasV1[ActionOperationActionIdV1]>;
 const titles: Record<ActionOperationActionIdV1, string> = {
   'action.operations.list': 'List operations', 'action.operations.get': 'Read operation',

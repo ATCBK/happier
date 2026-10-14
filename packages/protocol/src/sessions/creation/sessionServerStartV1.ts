@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   AutomationAccountCurrentnessWitnessV1Schema,
@@ -20,10 +20,7 @@ import {
   type SessionSpawnNewResultV1,
 } from './sessionSpawnNewResultV1.js';
 
-const SessionServerStartHostIdV1Schema = lazyZodSchema(() => z.string().min(1).max(256).refine(
-  (value) => value === value.trim(),
-  'Session server-start identifiers must not have surrounding whitespace',
-));
+const SessionServerStartHostIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(256), z.refine((value) => value === value.trim(), 'Session server-start identifiers must not have surrounding whitespace')));
 
 /**
  * Internal exact-machine method reserved for the server-stamped Session start
@@ -47,11 +44,11 @@ export type { SessionServerStartSpawnDraftV1 };
  * Server-held routing facts. `serverId` remains the authenticated server
  * scope, so it is intentionally not repeated as mutable payload data.
  */
-export const SessionServerStartTargetV1Schema = lazyZodSchema(() => z.object({
+export const SessionServerStartTargetV1Schema = lazyZodSchema(() => z.strictObject({
   accountId: SessionServerStartHostIdV1Schema,
   machineId: SessionServerStartHostIdV1Schema,
   machineInstallationId: SessionServerStartHostIdV1Schema,
-}).strict());
+}));
 export type SessionServerStartTargetV1 = z.infer<typeof SessionServerStartTargetV1Schema>;
 
 /**
@@ -64,27 +61,27 @@ export type SessionServerStartTargetV1 = z.infer<typeof SessionServerStartTarget
  * derived, so the same stamped request can be revalidated against canonical
  * Run state, claim, attempt, and lease immediately before target submission.
  */
-export const SessionServerStartClaimV1Schema = lazyZodSchema(() => z.object({
+export const SessionServerStartClaimV1Schema = lazyZodSchema(() => z.strictObject({
   automationId: SessionServerStartHostIdV1Schema,
   runId: SessionServerStartHostIdV1Schema,
-  attempt: z.number().int().positive().safe(),
+  attempt: z.number().check(z.int(), z.positive(), z.int()),
   claimedByMachineId: SessionServerStartHostIdV1Schema,
   cause: AutomationRunCauseSchema,
   accountCurrentness: AutomationAccountCurrentnessWitnessV1Schema,
   requestEnvelope: AutomationSessionStartRequestEnvelopeV1Schema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   const outer = validateAutomationSessionStartRequestEnvelopeOuterForModeV1({
     mode: value.accountCurrentness.mode,
     envelope: value.requestEnvelope,
   });
   if (outer.kind !== 'available') {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['requestEnvelope', 't'],
       message: 'Session server-start request envelope is not valid for the current Account mode',
     });
   }
-}));
+})));
 export type SessionServerStartClaimV1 = z.infer<typeof SessionServerStartClaimV1Schema>;
 
 /**
@@ -92,12 +89,12 @@ export type SessionServerStartClaimV1 = z.infer<typeof SessionServerStartClaimV1
  * The target performs exact V2 parsing only after server-authored cause, target,
  * currentness, and cancellation revalidation.
  */
-export const SessionServerStartDispatchRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionServerStartDispatchRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: z.literal('session.serverStart.dispatch'),
   target: SessionServerStartTargetV1Schema,
   start: SessionServerStartClaimV1Schema,
-}).strict());
+}));
 export type SessionServerStartDispatchRequestV1 = z.infer<
   typeof SessionServerStartDispatchRequestV1Schema
 >;
@@ -111,13 +108,13 @@ export type SessionServerStartDispatchResultV1 = SessionSpawnNewResultV1;
  * cause, target, installation, and currentness facts. The server reconstructs
  * those from the authenticated source socket and the active durable Run.
  */
-export const SessionServerStartIngressRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionServerStartIngressRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: z.literal('session.serverStart.ingress'),
   runId: SessionServerStartHostIdV1Schema,
-  attempt: z.number().int().positive().safe(),
+  attempt: z.number().check(z.int(), z.positive(), z.int()),
   requestEnvelope: AutomationSessionStartRequestEnvelopeV1Schema,
-}).strict());
+}));
 export type SessionServerStartIngressRequestV1 = z.infer<
   typeof SessionServerStartIngressRequestV1Schema
 >;
@@ -128,16 +125,16 @@ export type SessionServerStartIngressRequestV1 = z.infer<
  * Both shapes preserve the canonical Session create-or-rejoin result contract.
  */
 export const SessionServerStartIngressResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal('local'),
     dispatch: SessionServerStartDispatchRequestV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal('result'),
     result: SessionServerStartDispatchResultV1Schema,
-  }).strict(),
+  }),
 ]));
 export type SessionServerStartIngressResponseV1 = z.infer<
   typeof SessionServerStartIngressResponseV1Schema

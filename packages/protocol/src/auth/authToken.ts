@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 /**
@@ -24,7 +24,7 @@ export const AuthTokenAuthoritySchema = lazyZodSchema(() => z.enum([
 ]));
 export type AuthTokenAuthority = z.infer<typeof AuthTokenAuthoritySchema>;
 
-const AuthTokenEvidenceString = z.string().trim().min(1).max(512);
+const AuthTokenEvidenceString = z.string().check(z.trim(), z.minLength(1), z.maxLength(512));
 
 /**
  * A server-produced authentication fact attached to one ordinary credential.
@@ -32,17 +32,17 @@ const AuthTokenEvidenceString = z.string().trim().min(1).max(512);
  * credential; it carries no Team role, grant, profile, token, or client input.
  */
 export const AuthTokenAuthenticationEvidenceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('home_method'),
     methodId: AuthTokenEvidenceString,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('provider'),
     providerId: AuthTokenEvidenceString,
     identityId: AuthTokenEvidenceString,
     runtimeFingerprint: AuthTokenEvidenceString,
-    teamConnectionId: AuthTokenEvidenceString.optional(),
-  }).strict(),
+    teamConnectionId: z.optional(AuthTokenEvidenceString),
+  }),
 ]));
 export type AuthTokenAuthenticationEvidenceV1 = z.infer<typeof AuthTokenAuthenticationEvidenceV1Schema>;
 
@@ -55,23 +55,20 @@ export function authTokenAuthenticationEvidenceIdentityV1(value: AuthTokenAuthen
     : `provider:${value.providerId.toLowerCase()}:${value.identityId}:${value.teamConnectionId ?? ''}:${value.runtimeFingerprint}`;
 }
 
-const AuthTokenAuthenticationEvidenceSetV1Schema = lazyZodSchema(() => z.array(AuthTokenAuthenticationEvidenceV1Schema)
-  .min(1)
-  .max(AUTH_TOKEN_AUTHENTICATION_EVIDENCE_MAX_ITEMS)
-  .superRefine((value, ctx) => {
+const AuthTokenAuthenticationEvidenceSetV1Schema = lazyZodSchema(() => z.array(AuthTokenAuthenticationEvidenceV1Schema).check(z.minLength(1), z.maxLength(AUTH_TOKEN_AUTHENTICATION_EVIDENCE_MAX_ITEMS), z.superRefine((value, ctx) => {
     const seen = new Set<string>();
     for (const evidence of value) {
       const key = authTokenAuthenticationEvidenceIdentityV1(evidence);
       if (seen.has(key)) ctx.addIssue({ code: 'custom', message: 'authentication evidence must be deduplicated' });
       seen.add(key);
     }
-  }));
+  })));
 
 /** Closed persisted snapshot used when an existing unattended credential is explicitly authorized. */
-export const AuthTokenAuthenticationEvidenceSnapshotV1Schema = lazyZodSchema(() => z.object({
+export const AuthTokenAuthenticationEvidenceSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   evidence: AuthTokenAuthenticationEvidenceSetV1Schema,
-}).strict());
+}));
 export type AuthTokenAuthenticationEvidenceSnapshotV1 = z.infer<
   typeof AuthTokenAuthenticationEvidenceSnapshotV1Schema
 >;
@@ -96,11 +93,11 @@ export const AUTH_TOKEN_KIND_AUTHORITIES: Readonly<Record<AuthTokenKind, AuthTok
  * full Account credential, and so a kind can never travel with a
  * non-canonical authority.
  */
-export const AuthTokenProvenanceSchema = lazyZodSchema(() => z.object({
+export const AuthTokenProvenanceSchema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: AuthTokenKindSchema,
   authority: AuthTokenAuthoritySchema,
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   if (AUTH_TOKEN_KIND_AUTHORITIES[value.kind] !== value.authority) {
     ctx.addIssue({
       code: 'custom',
@@ -108,16 +105,16 @@ export const AuthTokenProvenanceSchema = lazyZodSchema(() => z.object({
       message: `authority "${value.authority}" is not canonical for token kind "${value.kind}"`,
     });
   }
-}));
+})));
 export type AuthTokenProvenance = z.infer<typeof AuthTokenProvenanceSchema>;
 
 /** Current additive provenance marker for credentials with authentication facts. */
-export const AuthTokenProvenanceV2Schema = lazyZodSchema(() => z.object({
+export const AuthTokenProvenanceV2Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2),
   kind: AuthTokenKindSchema,
   authority: AuthTokenAuthoritySchema,
   evidence: AuthTokenAuthenticationEvidenceSetV1Schema,
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   if (AUTH_TOKEN_KIND_AUTHORITIES[value.kind] !== value.authority) {
     ctx.addIssue({
       code: 'custom',
@@ -125,7 +122,7 @@ export const AuthTokenProvenanceV2Schema = lazyZodSchema(() => z.object({
       message: `authority "${value.authority}" is not canonical for token kind "${value.kind}"`,
     });
   }
-}));
+})));
 export type AuthTokenProvenanceV2 = z.infer<typeof AuthTokenProvenanceV2Schema>;
 
 export const AuthTokenProvenanceAnySchema = lazyZodSchema(() => z.union([

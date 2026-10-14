@@ -1,6 +1,7 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { CallerInputConstraintsV1Schema } from '../../auth/callerInputConstraintsV1.js';
 import { sha256 } from '@noble/hashes/sha2';
 
@@ -79,9 +80,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-const DisplayNameSnapshotSchema = lazyZodSchema(() => z.string()
-  .refine((value) => value === value.normalize('NFC'), 'Display-name snapshots must be NFC-normalized')
-  .refine((value) => Array.from(value).length <= 128, 'Display-name snapshots must contain at most 128 Unicode code points'));
+const DisplayNameSnapshotSchema = lazyZodSchema(() => z.string().check(z.refine((value) => value === value.normalize('NFC'), 'Display-name snapshots must be NFC-normalized'), z.refine((value) => Array.from(value).length <= 128, 'Display-name snapshots must contain at most 128 Unicode code points')));
 
 const SourceRefSchema = preservedBoundedNfcString(256, 'Source references');
 const SourceRevisionOrEpochSchema = preservedBoundedNfcString(128, 'Source revisions');
@@ -99,10 +98,10 @@ export const PLUGIN_INVOCATION_SURFACES_V1 = [
 export const PluginInvocationSurfaceV1Schema = lazyZodSchema(() => z.enum(PLUGIN_INVOCATION_SURFACES_V1));
 export type PluginInvocationSurfaceV1 = z.infer<typeof PluginInvocationSurfaceV1Schema>;
 
-export const ExternalActorV1Schema = lazyZodSchema(() => z.object({
+export const ExternalActorV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.enum(['human', 'bot']),
-  displayNameSnapshot: DisplayNameSnapshotSchema.optional(),
-}).strict());
+  displayNameSnapshot: z.optional(DisplayNameSnapshotSchema),
+}));
 export type ExternalActorV1 = z.infer<typeof ExternalActorV1Schema>;
 
 export const ContentProvenanceV1Schema = lazyZodSchema(() => z.enum(['original', 'forwarded', 'viaBot']));
@@ -113,7 +112,7 @@ function requireCoPresentExternalProvenance(
     externalActor?: unknown;
     contentProvenance?: unknown;
   }>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   if ((value.externalActor === undefined) === (value.contentProvenance === undefined)) return;
   context.addIssue({
@@ -128,14 +127,14 @@ export const PluginSessionInputIdempotencyKeyV1Schema = preservedBoundedNfcStrin
   'Plugin Session input idempotency keys',
 );
 
-export const PluginSessionInputSourceV1Schema = lazyZodSchema(() => z.object({
+export const PluginSessionInputSourceV1Schema = lazyZodSchema(() => z.strictObject({
   sourceRef: SourceRefSchema,
   sourceRevisionOrEpoch: SourceRevisionOrEpochSchema,
   remoteApprovalMaxScope: z.enum(['off', 'request', 'session']),
   requestedPermissionCeiling: asProtocolZod(AgentPermissionIntentV1Schema),
-  externalActor: ExternalActorV1Schema.optional(),
-  contentProvenance: ContentProvenanceV1Schema.optional(),
-}).strict().superRefine(requireCoPresentExternalProvenance));
+  externalActor: z.optional(ExternalActorV1Schema),
+  contentProvenance: z.optional(ContentProvenanceV1Schema),
+}).check(z.superRefine(requireCoPresentExternalProvenance)));
 export type PluginSessionInputSourceV1 = z.infer<typeof PluginSessionInputSourceV1Schema>;
 
 /**
@@ -149,15 +148,15 @@ export type PluginSessionInputSourceV1 = z.infer<typeof PluginSessionInputSource
  */
 export const PluginSessionUserTextAuthoredFieldSchemasV1 = Object.freeze({
   idempotencyKey: PluginSessionInputIdempotencyKeyV1Schema,
-  recipient: ParticipantRecipientRoutingIdentityV1Schema.optional(),
-  source: PluginSessionInputSourceV1Schema.optional(),
-  attachments: PluginSessionInputAttachmentsV1Schema.optional(),
+  recipient: zMini.optional(ParticipantRecipientRoutingIdentityV1Schema),
+  source: z.optional(PluginSessionInputSourceV1Schema),
+  attachments: zMini.optional(PluginSessionInputAttachmentsV1Schema),
   /** Identifies a provider-facing reply whose visible answer belongs on its question tool. */
-  toolAnswerDelivery: z.object({ toolCallId: z.string().trim().min(1) }).strict().optional(),
+  toolAnswerDelivery: z.optional(z.strictObject({ toolCallId: z.string().check(z.trim(), z.minLength(1)) })),
 });
 
 /** Public plugin-authored intent. Caller identity and admitted authority are host-owned. */
-const PluginSessionUserTextInputRequestV1Schema = lazyZodSchema(() => z.object({
+const PluginSessionUserTextInputRequestV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('userText'),
   /**
    * Blank only when an attachment carries the input. `requireSessionInputContent`
@@ -165,19 +164,19 @@ const PluginSessionUserTextInputRequestV1Schema = lazyZodSchema(() => z.object({
    */
   text: z.string(),
   ...PluginSessionUserTextAuthoredFieldSchemasV1,
-}).strict().superRefine(requireSessionInputContent));
+}).check(z.superRefine(requireSessionInputContent)));
 
-const PluginSessionSubagentLaunchInputRequestV1Schema = lazyZodSchema(() => z.object({
+const PluginSessionSubagentLaunchInputRequestV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('sessionSubagentLaunch'),
   launch: SubagentLaunchV1Schema,
   idempotencyKey: PluginSessionInputIdempotencyKeyV1Schema,
-}).strict());
+}));
 
-const PluginSessionSubagentCommandInputRequestV1Schema = lazyZodSchema(() => z.object({
+const PluginSessionSubagentCommandInputRequestV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('sessionSubagentCommand'),
   command: SubagentCommandV1Schema,
   idempotencyKey: PluginSessionInputIdempotencyKeyV1Schema,
-}).strict());
+}));
 
 export const PluginSessionInputRequestV1Schema = lazyZodSchema(() => z.union([
   PluginSessionUserTextInputRequestV1Schema,
@@ -217,26 +216,26 @@ export function derivePluginSessionInputLocalIdV1(params: Readonly<{
   return localId;
 }
 
-const HappierAppProvenanceSchema = lazyZodSchema(() => z.object({
+const HappierAppProvenanceSchema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: z.literal('happierApp'),
   actor: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('owner') }).strict(),
-    z.object({ kind: z.literal('sharedCollaborator') }).strict(),
+    z.strictObject({ kind: z.literal('owner') }),
+    z.strictObject({ kind: z.literal('sharedCollaborator') }),
   ]),
-}).strict());
+}));
 
-const PluginSessionProvenanceSchema = lazyZodSchema(() => z.object({
+const PluginSessionProvenanceSchema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: z.literal('pluginSession'),
   pluginId: asProtocolZod(PluginIdSchema),
   contributionLocalId: asProtocolZod(PluginContributionLocalIdSchema),
   surface: z.union([PluginInvocationSurfaceV1Schema, z.literal('unspecified')]),
-  sourceRef: SourceRefSchema.optional(),
-  sourceRevisionOrEpoch: SourceRevisionOrEpochSchema.optional(),
-  externalActor: ExternalActorV1Schema.optional(),
-  contentProvenance: ContentProvenanceV1Schema.optional(),
-}).strict().superRefine((value, context) => {
+  sourceRef: zMini.optional(SourceRefSchema),
+  sourceRevisionOrEpoch: zMini.optional(SourceRevisionOrEpochSchema),
+  externalActor: z.optional(ExternalActorV1Schema),
+  contentProvenance: z.optional(ContentProvenanceV1Schema),
+}).check(z.superRefine((value, context) => {
   if ((value.sourceRef === undefined) !== (value.sourceRevisionOrEpoch === undefined)) {
     context.addIssue({
       code: 'custom',
@@ -245,27 +244,27 @@ const PluginSessionProvenanceSchema = lazyZodSchema(() => z.object({
     });
   }
   requireCoPresentExternalProvenance(value, context);
-}));
+})));
 
 const MessageProvenanceUnionSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   HappierAppProvenanceSchema,
-  z.object({ v: z.literal(1), kind: z.literal('cli') }).strict(),
-  z.object({ v: z.literal(1), kind: z.literal('voice') }).strict(),
-  z.object({
+  z.strictObject({ v: z.literal(1), kind: z.literal('cli') }),
+  z.strictObject({ v: z.literal(1), kind: z.literal('voice') }),
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal('happierSession'),
     sourceSessionId: asProtocolZod(SessionIdSchema),
     via: z.enum(['action', 'mcp']),
-    callerDepth: SessionWorkDepthV1Schema.optional(),
-  }).strict(),
+    callerDepth: zMini.optional(SessionWorkDepthV1Schema),
+  }),
   PluginSessionProvenanceSchema,
-  z.object({
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal('automation'),
     automationId: BoundedAutomationIdSchema,
     runId: BoundedAutomationRunIdSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal('host'),
     producer: z.enum([
@@ -281,17 +280,17 @@ const MessageProvenanceUnionSchema = lazyZodSchema(() => z.discriminatedUnion('k
       'executionRunVoice',
       'agentRuntimeFirstInput',
     ]),
-  }).strict(),
+  }),
 ]));
 
-export const SessionMessageProvenanceV1Schema = lazyZodSchema(() => MessageProvenanceUnionSchema.superRefine((value, context) => {
+export const SessionMessageProvenanceV1Schema = lazyZodSchema(() => MessageProvenanceUnionSchema.check(z.superRefine((value, context) => {
   if (UTF8_ENCODER.encode(JSON.stringify(value)).byteLength > MAX_PROVENANCE_BYTES) {
     context.addIssue({
       code: 'custom',
       message: 'Session message provenance exceeds its encoded 4 KiB limit',
     });
   }
-}));
+})));
 export type SessionMessageProvenanceV1 = z.infer<typeof SessionMessageProvenanceV1Schema>;
 
 /**
@@ -299,21 +298,21 @@ export type SessionMessageProvenanceV1 = z.infer<typeof SessionMessageProvenance
  * owner the step's heading, map node and Session title read). A transcript shows it as written; it
  * never recomputes a number it has no definition for.
  */
-const WorkflowStepOrdinalV1Schema = z.string().regex(/^[1-9][0-9]*$/u);
+const WorkflowStepOrdinalV1Schema = z.string().check(z.regex(/^[1-9][0-9]*$/u));
 
 export const SessionMessageProvenanceV2Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     v: z.literal(2), kind: z.literal('workflow_invocation'),
     runId: BoundedAutomationRunIdSchema,
     invocationRecordId: WorkflowInvocationRecordIdSchema,
-    workDepth: SessionWorkDepthV1Schema.optional(),
-    stepOrdinal: WorkflowStepOrdinalV1Schema.optional(),
-  }).strict(),
-]).superRefine((value, context) => {
+    workDepth: zMini.optional(SessionWorkDepthV1Schema),
+    stepOrdinal: z.optional(WorkflowStepOrdinalV1Schema),
+  }),
+]).check(z.superRefine((value, context) => {
   if (UTF8_ENCODER.encode(JSON.stringify(value)).byteLength > MAX_PROVENANCE_BYTES) {
     context.addIssue({ code: 'custom', message: 'Session message provenance exceeds its encoded 4 KiB limit' });
   }
-}));
+})));
 export type SessionMessageProvenanceV2 = z.infer<typeof SessionMessageProvenanceV2Schema>;
 export const SessionMessageProvenanceSchema = lazyZodSchema(() => z.union([SessionMessageProvenanceV1Schema, SessionMessageProvenanceV2Schema]));
 export type SessionMessageProvenance = z.infer<typeof SessionMessageProvenanceSchema>;
@@ -372,46 +371,46 @@ export function buildSessionTranscriptMessageProvenanceV1(
 }
 
 const SessionInputCallerV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('plugin'),
     pluginId: asProtocolZod(PluginIdSchema),
     contributionLocalId: asProtocolZod(PluginContributionLocalIdSchema),
-  }).strict(),
-  z.object({ kind: z.literal('host') }).strict(),
+  }),
+  z.strictObject({ kind: z.literal('host') }),
 ]));
 
-export const SessionInputSourceSessionV1Schema = lazyZodSchema(() => z.object({
+export const SessionInputSourceSessionV1Schema = lazyZodSchema(() => z.strictObject({
   sourceSessionId: asProtocolZod(SessionIdSchema),
   sourceTurnId: TurnIdSchema,
   via: z.enum(['action', 'mcp']),
-}).strict());
+}));
 export type SessionInputSourceSessionV1 = z.infer<typeof SessionInputSourceSessionV1Schema>;
 
-export const SessionInputSourceAuthorityV1Schema = lazyZodSchema(() => z.object({
+export const SessionInputSourceAuthorityV1Schema = lazyZodSchema(() => z.strictObject({
   mediatorPluginId: asProtocolZod(PluginIdSchema),
   sourceRef: SourceRefSchema,
   sourceRevisionOrEpoch: SourceRevisionOrEpochSchema,
   remoteApprovalMaxScope: z.enum(['off', 'request', 'session']),
-}).strict());
+}));
 export type SessionInputSourceAuthorityV1 = z.infer<typeof SessionInputSourceAuthorityV1Schema>;
 
-const SessionInputAutomationV1Schema = lazyZodSchema(() => z.object({
+const SessionInputAutomationV1Schema = lazyZodSchema(() => z.strictObject({
   automationId: BoundedAutomationIdSchema,
   runId: BoundedAutomationRunIdSchema,
-}).strict());
+}));
 
-const SessionInputProtectedCommonV1Schema = lazyZodSchema(() => z.object({
+const SessionInputProtectedCommonV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   producer: SessionRoleUserProducerKindV1Schema,
-  caller: SessionInputCallerV1Schema.optional(),
-  sourceSession: SessionInputSourceSessionV1Schema.optional(),
-  sourceAuthority: SessionInputSourceAuthorityV1Schema.optional(),
-  automation: SessionInputAutomationV1Schema.optional(),
-}).strict());
+  caller: z.optional(SessionInputCallerV1Schema),
+  sourceSession: z.optional(SessionInputSourceSessionV1Schema),
+  sourceAuthority: z.optional(SessionInputSourceAuthorityV1Schema),
+  automation: z.optional(SessionInputAutomationV1Schema),
+}));
 
 function refineProtectedInputCommon(
   value: z.infer<typeof SessionInputProtectedCommonV1Schema>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   const admissionMode = SESSION_ROLE_USER_PRODUCER_ADMISSION_MODES_V1[value.producer];
   if (admissionMode === 'transcriptOnly') {
@@ -478,21 +477,21 @@ function refineProtectedInputCommon(
   }
 }
 
-export const SessionInputRequestV1Schema = lazyZodSchema(() => SessionInputProtectedCommonV1Schema.extend({
-  permission: z.object({
-    requestedPermissionCeiling: asProtocolZod(AgentPermissionIntentV1Schema).optional(),
-  }).strict(),
-}).strict().superRefine(refineProtectedInputCommon));
+export const SessionInputRequestV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionInputProtectedCommonV1Schema, {
+  permission: z.strictObject({
+    requestedPermissionCeiling: zMini.optional(asProtocolZod(AgentPermissionIntentV1Schema)),
+  }),
+})).check(z.superRefine(refineProtectedInputCommon)));
 export type SessionInputRequestV1 = z.infer<typeof SessionInputRequestV1Schema>;
 
 export const SessionInputWorkflowV2Schema = lazyZodSchema(() => z.discriminatedUnion('purpose', [
-  z.object({
+  z.strictObject({
     purpose: z.literal('invocation'),
     runId: BoundedAutomationRunIdSchema,
     invocationRecordId: WorkflowInvocationRecordIdSchema,
-    workDepth: SessionWorkDepthV1Schema.optional(),
-    stepOrdinal: WorkflowStepOrdinalV1Schema.optional(),
-  }).strict(),
+    workDepth: zMini.optional(SessionWorkDepthV1Schema),
+    stepOrdinal: z.optional(WorkflowStepOrdinalV1Schema),
+  }),
 ]));
 export type SessionInputWorkflowV2 = z.infer<typeof SessionInputWorkflowV2Schema>;
 
@@ -513,39 +512,39 @@ export function deriveWorkflowSessionInputLocalIdV2(workflow: SessionInputWorkfl
   return localId;
 }
 
-const SessionInputProtectedCommonV2Schema = lazyZodSchema(() => z.object({
+const SessionInputProtectedCommonV2Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2),
   producer: z.literal('workflow'),
-  caller: SessionInputCallerV1Schema.optional(),
-  sourceSession: SessionInputSourceSessionV1Schema.optional(),
-  sourceAuthority: SessionInputSourceAuthorityV1Schema.optional(),
+  caller: z.optional(SessionInputCallerV1Schema),
+  sourceSession: z.optional(SessionInputSourceSessionV1Schema),
+  sourceAuthority: z.optional(SessionInputSourceAuthorityV1Schema),
   workflow: SessionInputWorkflowV2Schema,
-}).strict());
+}));
 
 function refineProtectedWorkflowInputCommon(
   value: z.infer<typeof SessionInputProtectedCommonV2Schema>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   if (value.caller?.kind === 'plugin') {
     context.addIssue({ code: 'custom', path: ['caller'], message: 'Workflow input is emitted only by the trusted host' });
   }
 }
 
-export const SessionInputRequestV2Schema = lazyZodSchema(() => SessionInputProtectedCommonV2Schema.extend({
-  permission: z.object({
-    requestedPermissionCeiling: asProtocolZod(AgentPermissionIntentV1Schema).optional(),
-  }).strict(),
-}).strict().superRefine(refineProtectedWorkflowInputCommon));
+export const SessionInputRequestV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionInputProtectedCommonV2Schema, {
+  permission: z.strictObject({
+    requestedPermissionCeiling: zMini.optional(asProtocolZod(AgentPermissionIntentV1Schema)),
+  }),
+})).check(z.superRefine(refineProtectedWorkflowInputCommon)));
 export type SessionInputRequestV2 = z.infer<typeof SessionInputRequestV2Schema>;
 export const SessionInputRequestSchema = lazyZodSchema(() => z.union([SessionInputRequestV1Schema, SessionInputRequestV2Schema]));
 export type SessionInputRequest = z.infer<typeof SessionInputRequestSchema>;
 
-export const SessionInputAuthorityV2Schema = lazyZodSchema(() => SessionInputProtectedCommonV2Schema.extend({
-  permission: z.object({
-    requestedPermissionCeiling: asProtocolZod(AgentPermissionIntentV1Schema).optional(),
+export const SessionInputAuthorityV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionInputProtectedCommonV2Schema, {
+  permission: z.strictObject({
+    requestedPermissionCeiling: zMini.optional(asProtocolZod(AgentPermissionIntentV1Schema)),
     admittedPermissionCeiling: asProtocolZod(AgentPermissionIntentV1Schema),
-  }).strict(),
-}).strict().superRefine(refineProtectedWorkflowInputCommon));
+  }),
+})).check(z.superRefine(refineProtectedWorkflowInputCommon)));
 export type SessionInputAuthorityV2 = z.infer<typeof SessionInputAuthorityV2Schema>;
 
 export const SESSION_INPUT_ADMISSION_WORKFLOW_PROTOCOL_VERSION = 2 as const;
@@ -585,12 +584,12 @@ export function buildTrustedHostSessionInputAdmissionV1(
   });
 }
 
-export const SessionInputAuthorityV1Schema = lazyZodSchema(() => SessionInputProtectedCommonV1Schema.extend({
-  permission: z.object({
-    requestedPermissionCeiling: asProtocolZod(AgentPermissionIntentV1Schema).optional(),
+export const SessionInputAuthorityV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionInputProtectedCommonV1Schema, {
+  permission: z.strictObject({
+    requestedPermissionCeiling: zMini.optional(asProtocolZod(AgentPermissionIntentV1Schema)),
     admittedPermissionCeiling: asProtocolZod(AgentPermissionIntentV1Schema),
-  }).strict(),
-}).strict().superRefine(refineProtectedInputCommon));
+  }),
+})).check(z.superRefine(refineProtectedInputCommon)));
 export type SessionInputAuthorityV1 = z.infer<typeof SessionInputAuthorityV1Schema>;
 export const SessionInputAuthoritySchema = lazyZodSchema(() => z.union([SessionInputAuthorityV1Schema, SessionInputAuthorityV2Schema]));
 export type SessionInputAuthority = z.infer<typeof SessionInputAuthoritySchema>;
@@ -732,40 +731,40 @@ export function settleSessionInputRequestV2(params: Readonly<{
 const AccountIdSchema = preservedBoundedNfcString(191, 'Account ids');
 
 /** Server-stamped input placement, not author-supplied execution authority. */
-export const SessionInputMachineTargetV1Schema = lazyZodSchema(() => z.object({
-  homeId: z.string().min(1),
+export const SessionInputMachineTargetV1Schema = lazyZodSchema(() => z.strictObject({
+  homeId: z.string().check(z.minLength(1)),
   accountId: AccountIdSchema,
   sessionId: asProtocolZod(SessionIdSchema),
-  machineId: z.string().min(1),
-  installationId: z.string().trim().min(1),
-}).strict());
+  machineId: z.string().check(z.minLength(1)),
+  installationId: z.string().check(z.trim(), z.minLength(1)),
+}));
 export type SessionInputMachineTargetV1 = z.infer<typeof SessionInputMachineTargetV1Schema>;
 
 /** Lossy non-content notification; the retained receipt remains the recovery authority. */
-export const PendingActivationRequestedEphemeralV1Schema = lazyZodSchema(() => z.object({
+export const PendingActivationRequestedEphemeralV1Schema = lazyZodSchema(() => z.strictObject({
   type: z.literal('pending-activation-requested'),
   target: SessionInputMachineTargetV1Schema,
-  requestId: z.string().trim().min(1),
-  requestedAt: z.number().int().nonnegative(),
-  pendingVersion: z.number().int().nonnegative(),
-}).strict());
+  requestId: z.string().check(z.trim(), z.minLength(1)),
+  requestedAt: z.number().check(z.int(), z.nonnegative()),
+  pendingVersion: z.number().check(z.int(), z.nonnegative()),
+}));
 export type PendingActivationRequestedEphemeralV1 = z.infer<typeof PendingActivationRequestedEphemeralV1Schema>;
 
 export const SessionInputAdmissionReceiptV1Schema = lazyZodSchema(() => z.discriminatedUnion('issuer', [
-  z.object({
+  z.strictObject({
     v: z.literal(1),
     issuer: z.literal('authenticatedAccount'),
-    callerInputConstraints: CallerInputConstraintsV1Schema.optional(),
+    callerInputConstraints: zMini.optional(CallerInputConstraintsV1Schema),
     actorAccountId: AccountIdSchema,
     sessionRelationship: z.enum(['owner', 'sharedEditor', 'sharedAdmin']),
-    admittedTarget: SessionInputMachineTargetV1Schema.optional(),
-  }).strict(),
-  z.object({
+    admittedTarget: z.optional(SessionInputMachineTargetV1Schema),
+  }),
+  z.strictObject({
     v: z.literal(1),
     issuer: z.literal('authenticatedMachine'),
-    callerInputConstraints: CallerInputConstraintsV1Schema.optional(),
-    admittedTarget: SessionInputMachineTargetV1Schema.optional(),
-  }).strict(),
+    callerInputConstraints: zMini.optional(CallerInputConstraintsV1Schema),
+    admittedTarget: z.optional(SessionInputMachineTargetV1Schema),
+  }),
 ]));
 export type SessionInputAdmissionReceiptV1 = z.infer<typeof SessionInputAdmissionReceiptV1Schema>;
 
@@ -865,23 +864,23 @@ export const SessionInputRequestEqualityEvidenceV1Schema = SessionMutationEquali
 export type SessionInputRequestEqualityEvidenceV1 = z.infer<typeof SessionInputRequestEqualityEvidenceV1Schema>;
 
 export const SessionInputAdmissionResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({
+  z.strictObject({
     status: z.literal('accepted'),
     localId: PendingLocalIdSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('alreadyAccepted'),
     localId: PendingLocalIdSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('rejected'),
     code: SessionInputAdmissionRejectionCodeV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('outcomeUnknown'),
     localId: PendingLocalIdSchema,
     code: preservedBoundedNfcString(128, 'Admission outcome codes'),
-  }).strict(),
+  }),
 ]));
 export type SessionInputAdmissionResultV1 = z.infer<typeof SessionInputAdmissionResultV1Schema>;
 
@@ -893,27 +892,27 @@ export type SessionInputAdmissionResultV1 = z.infer<typeof SessionInputAdmission
  */
 export const SessionMessageSendResultV1Schema = lazyZodSchema(() => z.union([
   SessionInputAdmissionResultV1Schema,
-  z.object({
+  z.strictObject({
     status: z.literal('failed'),
     localId: PendingLocalIdSchema,
     code: z.literal('session_input_turn_failed'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('cancelled'),
     localId: PendingLocalIdSchema,
     code: z.literal('session_input_turn_cancelled'),
-  }).strict(),
+  }),
 ]));
 export type SessionMessageSendResultV1 = z.infer<typeof SessionMessageSendResultV1Schema>;
 
-export const SessionPermissionSourceAuthorityV1Schema = lazyZodSchema(() => z.object({
+export const SessionPermissionSourceAuthorityV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('mediatedExternal'),
   mediatorPluginId: asProtocolZod(PluginIdSchema),
   sourceRef: SourceRefSchema,
   sourceRevisionOrEpoch: SourceRevisionOrEpochSchema,
   admittedPermissionCeiling: asProtocolZod(AgentPermissionIntentV1Schema),
   remoteApprovalMaxScope: z.enum(['off', 'request', 'session']),
-}).strict());
+}));
 export type SessionPermissionSourceAuthorityV1 = z.infer<
   typeof SessionPermissionSourceAuthorityV1Schema
 >;
@@ -922,11 +921,11 @@ export type SessionPermissionSourceAuthorityV1 = z.infer<
  * Immutable input authority carried with one host-dispatched turn. Its explicit
  * arm separates admitted V1 input from pre-admission legacy/host execution.
  */
-export const SessionInputCausalPermissionAuthorityV1Schema = lazyZodSchema(() => z.object({
+export const SessionInputCausalPermissionAuthorityV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('admittedSessionInputV1'),
   admittedPermissionCeiling: asProtocolZod(AgentPermissionIntentV1Schema),
-  sourceAuthority: SessionPermissionSourceAuthorityV1Schema.optional(),
-}).strict().superRefine((value, context) => {
+  sourceAuthority: z.optional(SessionPermissionSourceAuthorityV1Schema),
+}).check(z.superRefine((value, context) => {
   if (
     value.sourceAuthority
     && value.sourceAuthority.admittedPermissionCeiling !== value.admittedPermissionCeiling
@@ -937,7 +936,7 @@ export const SessionInputCausalPermissionAuthorityV1Schema = lazyZodSchema(() =>
       message: 'Mediated source authority must carry the causal admitted permission ceiling',
     });
   }
-}));
+})));
 export type SessionInputCausalPermissionAuthorityV1 = z.infer<
   typeof SessionInputCausalPermissionAuthorityV1Schema
 >;

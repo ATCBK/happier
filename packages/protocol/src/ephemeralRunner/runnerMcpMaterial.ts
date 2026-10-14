@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { resolveSessionCapabilitiesV1, projectMcpServerMaterializationV1, type ResolvedMcpServerV1 } from '../reach/resolveSessionCapabilitiesV1.js';
 import { SessionMcpSelectionV1Schema } from '../mcp/servers/sessionSelectionV1.js';
@@ -11,17 +11,17 @@ import {
 } from '../mcp/servers/settingsV1.js';
 import { listValueRefSecretIdsV1, resolveValueRefPlaintextV1, type ValueRefV1 } from '../valueRefs/valueRefV1.js';
 
-const RunnerReviewedMcpServerV1Schema = z.object({
-  serverId: z.string().min(1),
+const RunnerReviewedMcpServerV1Schema = z.strictObject({
+  serverId: z.string().check(z.minLength(1)),
   serverRevision: z.number(),
-  bindingId: z.string().min(1).nullable(),
-  bindingRevision: z.number().nullable(),
-  savedSecretRevisions: z.array(z.object({
-    secretId: z.string().min(1),
+  bindingId: z.nullable(z.string().check(z.minLength(1))),
+  bindingRevision: z.nullable(z.number()),
+  savedSecretRevisions: z.array(z.strictObject({
+    secretId: z.string().check(z.minLength(1)),
     revision: z.number(),
-  }).strict()).max(256),
+  })).check(z.maxLength(256)),
   config: McpServerCatalogEntryV1Schema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   const refs = [
     ...Object.values(value.config.env),
     ...Object.values(value.config.remote?.headers ?? {}),
@@ -29,14 +29,14 @@ const RunnerReviewedMcpServerV1Schema = z.object({
   if (refs.some((ref) => listValueRefSecretIdsV1(ref).length > 0)) {
     context.addIssue({ code: 'custom', path: ['config'], message: 'Reviewed MCP material must resolve Saved Secret values before handoff' });
   }
-});
+}));
 
-export const RunnerMcpMaterialV1Schema = z.object({
+export const RunnerMcpMaterialV1Schema = z.strictObject({
   v: z.literal(1),
   strictMode: z.boolean(),
   capabilitySelection: SessionCapabilitySelectionAuthoringV1Schema,
-  servers: z.array(RunnerReviewedMcpServerV1Schema).max(256),
-}).strict().superRefine((value, context) => {
+  servers: z.array(RunnerReviewedMcpServerV1Schema).check(z.maxLength(256)),
+}).check(z.superRefine((value, context) => {
   const serverIds = new Set<string>();
   const serverNames = new Set<string>();
   for (const [index, server] of value.servers.entries()) {
@@ -59,7 +59,7 @@ export const RunnerMcpMaterialV1Schema = z.object({
     serverIds.add(server.serverId);
     serverNames.add(server.config.name);
   }
-});
+}));
 export type RunnerMcpMaterialV1 = z.infer<typeof RunnerMcpMaterialV1Schema>;
 export const EPHEMERAL_RUNNER_UNMATERIALIZED_MACHINE_ID_V1 = 'ephemeral-runner-unmaterialized';
 

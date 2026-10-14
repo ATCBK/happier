@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
 import { createStoredReadSchema, defineStoredReadProjection } from '../json/storedReadSchema.js';
@@ -24,12 +24,12 @@ export function parseWorkflowProjectMemoryKeyV1(key: string): string | null {
     return id.success && buildWorkflowProjectMemoryKeyV1(id.data) === key ? id.data : null;
   } catch { return null; }
 }
-const ProjectAnchorSchema = lazyZodSchema(() => z.object({
-  serverId: z.string().min(1).refine(value => value === value.trim()),
-  projectKey: z.string().min(1).refine(value => value === value.trim()),
-}).strict());
+const ProjectAnchorSchema = lazyZodSchema(() => z.strictObject({
+  serverId: z.string().check(z.minLength(1), z.refine(value => value === value.trim())),
+  projectKey: z.string().check(z.minLength(1), z.refine(value => value === value.trim())),
+}));
 export type ProjectLastOpenedMemoryAnchorV1 = z.infer<typeof ProjectAnchorSchema>;
-export const ProjectLastOpenedMemoryValueV1Schema = lazyZodSchema(() => z.number().finite().nonnegative());
+export const ProjectLastOpenedMemoryValueV1Schema = lazyZodSchema(() => z.number().check(z.nonnegative()));
 
 export function buildProjectLastOpenedMemoryKeyV1(input: ProjectLastOpenedMemoryAnchorV1): string {
   const anchor = ProjectAnchorSchema.parse(input);
@@ -49,12 +49,9 @@ export function parseProjectLastOpenedMemoryKeyV1(key: string): ProjectLastOpene
 export const AuthoringMemoryKeyV1Schema = lazyZodSchema(() => z.union([
   z.literal('recentMachinePaths'),
   z.literal('lastUsedProfile'),
-  z.string().refine(key => parseWorkflowProjectMemoryKeyV1(key) !== null, 'Workflow projects require a canonical definition identity'),
-  z.string().refine(key => parseProjectLastOpenedMemoryKeyV1(key) !== null, 'Project recency requires a canonical qualified anchor'),
-  z.string().startsWith('engineSelection:').refine(
-    (key) => key.length > 'engineSelection:'.length && key === key.trim(),
-    'Engine selection requires a nonempty canonical scope',
-  ),
+  z.string().check(z.refine(key => parseWorkflowProjectMemoryKeyV1(key) !== null, 'Workflow projects require a canonical definition identity')),
+  z.string().check(z.refine(key => parseProjectLastOpenedMemoryKeyV1(key) !== null, 'Project recency requires a canonical qualified anchor')),
+  z.string().check(z.startsWith('engineSelection:'), z.refine((key) => key.length > 'engineSelection:'.length && key === key.trim(), 'Engine selection requires a nonempty canonical scope')),
 ]));
 export type AuthoringMemoryKeyV1 = z.infer<typeof AuthoringMemoryKeyV1Schema>;
 
@@ -62,7 +59,7 @@ export type AuthoringMemoryKeyV1 = z.infer<typeof AuthoringMemoryKeyV1Schema>;
 export const AuthoringMemoryValueV1Schema = StrictJsonValueSchema;
 export type AuthoringMemoryValueV1 = z.infer<typeof AuthoringMemoryValueV1Schema>;
 const StoredWorkflowProjectTargetV1Schema = createStoredReadSchema(WorkflowProjectTargetV1Schema);
-function authoringMemoryValueSchemaForKeyV1(key: string, stored: boolean): z.ZodType<AuthoringMemoryValueV1> {
+function authoringMemoryValueSchemaForKeyV1(key: string, stored: boolean): z.ZodMiniType<AuthoringMemoryValueV1> {
   AuthoringMemoryKeyV1Schema.parse(key);
   return parseProjectLastOpenedMemoryKeyV1(key)
     ? ProjectLastOpenedMemoryValueV1Schema
@@ -77,42 +74,42 @@ export function assertStoredAuthoringMemoryValueForKeyV1(key: string, value: unk
 }
 
 /** Preserve retained alias carriers together under their one canonical row identity. */
-export const AuthoringMemoryEngineSelectionsV1Schema = lazyZodSchema(() => z.object({
+export const AuthoringMemoryEngineSelectionsV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   selectionsByScope: z.record(z.string(), AuthoringMemoryValueV1Schema),
-}).strict());
+}));
 export type AuthoringMemoryEngineSelectionsV1 = z.infer<typeof AuthoringMemoryEngineSelectionsV1Schema>;
 export const StoredAuthoringMemoryEngineSelectionsV1Schema = createStoredReadSchema(AuthoringMemoryEngineSelectionsV1Schema);
 
 /** E2EE opens must match the requested row before disclosing this value. */
-const AuthoringMemoryPrivatePayloadShapeV1Schema = lazyZodSchema(() => z.object({
+const AuthoringMemoryPrivatePayloadShapeV1Schema = lazyZodSchema(() => z.strictObject({
   key: AuthoringMemoryKeyV1Schema,
   value: AuthoringMemoryValueV1Schema,
-}).strict());
+}));
 function projectStoredAuthoringMemoryPrivatePayload(schema: typeof AuthoringMemoryPrivatePayloadShapeV1Schema) {
-  return schema.transform((payload, ctx) => {
+  return z.pipe(schema, z.transform((payload, ctx) => {
     const value = authoringMemoryValueSchemaForKeyV1(payload.key, true).safeParse(payload.value);
     if (!value.success) {
-      ctx.addIssue({ code: 'custom', path: ['value'], message: 'Authoring memory value does not match its row key' });
+      ctx.issues.push({ code: 'custom', path: ['value'], message: 'Authoring memory value does not match its row key', input: ctx.value });
       return z.NEVER;
     }
     return { key: payload.key, value: value.data };
-  });
+  }));
 }
 export const AuthoringMemoryPrivatePayloadV1Schema = defineStoredReadProjection(
-  lazyZodSchema(() => AuthoringMemoryPrivatePayloadShapeV1Schema.superRefine((payload, ctx) => {
+  lazyZodSchema(() => AuthoringMemoryPrivatePayloadShapeV1Schema.check(z.superRefine((payload, ctx) => {
     if (!authoringMemoryValueSchemaForKeyV1(payload.key, false).safeParse(payload.value).success) {
       ctx.addIssue({ code: 'custom', path: ['value'], message: 'Authoring memory value does not match its row key' });
     }
-  })),
+  }))),
   () => projectStoredAuthoringMemoryPrivatePayload(createStoredReadSchema(AuthoringMemoryPrivatePayloadShapeV1Schema)),
 );
 export type AuthoringMemoryPrivatePayloadV1 = z.infer<typeof AuthoringMemoryPrivatePayloadV1Schema>;
 export const StoredAuthoringMemoryPrivatePayloadV1Schema = createStoredReadSchema(AuthoringMemoryPrivatePayloadV1Schema);
 
 export const AuthoringMemoryContentV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('plain'), v: AuthoringMemoryValueV1Schema }).strict(),
-  z.object({ t: z.literal('encrypted'), c: z.string().min(1) }).strict(),
+  z.strictObject({ t: z.literal('plain'), v: AuthoringMemoryValueV1Schema }),
+  z.strictObject({ t: z.literal('encrypted'), c: z.string().check(z.minLength(1)) }),
 ]));
 export type AuthoringMemoryContentV1 = z.infer<typeof AuthoringMemoryContentV1Schema>;
 export const StoredAuthoringMemoryContentV1Schema = createStoredReadSchema(AuthoringMemoryContentV1Schema);
@@ -145,37 +142,37 @@ export function assertAuthoringMemoryContentForModeV1(
   return content;
 }
 
-const RevisionV1Schema = lazyZodSchema(() => z.number().int().min(0).max(Number.MAX_SAFE_INTEGER));
-export const AuthoringMemoryRowV1Schema = lazyZodSchema(() => z.object({
+const RevisionV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(0), z.maximum(Number.MAX_SAFE_INTEGER)));
+export const AuthoringMemoryRowV1Schema = lazyZodSchema(() => z.strictObject({
   key: AuthoringMemoryKeyV1Schema,
   revision: RevisionV1Schema,
-  content: AuthoringMemoryContentV1Schema.nullable(),
-}).strict());
+  content: z.nullable(AuthoringMemoryContentV1Schema),
+}));
 export type AuthoringMemoryRowV1 = z.infer<typeof AuthoringMemoryRowV1Schema>;
-export const AuthoringMemoryListResponseV1Schema = lazyZodSchema(() => z.object({ rows: z.array(AuthoringMemoryRowV1Schema) }).strict());
+export const AuthoringMemoryListResponseV1Schema = lazyZodSchema(() => z.strictObject({ rows: z.array(AuthoringMemoryRowV1Schema) }));
 export type AuthoringMemoryListResponseV1 = z.infer<typeof AuthoringMemoryListResponseV1Schema>;
 export const AuthoringMemoryReadResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('present'), revision: RevisionV1Schema, content: AuthoringMemoryContentV1Schema }).strict(),
-  z.object({ status: z.literal('absent') }).strict(),
-  z.object({ status: z.literal('deleted'), revision: RevisionV1Schema }).strict(),
+  z.strictObject({ status: z.literal('present'), revision: RevisionV1Schema, content: AuthoringMemoryContentV1Schema }),
+  z.strictObject({ status: z.literal('absent') }),
+  z.strictObject({ status: z.literal('deleted'), revision: RevisionV1Schema }),
 ]));
 export type AuthoringMemoryReadResponseV1 = z.infer<typeof AuthoringMemoryReadResponseV1Schema>;
-export const AuthoringMemoryMutationRequestV1Schema = lazyZodSchema(() => z.object({
+export const AuthoringMemoryMutationRequestV1Schema = lazyZodSchema(() => z.strictObject({
   expectedRevision: z.union([RevisionV1Schema, z.literal('absent')]),
-  content: AuthoringMemoryContentV1Schema.nullable(),
-}).strict());
+  content: z.nullable(AuthoringMemoryContentV1Schema),
+}));
 export type AuthoringMemoryMutationRequestV1 = z.infer<typeof AuthoringMemoryMutationRequestV1Schema>;
 export const AuthoringMemoryMutationResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('updated'), revision: RevisionV1Schema, cursor: RevisionV1Schema }).strict(),
-  z.object({ status: z.literal('conflict'), revision: z.number().int().min(-1).max(Number.MAX_SAFE_INTEGER) }).strict(),
+  z.strictObject({ status: z.literal('updated'), revision: RevisionV1Schema, cursor: RevisionV1Schema }),
+  z.strictObject({ status: z.literal('conflict'), revision: z.number().check(z.int(), z.minimum(-1), z.maximum(Number.MAX_SAFE_INTEGER)) }),
 ]));
 export type AuthoringMemoryMutationResponseV1 = z.infer<typeof AuthoringMemoryMutationResponseV1Schema>;
-export const AuthoringMemoryStorageUnavailableV1Schema = lazyZodSchema(() => z.object({
+export const AuthoringMemoryStorageUnavailableV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.literal('authoring_memory_storage_unavailable'),
-}).strict());
-export const AuthoringMemoryChangeHintV1Schema = lazyZodSchema(() => z.object({
+}));
+export const AuthoringMemoryChangeHintV1Schema = lazyZodSchema(() => z.strictObject({
   authoringMemory: z.literal(true),
   key: AuthoringMemoryKeyV1Schema,
   revision: RevisionV1Schema,
-}).strict());
+}));
 export type AuthoringMemoryChangeHintV1 = z.infer<typeof AuthoringMemoryChangeHintV1Schema>;

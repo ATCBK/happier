@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { AccountEncryptionModeSchema } from '../features/payload/capabilities/encryptionCapabilities.js';
 import {
@@ -16,22 +16,22 @@ import { AutomationNonnegativeSafeIntegerV1Schema } from './automationResultDeli
  * host binds it to private Automation content; plugin Action input never
  * supplies it.
  */
-export const AutomationAccountCurrentnessWitnessV1Schema = lazyZodSchema(() => z.object({
+export const AutomationAccountCurrentnessWitnessV1Schema = lazyZodSchema(() => z.strictObject({
   mode: AccountEncryptionModeSchema,
   version: AutomationNonnegativeSafeIntegerV1Schema,
-  contentKeyFingerprint: z.string().min(1).max(256).nullable(),
-}).strict().superRefine((value, context) => {
+  contentKeyFingerprint: z.nullable(z.string().check(z.minLength(1), z.maxLength(256))),
+}).check(z.superRefine((value, context) => {
   if (
     (value.mode === 'plain' && value.contentKeyFingerprint !== null)
     || (value.mode === 'e2ee' && value.contentKeyFingerprint === null)
   ) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['contentKeyFingerprint'],
       message: 'Account currentness mode and content-key fingerprint must agree',
     });
   }
-}));
+})));
 export type AutomationAccountCurrentnessWitnessV1 = z.infer<
   typeof AutomationAccountCurrentnessWitnessV1Schema
 >;

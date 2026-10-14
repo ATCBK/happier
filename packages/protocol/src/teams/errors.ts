@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * The typed Team domain results a route may map to HTTP.
@@ -71,9 +71,9 @@ export const TeamErrorCodeV1Schema = lazyZodSchema(() => z.enum([
 ]));
 export type TeamErrorCodeV1 = z.infer<typeof TeamErrorCodeV1Schema>;
 
-export const TeamAuthenticationPolicyUnavailableDetailsV1Schema = lazyZodSchema(() => z.object({
+export const TeamAuthenticationPolicyUnavailableDetailsV1Schema = lazyZodSchema(() => z.strictObject({
   reason: z.literal('provider_test_required'),
-}).strict());
+}));
 export type TeamAuthenticationPolicyUnavailableDetailsV1 = z.infer<
   typeof TeamAuthenticationPolicyUnavailableDetailsV1Schema
 >;
@@ -83,18 +83,18 @@ export type TeamAuthenticationPolicyUnavailableDetailsV1 = z.infer<
  * invented its own envelope would make the same domain result unreadable
  * depending on which path produced it.
  */
-export const TeamErrorV1Schema = lazyZodSchema(() => z.object({
+export const TeamErrorV1Schema = lazyZodSchema(() => z.strictObject({
   error: TeamErrorCodeV1Schema,
-  details: TeamAuthenticationPolicyUnavailableDetailsV1Schema.optional(),
-}).strict().superRefine((value, context) => {
+  details: z.optional(TeamAuthenticationPolicyUnavailableDetailsV1Schema),
+}).check(z.superRefine((value, context) => {
   if (value.details !== undefined && value.error !== 'team_authentication_policy_unavailable') {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['details'],
       message: 'Team authentication-policy details require the matching unavailable error',
     });
   }
-}));
+})));
 export type TeamErrorV1 = z.infer<typeof TeamErrorV1Schema>;
 
 /**

@@ -1,12 +1,12 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { RuntimeActionIdV1 } from '../actionIds.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 
 export type RuntimeActionSpecTextMap = Readonly<Partial<Record<RuntimeActionIdV1, string>>>;
 
-export type RuntimeActionSchemaMap = Readonly<Partial<Record<RuntimeActionIdV1, z.ZodTypeAny>>>;
+export type RuntimeActionSchemaMap = Readonly<Partial<Record<RuntimeActionIdV1, z.ZodMiniType>>>;
 
 export type RuntimeActionSpecFamily = Readonly<{
   approvalPolicies?: Readonly<Partial<Record<RuntimeActionIdV1, PreNormalizedActionSpec['approvalPolicy']>>>;
@@ -17,16 +17,16 @@ export type RuntimeActionSpecFamily = Readonly<{
   outputSchemas?: RuntimeActionSchemaMap;
 }>;
 
-export const PassthroughEmptyObjectSchema = lazyZodSchema(() => z.object({}).passthrough());
+export const PassthroughEmptyObjectSchema = lazyZodSchema(() => z.looseObject({}));
 
 export function refineKindSchema(
-  schema: z.ZodTypeAny,
+  schema: z.ZodMiniType,
   field: string,
   expected: string,
   label: string,
-): z.ZodTypeAny {
-  return schema.refine((value) => (value as Record<string, unknown>)[field] === expected, {
+): z.ZodMiniType {
+  return schema.check(z.refine((value) => (value as Record<string, unknown>)[field] === expected, {
     message: `${label} must be ${expected}.`,
     path: [field],
-  });
+  }));
 }

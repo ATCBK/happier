@@ -13,7 +13,7 @@ import {
   serializeActionSpec,
   SerializedActionDefinitionV1Schema,
 } from '../index.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { projectActionDefinitionForExternalDiscovery } from './actionCatalog.js';
 import { zodSchemaToJsonSchemaObject } from './actionInputJsonSchema.js';
 import { prepareExternalActionResponseEnvelopeV1 } from './externalActionApi.js';
@@ -42,7 +42,7 @@ describe('actionCatalog action-definition adapter', () => {
   });
 
   it('omits unrepresentable optional output metadata without weakening the input contract', () => {
-    const spec = { ...getActionSpec('action.spec.get'), outputSchema: z.object({ data: z.custom<unknown>() }).strict() };
+    const spec = { ...getActionSpec('action.spec.get'), outputSchema: z.strictObject({ data: z.custom<unknown>() }) };
     const definition = actionSpecToActionDefinitionV1(spec);
     expect(definition.id).toBe(spec.id);
     expect(definition.inputSchema).toMatchObject({ type: 'object' });
@@ -97,8 +97,8 @@ describe('actionCatalog action-definition adapter', () => {
         plugin: true,
       },
       inputHints: null,
-      inputSchema: z.object({ id: z.string() }).strict(),
-      outputSchema: z.object({ spec: z.unknown() }).passthrough(),
+      inputSchema: z.strictObject({ id: z.string() }),
+      outputSchema: z.looseObject({ spec: z.unknown() }),
       execution: {
         handler: 'actions.get',
         transport: 'host',
@@ -409,13 +409,13 @@ describe('actionCatalog action-definition adapter', () => {
   it('projects constrained Action inputs and outputs through the shared catalog', () => {
     const spec: ActionSpec = {
       ...getActionSpec('action.spec.get'),
-      inputSchema: z.object({
-        label: z.string().min(2).max(20).regex(/^[a-z-]+$/).describe('Action label'),
-        attempts: z.number().min(1).max(3),
-        tags: z.array(z.string()).min(1).max(2),
+      inputSchema: z.strictObject({
+        label: z.string().check(z.minLength(2), z.maxLength(20), z.regex(/^[a-z-]+$/), z.describe('Action label')),
+        attempts: z.number().check(z.minimum(1), z.maximum(3)),
+        tags: z.array(z.string()).check(z.minLength(1), z.maxLength(2)),
         mode: z.enum(['safe', 'fast']),
-      }).strict().describe('Constrained action input'),
-      outputSchema: z.string().min(2).describe('Result text'),
+      }).check(z.describe('Constrained action input')),
+      outputSchema: z.string().check(z.minLength(2), z.describe('Result text')),
     };
 
     const definition = actionSpecToActionDefinitionV1(spec);

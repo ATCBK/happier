@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { AgentActivityKindV1Schema } from './agentActivityKindV1.js';
 import { AgentActivityStatusV1Schema, type AgentActivityStatusV1 } from './agentActivityStatusV1.js';
@@ -41,14 +41,14 @@ export const SessionAgentActivityEntryV1Schema = z
      * the merge that unions this headline with locally derived entries keys on it, so two spellings
      * of one agent become two rows.
      */
-    entryId: z.string().trim().min(1),
+    entryId: z.string().check(z.trim(), z.minLength(1)),
     kind: AgentActivityKindV1Schema,
-    title: z.string().trim().min(1).max(SESSION_AGENT_ACTIVITY_ENTRY_TITLE_MAX),
+    title: z.string().check(z.trim(), z.minLength(1), z.maxLength(SESSION_AGENT_ACTIVITY_ENTRY_TITLE_MAX)),
     status: AgentActivityStatusV1Schema,
     /** Epoch ms. Absent when no genuine start is known — never back-filled from a finish. */
-    startedAt: z.number().int().nonnegative().optional(),
+    startedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
     /** Epoch ms of the most recent evidence about this entry. */
-    updatedAt: z.number().int().nonnegative(),
+    updatedAt: z.number().check(z.int(), z.nonnegative()),
     /**
      * The durable sidechain holding this entry's transcript, when it has one.
      *
@@ -60,11 +60,11 @@ export const SessionAgentActivityEntryV1Schema = z
      * strip-by-default schema without this field would silently discard it on every entry a
      * predecessor producer published.
      */
-    sidechainId: z.string().trim().min(1).optional(),
+    sidechainId: z.optional(z.string().check(z.trim(), z.minLength(1))),
     /** The run this entry belongs to or is, when the kind has one. */
-    runId: z.string().trim().min(1).optional(),
+    runId: z.optional(z.string().check(z.trim(), z.minLength(1))),
     /** `entryId` of the owning entry. Authorises grouping and layout only — never numeric rollup. */
-    parentId: z.string().trim().min(1).optional(),
+    parentId: z.optional(z.string().check(z.trim(), z.minLength(1))),
     /**
      * Which version of the durable record this entry points at, when its producer versions one.
      *
@@ -83,11 +83,8 @@ export const SessionAgentActivityEntryV1Schema = z
      * happens to write a monotonic decimal string, but that is its private contract with its own
      * record, not a promise every future kind's record has to keep.
      */
-    recordRevision: z.string().trim().min(1).optional(),
-  })
-  // Strip unknown keys (Zod default, stated): a producer that attaches detail has it dropped on
-  // parse as well as at the projection below. Forward-compatible fields are added explicitly.
-  .strip();
+    recordRevision: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  });
 export type SessionAgentActivityEntryV1 = z.infer<typeof SessionAgentActivityEntryV1Schema>;
 
 /**

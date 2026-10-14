@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionIdSchema } from '../idsV1.js';
 import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
@@ -15,7 +15,7 @@ import { ExternalActionMachineRpcExecutionV1Schema } from '../../actions/externa
 export const SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1 =
   'session-pending-enqueue-by-machine-v1' as const;
 
-const SessionPendingTargetMachineIdV1Schema = lazyZodSchema(() => z.string().trim().min(1).max(256));
+const SessionPendingTargetMachineIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 
 export const SessionPendingEnqueueByMachineFieldsV1 = {
   v: z.literal(1),
@@ -25,15 +25,15 @@ export const SessionPendingEnqueueByMachineFieldsV1 = {
   localId: PendingLocalIdSchema,
   content: SessionStoredMessageContentSchema,
   requestedAction: PendingRequestedActionV1Schema,
-  requestEqualityEvidenceV1: SessionInputRequestEqualityEvidenceV1Schema.optional(),
+  requestEqualityEvidenceV1: z.optional(SessionInputRequestEqualityEvidenceV1Schema),
   /** Existing invocation authorization plus exact Machine-signed payload; never raw caller constraints. */
-  externalAction: z.lazy(() => ExternalActionMachineRpcExecutionV1Schema).optional(),
+  externalAction: z.optional(z.lazy(() => ExternalActionMachineRpcExecutionV1Schema)),
 };
 
 /** Shared host-equality boundary for each closed Machine admission epoch. */
 export function refineSessionPendingMachineEqualityEvidenceV1(
   value: { content: z.infer<typeof SessionStoredMessageContentSchema>; requestEqualityEvidenceV1?: z.infer<typeof SessionInputRequestEqualityEvidenceV1Schema> },
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   if (value.content.t === 'plain' && value.requestEqualityEvidenceV1 !== undefined) {
     context.addIssue({
@@ -55,16 +55,15 @@ export function refineSessionPendingMachineEqualityEvidenceV1(
   }
 }
 
-export const SessionPendingEnqueueByMachineRequestV1Schema = lazyZodSchema(() => z.object(SessionPendingEnqueueByMachineFieldsV1)
-  .strict().superRefine(refineSessionPendingMachineEqualityEvidenceV1));
+export const SessionPendingEnqueueByMachineRequestV1Schema = lazyZodSchema(() => z.strictObject(SessionPendingEnqueueByMachineFieldsV1).check(z.superRefine(refineSessionPendingMachineEqualityEvidenceV1)));
 export type SessionPendingEnqueueByMachineRequestV1 = z.infer<
   typeof SessionPendingEnqueueByMachineRequestV1Schema
 >;
 
-export const SessionPendingEnqueueByMachineResponseV1Schema = lazyZodSchema(() => z.object({
+export const SessionPendingEnqueueByMachineResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   result: SessionInputAdmissionResultV1Schema,
-}).strict());
+}));
 export type SessionPendingEnqueueByMachineResponseV1 = z.infer<
   typeof SessionPendingEnqueueByMachineResponseV1Schema
 >;

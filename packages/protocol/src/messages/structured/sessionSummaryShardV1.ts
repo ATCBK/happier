@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { MemoryIndexPolicyV1Schema } from '../../memory/memorySettings.js';
 
 /**
@@ -10,32 +10,32 @@ import { MemoryIndexPolicyV1Schema } from '../../memory/memorySettings.js';
  * This payload is intentionally self-contained so the daemon can rebuild local indexes
  * from transcript history without re-running the summarizer.
  */
-export const SessionSummaryShardV1Schema = lazyZodSchema(() => z.object({
+export const SessionSummaryShardV1Schema = lazyZodSchema(() => z.looseObject({
   v: z.literal(1),
-  seqFrom: z.number().int().min(0),
-  seqTo: z.number().int().min(0),
-  createdAtFromMs: z.number().int().min(0),
-  createdAtToMs: z.number().int().min(0),
-  summary: z.string().min(1),
-  keywords: z.array(z.string().min(1)).default([]),
-  entities: z.array(z.string().min(1)).default([]),
-  decisions: z.array(z.string().min(1)).default([]),
-  memoryPolicy: MemoryIndexPolicyV1Schema.optional(),
-}).passthrough().superRefine((value, ctx) => {
+  seqFrom: z.number().check(z.int(), z.minimum(0)),
+  seqTo: z.number().check(z.int(), z.minimum(0)),
+  createdAtFromMs: z.number().check(z.int(), z.minimum(0)),
+  createdAtToMs: z.number().check(z.int(), z.minimum(0)),
+  summary: z.string().check(z.minLength(1)),
+  keywords: z._default(z.array(z.string().check(z.minLength(1))), []),
+  entities: z._default(z.array(z.string().check(z.minLength(1))), []),
+  decisions: z._default(z.array(z.string().check(z.minLength(1))), []),
+  memoryPolicy: z.optional(MemoryIndexPolicyV1Schema),
+}).check(z.superRefine((value, ctx) => {
   if (value.seqFrom > value.seqTo) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'seqFrom must be <= seqTo',
       path: ['seqFrom'],
     });
   }
   if (value.createdAtFromMs > value.createdAtToMs) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'createdAtFromMs must be <= createdAtToMs',
       path: ['createdAtFromMs'],
     });
   }
-}));
+})));
 
 export type SessionSummaryShardV1 = z.infer<typeof SessionSummaryShardV1Schema>;

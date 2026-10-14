@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   PET_CANONICAL_SPRITESHEET_PATHS_V1,
@@ -17,13 +17,11 @@ export function isCanonicalPetSpritesheetPathV1(value: unknown): value is PetMan
 
 export const PetManifestSpritesheetPathV1Schema = lazyZodSchema(() => z.enum(PET_MANIFEST_SPRITESHEET_PATHS_V1));
 
-export const PetPackageManifestV1Schema = lazyZodSchema(() => z
-  .object({
-    id: z.string().min(1).max(200),
-    displayName: z.string().min(1).max(200),
-    description: z.string().min(1).max(2000),
+export const PetPackageManifestV1Schema = lazyZodSchema(() => z.looseObject({
+    id: z.string().check(z.minLength(1), z.maxLength(200)),
+    displayName: z.string().check(z.minLength(1), z.maxLength(200)),
+    description: z.string().check(z.minLength(1), z.maxLength(2000)),
     spritesheetPath: PetManifestSpritesheetPathV1Schema,
-  })
-  .passthrough());
+  }));
 
 export type PetPackageManifestV1 = z.infer<typeof PetPackageManifestV1Schema>;

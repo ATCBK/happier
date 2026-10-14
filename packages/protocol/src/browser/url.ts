@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 function hasHttpProtocol(value: string): boolean {
   try {
@@ -19,12 +19,12 @@ function isHttpOrigin(value: string): boolean {
   }
 }
 
-export const BrowserHttpUrlV1Schema = lazyZodSchema(() => z.string().trim().url().refine(hasHttpProtocol, {
+export const BrowserHttpUrlV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.url(), z.refine(hasHttpProtocol, {
   message: 'Browser URLs must use http or https.',
-}));
+})));
 export type BrowserHttpUrlV1 = z.infer<typeof BrowserHttpUrlV1Schema>;
 
-export const BrowserHttpOriginV1Schema = lazyZodSchema(() => z.string().trim().url().refine(isHttpOrigin, {
+export const BrowserHttpOriginV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.url(), z.refine(isHttpOrigin, {
   message: 'Browser permission origins must be http/https origins without path, search, or hash.',
-}));
+})));
 export type BrowserHttpOriginV1 = z.infer<typeof BrowserHttpOriginV1Schema>;

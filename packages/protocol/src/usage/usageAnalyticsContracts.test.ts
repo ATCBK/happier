@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { describe, expect, it } from 'vitest';
 
 import * as protocol from '../index.js';
@@ -125,8 +126,8 @@ describe('usageAnalyticsContracts', () => {
     });
 
     expect(request.breakdowns).toEqual([
-      UsageAnalyticsBreakdownDimensionSchema.enum.agent,
-      UsageAnalyticsBreakdownDimensionSchema.enum.model,
+      UsageAnalyticsBreakdownDimensionSchema._zod.def.entries.agent,
+      UsageAnalyticsBreakdownDimensionSchema._zod.def.entries.model,
     ]);
     expect(request.filters?.machineIds).toEqual(['machine-1']);
     expect(UsageAnalyticsQueryRequestSchema.safeParse({ filters: { machineIds: [' '] } }).success).toBe(false);

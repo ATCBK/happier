@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { describe, expect, it } from 'vitest';
 
 import { pluginJsonValuesEqual } from './jsonSchemaValues';
@@ -21,7 +22,7 @@ describe('structural JSON schema', () => {
   });
 
   it('preserves structural JSON constraints in its recursive public projection', () => {
-    const validate = new Ajv({ strict: false }).compile(PluginJsonValueV2Schema.toJSONSchema({ io: 'input', target: 'draft-7' }));
+    const validate = new Ajv({ strict: false }).compile(z.toJSONSchema(PluginJsonValueV2Schema, { io: 'input', target: 'draft-7' }));
     expect(validate({ nested: [1, null, { text: 'value' }] })).toBe(true);
     expect(validate({ nested: [undefined] })).toBe(false);
   });

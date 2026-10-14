@@ -1,5 +1,5 @@
 import { SessionInitialAccessDraftV1Schema } from '../access/sessionInitialAccessDraftV1.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { NonBlankOpaqueIdentifierSchema } from '../../strings/opaqueIdentifier.js';
 
@@ -32,7 +32,7 @@ export type SessionAuthoringJsonValue =
   | SessionAuthoringJsonArray
   | SessionAuthoringJsonObject;
 
-const SessionAuthoringJsonValueSchema: z.ZodType<SessionAuthoringJsonValue> = z.lazy(() =>
+const SessionAuthoringJsonValueSchema: z.ZodMiniType<SessionAuthoringJsonValue> = z.lazy(() =>
   z.union([
     z.null(),
     z.string(),
@@ -43,59 +43,59 @@ const SessionAuthoringJsonValueSchema: z.ZodType<SessionAuthoringJsonValue> = z.
   ]),
 );
 
-export const SyncedSessionAuthoringTerminalV1Schema = z.object({
-  mode: z.enum(['integrated', 'plain', 'tmux', 'windows_terminal', 'windows_console']).optional(),
-  tmux: z.object({
-    sessionName: z.string().optional(),
-    isolated: z.boolean().optional(),
-  }).strict().optional(),
-}).strict();
+export const SyncedSessionAuthoringTerminalV1Schema = z.strictObject({
+  mode: z.optional(z.enum(['integrated', 'plain', 'tmux', 'windows_terminal', 'windows_console'])),
+  tmux: z.optional(z.strictObject({
+    sessionName: z.optional(z.string()),
+    isolated: z.optional(z.boolean()),
+  })),
+});
 
 export const SyncedSessionAuthoringConnectedServicesV1Schema = ConnectedServiceBindingsV2IngressSchema;
 
-export const SessionAuthoringAutomationTriggerDraftV1Schema = z.object({
-  clientId: z.string().trim().min(1),
+export const SessionAuthoringAutomationTriggerDraftV1Schema = z.strictObject({
+  clientId: z.string().check(z.trim(), z.minLength(1)),
   kind: z.enum(['schedule', 'pluginEvent', 'sessionLifecycle']),
   persisted: z.null(),
   enabled: z.boolean(),
-  definition: AutomationTriggerDefinitionSchema.nullable(),
-}).strict().superRefine((trigger, context) => {
+  definition: z.nullable(AutomationTriggerDefinitionSchema),
+}).check(z.superRefine((trigger, context) => {
   if (trigger.definition !== null && trigger.definition.kind !== trigger.kind) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['definition', 'kind'],
       message: 'Automation trigger row kind must match its definition',
     });
   }
-});
+}));
 
-export const SessionAuthoringAutomationV1Schema = z.object({
+export const SessionAuthoringAutomationV1Schema = z.strictObject({
   enabled: z.boolean(),
   name: z.string(),
   description: z.string(),
   triggers: z.array(SessionAuthoringAutomationTriggerDraftV1Schema),
-}).strict().superRefine((automation, context) => {
+}).check(z.superRefine((automation, context) => {
   const clientIds = new Set<string>();
   automation.triggers.forEach((trigger, index) => {
     if (clientIds.has(trigger.clientId)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['triggers', index, 'clientId'],
         message: 'Automation trigger client identities must be unique',
       });
     }
     clientIds.add(trigger.clientId);
   });
-});
+}));
 
 /** Authoring intent; parsing a temporary target does not authorize headless activation. */
 export const SessionAuthoringExecutionTargetV2Schema = z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('machine'),
     target: SessionExecutionTargetV1Schema,
-    selectionOrigin: MachinePoolSelectionOriginV1Schema.optional(),
-  }).strict(),
-  z.object({
+    selectionOrigin: z.optional(MachinePoolSelectionOriginV1Schema),
+  }),
+  z.strictObject({
     kind: z.literal('temporary_computer'),
     serverId: SessionExecutionTargetV1Schema.shape.serverId,
     artifactTarget: RunnerArtifactTargetSchema,
@@ -109,17 +109,17 @@ export const SessionAuthoringExecutionTargetV2Schema = z.discriminatedUnion('kin
      * would need something to keep counting it down, and nothing in this lane
      * owns a timer. The activation service enforces it before materialization.
      */
-    packageExpiresAt: z.number().int().positive().safe().optional(),
-  }).strict(),
+    packageExpiresAt: z.optional(z.number().check(z.int(), z.positive(), z.int())),
+  }),
 ]);
 export type SessionAuthoringExecutionTargetV2 = z.infer<typeof SessionAuthoringExecutionTargetV2Schema>;
 
 /** Synchronized display/recovery reference only; the activation service owns lifecycle and authority. */
-export const TemporaryComputerActivationRefV1Schema = z.object({
+export const TemporaryComputerActivationRefV1Schema = z.strictObject({
   v: z.literal(1),
   activationId: RunnerActivationCreateRequestV1Schema.shape.activationId,
-  createdOnDeviceLabel: z.string().trim().min(1),
-}).strict();
+  createdOnDeviceLabel: z.string().check(z.trim(), z.minLength(1)),
+});
 export type TemporaryComputerActivationRefV1 = z.infer<typeof TemporaryComputerActivationRefV1Schema>;
 
 const ALL_AUTHORING_CONTEXTS = [
@@ -142,7 +142,7 @@ const LIVE_ONLY_CONTEXTS = [
 
 export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
   initialTriggers: {
-    schema: z.array(z.lazy(() => SessionInitialTriggerV1Schema)).optional(),
+    schema: z.optional(z.array(z.lazy(() => SessionInitialTriggerV1Schema))),
     description: 'Session-scoped triggers admitted atomically with a newly authored Session.',
     storageClass: 'template',
     draftStorage: 'sync',
@@ -165,7 +165,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     },
   },
   executionTarget: {
-    schema: SessionAuthoringExecutionTargetV2Schema.nullable(),
+    schema: z.nullable(SessionAuthoringExecutionTargetV2Schema),
     description: 'Exact server-qualified execution target and optional selection provenance for a not-yet-created session.',
     storageClass: 'template',
     draftStorage: 'sync',
@@ -179,7 +179,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     default: null,
   },
   temporaryComputerActivationRef: {
-    schema: TemporaryComputerActivationRefV1Schema.nullable().optional(),
+    schema: z.optional(z.nullable(TemporaryComputerActivationRefV1Schema)),
     description: 'Non-authoritative reference to a pending Temporary computer activation; private launch custody stays on its creating device.',
     storageClass: 'derived',
     draftStorage: 'sync',
@@ -189,7 +189,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     default: null,
   },
   directory: {
-    schema: z.string().trim().min(1),
+    schema: z.string().check(z.trim(), z.minLength(1)),
     description: 'Primary working directory for the authored session.',
     storageClass: 'template',
     draftStorage: 'sync',
@@ -205,7 +205,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     // Which `SessionDirectoryIntentV1` kind the new session is authored with. `managed` means no
     // folder: the target daemon keeps a private one. `directory` above stays the remembered folder,
     // so choosing a folder again restores it. Absent (every older draft) means `path`.
-    schema: z.enum(['path', 'managed']).nullable().optional(),
+    schema: z.optional(z.nullable(z.enum(['path', 'managed']))),
     description: 'Whether the new session uses the directory above or no folder (a private folder kept by the machine).',
     storageClass: 'template',
     draftStorage: 'sync',
@@ -215,7 +215,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     default: null,
   },
   checkoutCreationDraft: {
-    schema: SessionAuthoringCheckoutCreationDraftV1Schema.nullable(),
+    schema: z.nullable(SessionAuthoringCheckoutCreationDraftV1Schema),
     description: 'Worktree creation draft persisted in authoring state before session creation.',
     storageClass: 'template',
     draftStorage: 'sync',
@@ -229,7 +229,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     default: null,
   },
   access: {
-    schema: SessionInitialAccessDraftV1Schema.nullable().optional(),
+    schema: z.optional(z.nullable(SessionInitialAccessDraftV1Schema)),
     description: 'Initial named Session access applied only during fresh creation.',
     storageClass: 'template',
     draftStorage: 'sync',
@@ -238,7 +238,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     defaultEditabilityByContext: { newSession: 'editable' },
   },
   primaryTeamId: {
-    schema: z.string().trim().min(1).nullable().optional(),
+    schema: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
     description: 'Home-local Team context applied only during fresh Session creation.',
     storageClass: 'template',
     draftStorage: 'sync',
@@ -335,7 +335,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     default: null,
   },
   environmentVariables: {
-    schema: z.record(z.string(), z.string()).nullable(),
+    schema: z.nullable(z.record(z.string(), z.string())),
     description: 'Explicit environment-variable overrides applied to the authored session.',
     storageClass: 'template',
     draftStorage: 'exclude',
@@ -350,7 +350,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     default: null,
   },
   resumeSessionId: {
-    schema: NonBlankOpaqueIdentifierSchema.nullable(),
+    schema: z.nullable(NonBlankOpaqueIdentifierSchema),
     description: 'Requested resume session id when session start should attach/reuse an existing runner. The Agent minted it, so it is stored and replayed byte for byte.',
     storageClass: 'template',
     draftStorage: 'sync',
@@ -378,7 +378,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     default: null,
   },
   permissionModeUpdatedAt: {
-    schema: z.number().int().nullable(),
+    schema: z.nullable(z.number().check(z.int())),
     description: 'Timestamp for the last permission-mode change authored into the session configuration.',
     storageClass: 'derived',
     draftStorage: 'exclude',
@@ -409,7 +409,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
       automationNewSession: 'editable', automationExistingSession: 'hidden' },
   },
   modelSelection: {
-    schema: SessionModelSelectionV1Schema.nullable().default(null),
+    schema: z._default(z.nullable(SessionModelSelectionV1Schema), null),
     description: 'Explicit target-bound model selection; null means the agent default/automatic model.',
     storageClass: 'template',
     draftStorage: 'sync',
@@ -424,7 +424,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     default: null,
   },
   modelId: {
-    schema: z.string().trim().min(1).nullable().optional(),
+    schema: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
     description: 'Read-only compatibility field for legacy authored model ids. New writers use modelSelection.',
     storageClass: 'derived',
     draftStorage: 'exclude',
@@ -438,7 +438,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     },
   },
   modelUpdatedAt: {
-    schema: z.number().int().nullable().optional(),
+    schema: z.optional(z.nullable(z.number().check(z.int()))),
     description: 'Read-only compatibility timestamp for legacy authored model ids.',
     storageClass: 'derived',
     draftStorage: 'exclude',
@@ -467,11 +467,11 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     default: null,
   },
   connectedServices: {
-    schema: SessionAuthoringJsonValueSchema.nullable(),
+    schema: z.nullable(SessionAuthoringJsonValueSchema),
     description: 'Connected-services binding payload authored for the session runtime.',
     storageClass: 'template',
     draftStorage: 'sync',
-    draftSchema: SyncedSessionAuthoringConnectedServicesV1Schema.nullable(),
+    draftSchema: z.nullable(SyncedSessionAuthoringConnectedServicesV1Schema),
     contexts: [...ALL_AUTHORING_CONTEXTS],
     defaultSurface: 'section',
     defaultEditabilityByContext: {
@@ -487,7 +487,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     description: 'Terminal/runtime attach preferences authored for the session.',
     storageClass: 'template',
     draftStorage: 'sync',
-    draftSchema: SyncedSessionAuthoringTerminalV1Schema.nullable(),
+    draftSchema: z.nullable(SyncedSessionAuthoringTerminalV1Schema),
     contexts: [...ALL_AUTHORING_CONTEXTS],
     defaultSurface: 'section',
     defaultEditabilityByContext: {
@@ -538,7 +538,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     default: null,
   },
   runtimeDescriptorV1: {
-    schema: RuntimeDescriptorV1Schema.nullable(),
+    schema: z.nullable(RuntimeDescriptorV1Schema),
     description: 'Opaque Agent-owned runtime selection bound to the selected Agent.',
     storageClass: 'template',
     draftStorage: 'sync',
@@ -583,7 +583,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     default: null,
   },
   existingSessionId: {
-    schema: z.string().trim().min(1).nullable(),
+    schema: z.nullable(z.string().check(z.trim(), z.minLength(1))),
     description: 'Bound existing-session target id for existing-session automations and related authoring contexts.',
     storageClass: 'inheritedOnly',
     draftStorage: 'exclude',
@@ -595,7 +595,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     default: null,
   },
   sessionEncryptionMode: {
-    schema: z.enum(['e2ee', 'plain']).nullable(),
+    schema: z.nullable(z.enum(['e2ee', 'plain'])),
     description: 'Storage-encryption mode for authored existing-session automation targets.',
     storageClass: 'inheritedOnly',
     draftStorage: 'exclude',
@@ -607,7 +607,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     default: null,
   },
   sessionEncryptionKeyBase64: {
-    schema: z.string().trim().min(1).nullable(),
+    schema: z.nullable(z.string().check(z.trim(), z.minLength(1))),
     description: 'Optional data key required to re-open encrypted existing-session targets.',
     storageClass: 'inheritedOnly',
     draftStorage: 'exclude',
@@ -619,7 +619,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     default: null,
   },
   sessionEncryptionVariant: {
-    schema: z.literal('dataKey').nullable(),
+    schema: z.nullable(z.literal('dataKey')),
     description: 'Encryption key variant for existing-session automation targets.',
     storageClass: 'inheritedOnly',
     draftStorage: 'exclude',
@@ -631,7 +631,7 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     default: null,
   },
   automation: {
-    schema: SessionAuthoringAutomationV1Schema.nullable(),
+    schema: z.nullable(SessionAuthoringAutomationV1Schema),
     description: 'Inline automation metadata attached to the current authored session intent.',
     storageClass: 'template',
     draftStorage: 'sync',

@@ -1,9 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
+import Ajv2020 from 'ajv/dist/2020.js';
+import { z } from 'zod/mini';
 import * as m from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { AutomationDefinitionCreateRequestSchema } from '../automations/automationApiV3.js';
-import { listActionSpecs } from './actionSpecs.js';
 
 import {
   ActionJsonSchemaProjectionError,
@@ -24,22 +23,22 @@ describe('actionInputJsonSchema', () => {
     }
   });
   it('compacts repeated Action schemas without weakening their advertised inputs', () => {
-    const target = z.object({ kind: z.literal('workspace'), path: z.string().min(1) }).strict();
-    const schema = z.object({ source: target, destination: target,
-      archives: z.array(target).optional(), alternatives: z.array(target).optional(),
-    }).strict();
+    const target = z.strictObject({ kind: z.literal('workspace'), path: z.string().check(z.minLength(1)) });
+    const schema = z.strictObject({ source: target, destination: target,
+      archives: z.optional(z.array(target)), alternatives: z.optional(z.array(target)),
+    });
     const inline = zodSchemaToJsonSchemaObject(schema);
     const compact = zodSchemaToJsonSchemaObject(schema, { reused: 'ref' });
     expect(JSON.stringify(compact).length).toBeLessThan(JSON.stringify(inline).length);
-    const advertised = z.fromJSONSchema(compact);
-    expect(advertised.safeParse({ source: { kind: 'workspace', path: '/a' }, destination: { kind: 'workspace', path: '/b' } }).success).toBe(true);
-    expect(advertised.safeParse({ source: { kind: 'workspace', path: '' }, destination: { kind: 'workspace', path: '/b' } }).success).toBe(false);
-    expect(advertised.safeParse({ source: { kind: 'workspace', path: '/a' }, destination: { kind: 'project', path: '/b' } }).success).toBe(false);
-    expect(advertised.safeParse({ source: { kind: 'workspace', path: '/a', secret: true }, destination: { kind: 'workspace', path: '/b' } }).success).toBe(false);
+    const advertised = new Ajv2020({ strict: false }).compile(compact);
+    expect(advertised({ source: { kind: 'workspace', path: '/a' }, destination: { kind: 'workspace', path: '/b' } })).toBe(true);
+    expect(advertised({ source: { kind: 'workspace', path: '' }, destination: { kind: 'workspace', path: '/b' } })).toBe(false);
+    expect(advertised({ source: { kind: 'workspace', path: '/a' }, destination: { kind: 'project', path: '/b' } })).toBe(false);
+    expect(advertised({ source: { kind: 'workspace', path: '/a', secret: true }, destination: { kind: 'workspace', path: '/b' } })).toBe(false);
   });
-  it.each(listActionSpecs().filter(spec => spec.surfaces.mcp))(
-    'projects the MCP input and output for $id from the real registry',
-    spec => {
+  it('projects the MCP input and output for every advertised Action from the real registry', async () => {
+    const { listActionSpecs } = await import('./actionSpecs.js');
+    for (const spec of listActionSpecs().filter(spec => spec.surfaces.mcp)) {
       // MCP eagerly registers every advertised input; a missing export must
       // fail this census rather than being skipped and aborting initialize.
       expect(spec.inputSchema, spec.id).toBeDefined();
@@ -48,13 +47,13 @@ describe('actionInputJsonSchema', () => {
         const projected = zodSchemaToJsonSchemaObject(schema, { target: 'draft-7' });
         expect(JSON.parse(JSON.stringify(projected))).toEqual(projected);
       }
-    },
-  );
+    }
+  });
 
   it('projects genuine Mini lazy children without losing their input constraints', () => {
-    const schema = z.object({
+    const schema = z.strictObject({
       name: m.lazy(() => m.string().check(m.minLength(2))),
-    }).strict();
+    });
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
       expect(zodSchemaToJsonSchemaObject(schema, { target })).toMatchObject({
         type: 'object',
@@ -66,13 +65,13 @@ describe('actionInputJsonSchema', () => {
   });
 
   it('preserves the canonical JSON Schema constraints and descriptions that Action inputs advertise', () => {
-    const schema = z.object({
-      name: z.string().min(2).max(12).regex(/^[a-z]+$/).describe('Lowercase action name'),
-      retries: z.number().min(1).max(5).describe('Retry limit'),
-      tags: z.array(z.string().min(1)).min(1).max(3).describe('Action tags'),
-      mode: z.enum(['safe', 'fast']).describe('Execution mode'),
-      target: z.union([z.literal('workspace'), z.literal('project')]).describe('Execution target'),
-    }).strict().describe('Agent action input');
+    const schema = z.strictObject({
+      name: z.string().check(z.minLength(2), z.maxLength(12), z.regex(/^[a-z]+$/), z.describe('Lowercase action name')),
+      retries: z.number().check(z.minimum(1), z.maximum(5), z.describe('Retry limit')),
+      tags: z.array(z.string().check(z.minLength(1))).check(z.minLength(1), z.maxLength(3), z.describe('Action tags')),
+      mode: z.enum(['safe', 'fast']).check(z.describe('Execution mode')),
+      target: z.union([z.literal('workspace'), z.literal('project')]).check(z.describe('Execution target')),
+    }).check(z.describe('Agent action input'));
 
     const json = zodSchemaToJsonSchemaObject(schema);
 
@@ -116,7 +115,7 @@ describe('actionInputJsonSchema', () => {
         },
       },
     });
-    expect(json).toEqual(schema.toJSONSchema({
+    expect(json).toEqual(z.toJSONSchema(schema, {
       io: 'input',
       target: 'draft-2020-12',
       unrepresentable: 'throw',
@@ -125,7 +124,7 @@ describe('actionInputJsonSchema', () => {
 
   it('projects the same Action contract to draft-07 for consumers that require that dialect', () => {
     const json = zodSchemaToJsonSchemaObject(
-      z.object({ value: z.string().trim().min(1) }).strict(),
+      z.strictObject({ value: z.string().check(z.trim(), z.minLength(1)) }),
       { target: 'draft-7' },
     );
 
@@ -139,14 +138,14 @@ describe('actionInputJsonSchema', () => {
   });
 
   it('uses the canonical open-object projection for passthrough schemas', () => {
-    const json = zodSchemaToJsonSchemaObject(z.object({ value: z.string() }).passthrough());
+    const json = zodSchemaToJsonSchemaObject(z.looseObject({ value: z.string() }));
 
     expect(json).toMatchObject({ type: 'object' });
     expect(json.additionalProperties).toEqual({});
   });
 
   it('does not leak Zod standard-schema metadata into the JSON boundary', () => {
-    const json = zodSchemaToJsonSchemaObject(z.object({ value: z.string() }).strict());
+    const json = zodSchemaToJsonSchemaObject(z.strictObject({ value: z.string() }));
 
     expect(Object.getOwnPropertyDescriptor(json, '~standard')).toBeUndefined();
   });
@@ -167,13 +166,11 @@ describe('actionInputJsonSchema', () => {
   });
 
   it('converts a zod object schema into a JSON schema object (no refs)', () => {
-    const schema = z
-      .object({
-        sessionId: z.string().min(1).optional(),
-        message: z.string().min(1),
-        flags: z.array(z.string().min(1)).optional(),
-      })
-      .passthrough();
+    const schema = z.looseObject({
+        sessionId: z.optional(z.string().check(z.minLength(1))),
+        message: z.string().check(z.minLength(1)),
+        flags: z.optional(z.array(z.string().check(z.minLength(1)))),
+      });
 
     const json = zodSchemaToJsonSchemaObject(schema);
 
@@ -206,23 +203,24 @@ describe('actionInputJsonSchema', () => {
   });
 });
 
-it('projects Classic roots with genuine Mini children without weakening typed refusals', () => {
- const mini = lazyZodSchema(() => z.object({ name: m.string().check(m.trim(),m.minLength(1)), count: m._default(m.number().check(m.int()),3) }).strict());
- const classic = z.object({ name: z.string().trim().min(1), count: z.number().int().default(3) }).strict();
+it('projects lazy Mini roots and children without weakening typed refusals', () => {
+ const wrapped = lazyZodSchema(() => z.strictObject({ name: m.string().check(m.trim(),m.minLength(1)), count: m._default(m.number().check(m.int()),3) }));
+ const concrete = z.strictObject({ name: z.string().check(z.trim(), z.minLength(1)), count: z._default(z.number().check(z.int()), 3) });
  for(const target of ['draft-7','draft-2020-12'] as const) {
-  expect(zodSchemaToJsonSchemaObject(mini,{target})).toEqual(zodSchemaToJsonSchemaObject(classic,{target}));
-  const unsupported = lazyZodSchema(() => z.object({ value: m.date() }).strict());
+  expect(zodSchemaToJsonSchemaObject(wrapped,{target})).toEqual(zodSchemaToJsonSchemaObject(concrete,{target}));
+  const unsupported = lazyZodSchema(() => z.strictObject({ value: m.date() }));
   expect(()=>zodSchemaToJsonSchemaObject(unsupported,{target})).toThrow(ActionJsonSchemaProjectionError);
   try { zodSchemaToJsonSchemaObject(unsupported,{target}); } catch(error) {
    expect(error).toMatchObject({name:'ActionJsonSchemaProjectionError',code:'action_schema_unrepresentable'});
   }
  }
- expect(mini.parse({name:' kept '})).toEqual(classic.parse({name:' kept '}));
- expect(()=>mini.parse({name:''})).toThrow(z.ZodError);
+ expect(wrapped.parse({name:' kept '})).toEqual(concrete.parse({name:' kept '}));
+ expect(()=>wrapped.parse({name:''})).toThrow(z.core.$ZodError);
 });
-it('keeps ref-rich lazy Action roots at their concrete public projection', () => {
- const repeated=z.object({id:z.string().min(1)}).strict().describe('Repeated argument');
- const concrete=z.object({first:repeated,second:repeated}).strict();
+it('keeps ref-rich lazy Action roots at their concrete public projection', async () => {
+ const { AutomationDefinitionCreateRequestSchema } = await import('../automations/automationApiV3.js');
+ const repeated=z.strictObject({id:z.string().check(z.minLength(1))}).check(z.describe('Repeated argument'));
+ const concrete=z.strictObject({first:repeated,second:repeated});
  for(const target of ['draft-7','draft-2020-12'] as const) {
   expect(zodSchemaToJsonSchemaObject(lazyZodSchema(()=>concrete),{target})).toEqual(zodSchemaToJsonSchemaObject(concrete,{target}));
   const automation=zodSchemaToJsonSchemaObject(AutomationDefinitionCreateRequestSchema,{target});

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { actionSpecToActionDefinitionV1, serializeActionSpec } from './actionCatalog.js';
 import { actionCliDerivedDefault } from './actionCliProjection.js';
@@ -10,11 +10,11 @@ import {
   type ActionSpec,
 } from './actionSpecs.js';
 
-const CallerSchema = z.object({
-  sessionId: z.string().min(1),
-  message: z.string().min(1),
-  run: z.string().min(1).optional(),
-}).strict();
+const CallerSchema = z.strictObject({
+  sessionId: z.string().check(z.minLength(1)),
+  message: z.string().check(z.minLength(1)),
+  run: z.optional(z.string().check(z.minLength(1))),
+});
 
 function baseSpec(overrides: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -125,7 +125,7 @@ describe('ActionSpec.cli declaration', () => {
   it('checks positionals against the declared CLI caller schema, not canonical input', () => {
     const parsed = ActionSpecSchema.safeParse(baseSpec({
       // `run` exists only on the caller shape; the binder turns it into a recipient.
-      inputSchema: z.object({ sessionId: z.string(), message: z.string() }).strict(),
+      inputSchema: z.strictObject({ sessionId: z.string(), message: z.string() }),
       cli: {
         commands: [{ path: ['send'], positionals: ['sessionId', 'message', 'run'] }],
         inputSchema: CallerSchema,

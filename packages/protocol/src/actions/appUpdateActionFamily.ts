@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { PreNormalizedActionSpec } from './actionSpecs.js';
 import { UpdateItemStateSchema, UpdateItemActionVerbSchema } from './updatesActionFamily.js';
 
@@ -9,19 +9,19 @@ export type AppUpdateActionId = typeof APP_UPDATE_ACTION_IDS[number];
 export function isAppUpdateActionId(value: string): value is AppUpdateActionId {
   return (APP_UPDATE_ACTION_IDS as readonly string[]).includes(value);
 }
-const EmptyInputSchema = lazyZodSchema(() => z.object({}).strict());
+const EmptyInputSchema = lazyZodSchema(() => z.strictObject({}));
 export const AppUpdateActionInputSchemas = {
   'app.updates.get': EmptyInputSchema, 'app.updates.check': EmptyInputSchema,
   'app.updates.update': EmptyInputSchema, 'app.updates.retry': EmptyInputSchema, 'app.updates.restart': EmptyInputSchema,
-  'app.updates.skip': z.object({ version: z.string().trim().min(1) }).strict(),
+  'app.updates.skip': z.strictObject({ version: z.string().check(z.trim(), z.minLength(1)) }),
 } as const;
-export const AppUpdateStatusResultSchema = lazyZodSchema(() => z.object({
+export const AppUpdateStatusResultSchema = lazyZodSchema(() => z.strictObject({
   channel: z.enum(['desktop', 'native-store', 'web-ui', 'ota', 'none']),
   state: UpdateItemStateSchema,
-  currentVersion: z.string().nullable(), latestVersion: z.string().nullable(), checkedAt: z.number().nullable(),
-  action: UpdateItemActionVerbSchema.nullable(), skipped: z.boolean(), canSkip: z.boolean(),
-}).strict());
-const OperationResultSchema = lazyZodSchema(() => z.object({ status: z.literal('requested') }).strict());
+  currentVersion: z.nullable(z.string()), latestVersion: z.nullable(z.string()), checkedAt: z.nullable(z.number()),
+  action: z.nullable(UpdateItemActionVerbSchema), skipped: z.boolean(), canSkip: z.boolean(),
+}));
+const OperationResultSchema = lazyZodSchema(() => z.strictObject({ status: z.literal('requested') }));
 export const AppUpdateActionOutputSchemas = {
   'app.updates.get': AppUpdateStatusResultSchema,
   'app.updates.check': OperationResultSchema, 'app.updates.update': OperationResultSchema,

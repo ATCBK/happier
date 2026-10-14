@@ -1,57 +1,57 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const TerminalIdSchema = lazyZodSchema(() => z.string().min(1).max(2000));
+const TerminalIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(2000)));
 const TerminalModifierSchema = lazyZodSchema(() => z.enum(['shift', 'ctrl', 'alt', 'meta']));
 
 export const TerminalInputEventSchema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({
+  z.strictObject({
     t: z.literal('text'),
-    text: z.string().max(100_000),
-  }).strict(),
-  z.object({
+    text: z.string().check(z.maxLength(100_000)),
+  }),
+  z.strictObject({
     t: z.literal('key'),
-    key: z.string().min(1).max(200),
-    modifiers: z.array(TerminalModifierSchema).max(4).default([]),
-  }).strict(),
-  z.object({
+    key: z.string().check(z.minLength(1), z.maxLength(200)),
+    modifiers: z._default(z.array(TerminalModifierSchema).check(z.maxLength(4)), []),
+  }),
+  z.strictObject({
     t: z.literal('paste'),
-    text: z.string().max(1_000_000),
+    text: z.string().check(z.maxLength(1_000_000)),
     bracketed: z.boolean(),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     t: z.literal('ime'),
     phase: z.enum(['start', 'update', 'commit', 'cancel']),
-    text: z.string().max(100_000).optional(),
-  }).strict(),
-  z.object({
+    text: z.optional(z.string().check(z.maxLength(100_000))),
+  }),
+  z.strictObject({
     t: z.literal('mouse'),
     kind: z.enum(['down', 'up', 'move', 'wheel']),
-    button: z.number().int().min(0).max(8).optional(),
-    x: z.number().int().min(0).max(10_000),
-    y: z.number().int().min(0).max(10_000),
-    modifiers: z.array(TerminalModifierSchema).max(4).default([]),
-  }).strict(),
-  z.object({
+    button: z.optional(z.number().check(z.int(), z.minimum(0), z.maximum(8))),
+    x: z.number().check(z.int(), z.minimum(0), z.maximum(10_000)),
+    y: z.number().check(z.int(), z.minimum(0), z.maximum(10_000)),
+    modifiers: z._default(z.array(TerminalModifierSchema).check(z.maxLength(4)), []),
+  }),
+  z.strictObject({
     t: z.literal('resize'),
-    cols: z.number().int().min(2).max(500),
-    rows: z.number().int().min(2).max(500),
-  }).strict(),
+    cols: z.number().check(z.int(), z.minimum(2), z.maximum(500)),
+    rows: z.number().check(z.int(), z.minimum(2), z.maximum(500)),
+  }),
 ]));
 export type TerminalInputEvent = z.infer<typeof TerminalInputEventSchema>;
 
-export const TerminalStreamInputRequestSchema = lazyZodSchema(() => z.object({
+export const TerminalStreamInputRequestSchema = lazyZodSchema(() => z.strictObject({
   terminalId: TerminalIdSchema,
   event: TerminalInputEventSchema,
-}).strict());
+}));
 export type TerminalStreamInputRequest = z.infer<typeof TerminalStreamInputRequestSchema>;
 
 export const TerminalStreamInputResponseSchema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true) }).strict(),
-  z.object({
+  z.strictObject({ ok: z.literal(true) }),
+  z.strictObject({
     ok: z.literal(false),
-    code: z.string().min(1).max(200),
-    message: z.string().min(1).max(2000),
-  }).strict(),
+    code: z.string().check(z.minLength(1), z.maxLength(200)),
+    message: z.string().check(z.minLength(1), z.maxLength(2000)),
+  }),
 ]));
 export type TerminalStreamInputResponse = z.infer<typeof TerminalStreamInputResponseSchema>;

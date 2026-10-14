@@ -1,23 +1,23 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { SessionBoardTabIdSchema, SessionSurfaceItemIdSchema } from './ids.js';
 import { WidgetSessionBoardWidthV1Schema } from '../../widgets/widgetPresentationV1.js';
 
 export const SessionBoardItemWidthSchema = WidgetSessionBoardWidthV1Schema;
 export const SessionBoardItemFrameStyleSchema = lazyZodSchema(() => z.enum(['card', 'plain']));
-export const SessionBoardLayoutV1Schema = lazyZodSchema(() => z.object({
+export const SessionBoardLayoutV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  tabs: z.array(z.object({
+  tabs: z.array(z.strictObject({
     id: SessionBoardTabIdSchema,
-    title: z.string().trim(),
-    items: z.array(z.object({
+    title: z.string().check(z.trim()),
+    items: z.array(z.strictObject({
       itemId: SessionSurfaceItemIdSchema,
       width: SessionBoardItemWidthSchema,
-      frameStyle: SessionBoardItemFrameStyleSchema.optional(),
-    }).strict()),
-  }).strict()),
-}).strict().superRefine((layout, context) => {
+      frameStyle: z.optional(SessionBoardItemFrameStyleSchema),
+    })),
+  })),
+}).check(z.superRefine((layout, context) => {
   const tabs = new Set<string>();
   layout.tabs.forEach((tab, tabIndex) => {
     if (tabs.has(tab.id)) context.addIssue({ code: 'custom', path: ['tabs', tabIndex, 'id'], message: 'Duplicate Board view identity' });
@@ -28,7 +28,7 @@ export const SessionBoardLayoutV1Schema = lazyZodSchema(() => z.object({
       items.add(item.itemId);
     });
   });
-}));
+})));
 export type SessionBoardItemWidth = z.infer<typeof SessionBoardItemWidthSchema>;
 /** Persisted layout normalizes additive fields; mutations still use the closed schema. */
 export const SessionBoardLayoutV1StoredSchema = createStoredReadSchema(SessionBoardLayoutV1Schema);

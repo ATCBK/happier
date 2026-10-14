@@ -1,7 +1,7 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const boundedId = z.string().trim().min(1).max(512);
+const boundedId = z.string().check(z.trim(), z.minLength(1), z.maxLength(512));
 
 /**
  * Every destructive consequence a single handoff destination decision can
@@ -21,22 +21,19 @@ export type HandoffTargetApprovalConsequenceV1 = typeof HANDOFF_TARGET_APPROVAL_
  * once. It is durable only as approval subject data and is never
  * caller-supplied Action/SDK input.
  */
-export const HandoffTargetReplacementApprovalV1Schema = lazyZodSchema(() => z.object({
+export const HandoffTargetReplacementApprovalV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  consequences: z.array(z.enum(HANDOFF_TARGET_APPROVAL_CONSEQUENCES_V1))
-    .min(1)
-    .max(HANDOFF_TARGET_APPROVAL_CONSEQUENCES_V1.length)
-    .refine((consequences) => consequences.every((consequence, index) => (
+  consequences: z.array(z.enum(HANDOFF_TARGET_APPROVAL_CONSEQUENCES_V1)).check(z.minLength(1), z.maxLength(HANDOFF_TARGET_APPROVAL_CONSEQUENCES_V1.length), z.refine((consequences) => consequences.every((consequence, index) => (
       index === 0
       || HANDOFF_TARGET_APPROVAL_CONSEQUENCES_V1.indexOf(consequence)
         > HANDOFF_TARGET_APPROVAL_CONSEQUENCES_V1.indexOf(consequences[index - 1]!)
-    )), 'handoff target approval consequences must be unique and canonically ordered'),
+    )), 'handoff target approval consequences must be unique and canonically ordered')),
   serverId: boundedId,
   machineId: boundedId,
-  canonicalRoot: z.string().min(1).max(4096),
-  rootFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+  canonicalRoot: z.string().check(z.minLength(1), z.maxLength(4096)),
+  rootFingerprint: z.string().check(z.regex(/^[a-f0-9]{64}$/u)),
   operationId: boundedId,
-}).strict());
+}));
 
 export type HandoffTargetReplacementApprovalV1 = z.infer<
   typeof HandoffTargetReplacementApprovalV1Schema

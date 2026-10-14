@@ -1,28 +1,28 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '../json/storedReadSchema.js';
 import { ProviderConnectionDisplaySnapshotV1Schema } from './sessions/bindingMetadataV1.js';
 import { SessionModelSelectionV1Schema } from './selection/v1.js';
 import { ACCOUNT_SETTING_DEFINITIONS, type AccountSettingsDefaults } from '../account/settings/accountSettings.js';
 
-const CanonicalFavoriteModelSelectionV1Schema = z.object({
+const CanonicalFavoriteModelSelectionV1Schema = z.strictObject({
     selection: SessionModelSelectionV1Schema,
-    catalogAgentId: z.string().optional(),
-    builtInAgentId: z.string().nullable().optional(),
-    configuredBackendId: z.string().nullable().optional(),
-    backendLabel: z.string().optional(),
-    modelLabel: z.string().optional(),
-    providerDisplaySnapshot: ProviderConnectionDisplaySnapshotV1Schema.optional(),
-    addedAtMs: z.number().int().nonnegative().optional(),
-}).strict().superRefine((value, context) => {
+    catalogAgentId: z.optional(z.string()),
+    builtInAgentId: z.optional(z.nullable(z.string())),
+    configuredBackendId: z.optional(z.nullable(z.string())),
+    backendLabel: z.optional(z.string()),
+    modelLabel: z.optional(z.string()),
+    providerDisplaySnapshot: z.optional(ProviderConnectionDisplaySnapshotV1Schema),
+    addedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+}).check(z.superRefine((value, context) => {
     const ref = value.selection.ref;
     if (ref.providerConnectionId === null && ref.modelId.trim() === 'default') {
         context.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ['selection', 'ref', 'modelId'],
             message: 'Agent default is represented by the absence of a favorite selection',
         });
     }
-});
+}));
 
 const LegacyFavoriteModelSelectionV1Keys = new Set([
     'backendTargetKey',
@@ -95,18 +95,15 @@ function normalizeFavoriteModelSelection(value: unknown, storedRead = false): un
 }
 
 export const FavoriteModelSelectionV1Schema = defineStoredReadProjection(
-    z.preprocess(value => normalizeFavoriteModelSelection(value), CanonicalFavoriteModelSelectionV1Schema),
-    () => z.preprocess(
-        value => normalizeFavoriteModelSelection(value, true),
-        createStoredReadSchema(CanonicalFavoriteModelSelectionV1Schema),
-    ),
+    z.pipe(z.transform(value => normalizeFavoriteModelSelection(value)), CanonicalFavoriteModelSelectionV1Schema),
+    () => z.pipe(z.transform(value => normalizeFavoriteModelSelection(value, true)), createStoredReadSchema(CanonicalFavoriteModelSelectionV1Schema)),
 );
 export const StoredFavoriteModelSelectionV1Schema = createStoredReadSchema(FavoriteModelSelectionV1Schema);
 
 export type FavoriteModelSelectionV1 = z.infer<typeof FavoriteModelSelectionV1Schema>;
 export type RetainedFavoriteModelSelectionsV1 = AccountSettingsDefaults['favoriteModelSelectionsV1'];
 
-export const ModelFavoriteMutationV1Schema = z.object({ selection: CanonicalFavoriteModelSelectionV1Schema, favorite: z.boolean() }).strict();
+export const ModelFavoriteMutationV1Schema = z.strictObject({ selection: CanonicalFavoriteModelSelectionV1Schema, favorite: z.boolean() });
 export type ModelFavoriteMutationV1 = z.infer<typeof ModelFavoriteMutationV1Schema>;
 
 /** Exact-tuple membership intent; unrelated and unreadable retained entries stay untouched. */

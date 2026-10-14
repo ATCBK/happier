@@ -57,7 +57,7 @@ import * as scm from '../scm/index.js';
 import * as branches from '../scm/branches.js';
 import * as stash from '../scm/stash.js';
 import * as worktrees from '../scm/worktrees.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ScmHistoryEntriesInputV1Schema, ScmHistoryEntriesResponseSchema } from '../scm/entriesHistoryV1.js';
 import type { ActionId } from './actionIds.js';
 import type { PreNormalizedActionSpec } from './actionSpecs.js';
@@ -65,8 +65,8 @@ import type { PreNormalizedActionSpec } from './actionSpecs.js';
 /** Named metadata keeps declaration emission bounded without widening the wire schemas. */
 export type ScmActionSpecDefinition<
   TId extends ActionId,
-  TInput extends z.ZodTypeAny,
-  TOutput extends z.ZodTypeAny,
+  TInput extends z.ZodMiniType,
+  TOutput extends z.ZodMiniType,
 > = Omit<PreNormalizedActionSpec, 'id' | 'inputSchema' | 'outputSchema'> & Readonly<{
   id: TId;
   inputSchema: TInput;
@@ -75,8 +75,8 @@ export type ScmActionSpecDefinition<
 
 function defineScmActionSpec<
   const TId extends ActionId,
-  TInput extends z.ZodTypeAny,
-  TOutput extends z.ZodTypeAny,
+  TInput extends z.ZodMiniType,
+  TOutput extends z.ZodMiniType,
 >(spec: ScmActionSpecDefinition<TId, TInput, TOutput>): ScmActionSpecDefinition<TId, TInput, TOutput> {
   return spec;
 }

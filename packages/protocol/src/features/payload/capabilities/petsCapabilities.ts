@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   BUILT_IN_PET_IDS_V1,
@@ -8,7 +8,7 @@ import {
 } from '../../../pets/constants.js';
 
 function positiveIntWithDefault(defaultValue: number) {
-  return z.number().int().positive().optional().default(defaultValue);
+  return z._default(z.optional(z.number().check(z.int(), z.positive())), defaultValue);
 }
 
 export const PetsPackageLimitsCapabilitiesSchema = lazyZodSchema(() => z.object({
@@ -36,7 +36,7 @@ export const DEFAULT_PETS_PACKAGE_LIMITS_CAPABILITIES: PetsPackageLimitsCapabili
 };
 
 export const PetsCompanionCapabilitiesSchema = lazyZodSchema(() => z.object({
-  builtInPetIds: z.array(z.string().min(1).max(200)).optional().default([...BUILT_IN_PET_IDS_V1]),
+  builtInPetIds: z._default(z.optional(z.array(z.string().check(z.minLength(1), z.maxLength(200)))), [...BUILT_IN_PET_IDS_V1]),
 }));
 
 export type PetsCompanionCapabilities = z.infer<typeof PetsCompanionCapabilitiesSchema>;
@@ -51,12 +51,10 @@ export type PetsEncryptedCustomPetSyncPolicy = z.infer<typeof PetsEncryptedCusto
 export const PetsSyncSupportedMediaTypeSchema = lazyZodSchema(() => z.enum(PET_SYNC_SUPPORTED_MEDIA_TYPES_V1));
 export type PetsSyncSupportedMediaType = z.infer<typeof PetsSyncSupportedMediaTypeSchema>;
 
-export const PetsSyncCapabilitiesSchema = lazyZodSchema(() => PetsPackageLimitsCapabilitiesSchema.extend({
-  supportedMediaTypes: z
-    .array(PetsSyncSupportedMediaTypeSchema)
-    .optional()
-    .default([...PET_SYNC_SUPPORTED_MEDIA_TYPES_V1]),
-  encryptedCustomPetSyncPolicy: PetsEncryptedCustomPetSyncPolicySchema.optional().default('disabled'),
+export const PetsSyncCapabilitiesSchema = lazyZodSchema(() => z.extend(PetsPackageLimitsCapabilitiesSchema, {
+  supportedMediaTypes: z._default(z.optional(z
+    .array(PetsSyncSupportedMediaTypeSchema)), [...PET_SYNC_SUPPORTED_MEDIA_TYPES_V1]),
+  encryptedCustomPetSyncPolicy: z._default(z.optional(PetsEncryptedCustomPetSyncPolicySchema), 'disabled'),
 }));
 
 export type PetsSyncCapabilities = z.infer<typeof PetsSyncCapabilitiesSchema>;
@@ -68,9 +66,9 @@ export const DEFAULT_PETS_SYNC_CAPABILITIES: PetsSyncCapabilities = {
 };
 
 export const PetsCapabilitiesSchema = lazyZodSchema(() => z.object({
-  companion: PetsCompanionCapabilitiesSchema.optional().default(DEFAULT_PETS_COMPANION_CAPABILITIES),
-  limits: PetsPackageLimitsCapabilitiesSchema.optional().default(DEFAULT_PETS_PACKAGE_LIMITS_CAPABILITIES),
-  sync: PetsSyncCapabilitiesSchema.optional().default(DEFAULT_PETS_SYNC_CAPABILITIES),
+  companion: z._default(z.optional(PetsCompanionCapabilitiesSchema), DEFAULT_PETS_COMPANION_CAPABILITIES),
+  limits: z._default(z.optional(PetsPackageLimitsCapabilitiesSchema), DEFAULT_PETS_PACKAGE_LIMITS_CAPABILITIES),
+  sync: z._default(z.optional(PetsSyncCapabilitiesSchema), DEFAULT_PETS_SYNC_CAPABILITIES),
 }));
 
 export type PetsCapabilities = z.infer<typeof PetsCapabilitiesSchema>;

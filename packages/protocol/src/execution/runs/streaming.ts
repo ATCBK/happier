@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { VoiceAssistantActionSchema } from '../../voice/actions.js';
 import { VoiceAgentOutputEventV1Schema } from '../../voice/outputEvents.js';
@@ -11,14 +11,14 @@ export {
 } from './runPrimitives.js';
 
 // Streaming turn IO (V1: used for intent='voice_agent').
-export const ExecutionRunTurnStreamStartRequestSchema = lazyZodSchema(() => z.object({
-  runId: z.string().min(1),
-  message: z.string().min(1),
-  displayMessage: z.string().min(1).optional(),
-  resume: z.boolean().optional(),
+export const ExecutionRunTurnStreamStartRequestSchema = lazyZodSchema(() => z.looseObject({
+  runId: z.string().check(z.minLength(1)),
+  message: z.string().check(z.minLength(1)),
+  displayMessage: z.optional(z.string().check(z.minLength(1))),
+  resume: z.optional(z.boolean()),
   /** Voice latency preference; provider request-size limits remain separate. */
-  speechSegmentTargetChars: z.number().int().min(32).max(2000).optional(),
-}).passthrough());
+  speechSegmentTargetChars: z.optional(z.number().check(z.int(), z.minimum(32), z.maximum(2000))),
+}));
 export type ExecutionRunTurnStreamStartRequest = z.infer<typeof ExecutionRunTurnStreamStartRequestSchema>;
 
 export const ExecutionRunUserTranscriptDirectiveSchema = lazyZodSchema(() => z.discriminatedUnion('mode', [
@@ -29,69 +29,69 @@ export const ExecutionRunUserTranscriptDirectiveSchema = lazyZodSchema(() => z.d
   z.object({
     mode: z.literal('suppress'),
     /** Correlates provider input whose transcript was already committed by the caller. */
-    localId: PendingLocalIdSchema.optional(),
+    localId: z.optional(PendingLocalIdSchema),
   }),
 ]));
 export type ExecutionRunUserTranscriptDirective = z.infer<typeof ExecutionRunUserTranscriptDirectiveSchema>;
 
-export const ExecutionRunTurnStreamStartV2RequestSchema = lazyZodSchema(() => ExecutionRunTurnStreamStartRequestSchema.extend({
+export const ExecutionRunTurnStreamStartV2RequestSchema = lazyZodSchema(() => z.extend(ExecutionRunTurnStreamStartRequestSchema, {
   userTranscript: ExecutionRunUserTranscriptDirectiveSchema,
 }));
 export type ExecutionRunTurnStreamStartV2Request = z.infer<typeof ExecutionRunTurnStreamStartV2RequestSchema>;
 
-export const ExecutionRunTurnStreamStartResponseSchema = lazyZodSchema(() => z.object({
-  streamId: z.string().min(1),
-}).passthrough());
+export const ExecutionRunTurnStreamStartResponseSchema = lazyZodSchema(() => z.looseObject({
+  streamId: z.string().check(z.minLength(1)),
+}));
 export type ExecutionRunTurnStreamStartResponse = z.infer<typeof ExecutionRunTurnStreamStartResponseSchema>;
 
 /**
  * Prospective predecessor vocabulary observed at
  * remote-dev@0649e4de85aacf08476063fef1990f418ce8e80b.
  */
-export const ExecutionRunUserTranscriptCommitRequestSchema = lazyZodSchema(() => z.object({
-  runId: z.string().min(1),
-  message: z.string().min(1),
-  displayMessage: z.string().min(1).optional(),
+export const ExecutionRunUserTranscriptCommitRequestSchema = lazyZodSchema(() => z.looseObject({
+  runId: z.string().check(z.minLength(1)),
+  message: z.string().check(z.minLength(1)),
+  displayMessage: z.optional(z.string().check(z.minLength(1))),
   localId: PendingLocalIdSchema,
-  text: z.never().optional(),
-  displayText: z.never().optional(),
-}).passthrough());
+  text: z.optional(z.never()),
+  displayText: z.optional(z.never()),
+}));
 export type ExecutionRunUserTranscriptCommitRequest = z.infer<typeof ExecutionRunUserTranscriptCommitRequestSchema>;
 
-export const ExecutionRunUserTranscriptCommitResponseSchema = lazyZodSchema(() => z.object({
+export const ExecutionRunUserTranscriptCommitResponseSchema = lazyZodSchema(() => z.looseObject({
   ok: z.literal(true),
-}).passthrough());
+}));
 export type ExecutionRunUserTranscriptCommitResponse = z.infer<typeof ExecutionRunUserTranscriptCommitResponseSchema>;
 
-export const ExecutionRunTurnStreamEventDeltaSchema = lazyZodSchema(() => z.object({
+export const ExecutionRunTurnStreamEventDeltaSchema = lazyZodSchema(() => z.looseObject({
   t: z.literal('delta'),
   textDelta: z.string(),
-}).passthrough());
+}));
 export type ExecutionRunTurnStreamEventDelta = z.infer<typeof ExecutionRunTurnStreamEventDeltaSchema>;
 
-export const ExecutionRunTurnStreamEventDoneSchema = lazyZodSchema(() => z.object({
+export const ExecutionRunTurnStreamEventDoneSchema = lazyZodSchema(() => z.looseObject({
   t: z.literal('done'),
   assistantText: z.string(),
-  actions: z.array(VoiceAssistantActionSchema).optional(),
-}).passthrough());
+  actions: z.optional(z.array(VoiceAssistantActionSchema)),
+}));
 export type ExecutionRunTurnStreamEventDone = z.infer<typeof ExecutionRunTurnStreamEventDoneSchema>;
 
-export const ExecutionRunTurnStreamEventErrorSchema = lazyZodSchema(() => z.object({
+export const ExecutionRunTurnStreamEventErrorSchema = lazyZodSchema(() => z.looseObject({
   t: z.literal('error'),
   error: z.string(),
-  errorCode: z.string().optional(),
-}).passthrough());
+  errorCode: z.optional(z.string()),
+}));
 export type ExecutionRunTurnStreamEventError = z.infer<typeof ExecutionRunTurnStreamEventErrorSchema>;
 
-export const ExecutionRunTurnStreamEventCancelledSchema = lazyZodSchema(() => z.object({
+export const ExecutionRunTurnStreamEventCancelledSchema = lazyZodSchema(() => z.looseObject({
   t: z.literal('cancelled'),
-}).passthrough());
+}));
 export type ExecutionRunTurnStreamEventCancelled = z.infer<typeof ExecutionRunTurnStreamEventCancelledSchema>;
 
-export const ExecutionRunTurnStreamEventVoiceOutputSchema = lazyZodSchema(() => z.object({
+export const ExecutionRunTurnStreamEventVoiceOutputSchema = lazyZodSchema(() => z.strictObject({
   t: z.literal('voice_output'),
   output: VoiceAgentOutputEventV1Schema,
-}).strict());
+}));
 export type ExecutionRunTurnStreamEventVoiceOutput = z.infer<typeof ExecutionRunTurnStreamEventVoiceOutputSchema>;
 
 export const ExecutionRunTurnStreamEventSchema = lazyZodSchema(() => z.discriminatedUnion('t', [
@@ -103,21 +103,21 @@ export const ExecutionRunTurnStreamEventSchema = lazyZodSchema(() => z.discrimin
 ]));
 export type ExecutionRunTurnStreamEvent = z.infer<typeof ExecutionRunTurnStreamEventSchema>;
 
-export const ExecutionRunTurnStreamReadResponseSchema = lazyZodSchema(() => z.object({
-  streamId: z.string().min(1),
+export const ExecutionRunTurnStreamReadResponseSchema = lazyZodSchema(() => z.looseObject({
+  streamId: z.string().check(z.minLength(1)),
   events: z.array(ExecutionRunTurnStreamEventSchema),
-  nextCursor: z.number().int().min(0),
+  nextCursor: z.number().check(z.int(), z.minimum(0)),
   done: z.boolean(),
-}).passthrough());
+}));
 export type ExecutionRunTurnStreamReadResponse = z.infer<typeof ExecutionRunTurnStreamReadResponseSchema>;
 
-export const ExecutionRunTurnStreamCancelRequestSchema = lazyZodSchema(() => z.object({
-  runId: z.string().min(1),
-  streamId: z.string().min(1),
-}).passthrough());
+export const ExecutionRunTurnStreamCancelRequestSchema = lazyZodSchema(() => z.looseObject({
+  runId: z.string().check(z.minLength(1)),
+  streamId: z.string().check(z.minLength(1)),
+}));
 export type ExecutionRunTurnStreamCancelRequest = z.infer<typeof ExecutionRunTurnStreamCancelRequestSchema>;
 
-export const ExecutionRunTurnStreamCancelResponseSchema = lazyZodSchema(() => z.object({
+export const ExecutionRunTurnStreamCancelResponseSchema = lazyZodSchema(() => z.looseObject({
   ok: z.literal(true),
-}).passthrough());
+}));
 export type ExecutionRunTurnStreamCancelResponse = z.infer<typeof ExecutionRunTurnStreamCancelResponseSchema>;

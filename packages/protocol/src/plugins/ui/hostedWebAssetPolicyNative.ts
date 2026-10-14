@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   resolveHostedWebAssetPolicy,
@@ -15,7 +15,7 @@ import {
 
 export const HOSTED_WEB_ASSET_NATIVE_POLICY_TABLE_VERSION_V1 = 1 as const;
 
-const HostedWebAssetNativeResourceIdV1Schema = z.string().regex(/^r(?:0|[1-9]\d*)$/u);
+const HostedWebAssetNativeResourceIdV1Schema = z.string().check(z.regex(/^r(?:0|[1-9]\d*)$/u));
 const HostedWebAssetPolicyFailureCodeSchema = z.enum([
   'asset_not_declared',
   'directory_listing_disabled',
@@ -23,37 +23,37 @@ const HostedWebAssetPolicyFailureCodeSchema = z.enum([
   'mime_type_not_allowed',
   'source_map_unavailable',
 ]);
-const HostedWebAssetNativeHeadersV1Schema = z.object({
-  'Cache-Control': z.string().min(1),
-  'Content-Security-Policy': z.string().min(1),
-  ETag: z.string().min(1),
-  'X-Content-Type-Options': z.string().min(1),
-}).strict();
+const HostedWebAssetNativeHeadersV1Schema = z.strictObject({
+  'Cache-Control': z.string().check(z.minLength(1)),
+  'Content-Security-Policy': z.string().check(z.minLength(1)),
+  ETag: z.string().check(z.minLength(1)),
+  'X-Content-Type-Options': z.string().check(z.minLength(1)),
+});
 
-export const HostedWebAssetNativePolicyContentV1Schema = z.object({
+export const HostedWebAssetNativePolicyContentV1Schema = z.strictObject({
   kind: z.literal('content'),
   resourceId: HostedWebAssetNativeResourceIdV1Schema,
-  contentType: z.string().min(1),
+  contentType: z.string().check(z.minLength(1)),
   headers: HostedWebAssetNativeHeadersV1Schema,
-}).strict();
+});
 export type HostedWebAssetNativePolicyContentV1 = Readonly<z.infer<
   typeof HostedWebAssetNativePolicyContentV1Schema
 >>;
 
-export const HostedWebAssetNativePolicyRejectionV1Schema = z.object({
+export const HostedWebAssetNativePolicyRejectionV1Schema = z.strictObject({
   kind: z.literal('rejected'),
   code: HostedWebAssetPolicyFailureCodeSchema,
   status: z.union([z.literal(400), z.literal(404), z.literal(415)]),
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   const expectedStatus = statusForFailureCode(value.code);
   if (value.status !== expectedStatus) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: `${value.code} must use HTTP ${expectedStatus}`,
       path: ['status'],
     });
   }
-});
+}));
 export type HostedWebAssetNativePolicyRejectionV1 = Readonly<z.infer<
   typeof HostedWebAssetNativePolicyRejectionV1Schema
 >>;
@@ -66,10 +66,10 @@ export type HostedWebAssetNativePolicyOutcomeV1 = Readonly<z.infer<
   typeof HostedWebAssetNativePolicyOutcomeV1Schema
 >>;
 
-const HostedWebAssetNativePolicyRouteV1Schema = z.object({
+const HostedWebAssetNativePolicyRouteV1Schema = z.strictObject({
   path: z.string(),
   outcome: HostedWebAssetNativePolicyOutcomeV1Schema,
-}).strict();
+});
 type HostedWebAssetNativePolicyRouteV1 = Readonly<z.infer<
   typeof HostedWebAssetNativePolicyRouteV1Schema
 >>;
@@ -80,11 +80,11 @@ type HostedWebAssetNativePolicyRouteV1 = Readonly<z.infer<
  * resource ids—not Artifact paths, file paths, bytes, cache locations, or a
  * URL endpoint.
  */
-export const HostedWebAssetNativePolicyTableV1Schema = z.object({
+export const HostedWebAssetNativePolicyTableV1Schema = z.strictObject({
   version: z.literal(HOSTED_WEB_ASSET_NATIVE_POLICY_TABLE_VERSION_V1),
   routes: z.array(HostedWebAssetNativePolicyRouteV1Schema),
-  pathFallback: HostedWebAssetNativePolicyContentV1Schema.optional(),
-}).strict().superRefine((table, context) => {
+  pathFallback: z.optional(HostedWebAssetNativePolicyContentV1Schema),
+}).check(z.superRefine((table, context) => {
   const paths = new Set<string>();
   for (const [index, route] of table.routes.entries()) {
     const normalized = normalizeHostedWebAssetArtifactPath(route.path);
@@ -93,21 +93,21 @@ export const HostedWebAssetNativePolicyTableV1Schema = z.object({
       || (route.path.length > 0 && (normalized === null || normalized !== route.path))
     ) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'native policy routes must use canonical decoded relative paths',
         path: ['routes', index, 'path'],
       });
     }
     if (paths.has(route.path)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'native policy routes must be unique',
         path: ['routes', index, 'path'],
       });
     }
     paths.add(route.path);
   }
-});
+}));
 export type HostedWebAssetNativePolicyTableV1 = Readonly<{
   version: typeof HOSTED_WEB_ASSET_NATIVE_POLICY_TABLE_VERSION_V1;
   routes: readonly HostedWebAssetNativePolicyRouteV1[];
@@ -119,10 +119,10 @@ export type HostedWebAssetNativePolicyTableV1 = Readonly<{
  * converts it to its verified native resource registry before the table is
  * registered under one revocable lease token.
  */
-export const HostedWebAssetNativePolicyResourceBindingV1Schema = z.object({
+export const HostedWebAssetNativePolicyResourceBindingV1Schema = z.strictObject({
   resourceId: HostedWebAssetNativeResourceIdV1Schema,
-  relativePath: z.string().min(1),
-}).strict();
+  relativePath: z.string().check(z.minLength(1)),
+});
 export type HostedWebAssetNativePolicyResourceBindingV1 = Readonly<z.infer<
   typeof HostedWebAssetNativePolicyResourceBindingV1Schema
 >>;

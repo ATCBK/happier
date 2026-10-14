@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionStateCapabilitiesV1Schema } from '../../../sessions/state/capabilitySchema.js';
 
@@ -14,37 +14,35 @@ export const DEFAULT_SESSION_MESSAGES_CAPABILITIES = Object.freeze({
   turns: false,
 });
 
-export const SessionMessagesCapabilitiesSchema = lazyZodSchema(() => z
+export const SessionMessagesCapabilitiesSchema = lazyZodSchema(() => z._default(z.optional(z
   .object({
-    role: z.boolean().optional().default(DEFAULT_SESSION_MESSAGES_CAPABILITIES.role),
-    turns: z.boolean().optional().default(DEFAULT_SESSION_MESSAGES_CAPABILITIES.turns),
-  })
-  .optional()
-  .default(DEFAULT_SESSION_MESSAGES_CAPABILITIES));
+    role: z._default(z.optional(z.boolean()), DEFAULT_SESSION_MESSAGES_CAPABILITIES.role),
+    turns: z._default(z.optional(z.boolean()), DEFAULT_SESSION_MESSAGES_CAPABILITIES.turns),
+  })), DEFAULT_SESSION_MESSAGES_CAPABILITIES));
 
 export type SessionMessagesCapabilities = z.infer<typeof SessionMessagesCapabilitiesSchema>;
 
-const SessionProtocolCapabilitySchema = lazyZodSchema(() => z.object({
-  protocolVersion: z.number().int().positive(),
-}).strict());
+const SessionProtocolCapabilitySchema = lazyZodSchema(() => z.strictObject({
+  protocolVersion: z.number().check(z.int(), z.positive()),
+}));
 
 export const SessionRuntimeActivityCapabilitiesSchema = SessionProtocolCapabilitySchema;
 export const SessionPendingInputCapabilitiesSchema = SessionProtocolCapabilitySchema;
 export const SessionPublisherAuthorityCapabilitiesSchema = SessionProtocolCapabilitySchema;
 
-export const SessionExternalImportCapabilitiesSchema = lazyZodSchema(() => z.object({
-  publicationFenceVersion: z.number().int().positive(),
-}).strict());
+export const SessionExternalImportCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+  publicationFenceVersion: z.number().check(z.int(), z.positive()),
+}));
 
-export const SessionSystemRecordsCapabilitiesSchema = lazyZodSchema(() => z.object({
+export const SessionSystemRecordsCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
   protocolVersions: z.tuple([z.literal(1)]),
-}).strict());
+}));
 export type SessionSystemRecordsCapabilities = z.infer<typeof SessionSystemRecordsCapabilitiesSchema>;
 
 /** Host-rendered Follow context accepted by the destination Session runtime. */
-export const SessionFollowCapabilitiesSchema = lazyZodSchema(() => z.object({
+export const SessionFollowCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
   contextVersion: z.literal(1),
-}).strict());
+}));
 export type SessionFollowCapabilities = z.infer<typeof SessionFollowCapabilitiesSchema>;
 
 export const DEFAULT_SESSION_CAPABILITIES = Object.freeze({
@@ -52,19 +50,15 @@ export const DEFAULT_SESSION_CAPABILITIES = Object.freeze({
   messages: DEFAULT_SESSION_MESSAGES_CAPABILITIES,
 });
 
-export const SessionCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    state: SessionStateCapabilitiesV1Schema.optional().default({}),
+export const SessionCapabilitiesSchema = lazyZodSchema(() => z._default(z.optional(z.strictObject({
+    state: z._default(z.optional(SessionStateCapabilitiesV1Schema), {}),
     messages: SessionMessagesCapabilitiesSchema,
-    systemRecords: SessionSystemRecordsCapabilitiesSchema.optional(),
-    follow: SessionFollowCapabilitiesSchema.optional(),
-    runtimeActivity: SessionRuntimeActivityCapabilitiesSchema.optional(),
-    pendingInput: SessionPendingInputCapabilitiesSchema.optional(),
-    publisherAuthority: SessionPublisherAuthorityCapabilitiesSchema.optional(),
-    externalImport: SessionExternalImportCapabilitiesSchema.optional(),
-  })
-  .strict()
-  .optional()
-  .default(DEFAULT_SESSION_CAPABILITIES));
+    systemRecords: z.optional(SessionSystemRecordsCapabilitiesSchema),
+    follow: z.optional(SessionFollowCapabilitiesSchema),
+    runtimeActivity: z.optional(SessionRuntimeActivityCapabilitiesSchema),
+    pendingInput: z.optional(SessionPendingInputCapabilitiesSchema),
+    publisherAuthority: z.optional(SessionPublisherAuthorityCapabilitiesSchema),
+    externalImport: z.optional(SessionExternalImportCapabilitiesSchema),
+  })), DEFAULT_SESSION_CAPABILITIES));
 
 export type SessionCapabilities = z.infer<typeof SessionCapabilitiesSchema>;

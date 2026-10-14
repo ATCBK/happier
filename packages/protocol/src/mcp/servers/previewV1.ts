@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { McpDetectedProviderV1Schema } from './daemonRpcV1.js';
 import type { ResolveSessionCapabilitiesV1Result, ResolvedMcpServerV1 } from '../../reach/resolveSessionCapabilitiesV1.js';
@@ -116,9 +116,9 @@ export const ManagedSessionMcpPortabilityV1Schema = lazyZodSchema(() => z.custom
 ));
 
 const McpPreviewEntryBaseV1Schema = lazyZodSchema(() => z.object({
-  key: z.string().min(1),
-  name: z.string().min(1),
-  title: z.string().min(1).optional(),
+  key: z.string().check(z.minLength(1)),
+  name: z.string().check(z.minLength(1)),
+  title: z.optional(z.string().check(z.minLength(1))),
   transport: McpServerCatalogEntryTransportV1Schema,
   authMode: McpPreviewAuthModeV1Schema,
   selected: z.boolean(),
@@ -128,8 +128,8 @@ const McpPreviewEntryBaseV1Schema = lazyZodSchema(() => z.object({
   scopeKind: McpPreviewScopeKindV1Schema,
 }));
 
-export const ManagedMcpPreviewEntryV1Schema = lazyZodSchema(() => McpPreviewEntryBaseV1Schema.extend({
-  serverId: z.string().min(1),
+export const ManagedMcpPreviewEntryV1Schema = lazyZodSchema(() => z.extend(McpPreviewEntryBaseV1Schema, {
+  serverId: z.string().check(z.minLength(1)),
   sourceKind: z.literal('managed'),
   scopeKind: z.union([z.literal('allMachines'), z.literal('machine'), z.literal('workspace')]),
   reasonCode: ManagedSessionMcpReasonCodeV1Schema,
@@ -138,51 +138,51 @@ export const ManagedMcpPreviewEntryV1Schema = lazyZodSchema(() => McpPreviewEntr
 }));
 export type ManagedMcpPreviewEntryV1 = z.infer<typeof ManagedMcpPreviewEntryV1Schema>;
 
-export const BuiltInMcpPreviewEntryV1Schema = lazyZodSchema(() => McpPreviewEntryBaseV1Schema.extend({
+export const BuiltInMcpPreviewEntryV1Schema = lazyZodSchema(() => z.extend(McpPreviewEntryBaseV1Schema, {
   sourceKind: z.literal('builtIn'),
   scopeKind: z.literal('builtIn'),
 }));
 export type BuiltInMcpPreviewEntryV1 = z.infer<typeof BuiltInMcpPreviewEntryV1Schema>;
 
-export const DetectedMcpPreviewEntryV1Schema = lazyZodSchema(() => McpPreviewEntryBaseV1Schema.extend({
+export const DetectedMcpPreviewEntryV1Schema = lazyZodSchema(() => z.extend(McpPreviewEntryBaseV1Schema, {
   sourceKind: z.literal('detected'),
   scopeKind: z.union([z.literal('providerUser'), z.literal('providerProject')]),
   provider: McpDetectedProviderV1Schema,
   enabled: z.union([z.boolean(), z.null()]),
-  envKeyCount: z.number().int().min(0),
-  headerKeyCount: z.number().int().min(0),
-  sourcePath: z.string().min(1),
+  envKeyCount: z.number().check(z.int(), z.minimum(0)),
+  headerKeyCount: z.number().check(z.int(), z.minimum(0)),
+  sourcePath: z.string().check(z.minLength(1)),
 }));
 export type DetectedMcpPreviewEntryV1 = z.infer<typeof DetectedMcpPreviewEntryV1Schema>;
 
-export const DaemonMcpServersPreviewRequestSchema = lazyZodSchema(() => z.object({
-  machineId: z.string().min(1),
-  directory: z.string().min(1).max(10_000).optional(),
-  agentId: z.string().min(1),
-  sessionId: z.string().min(1).optional(),
-  profileId: z.string().min(1).optional(),
-  projectKey: z.string().min(1).optional(),
-  capabilitySelection: SessionCapabilitySelectionAuthoringV1Schema.optional(),
-  selection: SessionMcpSelectionV1Schema.optional(),
-}).passthrough());
+export const DaemonMcpServersPreviewRequestSchema = lazyZodSchema(() => z.looseObject({
+  machineId: z.string().check(z.minLength(1)),
+  directory: z.optional(z.string().check(z.minLength(1), z.maxLength(10_000))),
+  agentId: z.string().check(z.minLength(1)),
+  sessionId: z.optional(z.string().check(z.minLength(1))),
+  profileId: z.optional(z.string().check(z.minLength(1))),
+  projectKey: z.optional(z.string().check(z.minLength(1))),
+  capabilitySelection: z.optional(SessionCapabilitySelectionAuthoringV1Schema),
+  selection: z.optional(SessionMcpSelectionV1Schema),
+}));
 export type DaemonMcpServersPreviewRequest = z.infer<typeof DaemonMcpServersPreviewRequestSchema>;
 
 export const DaemonMcpServersPreviewResponseSchema = lazyZodSchema(() => z.union([
-  z.object({
+  z.looseObject({
     ok: z.literal(true),
     builtIn: z.array(BuiltInMcpPreviewEntryV1Schema),
     managed: z.array(ManagedMcpPreviewEntryV1Schema),
     detected: z.array(DetectedMcpPreviewEntryV1Schema),
-    warnings: z.array(z.string()).optional(),
-    machinePlatform: SpawnCapabilitiesPreviewSuccessV1Schema.shape.machinePlatform.optional(),
-    mcp: SpawnCapabilitiesPreviewSuccessV1Schema.shape.mcp.optional(),
-    skills: SpawnCapabilitiesPreviewSuccessV1Schema.shape.skills.optional(),
-    applyTiming: SpawnCapabilitiesPreviewSuccessV1Schema.shape.applyTiming.optional(),
-  }).passthrough(),
-  z.object({
+    warnings: z.optional(z.array(z.string())),
+    machinePlatform: z.optional(SpawnCapabilitiesPreviewSuccessV1Schema.shape.machinePlatform),
+    mcp: z.optional(SpawnCapabilitiesPreviewSuccessV1Schema.shape.mcp),
+    skills: z.optional(SpawnCapabilitiesPreviewSuccessV1Schema.shape.skills),
+    applyTiming: z.optional(SpawnCapabilitiesPreviewSuccessV1Schema.shape.applyTiming),
+  }),
+  z.looseObject({
     ok: z.literal(false),
     errorCode: z.enum(['invalid_request', 'internal_error']),
-    error: z.string().min(1),
-  }).passthrough(),
+    error: z.string().check(z.minLength(1)),
+  }),
 ]));
 export type DaemonMcpServersPreviewResponse = z.infer<typeof DaemonMcpServersPreviewResponseSchema>;

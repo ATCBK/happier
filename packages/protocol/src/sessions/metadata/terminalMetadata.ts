@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { WINDOWS_REMOTE_SESSION_LAUNCH_MODES } from './windowsRemoteSessionLaunchMode.js';
 
 /**
@@ -29,59 +29,59 @@ function normalizeTerminalWireSelectors(value: unknown): unknown {
 }
 
 export function createSessionTerminalControlServiceabilityV1Schema(zod: typeof z, context: TerminalMetadataContext = 'legacy') {
-  return zod.object({
+  return zod.looseObject({
     v: zod.literal(1),
-    attachmentId: (context === 'owner' ? zod.string().max(2_000) : zod.string()).optional(),
+    attachmentId: zod.optional((context === 'owner' ? zod.string().check(zod.maxLength(2_000)) : zod.string())),
     state: zod.enum(['servable', 'recoverable_unservable', 'unknown']),
     observedAt: zod.number(),
-    reason: (context === 'owner' ? zod.string().max(20_000) : zod.string()).optional(),
-    retired: zod.boolean().optional(),
-  }).passthrough();
+    reason: zod.optional((context === 'owner' ? zod.string().check(zod.maxLength(20_000)) : zod.string())),
+    retired: zod.optional(zod.boolean()),
+  });
 }
 
 export const SessionTerminalControlServiceabilityV1Schema = createSessionTerminalControlServiceabilityV1Schema(z);
 
 export function createHerdrTerminalMetadataSchema(zod: typeof z, context: TerminalMetadataContext = 'legacy') {
-  const string = (maximum: number) => context === 'owner' ? zod.string().max(maximum) : zod.string();
+  const string = (maximum: number) => context === 'owner' ? zod.string().check(zod.maxLength(maximum)) : zod.string();
   const shape = {
     sessionName: string(20_000), socketPath: string(100_000),
-    terminalId: string(2_000), paneId: string(2_000).optional(),
+    terminalId: string(2_000), paneId: zod.optional(string(2_000)),
   };
-  return context === 'owner' ? zod.object(shape).strict() : zod.object(shape);
+  return context === 'owner' ? zod.strictObject(shape) : zod.object(shape);
 }
 
 function createTerminalObjectSchema(zod: typeof z, context: TerminalMetadataContext) {
   // Owner envelopes retain their existing bounded, closed policy. Legacy flat
   // metadata remains a round-trip custodian with permissive presentation fields.
-  const string = (ownerMax: number) => context === 'owner' ? zod.string().max(ownerMax) : zod.string();
-  const object = <T extends z.ZodRawShape>(shape: T) => context === 'owner' ? zod.object(shape).strict() : zod.object(shape);
+  const string = (ownerMax: number) => context === 'owner' ? zod.string().check(zod.maxLength(ownerMax)) : zod.string();
+  const object = <T extends z.core.$ZodShape>(shape: T) => context === 'owner' ? zod.strictObject(shape) : zod.object(shape);
   const terminalModeSchema = zod.enum(['plain', 'tmux', 'zellij', 'herdr', 'windows_terminal', 'windows_console']);
   const requestedModeSchema = zod.enum(['plain', 'tmux', 'zellij', 'herdr', ...WINDOWS_REMOTE_SESSION_LAUNCH_MODES]);
   return zod.object({
-      mode: terminalModeSchema.optional(),
-      requested: requestedModeSchema.optional(),
-      fallbackReason: string(20_000).optional(),
-      controlServiceabilityV1: createSessionTerminalControlServiceabilityV1Schema(zod, context).optional(),
-      tmux: object({
+      mode: zod.optional(terminalModeSchema),
+      requested: zod.optional(requestedModeSchema),
+      fallbackReason: zod.optional(string(20_000)),
+      controlServiceabilityV1: zod.optional(createSessionTerminalControlServiceabilityV1Schema(zod, context)),
+      tmux: zod.optional(object({
         target: string(20_000),
-        tmpDir: string(100_000).nullable().optional(),
-      }).optional(),
-      zellij: object({
+        tmpDir: zod.optional(zod.nullable(string(100_000))),
+      })),
+      zellij: zod.optional(object({
         sessionName: string(20_000),
-        paneId: string(2_000).optional(),
-        socketDirV1: string(100_000).optional(),
-      }).optional(),
-      herdr: createHerdrTerminalMetadataSchema(zod, context).optional(),
-      windows: object({
+        paneId: zod.optional(string(2_000)),
+        socketDirV1: zod.optional(string(100_000)),
+      })),
+      herdr: zod.optional(createHerdrTerminalMetadataSchema(zod, context)),
+      windows: zod.optional(object({
         host: zod.enum(['windows_terminal', 'console']),
-        windowId: string(2_000).optional(),
-        pid: zod.number().int().optional(),
-        title: string(20_000).optional(),
-      }).optional(),
+        windowId: zod.optional(string(2_000)),
+        pid: zod.optional(zod.number().check(zod.int())),
+        title: zod.optional(string(20_000)),
+      })),
   });
 }
 
-function refineTerminalMode(value: { mode?: unknown; controlServiceabilityV1?: { retired?: boolean } }, ctx: z.RefinementCtx) {
+function refineTerminalMode(value: { mode?: unknown; controlServiceabilityV1?: { retired?: boolean } }, ctx: z.core.$RefinementCtx) {
   if (value.mode === undefined && value.controlServiceabilityV1?.retired !== true) {
     ctx.addIssue({
       code: 'custom',
@@ -92,14 +92,14 @@ function refineTerminalMode(value: { mode?: unknown; controlServiceabilityV1?: {
 }
 
 function createOwnerTerminalSchema(zod: typeof z) {
-  const schema = createTerminalObjectSchema(zod, 'owner').extend({
-    controlServiceabilityV1: createSessionTerminalControlServiceabilityV1Schema(zod, 'owner').strict().optional(),
-  }).strict().superRefine(refineTerminalMode);
-  return zod.preprocess(normalizeTerminalWireSelectors, schema);
+  const schema = (<T extends zod.ZodMiniObject>(schema: T) => zod.core.clone(schema, { ...schema._zod.def, catchall: zod.never() }) as zod.ZodMiniObject<T['shape'], zod.core.$strict>)(zod.extend(createTerminalObjectSchema(zod, 'owner'), {
+    controlServiceabilityV1: zod.optional((<T extends zod.ZodMiniObject>(schema: T) => zod.core.clone(schema, { ...schema._zod.def, catchall: zod.never() }) as zod.ZodMiniObject<T['shape'], zod.core.$strict>)(createSessionTerminalControlServiceabilityV1Schema(zod, 'owner'))),
+  })).check(zod.superRefine(refineTerminalMode));
+  return zod.pipe(zod.transform(normalizeTerminalWireSelectors), schema);
 }
 
 function createLegacyTerminalSchema(zod: typeof z) {
-  return zod.preprocess(normalizeTerminalWireSelectors, createTerminalObjectSchema(zod, 'legacy').passthrough().superRefine(refineTerminalMode));
+  return zod.pipe(zod.transform(normalizeTerminalWireSelectors), (<T extends zod.ZodMiniObject>(schema: T) => zod.core.clone(schema, { ...schema._zod.def, catchall: zod.unknown() }) as zod.ZodMiniObject<T['shape'], zod.core.$loose>)(createTerminalObjectSchema(zod, 'legacy')).check(zod.superRefine(refineTerminalMode)));
 }
 
 export function createSessionTerminalMetadataSchema(zod: typeof z, context: 'owner'): ReturnType<typeof createOwnerTerminalSchema>;

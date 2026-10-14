@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * A bounded equality tag asserted by the authenticated Pending mutation caller.
@@ -20,10 +20,7 @@ import { z } from 'zod';
  * Both derivations are SHA-256-sized, so the wire shape is one 43-character
  * unpadded base64url value either way.
  */
-export const PendingMessageMutationFingerprintV1Schema = z.string().regex(
-  /^[A-Za-z0-9_-]{43}$/u,
-  'Expected an unpadded base64url SHA-256 digest',
-);
+export const PendingMessageMutationFingerprintV1Schema = z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u, 'Expected an unpadded base64url SHA-256 digest'));
 
 export type PendingMessageMutationFingerprintV1 = z.infer<
   typeof PendingMessageMutationFingerprintV1Schema

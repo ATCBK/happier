@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '../json/storedReadSchema.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 
@@ -51,17 +51,17 @@ import {
 } from '../sessions/creation/sessionSpawnNewInputV2.js';
 
 const UTF8_ENCODER = new TextEncoder();
-const TIMESTAMP_SCHEMA = z.number().int().nonnegative().safe();
-const AUTOMATION_RUN_ID_SCHEMA = z.string().trim().min(1).max(256);
+const TIMESTAMP_SCHEMA = z.number().check(z.int(), z.nonnegative(), z.int());
+const AUTOMATION_RUN_ID_SCHEMA = z.string().check(z.trim(), z.minLength(1), z.maxLength(256));
 
 function addUtf8LimitIssue(params: Readonly<{
   value: string;
   maxBytes: number;
-  context: z.RefinementCtx;
+  context: z.core.$RefinementCtx;
   message: string;
 }>): void {
   if (UTF8_ENCODER.encode(params.value).byteLength > params.maxBytes) {
-    params.context.addIssue({ code: z.ZodIssueCode.custom, message: params.message });
+    params.context.addIssue({ code: "custom", message: params.message });
   }
 }
 
@@ -70,16 +70,16 @@ function addUtf8LimitIssue(params: Readonly<{
  * Run. Execution-target facts belong to the target arm rather than this
  * program, so a rendered prompt cannot rewrite target authority.
  */
-export const AutomationRunTemplateV1Schema = lazyZodSchema(() => z.object({
+export const AutomationRunTemplateV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  prompt: z.string().superRefine((value, context) => {
+  prompt: z.string().check(z.superRefine((value, context) => {
     addUtf8LimitIssue({
       value,
       maxBytes: MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES,
       context,
       message: 'Automation template prompt exceeds its UTF-8 byte limit',
     });
-  }),
+  })),
   /**
    * The composer references this program carries, in the one canonical
    * identity-only shape every other send path persists (`MentionRefV1`). It is
@@ -87,8 +87,8 @@ export const AutomationRunTemplateV1Schema = lazyZodSchema(() => z.object({
    * surface with no reference picker, parses unchanged. Nothing here is
    * provider context — that is still reconstructed at dispatch (D-3/INV-9).
    */
-  mentions: z.array(MentionRefV1Schema).max(MENTION_BOUNDS.maxPerMessage).optional(),
-}).strict());
+  mentions: z.optional(z.array(MentionRefV1Schema).check(z.maxLength(MENTION_BOUNDS.maxPerMessage))),
+}));
 export type AutomationRunTemplateV1 = z.infer<typeof AutomationRunTemplateV1Schema>;
 export const AutomationRunTemplateV1ReadSchema = createStoredReadSchema(AutomationRunTemplateV1Schema);
 
@@ -98,24 +98,24 @@ export const AutomationRunTemplateV1ReadSchema = createStoredReadSchema(Automati
  * bounded before a repeated template token can expand it.
  */
 export const AutomationRunPluginEventTriggerEvidenceV1Schema =
-  lazyZodSchema(() => AutomationPluginEventOccurrenceEvidenceV1Schema.extend({
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AutomationPluginEventOccurrenceEvidenceV1Schema, {
     payload: asProtocolZod(AutomationEventPayloadV1Schema),
     sourceInstanceId: AutomationEventSourceInstanceIdV1Schema,
     sourceContractVersion: AutomationEventPositiveSafeIntegerV1Schema,
-    observationReceivedAt: z.number().int().nonnegative().safe(),
-    filter: z.object({
-      version: z.literal(1).nullable(),
+    observationReceivedAt: z.number().check(z.int(), z.nonnegative(), z.int()),
+    filter: z.strictObject({
+      version: z.nullable(z.literal(1)),
       result: z.literal('matched'),
-    }).strict(),
-  }).strict());
+    }),
+  })));
 export type AutomationRunPluginEventTriggerEvidenceV1 = z.infer<
   typeof AutomationRunPluginEventTriggerEvidenceV1Schema
 >;
 
 export const AutomationRunConversationTriggerEvidenceV1Schema =
-  lazyZodSchema(() => AutomationConversationOccurrenceEvidenceV1Schema.extend({
-    observationReceivedAt: z.number().int().nonnegative().safe(),
-  }).strict());
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AutomationConversationOccurrenceEvidenceV1Schema, {
+    observationReceivedAt: z.number().check(z.int(), z.nonnegative(), z.int()),
+  })));
 export type AutomationRunConversationTriggerEvidenceV1 = z.infer<
   typeof AutomationRunConversationTriggerEvidenceV1Schema
 >;
@@ -131,17 +131,17 @@ const AutomationRunTriggerEvidenceV1ReadSchema = createStoredReadSchema(Automati
 
 /** One retained evidence projection for the recipe and its separately stored sibling. */
 export const AutomationRunTriggerEvidenceEnvelopeV1ReadSchema = lazyZodSchema(() =>
-  AutomationStoredContentEnvelopeV1ReadSchema.transform((envelope, context) => {
+  z.pipe(AutomationStoredContentEnvelopeV1ReadSchema, z.transform((envelope, context) => {
     if (envelope.t === 'encrypted') return envelope;
     const evidence = AutomationRunTriggerEvidenceV1ReadSchema.safeParse(envelope.v);
     if (!evidence.success) {
       for (const issue of evidence.error.issues) {
-        context.addIssue({ ...issue, path: ['v', ...issue.path] });
+        context.issues.push({ ...issue, path: ['v', ...issue.path], input: ('input' in issue ? issue.input ?? context.value : context.value) });
       }
       return z.NEVER;
     }
     return AutomationStoredContentEnvelopeV1Schema.parse({ t: 'plain', v: evidence.data });
-  }));
+  })));
 
 /**
  * Why one frozen prompt program could not be materialized. Execution surfaces
@@ -307,18 +307,18 @@ export function materializeAutomationRunPromptV1(params: Readonly<{
 }
 
 export const AutomationRunExecutionTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('existingSession'),
     sessionId: asProtocolZod(SessionIdSchema),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('newSession'),
     spawn: SessionServerStartSpawnDraftV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('executionRun'),
     request: ExecutionRunDetachedStartRequestV1Schema,
-  }).strict(),
+  }),
 ]));
 export type AutomationRunExecutionTargetV1 = z.infer<typeof AutomationRunExecutionTargetV1Schema>;
 
@@ -381,13 +381,13 @@ export function validateAutomationRunTemplateForExecutionTargetV1(params: Readon
  */
 const AutomationExecutionRecipeBaseShapeV1 = {
   v: z.literal(1),
-  templateVersion: z.number().int().nonnegative().safe(),
+  templateVersion: z.number().check(z.int(), z.nonnegative(), z.int()),
   template: AutomationStoredContentEnvelopeV1Schema,
-  triggerEvidence: AutomationStoredContentEnvelopeV1Schema.nullable(),
+  triggerEvidence: z.nullable(AutomationStoredContentEnvelopeV1Schema),
   target: AutomationRunExecutionTargetV1Schema,
 } as const;
 
-function addAutomationExecutionRecipeFramingIssueV1(value: unknown, context: z.RefinementCtx): void {
+function addAutomationExecutionRecipeFramingIssueV1(value: unknown, context: z.core.$RefinementCtx): void {
   addUtf8LimitIssue({
     value: createCanonicalJsonSigningInput(value),
     // The recipe retains independently bounded opaque envelopes. Its framing
@@ -404,7 +404,7 @@ function addAutomationExecutionRecipePlainTemplateTargetIssueV1(
     template: z.infer<typeof AutomationStoredContentEnvelopeV1Schema>;
     target: AutomationRunExecutionTargetV1;
   }>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
   templateSchema: typeof AutomationRunTemplateV1Schema,
 ): void {
   if (value.template.t !== 'plain') return;
@@ -417,7 +417,7 @@ function addAutomationExecutionRecipePlainTemplateTargetIssueV1(
     }).kind !== 'available'
   ) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['template'],
       message: 'Automation template is incompatible with its execution target',
     });
@@ -425,26 +425,26 @@ function addAutomationExecutionRecipePlainTemplateTargetIssueV1(
 }
 
 function createAutomationRunExecutionRecipeV1Schema(templateSchema: typeof AutomationRunTemplateV1Schema) {
-  return z.object({
+  return z.strictObject({
     ...AutomationExecutionRecipeBaseShapeV1,
     assignmentMachineIds: z.array(PluginMachineMaterializationMachineIdV1Schema),
-  }).strict().superRefine((value, context) => {
+  }).check(z.superRefine((value, context) => {
     addAutomationExecutionRecipeFramingIssueV1(value, context);
     addAutomationExecutionRecipePlainTemplateTargetIssueV1(value, context, templateSchema);
     if (new Set(value.assignmentMachineIds).size !== value.assignmentMachineIds.length) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['assignmentMachineIds'],
         message: 'Automation Run assignment machine ids must be unique',
       });
     }
-  });
+  }));
 }
 
 function projectAutomationExecutionRecipePlainContentV1<T extends Readonly<{
   template: z.infer<typeof AutomationStoredContentEnvelopeV1Schema>;
   triggerEvidence: z.infer<typeof AutomationStoredContentEnvelopeV1Schema> | null;
-}>>(recipe: T, context: z.RefinementCtx) {
+}>>(recipe: T, context: z.core.$RefinementCtx) {
   const evidence = recipe.triggerEvidence === null
     ? null
     : AutomationRunTriggerEvidenceEnvelopeV1ReadSchema.safeParse(recipe.triggerEvidence);
@@ -469,8 +469,7 @@ function projectAutomationExecutionRecipePlainContentV1<T extends Readonly<{
 
 export const AutomationRunExecutionRecipeV1Schema = defineStoredReadProjection(
   createAutomationRunExecutionRecipeV1Schema(AutomationRunTemplateV1Schema),
-  () => createStoredReadSchema(createAutomationRunExecutionRecipeV1Schema(AutomationRunTemplateV1ReadSchema))
-    .transform(projectAutomationExecutionRecipePlainContentV1),
+  () => z.pipe(createStoredReadSchema(createAutomationRunExecutionRecipeV1Schema(AutomationRunTemplateV1ReadSchema)), z.transform(projectAutomationExecutionRecipePlainContentV1)),
 );
 export type AutomationRunExecutionRecipeV1 = z.infer<typeof AutomationRunExecutionRecipeV1Schema>;
 
@@ -481,25 +480,24 @@ export type AutomationRunExecutionRecipeV1 = z.infer<typeof AutomationRunExecuti
  * Conversation target Action — parses through this single owner.
  */
 function createAutomationStoredDefinitionExecutionRecipeV1Schema(templateSchema: typeof AutomationRunTemplateV1Schema) {
-  return z.object({
+  return z.strictObject({
     ...AutomationExecutionRecipeBaseShapeV1,
-  }).strict().superRefine((value, context) => {
+  }).check(z.superRefine((value, context) => {
     addAutomationExecutionRecipeFramingIssueV1(value, context);
     addAutomationExecutionRecipePlainTemplateTargetIssueV1(value, context, templateSchema);
     if (value.triggerEvidence !== null) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['triggerEvidence'],
         message: 'A stored Automation definition cannot carry Run occurrence evidence',
       });
     }
-  });
+  }));
 }
 
 export const AutomationStoredDefinitionExecutionRecipeV1Schema = defineStoredReadProjection(
   createAutomationStoredDefinitionExecutionRecipeV1Schema(AutomationRunTemplateV1Schema),
-  () => createStoredReadSchema(createAutomationStoredDefinitionExecutionRecipeV1Schema(AutomationRunTemplateV1ReadSchema))
-    .transform(projectAutomationExecutionRecipePlainContentV1),
+  () => z.pipe(createStoredReadSchema(createAutomationStoredDefinitionExecutionRecipeV1Schema(AutomationRunTemplateV1ReadSchema)), z.transform(projectAutomationExecutionRecipePlainContentV1)),
 );
 export type AutomationStoredDefinitionExecutionRecipeV1 = z.infer<
   typeof AutomationStoredDefinitionExecutionRecipeV1Schema
@@ -747,10 +745,10 @@ export type AutomationRunOpenedExecutionRecipeContentV1 = Readonly<{
   triggerEvidence: unknown | null;
 }>;
 
-const AutomationRunOpenedExecutionRecipeContentV1Schema = lazyZodSchema(() => z.object({
+const AutomationRunOpenedExecutionRecipeContentV1Schema = lazyZodSchema(() => z.strictObject({
   template: z.unknown(),
-  triggerEvidence: z.unknown().nullable(),
-}).strict());
+  triggerEvidence: z.nullable(z.unknown()),
+}));
 
 type ReadRecipeContentResult =
   | Readonly<{ kind: 'available'; content: AutomationRunOpenedExecutionRecipeContentV1 }>
@@ -780,10 +778,10 @@ function readRecipeContent(params: Readonly<{
     return { kind: 'contentInvalid' };
   }
   if (params.openedContent === undefined) return { kind: 'materialUnavailable' };
-  const openedContent = createStoredReadSchema(AutomationRunOpenedExecutionRecipeContentV1Schema).safeExtend({
+  const openedContent = lazyZodSchema(() => z.safeExtend(createStoredReadSchema(AutomationRunOpenedExecutionRecipeContentV1Schema), {
     template: AutomationRunTemplateV1ReadSchema,
-    triggerEvidence: AutomationRunTriggerEvidenceV1ReadSchema.nullable(),
-  }).safeParse(params.openedContent);
+    triggerEvidence: z.nullable(AutomationRunTriggerEvidenceV1ReadSchema),
+  })).safeParse(params.openedContent);
   return openedContent.success
     ? { kind: 'available', content: openedContent.data }
     : { kind: 'contentInvalid' };

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 export const AUTOMATION_TEMPLATE_ENCRYPTED_V1_KIND =
@@ -24,31 +24,24 @@ export const AUTOMATION_TEMPLATE_PAYLOAD_PLAINTEXT_MAX_CHARS = 200_000;
  */
 export const AUTOMATION_TEMPLATE_CIPHERTEXT_MAX_CHARS = 220_000;
 
-const ExistingSessionIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(128));
+const ExistingSessionIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(128)));
 
-export const EncryptedAutomationTemplateEnvelopeSchema = lazyZodSchema(() => z
-  .object({
+export const EncryptedAutomationTemplateEnvelopeSchema = lazyZodSchema(() => z.strictObject({
     kind: z.literal(AUTOMATION_TEMPLATE_ENCRYPTED_V1_KIND),
     payloadCiphertext: z
-      .string()
-      .trim()
-      .min(1)
-      .max(AUTOMATION_TEMPLATE_PAYLOAD_CIPHERTEXT_MAX_CHARS),
-  })
-  .strict());
+      .string().check(z.trim(), z.minLength(1), z.maxLength(AUTOMATION_TEMPLATE_PAYLOAD_CIPHERTEXT_MAX_CHARS)),
+  }));
 export type EncryptedAutomationTemplateEnvelope = z.infer<
   typeof EncryptedAutomationTemplateEnvelopeSchema
 >;
 
-const PlainAutomationTemplateEnvelopeBaseSchema = lazyZodSchema(() => z
-  .object({
+const PlainAutomationTemplateEnvelopeBaseSchema = lazyZodSchema(() => z.strictObject({
     kind: z.literal(AUTOMATION_TEMPLATE_PLAIN_V1_KIND),
     payload: z.unknown(),
-  })
-  .strict());
+  }));
 
-function withPlainPayloadValidation<T extends z.ZodTypeAny>(schema: T): T {
-  return schema.superRefine((value, context) => {
+function withPlainPayloadValidation<T extends z.ZodMiniType>(schema: T): T {
+  return schema.check(z.superRefine((value, context) => {
     const payload = (value as { payload: unknown }).payload;
     let payloadJson: string | undefined;
     try {
@@ -74,7 +67,7 @@ function withPlainPayloadValidation<T extends z.ZodTypeAny>(schema: T): T {
         message: 'payload is too large',
       });
     }
-  }) as T;
+  })) as T;
 }
 
 export const PlainAutomationTemplateEnvelopeSchema = withPlainPayloadValidation(
@@ -99,8 +92,8 @@ export type AutomationTemplateEnvelope = z.infer<
  * persisted rows can retain the former outer field.
  */
 export const LegacyEncryptedAutomationTemplateEnvelopeSchema =
-  lazyZodSchema(() => EncryptedAutomationTemplateEnvelopeSchema.extend({
-    existingSessionId: ExistingSessionIdSchema.optional(),
+  lazyZodSchema(() => z.extend(EncryptedAutomationTemplateEnvelopeSchema, {
+    existingSessionId: z.optional(ExistingSessionIdSchema),
   }));
 export type LegacyEncryptedAutomationTemplateEnvelope = z.infer<
   typeof LegacyEncryptedAutomationTemplateEnvelopeSchema
@@ -108,9 +101,9 @@ export type LegacyEncryptedAutomationTemplateEnvelope = z.infer<
 
 export const LegacyPlainAutomationTemplateEnvelopeSchema =
   withPlainPayloadValidation(
-    PlainAutomationTemplateEnvelopeBaseSchema.extend({
-      existingSessionId: ExistingSessionIdSchema.optional(),
-    }),
+    lazyZodSchema(() => z.extend(PlainAutomationTemplateEnvelopeBaseSchema, {
+      existingSessionId: z.optional(ExistingSessionIdSchema),
+    })),
   );
 export type LegacyPlainAutomationTemplateEnvelope = z.infer<
   typeof LegacyPlainAutomationTemplateEnvelopeSchema

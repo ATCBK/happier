@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 
 import { encodeBase64 } from '../crypto/base64.js';
@@ -119,7 +119,7 @@ describe('account/encryptionMigrate', () => {
         expect(schema.parse(undefined)).toBeUndefined();
         expect(schema.nullable().parse(null)).toBeNull();
         for (const target of ['draft-7', 'draft-2020-12'] as const) {
-          const projected = zodSchemaToJsonSchemaObject(z.object({ catalog: schema }).strict(), { target });
+          const projected = zodSchemaToJsonSchemaObject(z.strictObject({ catalog: schema }), { target });
           expect(projected).toMatchObject({ type: 'object', additionalProperties: false, properties: {
             catalog: { type: 'object', additionalProperties: false, required: [revisionKey, 'content'],
               properties: { [revisionKey]: { type: 'integer', minimum: 0 }, content: {
@@ -174,7 +174,7 @@ describe('account/encryptionMigrate', () => {
     const invalid = AccountEncryptionMigrateKeyProofSchema.safeParse({ v: 1, publicKey: 'public', signature: 'sig', contentPublicKey: 'content' });
     expect(invalid.success).toBe(false);
     if (!invalid.success) {
-      expect(invalid.error).toBeInstanceOf(z.ZodError);
+      expect(invalid.error).toBeInstanceOf(z.core.$ZodError);
       expect(invalid.error.issues).toContainEqual(expect.objectContaining({ code: 'custom' }));
     }
   });

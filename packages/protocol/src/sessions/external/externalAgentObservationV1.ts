@@ -1,10 +1,10 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ExternalSessionCompletedBoundaryV1Schema } from './followLifecycleV1.js';
 import { LinkedExternalSessionQualifiedIdentityV1Schema } from './linkedSessionMetadata.js';
 
-const ObservationTimestampMsSchema = lazyZodSchema(() => z.number().int().min(0).max(Number.MAX_SAFE_INTEGER));
+const ObservationTimestampMsSchema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(0), z.maximum(Number.MAX_SAFE_INTEGER)));
 const ObservationExpiryMsSchema = ObservationTimestampMsSchema;
 
 export const EXTERNAL_AGENT_OBSERVATION_METADATA_KEY = 'externalAgentObservationV1';
@@ -46,20 +46,17 @@ export const ExternalAgentObservationEvidenceClassV1Schema = lazyZodSchema(() =>
   'reconciliation',
 ]));
 
-const ExternalAgentObservationOpaqueKeyV1Schema = lazyZodSchema(() => z.string()
-  .trim()
-  .min(1)
-  .max(EXTERNAL_AGENT_OBSERVATION_KEY_MAX_CODE_UNITS_V1));
+const ExternalAgentObservationOpaqueKeyV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(EXTERNAL_AGENT_OBSERVATION_KEY_MAX_CODE_UNITS_V1)));
 
 export const ExternalAgentObservationResourceKeyV1Schema =
   ExternalAgentObservationOpaqueKeyV1Schema;
 export const ExternalAgentObservationLinkKeyV1Schema =
   ExternalAgentObservationOpaqueKeyV1Schema;
 
-export const ExternalAgentObservationResourceGroupingV1Schema = lazyZodSchema(() => z.object({
+export const ExternalAgentObservationResourceGroupingV1Schema = lazyZodSchema(() => z.strictObject({
   resourceKey: ExternalAgentObservationResourceKeyV1Schema,
   linkKey: ExternalAgentObservationLinkKeyV1Schema,
-}).strict());
+}));
 
 export function isCanonicalAbsoluteObservationFilePath(value: string): boolean {
   if (
@@ -98,25 +95,14 @@ export function isCanonicalAbsoluteObservationTopologyDirectoryPath(value: strin
     && !/^[/\\]{2}[^/\\]+[/\\][^/\\]+[/\\]?$/u.test(value);
 }
 
-export const ExternalAgentObservationWatchFileChangesV1Schema = lazyZodSchema(() => z.object({
+export const ExternalAgentObservationWatchFileChangesV1Schema = lazyZodSchema(() => z.strictObject({
   files: z.array(
-    z.string().refine(
-      isCanonicalAbsoluteObservationFilePath,
-      'Observation file-watch paths must be canonical absolute paths.',
-    ),
-  )
-    .min(1)
-    .max(EXTERNAL_AGENT_OBSERVATION_MAX_WATCH_FILES_V1),
-  topologyDirectories: z.array(
-    z.string().refine(
-      isCanonicalAbsoluteObservationTopologyDirectoryPath,
-      'Observation topology directories must be canonical absolute non-root paths.',
-    ),
-  )
-    .min(1)
-    .max(2)
-    .optional(),
-}).strict().superRefine((value, ctx) => {
+    z.string().check(z.refine(isCanonicalAbsoluteObservationFilePath, 'Observation file-watch paths must be canonical absolute paths.')),
+  ).check(z.minLength(1), z.maxLength(EXTERNAL_AGENT_OBSERVATION_MAX_WATCH_FILES_V1)),
+  topologyDirectories: z.optional(z.array(
+    z.string().check(z.refine(isCanonicalAbsoluteObservationTopologyDirectoryPath, 'Observation topology directories must be canonical absolute non-root paths.')),
+  ).check(z.minLength(1), z.maxLength(2))),
+}).check(z.superRefine((value, ctx) => {
   const seenFiles = new Set<string>();
   value.files.forEach((file, index) => {
     if (seenFiles.has(file)) {
@@ -141,7 +127,7 @@ export const ExternalAgentObservationWatchFileChangesV1Schema = lazyZodSchema(()
     }
     seenTopologyDirectories.add(directory);
   });
-}));
+})));
 
 const ExternalAgentObservationResourceDescriptorBaseV1Schema = lazyZodSchema(() => z.object({
   resourceKey: ExternalAgentObservationResourceKeyV1Schema,
@@ -150,16 +136,16 @@ const ExternalAgentObservationResourceDescriptorBaseV1Schema = lazyZodSchema(() 
 
 export const ExternalAgentObservationResourceDescriptorV1Schema =
   lazyZodSchema(() => z.discriminatedUnion('changeObservation', [
-    ExternalAgentObservationResourceDescriptorBaseV1Schema.extend({
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationResourceDescriptorBaseV1Schema, {
       changeObservation: z.literal('observe_resource'),
-    }).strict(),
-    ExternalAgentObservationResourceDescriptorBaseV1Schema.extend({
+    })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationResourceDescriptorBaseV1Schema, {
       changeObservation: z.literal('watch_file_changes'),
       watchFileChanges: ExternalAgentObservationWatchFileChangesV1Schema,
-    }).strict(),
-    ExternalAgentObservationResourceDescriptorBaseV1Schema.extend({
+    })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationResourceDescriptorBaseV1Schema, {
       changeObservation: z.literal('reconcile_only'),
-    }).strict(),
+    })),
   ]));
 
 const ExternalAgentObservationLeafFactBaseV1Schema = lazyZodSchema(() => z.object({
@@ -168,38 +154,38 @@ const ExternalAgentObservationLeafFactBaseV1Schema = lazyZodSchema(() => z.objec
 }));
 
 export const ExternalAgentObservationLeafFactV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  ExternalAgentObservationLeafFactBaseV1Schema.extend({
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationLeafFactBaseV1Schema, {
     kind: z.literal('liveness'),
     value: z.enum(['running', 'stopped']),
     expiresAtMs: ObservationExpiryMsSchema,
-  }).strict(),
-  ExternalAgentObservationLeafFactBaseV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationLeafFactBaseV1Schema, {
     kind: z.literal('turn_phase'),
     value: z.enum(['working', 'waiting', 'retrying', 'idle']),
     expiresAtMs: ObservationExpiryMsSchema,
-  }).strict(),
-  ExternalAgentObservationLeafFactBaseV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationLeafFactBaseV1Schema, {
     kind: z.literal('recent_activity'),
     expiresAtMs: ObservationExpiryMsSchema,
-  }).strict(),
-  ExternalAgentObservationLeafFactBaseV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationLeafFactBaseV1Schema, {
     kind: z.literal('completed_boundary'),
-    boundaryId: z.string().trim().min(1).max(1_024),
-  }).strict(),
-  ExternalAgentObservationLeafFactBaseV1Schema.extend({
+    boundaryId: z.string().check(z.trim(), z.minLength(1), z.maxLength(1_024)),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationLeafFactBaseV1Schema, {
     kind: z.literal('successful_empty'),
     emptyTurnPhase: z.enum(['idle', 'unsupported']),
     expiresAtMs: ObservationExpiryMsSchema,
-  }).strict(),
-  ExternalAgentObservationLeafFactBaseV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationLeafFactBaseV1Schema, {
     kind: z.literal('retrieval_failed'),
     axis: ExternalAgentObservationAxisV1Schema,
-  }).strict(),
-  ExternalAgentObservationLeafFactBaseV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationLeafFactBaseV1Schema, {
     kind: z.literal('unsupported'),
     axis: ExternalAgentObservationAxisV1Schema,
-  }).strict(),
-]).superRefine((fact, ctx) => {
+  })),
+]).check(z.superRefine((fact, ctx) => {
   if ('expiresAtMs' in fact && fact.expiresAtMs < fact.observedAtMs) {
     ctx.addIssue({
       code: 'custom',
@@ -207,14 +193,12 @@ export const ExternalAgentObservationLeafFactV1Schema = lazyZodSchema(() => z.di
       message: 'Observation expiry cannot precede its observation time.',
     });
   }
-}));
+})));
 
-export const ExternalAgentObservationLinkEvidenceV1Schema = lazyZodSchema(() => z.object({
+export const ExternalAgentObservationLinkEvidenceV1Schema = lazyZodSchema(() => z.strictObject({
   linkKey: ExternalAgentObservationLinkKeyV1Schema,
-  facts: z.array(ExternalAgentObservationLeafFactV1Schema)
-    .min(1)
-    .max(EXTERNAL_AGENT_OBSERVATION_MAX_FACTS_PER_LINK_V1),
-}).strict());
+  facts: z.array(ExternalAgentObservationLeafFactV1Schema).check(z.minLength(1), z.maxLength(EXTERNAL_AGENT_OBSERVATION_MAX_FACTS_PER_LINK_V1)),
+}));
 
 function rejectDuplicateObservationLinkKeys(
   value: Readonly<{
@@ -228,7 +212,7 @@ function rejectDuplicateObservationLinkKeys(
     >;
     linkKeys?: ReadonlyArray<string>;
   }>,
-  ctx: z.RefinementCtx,
+  ctx: z.core.$RefinementCtx,
 ): void {
   const entries = value.items ?? value.outcomes ?? value.linkKeys ?? [];
   const seen = new Set<string>();
@@ -250,12 +234,10 @@ function rejectDuplicateObservationLinkKeys(
   });
 }
 
-export const ExternalAgentObservationLinkEvidenceBatchV1Schema = lazyZodSchema(() => z.object({
+export const ExternalAgentObservationLinkEvidenceBatchV1Schema = lazyZodSchema(() => z.strictObject({
   // Empty observer callbacks carry no fact and are not an event.
-  items: z.array(ExternalAgentObservationLinkEvidenceV1Schema)
-    .min(1)
-    .max(EXTERNAL_AGENT_OBSERVATION_MAX_LINKS_PER_BATCH_V1),
-}).strict().superRefine(rejectDuplicateObservationLinkKeys));
+  items: z.array(ExternalAgentObservationLinkEvidenceV1Schema).check(z.minLength(1), z.maxLength(EXTERNAL_AGENT_OBSERVATION_MAX_LINKS_PER_BATCH_V1)),
+}).check(z.superRefine(rejectDuplicateObservationLinkKeys)));
 
 export const ExternalAgentObservationReconcilePurposeV1Schema = lazyZodSchema(() => z.enum([
   'observation_evidence',
@@ -264,112 +246,106 @@ export const ExternalAgentObservationReconcilePurposeV1Schema = lazyZodSchema(()
 
 const ExternalAgentObservationReconcileRequestBaseV1Schema = lazyZodSchema(() => z.object({
   // The host skips reconciliation when there are no current requested links.
-  linkKeys: z.array(ExternalAgentObservationLinkKeyV1Schema)
-    .min(1)
-    .max(EXTERNAL_AGENT_OBSERVATION_MAX_LINKS_PER_BATCH_V1),
+  linkKeys: z.array(ExternalAgentObservationLinkKeyV1Schema).check(z.minLength(1), z.maxLength(EXTERNAL_AGENT_OBSERVATION_MAX_LINKS_PER_BATCH_V1)),
 }));
 
 export const ExternalAgentObservationReconcileRequestV1Schema =
   lazyZodSchema(() => z.discriminatedUnion('purpose', [
-    ExternalAgentObservationReconcileRequestBaseV1Schema.extend({
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationReconcileRequestBaseV1Schema, {
       purpose: z.literal('observation_evidence'),
-    }).strict(),
-    ExternalAgentObservationReconcileRequestBaseV1Schema.extend({
+    })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationReconcileRequestBaseV1Schema, {
       purpose: z.literal('resource_descriptors'),
-    }).strict(),
-  ]).superRefine(rejectDuplicateObservationLinkKeys));
+    })),
+  ]).check(z.superRefine(rejectDuplicateObservationLinkKeys)));
 
 export const ExternalAgentObservationResourceDescriptorOutcomeV1Schema =
   lazyZodSchema(() => z.discriminatedUnion('kind', [
-    z.object({
+    z.strictObject({
       kind: z.literal('described'),
       descriptor: ExternalAgentObservationResourceDescriptorV1Schema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       kind: z.literal('unavailable'),
       linkKey: ExternalAgentObservationLinkKeyV1Schema,
-    }).strict(),
+    }),
   ]));
 
-const ExternalAgentObservationEvidenceReconcileResultV1Schema = lazyZodSchema(() => z.object({
+const ExternalAgentObservationEvidenceReconcileResultV1Schema = lazyZodSchema(() => z.strictObject({
   purpose: z.literal('observation_evidence'),
   // Every returned link reports facts, successful-empty, or retrieval failure;
   // a resource-wide empty success is never an implicit outcome.
-  outcomes: z.array(ExternalAgentObservationLinkEvidenceV1Schema)
-    .min(1)
-    .max(EXTERNAL_AGENT_OBSERVATION_MAX_LINKS_PER_BATCH_V1),
-}).strict());
+  outcomes: z.array(ExternalAgentObservationLinkEvidenceV1Schema).check(z.minLength(1), z.maxLength(EXTERNAL_AGENT_OBSERVATION_MAX_LINKS_PER_BATCH_V1)),
+}));
 
-const ExternalAgentObservationDescriptorReconcileResultV1Schema = lazyZodSchema(() => z.object({
+const ExternalAgentObservationDescriptorReconcileResultV1Schema = lazyZodSchema(() => z.strictObject({
   purpose: z.literal('resource_descriptors'),
-  outcomes: z.array(ExternalAgentObservationResourceDescriptorOutcomeV1Schema)
-    .min(1)
-    .max(EXTERNAL_AGENT_OBSERVATION_MAX_LINKS_PER_BATCH_V1),
-}).strict());
+  outcomes: z.array(ExternalAgentObservationResourceDescriptorOutcomeV1Schema).check(z.minLength(1), z.maxLength(EXTERNAL_AGENT_OBSERVATION_MAX_LINKS_PER_BATCH_V1)),
+}));
 
 export const ExternalAgentObservationReconcileResultV1Schema =
   lazyZodSchema(() => z.discriminatedUnion('purpose', [
     ExternalAgentObservationEvidenceReconcileResultV1Schema,
     ExternalAgentObservationDescriptorReconcileResultV1Schema,
-  ]).superRefine(rejectDuplicateObservationLinkKeys));
+  ]).check(z.superRefine(rejectDuplicateObservationLinkKeys)));
 
-export const ExternalAgentObservationTargetV1Schema = lazyZodSchema(() => z.object({
+export const ExternalAgentObservationTargetV1Schema = lazyZodSchema(() => z.strictObject({
   qualifiedLinkIdentity: LinkedExternalSessionQualifiedIdentityV1Schema,
-  linkGeneration: z.string().trim().min(1).max(2_000),
-}).strict());
+  linkGeneration: z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000)),
+}));
 
 const ExternalAgentObservationEvidenceBaseV1Schema = lazyZodSchema(() => z.object({
   target: ExternalAgentObservationTargetV1Schema,
-  evidenceClass: ExternalAgentObservationEvidenceClassV1Schema.optional(),
+  evidenceClass: z.optional(ExternalAgentObservationEvidenceClassV1Schema),
   observedAtMs: ObservationTimestampMsSchema,
 }));
 
 export const ExternalAgentObservationEvidenceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  ExternalAgentObservationEvidenceBaseV1Schema.extend({
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationEvidenceBaseV1Schema, {
     kind: z.literal('liveness'),
     value: z.enum(['running', 'stopped']),
     evidenceClass: ExternalAgentObservationEvidenceClassV1Schema,
     expiresAtMs: ObservationExpiryMsSchema,
-  }).strict(),
-  ExternalAgentObservationEvidenceBaseV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationEvidenceBaseV1Schema, {
     kind: z.literal('process_liveness'),
     value: z.enum(['running', 'stopped']),
-    processId: z.number().int().positive(),
-    processStartedAtMs: ObservationTimestampMsSchema.nullable(),
+    processId: z.number().check(z.int(), z.positive()),
+    processStartedAtMs: z.nullable(ObservationTimestampMsSchema),
     startTimeVerified: z.boolean(),
     expiresAtMs: ObservationExpiryMsSchema,
-  }).strict(),
-  ExternalAgentObservationEvidenceBaseV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationEvidenceBaseV1Schema, {
     kind: z.literal('turn_phase'),
     value: z.enum(['working', 'waiting', 'retrying', 'idle']),
     expiresAtMs: ObservationExpiryMsSchema,
-  }).strict(),
-  ExternalAgentObservationEvidenceBaseV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationEvidenceBaseV1Schema, {
     kind: z.literal('recent_activity'),
     expiresAtMs: ObservationExpiryMsSchema,
-  }).strict(),
-  ExternalAgentObservationEvidenceBaseV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationEvidenceBaseV1Schema, {
     kind: z.literal('completed_boundary'),
-    boundaryId: z.string().trim().min(1).max(1_024),
-  }).strict(),
-  ExternalAgentObservationEvidenceBaseV1Schema.extend({
+    boundaryId: z.string().check(z.trim(), z.minLength(1), z.maxLength(1_024)),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationEvidenceBaseV1Schema, {
     kind: z.literal('successful_empty'),
     emptyTurnPhase: z.enum(['idle', 'unsupported']),
     expiresAtMs: ObservationExpiryMsSchema,
-  }).strict(),
-  ExternalAgentObservationEvidenceBaseV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationEvidenceBaseV1Schema, {
     kind: z.literal('retrieval_failed'),
     axis: ExternalAgentObservationAxisV1Schema,
-  }).strict(),
-  ExternalAgentObservationEvidenceBaseV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationEvidenceBaseV1Schema, {
     kind: z.literal('unsupported'),
     axis: ExternalAgentObservationAxisV1Schema,
-  }).strict(),
-  ExternalAgentObservationEvidenceBaseV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalAgentObservationEvidenceBaseV1Schema, {
     kind: z.literal('lifecycle'),
     event: z.enum(['session_started', 'attached', 'stop']),
-  }).strict(),
-]).superRefine((evidence, ctx) => {
+  })),
+]).check(z.superRefine((evidence, ctx) => {
   if ('expiresAtMs' in evidence && evidence.expiresAtMs < evidence.observedAtMs) {
     ctx.addIssue({
       code: 'custom',
@@ -388,7 +364,7 @@ export const ExternalAgentObservationEvidenceV1Schema = lazyZodSchema(() => z.di
       message: 'Verified process identity requires its start time.',
     });
   }
-}));
+})));
 
 export function attachExternalAgentObservationTargetV1(
   target: ExternalAgentObservationTargetV1,
@@ -401,15 +377,15 @@ export function attachExternalAgentObservationTargetV1(
   }));
 }
 
-export const ExternalAgentObservationSnapshotV1Schema = lazyZodSchema(() => z.object({
+export const ExternalAgentObservationSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   qualifiedLinkIdentity: LinkedExternalSessionQualifiedIdentityV1Schema,
-  linkGeneration: z.string().trim().min(1).max(2_000),
+  linkGeneration: z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000)),
   status: ExternalAgentObservationStatusV1Schema,
-  observedAtMs: ObservationTimestampMsSchema.optional(),
-  expiresAtMs: ObservationExpiryMsSchema.optional(),
-  boundary: ExternalSessionCompletedBoundaryV1Schema.optional(),
-}).strict().superRefine((snapshot, ctx) => {
+  observedAtMs: z.optional(ObservationTimestampMsSchema),
+  expiresAtMs: z.optional(ObservationExpiryMsSchema),
+  boundary: z.optional(ExternalSessionCompletedBoundaryV1Schema),
+}).check(z.superRefine((snapshot, ctx) => {
   if (snapshot.status === 'unknown') {
     if (snapshot.observedAtMs !== undefined || snapshot.expiresAtMs !== undefined) {
       ctx.addIssue({
@@ -433,7 +409,7 @@ export const ExternalAgentObservationSnapshotV1Schema = lazyZodSchema(() => z.ob
       message: 'Snapshot expiry cannot precede its observation time.',
     });
   }
-}));
+})));
 
 export type ExternalAgentObservationStatusV1 = z.infer<
   typeof ExternalAgentObservationStatusV1Schema

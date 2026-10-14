@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   ScmOperationErrorCodeSchema,
@@ -11,40 +11,40 @@ export const SCM_WORKTREE_REMOVE_AUTHORIZATION_TOKEN = 'remove-worktree' as cons
 
 export const ScmWorktreeCommandResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
-  outcome: ScmOperationOutcomeSchema.optional(),
-  stdout: z.string().optional(),
-  stderr: z.string().optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  outcome: z.optional(ScmOperationOutcomeSchema),
+  stdout: z.optional(z.string()),
+  stderr: z.optional(z.string()),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }));
 export type ScmWorktreeCommandResponse = z.infer<typeof ScmWorktreeCommandResponseSchema>;
 
-export const ScmWorktreeCreateRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
-  displayName: z.string().min(1).optional(),
-  baseRef: z.string().min(1).optional(),
-  branchMode: z.enum(['new', 'existing']).optional(),
+export const ScmWorktreeCreateRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
+  displayName: z.optional(z.string().check(z.minLength(1))),
+  baseRef: z.optional(z.string().check(z.minLength(1))),
+  branchMode: z.optional(z.enum(['new', 'existing'])),
 }));
 export type ScmWorktreeCreateRequest = z.infer<typeof ScmWorktreeCreateRequestSchema>;
 
 export const ScmWorktreeCreateResponseSchema = lazyZodSchema(() => z.discriminatedUnion('success', [z.object({
   success: z.literal(true),
-  outcome: ScmOperationOutcomeSchema.optional(),
+  outcome: z.optional(ScmOperationOutcomeSchema),
   worktreePath: z.string(),
   branchName: z.string(),
-  sourceRootPath: z.string().optional(),
-  repositoryRootPath: z.string().optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  sourceRootPath: z.optional(z.string()),
+  repositoryRootPath: z.optional(z.string()),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }), z.object({
   success: z.literal(false),
-  outcome: ScmOperationOutcomeSchema.optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  outcome: z.optional(ScmOperationOutcomeSchema),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 })]));
 export type ScmWorktreeCreateResponse = z.infer<typeof ScmWorktreeCreateResponseSchema>;
 
-export const ScmWorktreeRemoveRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
-  worktreePath: z.string().min(1),
+export const ScmWorktreeRemoveRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
+  worktreePath: z.string().check(z.minLength(1)),
   confirmed: z.literal(true),
   authorizationToken: z.literal(SCM_WORKTREE_REMOVE_AUTHORIZATION_TOKEN),
 }));
@@ -54,11 +54,11 @@ export const ScmWorktreeRemoveResponseSchema = ScmWorktreeCommandResponseSchema;
 export type ScmWorktreeRemoveResponse = z.infer<typeof ScmWorktreeRemoveResponseSchema>;
 
 /** Separate advertised operations: an older backend must never ignore a retention request. */
-export const ScmWorktreeRetireRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
-  worktreePath: z.string().min(1),
-  targetPath: z.string().min(1),
-  entryId: z.string().min(1),
-}).strict());
+export const ScmWorktreeRetireRequestSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScmRequestBaseSchema, {
+  worktreePath: z.string().check(z.minLength(1)),
+  targetPath: z.string().check(z.minLength(1)),
+  entryId: z.string().check(z.minLength(1)),
+})));
 export type ScmWorktreeRetireRequest = z.infer<typeof ScmWorktreeRetireRequestSchema>;
 export const ScmWorktreeReinstateRequestSchema = ScmWorktreeRetireRequestSchema;
 export type ScmWorktreeReinstateRequest = ScmWorktreeRetireRequest;

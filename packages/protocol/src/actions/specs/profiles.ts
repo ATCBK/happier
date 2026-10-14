@@ -4,18 +4,18 @@ import {
 } from '../../profiles/profileActionsV1.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 import { readRecord } from '../../inputs/inputRecords.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 
-const ProfileSaveCliInput = lazyZodSchema(() => z.object({
+const ProfileSaveCliInput = lazyZodSchema(() => z.strictObject({
   id: inputs['launch_profiles.save'].shape.id,
   expectedRevision: inputs['launch_profiles.save'].shape.expectedRevision,
   profile: inputs['launch_profiles.save'].shape.profile,
   secretBindings: inputs['launch_profiles.save'].shape.secretBindings,
   legacyCloneSource: inputs['launch_profiles.save'].shape.legacyCloneSource,
   expectedArtifactRevision: inputs['launch_profiles.save'].shape.expectedArtifactRevision,
-  skill: z.array(z.string().min(1)).optional(),
-}).strict());
+  skill: z.optional(z.array(z.string().check(z.minLength(1)))),
+}));
 
 /** Shared observations expose outcome/identity, never private definitions or credential mappings. */
 function projectProfileObservation(input: unknown): unknown {

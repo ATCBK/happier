@@ -1,25 +1,25 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { SessionSurfaceItemIdSchema } from './ids.js';
 import { areServerProfileIdentifiersEquivalent, type ServerProfileScopeResolver } from '../../features/payload/capabilities/serverIdentityCapabilities.js';
 
 const origin = {
-    originServerId: z.string().trim().min(1),
-    originSessionId: z.string().trim().min(1),
+    originServerId: z.string().check(z.trim(), z.minLength(1)),
+    originSessionId: z.string().check(z.trim(), z.minLength(1)),
     originItemId: SessionSurfaceItemIdSchema,
 };
 
 /** Presentation correspondence only; these source hints confer no parent read authority. */
 export const SessionForkVisualCopyV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-    z.object({ ...origin, status: z.literal('copied'), itemId: SessionSurfaceItemIdSchema }).strict(),
-    z.object({ ...origin, status: z.literal('not_copied') }).strict(),
+    z.strictObject({ ...origin, status: z.literal('copied'), itemId: SessionSurfaceItemIdSchema }),
+    z.strictObject({ ...origin, status: z.literal('not_copied') }),
 ]));
 export type SessionForkVisualCopyV1 = Readonly<z.infer<typeof SessionForkVisualCopyV1Schema>>;
 
-export const SessionForkVisualsV1Schema = lazyZodSchema(() => z.object({
+export const SessionForkVisualsV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     copies: z.array(SessionForkVisualCopyV1Schema),
-}).strict());
+}));
 
 export type SessionForkVisualContextV1 = Readonly<{
     sessionId: string;
@@ -29,13 +29,13 @@ export type SessionForkVisualContextV1 = Readonly<{
 }>;
 
 /** Presentation provenance only; never grants access to the source Session. */
-export const SessionForkVisualOriginV1Schema = lazyZodSchema(() => z.object({
+export const SessionForkVisualOriginV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    serverId: z.string().trim().min(1),
-    sessionId: z.string().trim().min(1),
-    sourceMessageId: z.string().trim().min(1),
-    sourceSeq: z.number().int().nonnegative(),
-}).strict());
+    serverId: z.string().check(z.trim(), z.minLength(1)),
+    sessionId: z.string().check(z.trim(), z.minLength(1)),
+    sourceMessageId: z.string().check(z.trim(), z.minLength(1)),
+    sourceSeq: z.number().check(z.int(), z.nonnegative()),
+}));
 export type SessionForkVisualOriginV1 = Readonly<z.infer<typeof SessionForkVisualOriginV1Schema>>;
 
 /** An inherited hint never authorizes a parent read when its child copy is absent. */

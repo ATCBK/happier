@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 const protocol = await import('../index.js');
 
@@ -12,8 +12,8 @@ describe('workspace manifest schemas', () => {
   });
 
   it('accepts canonical directory, file, and symlink manifest entries with an optional manifest fingerprint', async () => {
-    const entrySchema = protocol.WorkspaceManifestEntrySchema as z.ZodTypeAny;
-    const manifestSchema = protocol.WorkspaceManifestSchema as z.ZodTypeAny;
+    const entrySchema = protocol.WorkspaceManifestEntrySchema as z.ZodMiniType;
+    const manifestSchema = protocol.WorkspaceManifestSchema as z.ZodMiniType;
 
     expect(entrySchema.safeParse({
       relativePath: 'src',
@@ -47,8 +47,8 @@ describe('workspace manifest schemas', () => {
   });
 
   it('rejects malformed manifest fingerprints and cross-kind entry payloads', async () => {
-    const entrySchema = protocol.WorkspaceManifestEntrySchema as z.ZodTypeAny;
-    const manifestSchema = protocol.WorkspaceManifestSchema as z.ZodTypeAny;
+    const entrySchema = protocol.WorkspaceManifestEntrySchema as z.ZodMiniType;
+    const manifestSchema = protocol.WorkspaceManifestSchema as z.ZodMiniType;
 
     const badDirectoryEntry = entrySchema.safeParse({
       relativePath: 'src',
@@ -65,7 +65,7 @@ describe('workspace manifest schemas', () => {
   });
 
   it('rejects Windows-style upward traversal segments in manifest paths', async () => {
-    const entrySchema = protocol.WorkspaceManifestEntrySchema as z.ZodTypeAny;
+    const entrySchema = protocol.WorkspaceManifestEntrySchema as z.ZodMiniType;
 
     const escaped = entrySchema.safeParse({
       relativePath: 'src\\..\\secret.txt',
@@ -79,7 +79,7 @@ describe('workspace manifest schemas', () => {
   });
 
   it('rejects Windows absolute paths in manifest entries', async () => {
-    const entrySchema = protocol.WorkspaceManifestEntrySchema as z.ZodTypeAny;
+    const entrySchema = protocol.WorkspaceManifestEntrySchema as z.ZodMiniType;
 
     expect(entrySchema.safeParse({
       relativePath: 'C:\\repo\\secret.txt',

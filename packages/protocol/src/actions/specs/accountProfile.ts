@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
   AccountNameUpdateRequestV1Schema, AccountNameUpdateResponseV1Schema,
   AccountUsernameUpdateRequestV1Schema, AccountUsernameUpdateResponseV1Schema,
@@ -12,7 +12,7 @@ export const ACCOUNT_PROFILE_ACTION_SPECS_V1 = Object.freeze([
     id: 'account.profile.get', approval: {result: 'required'}, title: 'Read your profile',
     description: 'Read your own name, username and avatar on this Home.',
     safety: 'safe', sideEffectClass: 'read', cliPath: ['account', 'profile', 'get'],
-    method: 'GET', path: '/v1/account/profile', inputSchema: z.object({}).strict(),
+    method: 'GET', path: '/v1/account/profile', inputSchema: z.strictObject({}),
     outputSchema: AccountSelfProfileV1Schema,
   }),
   homeDomainActionRow({

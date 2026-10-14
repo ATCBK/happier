@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * 43 characters of the server's cryptographic alphanumeric alphabet is ~256 bits of
@@ -8,6 +8,5 @@ import { z } from 'zod';
  */
 export const TEAM_INVITATION_TOKEN_LENGTH = 43;
 export const TeamInvitationTokenV1Schema = lazyZodSchema(() => z
-  .string()
-  .regex(new RegExp(`^[A-Za-z0-9]{${TEAM_INVITATION_TOKEN_LENGTH}}$`)));
+  .string().check(z.regex(new RegExp(`^[A-Za-z0-9]{${TEAM_INVITATION_TOKEN_LENGTH}}$`))));
 export type TeamInvitationTokenV1 = z.infer<typeof TeamInvitationTokenV1Schema>;

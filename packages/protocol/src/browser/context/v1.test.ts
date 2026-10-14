@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { describe, expect, it } from 'vitest';
 import { SessionRunStreamReadEnvelopeSchema } from '../../sessions/control/contract.js';
 import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
@@ -28,7 +29,7 @@ describe('browser context protocol contracts', () => {
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
       for (const schema of [
         zodSchemaToJsonSchemaObject(SessionRunStreamReadEnvelopeSchema, { target }),
-        SessionRunStreamReadEnvelopeSchema.toJSONSchema({ io: 'input', target, unrepresentable: 'any' }),
+        z.toJSONSchema(SessionRunStreamReadEnvelopeSchema, { io: 'input', target, unrepresentable: 'any' }),
       ]) {
         const definitions = object(target === 'draft-7' ? schema.definitions : schema.$defs);
         const page = Object.values(definitions).map(object).find((node) => {

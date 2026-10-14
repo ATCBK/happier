@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 
 import type { TeamIdentityActionIdV1 } from '../../teams/actionsV1.js';
 import type { TeamDirectoryActionIdV1 } from '../../teams/directory/v1.js';
@@ -126,8 +126,8 @@ type TeamProvisioningActionRowInput = Readonly<{
   presentUser?: boolean;
   agent?: boolean;
   sdkMethod?: string;
-  inputSchema: z.ZodTypeAny;
-  outputSchema: z.ZodTypeAny;
+  inputSchema: z.ZodMiniType;
+  outputSchema: z.ZodMiniType;
   method?: 'GET' | 'POST' | 'DELETE';
   path: string;
   projectObservationInput?: PreNormalizedActionSpec['projectObservationInput'];
@@ -170,8 +170,8 @@ function teamProvisioningActionRow<const TInput extends TeamProvisioningActionRo
 
 function teamExternalGroupBindingActionRow<
   const TActionId extends TeamExternalGroupBindingActionIdV1,
-  const TInputSchema extends z.ZodTypeAny,
-  const TOutputSchema extends z.ZodTypeAny,
+  const TInputSchema extends z.ZodMiniType,
+  const TOutputSchema extends z.ZodMiniType,
 >(input: Readonly<{
   id: TActionId;
   title: string;

@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { describe, expect, it } from 'vitest';
 import Ajv from 'ajv';
 
@@ -284,7 +285,7 @@ describe('workflow definition normalization', () => {
     expect(WorkflowBlockSchema.safeParse({ ...loop, body: [leaf, leaf] }).success).toBe(true);
   });
   it('advertises recursive canonical block constraints to Action schema consumers', () => {
-    const jsonSchema = WorkflowBlockSchema.toJSONSchema({ io: 'input', target: 'draft-7' });
+    const jsonSchema = z.toJSONSchema(WorkflowBlockSchema, { io: 'input', target: 'draft-7' });
     const validate = new Ajv({ strict: false }).compile(jsonSchema);
     expect(validate(createDeepWorkflowDefinition(12).blocks[0])).toBe(true);
     expect(validate({ kind: 'if', id: 'gate', when: { kind: 'exists', value: { kind: 'literal', value: true } },

@@ -1,5 +1,5 @@
 import type { AcpBackendLaunchV1 } from '../settingsV1.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PinnedArchivePlatformSchema, type PinnedArchiveInstallableAsset } from '../../../installables/sourceKind.js';
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import type { AcpRegistryAgentV1, RegistryAgentDistributionV1 } from '../../../registries/registryItemsV1.js';
@@ -13,9 +13,9 @@ export type AcpPlatformFitV1 =
   | Readonly<{ kind: 'unknown'; reason: 'platform_unknown' | 'arch_unknown' }>;
 
 export const AcpPlatformFitV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('can_run'), via: z.enum(['command', 'npm', 'archive', 'uv']), target: PinnedArchivePlatformSchema.optional() }).strict(),
-  z.object({ kind: z.literal('cant_run'), reason: z.enum(['no_build_for_platform', 'archive_type_unsupported']) }).strict(),
-  z.object({ kind: z.literal('unknown'), reason: z.enum(['platform_unknown', 'arch_unknown']) }).strict(),
+  z.strictObject({ kind: z.literal('can_run'), via: z.enum(['command', 'npm', 'archive', 'uv']), target: z.optional(PinnedArchivePlatformSchema) }),
+  z.strictObject({ kind: z.literal('cant_run'), reason: z.enum(['no_build_for_platform', 'archive_type_unsupported']) }),
+  z.strictObject({ kind: z.literal('unknown'), reason: z.enum(['platform_unknown', 'arch_unknown']) }),
 ]));
 
 function archiveSupported(asset: PinnedArchiveInstallableAsset): boolean {

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { ProjectDefinitionDetectionV1Schema, ProjectDefinitionImportCandidateV1Schema, ProjectExecutionInputV1Schema, ProjectNativeInvocationPreviewV1Schema, ProjectNativeRefV1Schema, ProjectToolInspectionV1Schema } from '../workspaces/projectSetup/projectManifestV1.js';
 import { ProjectManifestFileBasisV1Schema, ProjectManifestFileSnapshotSchema, ProjectManifestUpdateResultSchema } from '../workspaces/projectSetup/projectManifestDocument.js';
@@ -13,33 +13,33 @@ export type ProjectDefinitionActionId = typeof PROJECT_DEFINITION_ACTION_IDS[num
 // nested domain schemas remain the single Mini validation owners.
 export const ProjectDefinitionWorkspaceSchema = WorkspaceAddressV1Schema;
 export type ProjectDefinitionWorkspace = z.infer<typeof ProjectDefinitionWorkspaceSchema>;
-export const ProjectDefinitionInspectInputSchema = lazyZodSchema(() => z.object({ workspace: ProjectDefinitionWorkspaceSchema }).strict());
-export const ProjectManifestUpdateInputSchema = lazyZodSchema(() => z.object({
+export const ProjectDefinitionInspectInputSchema = lazyZodSchema(() => z.strictObject({ workspace: ProjectDefinitionWorkspaceSchema }));
+export const ProjectManifestUpdateInputSchema = lazyZodSchema(() => z.strictObject({
   workspace: ProjectDefinitionWorkspaceSchema, expectedBasis: ProjectManifestFileBasisV1Schema, bytes: z.string(),
-}).strict());
+}));
 /** Current reviewed target facts; retained operation completion is never a readiness input. */
 export const ProjectSetupReadinessV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('current'), reviewedEffectDigest: z.string().min(1), completedAtMs: z.number().int().nonnegative() }).strict(),
-  z.object({ kind: z.literal('unprepared'), reviewedEffectDigest: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal('notRequired'), reviewedEffectDigest: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal('needsReview'), code: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal('unknown'), code: z.string().min(1) }).strict(),
+  z.strictObject({ kind: z.literal('current'), reviewedEffectDigest: z.string().check(z.minLength(1)), completedAtMs: z.number().check(z.int(), z.nonnegative()) }),
+  z.strictObject({ kind: z.literal('unprepared'), reviewedEffectDigest: z.string().check(z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('notRequired'), reviewedEffectDigest: z.string().check(z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('needsReview'), code: z.string().check(z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('unknown'), code: z.string().check(z.minLength(1)) }),
 ]));
 export type ProjectSetupReadinessV1 = z.infer<typeof ProjectSetupReadinessV1Schema>;
-export const ProjectDefinitionInspectOutputSchema = lazyZodSchema(() => z.object({
+export const ProjectDefinitionInspectOutputSchema = lazyZodSchema(() => z.strictObject({
   definition: ProjectManifestFileSnapshotSchema, detection: ProjectDefinitionDetectionV1Schema,
   importCandidates: z.array(ProjectDefinitionImportCandidateV1Schema),
-  commands: z.array(z.object({
-    name: z.string().min(1), usage: z.enum(['script', 'service', 'setup']), source: ProjectNativeRefV1Schema,
-    availability: z.enum(['available', 'unavailable', 'unresolved', 'ambiguous']), code: z.string().optional(),
+  commands: z.optional(z.array(z.strictObject({
+    name: z.string().check(z.minLength(1)), usage: z.enum(['script', 'service', 'setup']), source: ProjectNativeRefV1Schema,
+    availability: z.enum(['available', 'unavailable', 'unresolved', 'ambiguous']), code: z.optional(z.string()),
     invocation: z.optional(ProjectNativeInvocationPreviewV1Schema),
-    executionInputs: z.array(ProjectExecutionInputV1Schema).optional(),
-  }).strict()).optional(),
-  environmentExecutionInputs: z.array(ProjectExecutionInputV1Schema).optional(),
-  tools: z.array(ProjectToolInspectionV1Schema).optional(),
-  setupReadiness: ProjectSetupReadinessV1Schema.optional(),
-  setupReview: ProjectSetupReviewV1Schema.optional(),
-}).strict());
+    executionInputs: z.optional(z.array(ProjectExecutionInputV1Schema)),
+  }))),
+  environmentExecutionInputs: z.optional(z.array(ProjectExecutionInputV1Schema)),
+  tools: z.optional(z.array(ProjectToolInspectionV1Schema)),
+  setupReadiness: z.optional(ProjectSetupReadinessV1Schema),
+  setupReview: z.optional(ProjectSetupReviewV1Schema),
+}));
 export type ProjectDefinitionInspectOutput = z.infer<typeof ProjectDefinitionInspectOutputSchema>;
 export const ProjectManifestUpdateOutputSchema = lazyZodSchema(() => z.lazy(() => ProjectManifestUpdateResultSchema));
 export const PROJECT_DEFINITION_ACTION_INPUT_SCHEMAS = {

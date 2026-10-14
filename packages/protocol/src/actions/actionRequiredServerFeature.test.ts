@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Session } from 'node:inspector/promises';
 import { performance } from 'node:perf_hooks';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { getActionRequiredServerFeatureId } from './actionRequiredServerFeature.js';
 

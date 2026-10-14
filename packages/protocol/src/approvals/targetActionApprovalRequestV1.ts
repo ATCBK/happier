@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import {
   ApprovalDecisionV1Schema,
@@ -18,7 +18,7 @@ export const TARGET_ACTION_APPROVAL_LIMITS_V1 = Object.freeze({
   detailUtf16Units: 4_096,
 });
 
-const boundedId = z.string().min(1).max(TARGET_ACTION_APPROVAL_LIMITS_V1.idUtf16Units);
+const boundedId = z.string().check(z.minLength(1), z.maxLength(TARGET_ACTION_APPROVAL_LIMITS_V1.idUtf16Units));
 
 const TargetActionApprovalStatusV1Schema = lazyZodSchema(() => z.enum([
   'open', 'approved', 'executing', 'rejected', 'executed', 'failed', 'canceled',
@@ -28,31 +28,31 @@ const TargetActionApprovalStatusV1Schema = lazyZodSchema(() => z.enum([
  * Host-stamped routing evidence for a deferred API Action approval. It is
  * durable approval subject data, never caller-supplied Action input.
  */
-export const TargetActionApprovalReplayPlacementV1Schema = lazyZodSchema(() => z.object({
+export const TargetActionApprovalReplayPlacementV1Schema = lazyZodSchema(() => z.strictObject({
   serverId: boundedId,
   machineId: boundedId,
-  defaultSessionId: boundedId.optional(),
-}).strict());
+  defaultSessionId: z.optional(boundedId),
+}));
 export type TargetActionApprovalReplayPlacementV1 = z.infer<
   typeof TargetActionApprovalReplayPlacementV1Schema
 >;
 
-export const TargetActionApprovalRequestV1Schema = lazyZodSchema(() => z.object({
+export const TargetActionApprovalRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1), kind: z.literal('plugin_target_action'), status: TargetActionApprovalStatusV1Schema,
-  createdAtMs: z.number().int().min(0), updatedAtMs: z.number().int().min(0),
+  createdAtMs: z.number().check(z.int(), z.minimum(0)), updatedAtMs: z.number().check(z.int(), z.minimum(0)),
   createdBy: ApprovalRequestCreatedBySchema,
-  requestedSurface: z.string().min(1).max(TARGET_ACTION_APPROVAL_LIMITS_V1.surfaceUtf16Units),
-  qualifiedActionId: z.string().max(TARGET_ACTION_APPROVAL_LIMITS_V1.idUtf16Units).regex(/^[a-z0-9][a-z0-9._-]*\/actions\/[a-z0-9][a-z0-9/-]*$/),
-  input: AgentRuntimeJsonValueV1Schema, accountId: boundedId.optional(), resourceId: boundedId.optional(),
+  requestedSurface: z.string().check(z.minLength(1), z.maxLength(TARGET_ACTION_APPROVAL_LIMITS_V1.surfaceUtf16Units)),
+  qualifiedActionId: z.string().check(z.maxLength(TARGET_ACTION_APPROVAL_LIMITS_V1.idUtf16Units), z.regex(/^[a-z0-9][a-z0-9._-]*\/actions\/[a-z0-9][a-z0-9/-]*$/)),
+  input: AgentRuntimeJsonValueV1Schema, accountId: z.optional(boundedId), resourceId: z.optional(boundedId),
   sourceCustody: PluginSourceCustodyV1Schema,
-  policyFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-  subjectFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-  replayPlacement: TargetActionApprovalReplayPlacementV1Schema.optional(),
-  executionOriginV1: ApprovalExecutionOriginV1Schema.optional(),
-  summary: z.string().min(1).max(TARGET_ACTION_APPROVAL_LIMITS_V1.summaryUtf16Units),
-  detail: z.string().min(1).max(TARGET_ACTION_APPROVAL_LIMITS_V1.detailUtf16Units).optional(),
-  decision: ApprovalDecisionV1Schema.optional(), execution: ApprovalExecutionV1Schema.optional(),
-}).strict().superRefine((value, ctx) => {
+  policyFingerprint: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
+  subjectFingerprint: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
+  replayPlacement: z.optional(TargetActionApprovalReplayPlacementV1Schema),
+  executionOriginV1: z.optional(ApprovalExecutionOriginV1Schema),
+  summary: z.string().check(z.minLength(1), z.maxLength(TARGET_ACTION_APPROVAL_LIMITS_V1.summaryUtf16Units)),
+  detail: z.optional(z.string().check(z.minLength(1), z.maxLength(TARGET_ACTION_APPROVAL_LIMITS_V1.detailUtf16Units))),
+  decision: z.optional(ApprovalDecisionV1Schema), execution: z.optional(ApprovalExecutionV1Schema),
+}).check(z.superRefine((value, ctx) => {
   if (value.status === 'open' && (value.decision || value.execution)) ctx.addIssue({ code: 'custom', message: 'open target-action approval cannot contain a decision or execution' });
   if ((value.status === 'approved' || value.status === 'executing' || value.status === 'executed' || value.status === 'failed') && value.decision?.kind !== 'approve') ctx.addIssue({ code: 'custom', message: `${value.status} target-action approval requires approve` });
   if (value.status === 'rejected' && value.decision?.kind !== 'reject') ctx.addIssue({ code: 'custom', message: 'rejected target-action approval requires reject' });
@@ -85,6 +85,6 @@ export const TargetActionApprovalRequestV1Schema = lazyZodSchema(() => z.object(
   } else if (new TextEncoder().encode(JSON.stringify(strictJson.data)).byteLength > TARGET_ACTION_APPROVAL_LIMITS_V1.artifactJsonBytes) {
     ctx.addIssue({ code: 'custom', message: 'target-action approval artifact byte limit exceeded' });
   }
-}));
+})));
 export type TargetActionApprovalRequestV1 = z.infer<typeof TargetActionApprovalRequestV1Schema>;
 export const StoredTargetActionApprovalRequestV1Schema = createStoredReadSchema(TargetActionApprovalRequestV1Schema);

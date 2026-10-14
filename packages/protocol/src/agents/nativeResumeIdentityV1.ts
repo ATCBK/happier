@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { NonBlankOpaqueIdentifierSchema } from '../strings/opaqueIdentifier.js';
 
@@ -31,10 +31,8 @@ import { NonBlankOpaqueIdentifierSchema } from '../strings/opaqueIdentifier.js';
  * it back to the Agent that minted it, so the released 512-code-unit bound is
  * measured on the preserved bytes rather than on a trimmed projection of them.
  */
-export const AgentNativeResumeIdentityV1Schema = lazyZodSchema(() => z
-  .object({
+export const AgentNativeResumeIdentityV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    vendorResumeId: NonBlankOpaqueIdentifierSchema.max(512),
-  })
-  .strict());
+    vendorResumeId: NonBlankOpaqueIdentifierSchema.check(z.maxLength(512)),
+  }));
 export type AgentNativeResumeIdentityV1 = z.infer<typeof AgentNativeResumeIdentityV1Schema>;

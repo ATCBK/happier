@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { readCanonicalPaddedBase64DecodedLength } from '../../../../crypto/base64.js';
 import { createCanonicalJsonSigningInput } from '../../../../crypto/canonicalJson.js';
@@ -11,88 +11,81 @@ export { getMachineLiveStreamPayloadDecodedByteLength } from './codecsV1.js';
 export const MACHINE_LIVE_STREAM_SOCKET_EVENT = 'machines.liveStream.v1' as const;
 export const MACHINE_LIVE_STREAM_RELAY_AUTHORIZATION_AUDIENCE_V1 = 'happier-live-stream-relay-authorization' as const;
 
-const PositiveIntSchema = lazyZodSchema(() => z.number().int().positive());
-const NonNegativeIntSchema = lazyZodSchema(() => z.number().int().nonnegative());
-const Base64Schema = lazyZodSchema(() => z.string().superRefine((value, context) => {
+const PositiveIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.positive()));
+const NonNegativeIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
+const Base64Schema = lazyZodSchema(() => z.string().check(z.superRefine((value, context) => {
   if (readCanonicalPaddedBase64DecodedLength(value) !== null) return;
   context.addIssue({
-    code: z.ZodIssueCode.custom,
+    code: "custom",
     message: 'Invalid base64 payload',
   });
-}));
-const Base64UrlSchema = lazyZodSchema(() => z.string().regex(/^[A-Za-z0-9_-]+$/));
+})));
+const Base64UrlSchema = lazyZodSchema(() => z.string().check(z.regex(/^[A-Za-z0-9_-]+$/)));
 
 const MachineLiveStreamCapsV1Shape = {
-  maxBitrateBps: PositiveIntSchema.optional(),
-  maxFramesPerSecond: PositiveIntSchema.optional(),
-  maxFrameBytes: PositiveIntSchema.optional(),
-  maxDurationMs: PositiveIntSchema.optional(),
-  maxTotalBytes: PositiveIntSchema.optional(),
+  maxBitrateBps: z.optional(PositiveIntSchema),
+  maxFramesPerSecond: z.optional(PositiveIntSchema),
+  maxFrameBytes: z.optional(PositiveIntSchema),
+  maxDurationMs: z.optional(PositiveIntSchema),
+  maxTotalBytes: z.optional(PositiveIntSchema),
 } as const;
 
-export const MachineLiveStreamCapsV1Schema = lazyZodSchema(() => z.object(MachineLiveStreamCapsV1Shape).passthrough());
+export const MachineLiveStreamCapsV1Schema = lazyZodSchema(() => z.looseObject(MachineLiveStreamCapsV1Shape));
 
-export const MachineLiveStreamRelayCapsV1Schema = lazyZodSchema(() => z
-  .object({
+export const MachineLiveStreamRelayCapsV1Schema = lazyZodSchema(() => z.looseObject({
     ...MachineLiveStreamCapsV1Shape,
-    maxConcurrentStreamsPerAccount: PositiveIntSchema.optional(),
-    maxConcurrentStreamsPerSocket: PositiveIntSchema.optional(),
-    maxConcurrentStreamsPerMachine: PositiveIntSchema.optional(),
-  })
-  .passthrough());
+    maxConcurrentStreamsPerAccount: z.optional(PositiveIntSchema),
+    maxConcurrentStreamsPerSocket: z.optional(PositiveIntSchema),
+    maxConcurrentStreamsPerMachine: z.optional(PositiveIntSchema),
+  }));
 
 export const MachineLiveStreamRouteKindV1Schema = lazyZodSchema(() => z.enum(['loopback_direct', 'server_relay']));
 export const MachineLiveStreamPayloadKindV1Schema = lazyZodSchema(() => z.enum(['image_delta', 'image_keyframe', 'metadata']));
 
-export const MachineLiveStreamRelayAuthorizationPayloadV1Schema = lazyZodSchema(() => z
-  .object({
+export const MachineLiveStreamRelayAuthorizationPayloadV1Schema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
-    grantId: z.string().min(1),
-    accountId: z.string().min(1),
-    sourceMachineId: z.string().min(1),
-    targetMachineId: z.string().min(1),
+    grantId: z.string().check(z.minLength(1)),
+    accountId: z.string().check(z.minLength(1)),
+    sourceMachineId: z.string().check(z.minLength(1)),
+    targetMachineId: z.string().check(z.minLength(1)),
     flowKind: z.literal('live_stream'),
     routeKind: z.literal('server_relay'),
-    streamId: z.string().min(1),
-    streamFamily: z.string().min(1),
-    sourceId: z.string().min(1).optional(),
+    streamId: z.string().check(z.minLength(1)),
+    streamFamily: z.string().check(z.minLength(1)),
+    sourceId: z.optional(z.string().check(z.minLength(1))),
     // Optional per-tab viewer target (C1). When the watcher is a user-scoped browser
     // socket rather than a peer machine, the grant is minted bound to that socket id so the
     // server can deliver frames to the exact tab (`io.to(viewerSocketId)`) instead of a
     // machine room the viewer never joins. Omitted for the legacy machine→machine path; it
     // is part of the canonical-JSON signing input, so when present it must be identical at
     // mint, start-request, and handler-verify time.
-    viewerSocketId: z.string().min(1).optional(),
+    viewerSocketId: z.optional(z.string().check(z.minLength(1))),
     ...MachineLiveStreamCapsV1Shape,
-    codecId: MachineLiveStreamCodecIdV1Schema.optional(),
-    viewerCodecs: z.array(MachineLiveStreamCodecIdV1Schema).optional(),
+    codecId: z.optional(MachineLiveStreamCodecIdV1Schema),
+    viewerCodecs: z.optional(z.array(MachineLiveStreamCodecIdV1Schema)),
     iat: NonNegativeIntSchema,
     exp: PositiveIntSchema,
     aud: z.literal(MACHINE_LIVE_STREAM_RELAY_AUTHORIZATION_AUDIENCE_V1),
-  })
-  .passthrough()
-  .superRefine((payload, ctx) => {
+  }).check(z.superRefine((payload, ctx) => {
     if (payload.exp <= payload.iat) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['exp'],
         message: 'Live-stream relay authorization must expire after issuance',
       });
     }
-  }));
+  })));
 
 export const MachineLiveStreamRelayAuthorizationSignatureV1Schema = lazyZodSchema(() => z.object({
-  keyId: z.string().min(1),
+  keyId: z.string().check(z.minLength(1)),
   alg: z.literal('Ed25519'),
   valueBase64Url: Base64UrlSchema,
 }));
 
-export const MachineLiveStreamRelayAuthorizationV1Schema = lazyZodSchema(() => z
-  .object({
+export const MachineLiveStreamRelayAuthorizationV1Schema = lazyZodSchema(() => z.looseObject({
     payload: MachineLiveStreamRelayAuthorizationPayloadV1Schema,
     signature: MachineLiveStreamRelayAuthorizationSignatureV1Schema,
-  })
-  .passthrough());
+  }));
 
 export function createMachineLiveStreamRelayAuthorizationSigningInputV1(
   payload: MachineLiveStreamRelayAuthorizationPayloadV1,
@@ -100,32 +93,29 @@ export function createMachineLiveStreamRelayAuthorizationSigningInputV1(
   return createCanonicalJsonSigningInput(MachineLiveStreamRelayAuthorizationPayloadV1Schema.parse(payload));
 }
 
-export const MachineLiveStreamStartRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const MachineLiveStreamStartRequestV1Schema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
-    streamId: z.string().min(1),
-    streamFamily: z.string().min(1),
-    sourceId: z.string().min(1).optional(),
+    streamId: z.string().check(z.minLength(1)),
+    streamFamily: z.string().check(z.minLength(1)),
+    sourceId: z.optional(z.string().check(z.minLength(1))),
     /** Exact source occurrence bound by plugin viewing admission. */
-    sourceOccurrenceId: z.string().min(1).optional(),
+    sourceOccurrenceId: z.optional(z.string().check(z.minLength(1))),
     routeKind: MachineLiveStreamRouteKindV1Schema,
-    sourceMachineId: z.string().min(1),
-    targetMachineId: z.string().min(1),
-    viewerSocketId: z.string().min(1).optional(),
+    sourceMachineId: z.string().check(z.minLength(1)),
+    targetMachineId: z.string().check(z.minLength(1)),
+    viewerSocketId: z.optional(z.string().check(z.minLength(1))),
     ...MachineLiveStreamCapsV1Shape,
-    codecId: MachineLiveStreamCodecIdV1Schema.optional(),
-    viewerCodecs: z.array(MachineLiveStreamCodecIdV1Schema).optional(),
-    authorization: MachineLiveStreamRelayAuthorizationV1Schema.optional(),
-  })
-  .passthrough()
-  .superRefine((request, ctx) => {
+    codecId: z.optional(MachineLiveStreamCodecIdV1Schema),
+    viewerCodecs: z.optional(z.array(MachineLiveStreamCodecIdV1Schema)),
+    authorization: z.optional(MachineLiveStreamRelayAuthorizationV1Schema),
+  }).check(z.superRefine((request, ctx) => {
     if (request.streamFamily === 'browser.streamed' && !request.sourceId) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['sourceId'], message: 'Browser streams require the exact view source' });
+      ctx.addIssue({ code: "custom", path: ['sourceId'], message: 'Browser streams require the exact view source' });
     }
     const authorization = request.authorization;
     if (request.routeKind === 'server_relay' && !authorization) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['authorization'],
         message: 'Server-routed live-stream starts require relay authorization',
       });
@@ -151,13 +141,13 @@ export const MachineLiveStreamStartRequestV1Schema = lazyZodSchema(() => z
     for (const [key, value] of Object.entries(expected)) {
       if (payload[key as keyof typeof expected] === value) continue;
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['authorization', 'payload', key],
         message: 'Live-stream relay authorization must match the start request',
       });
     }
     if (JSON.stringify(request.viewerCodecs) !== JSON.stringify(payload.viewerCodecs)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['authorization', 'payload', 'viewerCodecs'],
+      ctx.addIssue({ code: "custom", path: ['authorization', 'payload', 'viewerCodecs'],
         message: 'Live-stream relay authorization must match the viewer codecs' });
     }
     // The viewer target is part of the signed grant; the start request must not re-point a
@@ -165,57 +155,50 @@ export const MachineLiveStreamStartRequestV1Schema = lazyZodSchema(() => z
     // legacy machine→machine path and matches.
     if (request.viewerSocketId !== payload.viewerSocketId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['authorization', 'payload', 'viewerSocketId'],
         message: 'Live-stream relay authorization must match the start request',
       });
     }
-  }));
+  })));
 
 export const MachineLiveStreamStartResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('accepted', [
-  z
-    .object({
+  z.looseObject({
       v: z.literal(1),
-      streamId: z.string().min(1),
+      streamId: z.string().check(z.minLength(1)),
       accepted: z.literal(true),
       routeKind: MachineLiveStreamRouteKindV1Schema,
       caps: MachineLiveStreamCapsV1Schema,
-      expiresAtMs: PositiveIntSchema.optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      expiresAtMs: z.optional(PositiveIntSchema),
+    }),
+  z.looseObject({
       v: z.literal(1),
-      streamId: z.string().min(1),
+      streamId: z.string().check(z.minLength(1)),
       accepted: z.literal(false),
-      routeKind: MachineLiveStreamRouteKindV1Schema.optional(),
-      disabledReason: z.string().min(1),
-    })
-    .passthrough(),
+      routeKind: z.optional(MachineLiveStreamRouteKindV1Schema),
+      disabledReason: z.string().check(z.minLength(1)),
+    }),
 ]));
 
-export const MachineLiveStreamFrameV1Schema = lazyZodSchema(() => z
-  .object({
+export const MachineLiveStreamFrameV1Schema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
-    streamId: z.string().min(1),
+    streamId: z.string().check(z.minLength(1)),
     sequence: PositiveIntSchema,
     timestampMs: NonNegativeIntSchema,
     payloadKind: MachineLiveStreamPayloadKindV1Schema,
     payloadEncoding: z.literal('binary_base64'),
     payloadBase64: Base64Schema,
     payloadSizeBytes: NonNegativeIntSchema,
-    codecId: MachineLiveStreamCodecIdV1Schema.optional(),
-  })
-  .passthrough()
-  .superRefine((frame, ctx) => {
+    codecId: z.optional(MachineLiveStreamCodecIdV1Schema),
+  }).check(z.superRefine((frame, ctx) => {
     const decodedBytes = getMachineLiveStreamPayloadDecodedByteLength(frame.payloadBase64);
     if (decodedBytes === frame.payloadSizeBytes) return;
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['payloadSizeBytes'],
       message: 'Live-stream frame advisory size must match decoded payload bytes',
     });
-  }));
+  })));
 
 const UNSAFE_STREAM_DETAIL_KEYS = new Set([
   'payload',
@@ -228,145 +211,140 @@ const UNSAFE_STREAM_DETAIL_KEYS = new Set([
   'endpointUrlWithToken',
 ]);
 
-function rejectUnsafeStreamDetailKeys(value: Record<string, unknown>, ctx: z.RefinementCtx): void {
+function rejectUnsafeStreamDetailKeys(value: Record<string, unknown>, ctx: z.core.$RefinementCtx): void {
   for (const key of Object.keys(value)) {
     if (!UNSAFE_STREAM_DETAIL_KEYS.has(key)) continue;
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: [key],
       message: 'Live-stream metadata must not contain payload, grant, token, or nonce material',
     });
   }
 }
 
-export const MachineLiveStreamMeteringV1Schema = lazyZodSchema(() => z
-  .object({
+export const MachineLiveStreamMeteringV1Schema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
-    streamId: z.string().min(1),
-    routeKind: MachineLiveStreamRouteKindV1Schema.optional(),
-    bytesSent: NonNegativeIntSchema.optional(),
-    bytesRelayed: NonNegativeIntSchema.optional(),
-    bytesDropped: NonNegativeIntSchema.optional(),
-    framesSent: NonNegativeIntSchema.optional(),
-    framesDropped: NonNegativeIntSchema.optional(),
+    streamId: z.string().check(z.minLength(1)),
+    routeKind: z.optional(MachineLiveStreamRouteKindV1Schema),
+    bytesSent: z.optional(NonNegativeIntSchema),
+    bytesRelayed: z.optional(NonNegativeIntSchema),
+    bytesDropped: z.optional(NonNegativeIntSchema),
+    framesSent: z.optional(NonNegativeIntSchema),
+    framesDropped: z.optional(NonNegativeIntSchema),
     movingBitrateBps: NonNegativeIntSchema,
     framesPerSecond: NonNegativeIntSchema,
-    nextAction: z.enum(['continue', 'pause', 'require_keyframe', 'stop']).optional(),
-    reasonCode: z.string().min(1).optional(),
-    maxBitrateBps: PositiveIntSchema.optional(),
-    maxFramesPerSecond: PositiveIntSchema.optional(),
-    maxFrameBytes: PositiveIntSchema.optional(),
-    maxDurationMs: PositiveIntSchema.optional(),
-    maxTotalBytes: PositiveIntSchema.optional(),
-  })
-  .passthrough()
-  .superRefine(rejectUnsafeStreamDetailKeys));
+    nextAction: z.optional(z.enum(['continue', 'pause', 'require_keyframe', 'stop'])),
+    reasonCode: z.optional(z.string().check(z.minLength(1))),
+    maxBitrateBps: z.optional(PositiveIntSchema),
+    maxFramesPerSecond: z.optional(PositiveIntSchema),
+    maxFrameBytes: z.optional(PositiveIntSchema),
+    maxDurationMs: z.optional(PositiveIntSchema),
+    maxTotalBytes: z.optional(PositiveIntSchema),
+  }).check(z.superRefine(rejectUnsafeStreamDetailKeys)));
 
 const BaseControlSchema = lazyZodSchema(() => z.object({
   v: z.literal(1),
-  streamId: z.string().min(1),
+  streamId: z.string().check(z.minLength(1)),
 }));
 
 export const MachineLiveStreamControlV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  BaseControlSchema.extend({
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseControlSchema, {
     kind: z.literal('pause'),
-    reasonCode: z.string().min(1),
-  }).passthrough(),
-  BaseControlSchema.extend({
+    reasonCode: z.string().check(z.minLength(1)),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseControlSchema, {
     kind: z.literal('resume'),
-  }).passthrough(),
-  BaseControlSchema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseControlSchema, {
     kind: z.literal('ack'),
     nextSequence: PositiveIntSchema,
     // The server relay owns network credit. ACKs do not change producer sequencing or
     // capture credit; direct transports may consume them at their own carrier boundary.
-    windowFrames: NonNegativeIntSchema.optional(),
-    windowBytes: NonNegativeIntSchema.optional(),
-  }).passthrough(),
-  BaseControlSchema.extend({
+    windowFrames: z.optional(NonNegativeIntSchema),
+    windowBytes: z.optional(NonNegativeIntSchema),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseControlSchema, {
     kind: z.literal('stop'),
-    reasonCode: z.string().min(1).optional(),
-  }).passthrough(),
-  BaseControlSchema.extend({
+    reasonCode: z.optional(z.string().check(z.minLength(1))),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseControlSchema, {
     kind: z.literal('cap_exceeded'),
-    reasonCode: z.string().min(1),
-  }).passthrough(),
-  BaseControlSchema.extend({
+    reasonCode: z.string().check(z.minLength(1)),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseControlSchema, {
     kind: z.literal('grant_expiring'),
     expiresAtMs: PositiveIntSchema,
-  }).passthrough(),
-  BaseControlSchema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseControlSchema, {
     kind: z.literal('grant_refresh_denied'),
-    reasonCode: z.string().min(1),
-  }).passthrough(),
-  BaseControlSchema.extend({
+    reasonCode: z.string().check(z.minLength(1)),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(BaseControlSchema, {
     kind: z.literal('keyframe_required'),
-    reasonCode: z.string().min(1),
-  }).passthrough(),
+    reasonCode: z.string().check(z.minLength(1)),
+  })),
 ]));
 
 const MachineLiveStreamPublicMessageSchemas = [
-  z.object({ kind: z.literal('start'), startRequest: MachineLiveStreamStartRequestV1Schema }).passthrough(),
-  z.object({ kind: z.literal('renew'), startRequest: MachineLiveStreamStartRequestV1Schema }).strict(),
-  z.object({ kind: z.literal('start_response'), startResponse: MachineLiveStreamStartResponseV1Schema }).passthrough(),
-  z.object({ kind: z.literal('control'), control: MachineLiveStreamControlV1Schema }).passthrough(),
-  z.object({ kind: z.literal('receipt'), receipt: z.unknown() }).passthrough(),
-  z.object({ kind: z.literal('metering'), metering: MachineLiveStreamMeteringV1Schema }).passthrough(),
+  z.looseObject({ kind: z.literal('start'), startRequest: MachineLiveStreamStartRequestV1Schema }),
+  z.strictObject({ kind: z.literal('renew'), startRequest: MachineLiveStreamStartRequestV1Schema }),
+  z.looseObject({ kind: z.literal('start_response'), startResponse: MachineLiveStreamStartResponseV1Schema }),
+  z.looseObject({ kind: z.literal('control'), control: MachineLiveStreamControlV1Schema }),
+  z.looseObject({ kind: z.literal('receipt'), receipt: z.unknown() }),
+  z.looseObject({ kind: z.literal('metering'), metering: MachineLiveStreamMeteringV1Schema }),
 ] as const;
 
 // Decoded process-local content. Never emit this schema's frame/input shapes on the socket.
-export const MachineLiveStreamDecodedEnvelopeV1Schema = lazyZodSchema(() => z
-  .object({
+export const MachineLiveStreamDecodedEnvelopeV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    sourceMachineId: z.string().min(1),
-    targetMachineId: z.string().min(1),
+    sourceMachineId: z.string().check(z.minLength(1)),
+    targetMachineId: z.string().check(z.minLength(1)),
     // Optional per-tab viewer target (C1). The source daemon echoes the `viewerSocketId` it
     // received in the signed start so the relay can deliver frames/controls to the exact
     // viewer socket. Omitted on the legacy machine→machine path.
-    viewerSocketId: z.string().min(1).optional(),
+    viewerSocketId: z.optional(z.string().check(z.minLength(1))),
     message: z.discriminatedUnion('kind', [
       ...MachineLiveStreamPublicMessageSchemas,
-      z.object({ kind: z.literal('frame'), frame: MachineLiveStreamFrameV1Schema }).passthrough(),
-      z.object({ kind: z.literal('sideband_control'), control: MachineLiveStreamControlSidebandV1Schema }).strict(),
+      z.looseObject({ kind: z.literal('frame'), frame: MachineLiveStreamFrameV1Schema }),
+      z.strictObject({ kind: z.literal('sideband_control'), control: MachineLiveStreamControlSidebandV1Schema }),
     ]),
-  })
-  .strict());
+  }));
 
-const EncryptedStreamPayloadSchema = lazyZodSchema(() => z.object({ t: z.literal('encrypted'), c: Base64Schema }).strict());
-export const MachineLiveStreamWireFrameV1Schema = lazyZodSchema(() => z.object({
+const EncryptedStreamPayloadSchema = lazyZodSchema(() => z.strictObject({ t: z.literal('encrypted'), c: Base64Schema }));
+export const MachineLiveStreamWireFrameV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  streamId: z.string().min(1),
+  streamId: z.string().check(z.minLength(1)),
   sequence: PositiveIntSchema,
   timestampMs: NonNegativeIntSchema,
   payloadKind: MachineLiveStreamPayloadKindV1Schema,
   payloadEncoding: z.literal('binary_base64'),
   payloadSizeBytes: NonNegativeIntSchema,
-  codecId: MachineLiveStreamCodecIdV1Schema.optional(),
+  codecId: z.optional(MachineLiveStreamCodecIdV1Schema),
   payload: z.discriminatedUnion('t', [
-    z.object({ t: z.literal('plain'), v: Base64Schema }).strict(),
+    z.strictObject({ t: z.literal('plain'), v: Base64Schema }),
     EncryptedStreamPayloadSchema,
   ]),
-}).strict().superRefine((frame, ctx) => {
+}).check(z.superRefine((frame, ctx) => {
   const encoded = frame.payload.t === 'plain' ? frame.payload.v : frame.payload.c;
   if (getMachineLiveStreamPayloadDecodedByteLength(encoded) === frame.payloadSizeBytes) return;
-  ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['payloadSizeBytes'],
+  ctx.addIssue({ code: "custom", path: ['payloadSizeBytes'],
     message: 'Live-stream transport size must match payload bytes' });
-}));
+})));
 
 // The relay can inspect routing/metering headers, never decoded input or E2EE pixels.
-export const MachineLiveStreamRelayEnvelopeV1Schema = lazyZodSchema(() => MachineLiveStreamDecodedEnvelopeV1Schema.extend({
+export const MachineLiveStreamRelayEnvelopeV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(MachineLiveStreamDecodedEnvelopeV1Schema, {
   message: z.discriminatedUnion('kind', [
     ...MachineLiveStreamPublicMessageSchemas,
-    z.object({ kind: z.literal('frame'), frame: MachineLiveStreamWireFrameV1Schema }).strict(),
-    z.object({ kind: z.literal('sideband_control'), control: z.object({
-      v: z.literal(1), streamId: z.string().min(1),
+    z.strictObject({ kind: z.literal('frame'), frame: MachineLiveStreamWireFrameV1Schema }),
+    z.strictObject({ kind: z.literal('sideband_control'), control: z.strictObject({
+      v: z.literal(1), streamId: z.string().check(z.minLength(1)),
       payload: z.discriminatedUnion('t', [
-        z.object({ t: z.literal('plain'), v: MachineLiveStreamControlSidebandV1Schema }).strict(),
+        z.strictObject({ t: z.literal('plain'), v: MachineLiveStreamControlSidebandV1Schema }),
         EncryptedStreamPayloadSchema,
       ]),
-    }).strict() }).strict(),
+    }) }),
   ]),
-}).strict());
+})));
 
 export type MachineLiveStreamCapsV1 = z.infer<typeof MachineLiveStreamCapsV1Schema>;
 export type MachineLiveStreamRouteKindV1 = z.infer<typeof MachineLiveStreamRouteKindV1Schema>;

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { ActionInputHintsSchema } from '../actions/actionInputHints.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
@@ -11,47 +11,47 @@ import { PluginEventAutomationDeclarationV1Schema } from '../automations/automat
 const PluginContributionIdentityV1Schema = lazyZodSchema(() => asProtocolZod(CanonicalPluginContributionIdentityV1Schema));
 const PluginUiRuntimeOccurrenceIdV1Schema = lazyZodSchema(() => asProtocolZod(CanonicalPluginUiRuntimeOccurrenceIdV1Schema));
 
-export const DaemonContributionRegistryProjectionAutomationEligibleEventActionV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().trim().min(1).max(1024),
+export const DaemonContributionRegistryProjectionAutomationEligibleEventActionV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.trim(), z.minLength(1), z.maxLength(1024)),
   identity: PluginContributionIdentityV1Schema,
   occurrenceId: PluginUiRuntimeOccurrenceIdV1Schema,
-  title: z.string().trim().min(1),
-  description: z.string().trim().min(1).nullable(),
+  title: z.string().check(z.trim(), z.minLength(1)),
+  description: z.nullable(z.string().check(z.trim(), z.minLength(1))),
   inputSchema: PluginJsonSchemaV2Schema,
-  inputHints: ActionInputHintsSchema.nullable(),
-}).strict());
+  inputHints: z.nullable(ActionInputHintsSchema),
+}));
 export type DaemonContributionRegistryProjectionAutomationEligibleEventActionV1 = z.infer<
   typeof DaemonContributionRegistryProjectionAutomationEligibleEventActionV1Schema
 >;
 
 /** The declaration/setup catalog shared by daemon presentation and headless authoring. */
-export const AutomationEligibleEventCatalogEntryV1Schema = lazyZodSchema(() => z.object({
-  event: z.object({
-    id: z.string().trim().min(1).max(1024),
+export const AutomationEligibleEventCatalogEntryV1Schema = lazyZodSchema(() => z.strictObject({
+  event: z.strictObject({
+    id: z.string().check(z.trim(), z.minLength(1), z.maxLength(1024)),
     identity: PluginContributionIdentityV1Schema,
     occurrenceId: PluginUiRuntimeOccurrenceIdV1Schema,
     sourceCustody: PluginSourceCustodyV1Schema,
-    title: z.string().trim().min(1),
-    description: z.string().trim().min(1).nullable(),
-    payloadSchema: PluginJsonSchemaV2Schema.optional(),
+    title: z.string().check(z.trim(), z.minLength(1)),
+    description: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+    payloadSchema: z.optional(PluginJsonSchemaV2Schema),
     automation: PluginEventAutomationDeclarationV1Schema,
-  }).strict(),
+  }),
   setupAction: DaemonContributionRegistryProjectionAutomationEligibleEventActionV1Schema,
-  historyGapResetAction: DaemonContributionRegistryProjectionAutomationEligibleEventActionV1Schema.optional(),
-}).strict().superRefine((entry, context) => {
+  historyGapResetAction: z.optional(DaemonContributionRegistryProjectionAutomationEligibleEventActionV1Schema),
+}).check(z.superRefine((entry, context) => {
   const requireSamePluginOccurrence = (
     value: Readonly<{ identity: Readonly<{ pluginId: string }>; occurrenceId: string }>,
     path: (string | number)[],
   ) => {
     if (value.identity.pluginId !== entry.event.identity.pluginId
       || value.occurrenceId !== entry.event.occurrenceId) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path,
+      context.addIssue({ code: "custom", path,
         message: 'Automation Action must carry the exact admitted Event plugin occurrence.' });
     }
   };
   requireSamePluginOccurrence(entry.setupAction, ['setupAction']);
   if (entry.historyGapResetAction) requireSamePluginOccurrence(entry.historyGapResetAction, ['historyGapResetAction']);
-}));
+})));
 export type AutomationEligibleEventCatalogEntryV1 = z.output<typeof AutomationEligibleEventCatalogEntryV1Schema>;
 
 export const AutomationEligibleEventsCatalogV1Schema = lazyZodSchema(() => z.array(AutomationEligibleEventCatalogEntryV1Schema));

@@ -1,6 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import tweetnacl from 'tweetnacl';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { decodeBase64, encodeBase64 } from '../../crypto/base64.js';
@@ -31,12 +31,12 @@ export type {
   SavedSecretResourceStoredContentV1,
 };
 
-const EncryptedSavedSecretResourcePayloadV1Schema = lazyZodSchema(() => z.object({
+const EncryptedSavedSecretResourcePayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   resourceId: z.string(),
   mode: z.literal('e2ee'),
   content: SavedSecretResourceContentV1Schema,
-}).strict());
+}));
 
 type SealSavedSecretResourceStoredContentV1Params =
   | Readonly<{

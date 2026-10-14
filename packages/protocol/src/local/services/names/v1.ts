@@ -1,9 +1,5 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const LocalServiceDnsLabelV1Schema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(63)
-  .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/);
+  .string().check(z.trim(), z.minLength(1), z.maxLength(63), z.regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/));
 export type LocalServiceDnsLabelV1 = z.infer<typeof LocalServiceDnsLabelV1Schema>;

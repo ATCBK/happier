@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { BrowserActiveTargetV1Schema } from '../events/activeTarget.js';
 import { SecretFillScopeV1Schema } from '../../computer/v1.js';
 
@@ -26,27 +26,27 @@ export {
   redactBrowserAutomationTimelineDetails,
 } from './redaction.js';
 
-const IdSchema = lazyZodSchema(() => z.string().trim().min(1).max(256));
-const NonNegativeIntSchema = lazyZodSchema(() => z.number().int().nonnegative());
+const IdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
+const NonNegativeIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
 export const BROWSER_AUTOMATION_MAX_ACTION_TIMEOUT_MS = 60_000;
-const PositiveTimeoutMsSchema = lazyZodSchema(() => z.number().int().positive().max(BROWSER_AUTOMATION_MAX_ACTION_TIMEOUT_MS));
+const PositiveTimeoutMsSchema = lazyZodSchema(() => z.number().check(z.int(), z.positive(), z.maximum(BROWSER_AUTOMATION_MAX_ACTION_TIMEOUT_MS)));
 
 /** Exact observed browser field; never the generic automation payload/value bag. */
-export const BrowserAutomationSecretFillRequestV1Schema = lazyZodSchema(() => SecretFillScopeV1Schema.extend({
+export const BrowserAutomationSecretFillRequestV1Schema = lazyZodSchema(() => z.extend(SecretFillScopeV1Schema, {
   browserSessionId: IdSchema,
   viewId: IdSchema,
   tabId: IdSchema,
   frameId: IdSchema,
   documentId: IdSchema,
   navigationGeneration: NonNegativeIntSchema,
-  origin: z.string().url().refine(value => {
+  origin: z.string().check(z.url(), z.refine(value => {
     try {
       const url = new URL(value);
       return (url.protocol === 'http:' || url.protocol === 'https:') && url.origin === value;
     } catch { return false; }
-  }, { message: 'Credential entry requires an exact HTTP origin' }),
-  field: z.object({ fieldId: IdSchema, focusId: IdSchema, locator: IdSchema }).strict(),
-  submit: z.object({ controlId: IdSchema, locator: IdSchema, label: IdSchema, consequence: IdSchema }).strict().optional(),
+  }, { message: 'Credential entry requires an exact HTTP origin' })),
+  field: z.strictObject({ fieldId: IdSchema, focusId: IdSchema, locator: IdSchema }),
+  submit: z.optional(z.strictObject({ controlId: IdSchema, locator: IdSchema, label: IdSchema, consequence: IdSchema })),
 }));
 export type BrowserAutomationSecretFillRequestV1 = z.infer<typeof BrowserAutomationSecretFillRequestV1Schema>;
 
@@ -127,10 +127,9 @@ export function isBrowserAutomationMutatingActionKind(
 }
 
 const TimelineDetailsSchema = lazyZodSchema(() => z
-  .record(z.string(), z.unknown())
-  .superRefine((details, context) => rejectUnsafeBrowserEgressKeys(details, context, {
+  .record(z.string(), z.unknown()).check(z.superRefine((details, context) => rejectUnsafeBrowserEgressKeys(details, context, {
     message: 'Browser automation timeline data must not contain inline screenshots, diagnostics bundles, bodies, payloads, cookies, tokens, or storage values.',
-  })));
+  }))));
 
 export const BrowserAutomationRequesterKindV1Schema = lazyZodSchema(() => z.enum(['user', 'agent', 'plugin', 'system']));
 export type BrowserAutomationRequesterKindV1 = z.infer<typeof BrowserAutomationRequesterKindV1Schema>;
@@ -144,19 +143,16 @@ export function resolveBrowserAutomationActionRequester(
   return requestedBy === 'user' ? null : 'agent';
 }
 
-export const BrowserAutomationRequesterRefV1Schema = lazyZodSchema(() => z
-  .object({
-    kind: z.string().trim().min(1).max(64),
+export const BrowserAutomationRequesterRefV1Schema = lazyZodSchema(() => z.strictObject({
+    kind: z.string().check(z.trim(), z.minLength(1), z.maxLength(64)),
     id: IdSchema,
-  })
-  .strict());
+  }));
 export type BrowserAutomationRequesterRefV1 = z.infer<typeof BrowserAutomationRequesterRefV1Schema>;
 
 export const BrowserAutomationControllerKindV1Schema = lazyZodSchema(() => z.enum(['none', 'human', 'agent', 'system']));
 export type BrowserAutomationControllerKindV1 = z.infer<typeof BrowserAutomationControllerKindV1Schema>;
 
-export const BrowserAutomationActionRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserAutomationActionRequestV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     automationRequestId: IdSchema,
     browserSessionId: IdSchema,
@@ -165,11 +161,9 @@ export const BrowserAutomationActionRequestV1Schema = lazyZodSchema(() => z
     requestedBy: BrowserAutomationRequesterKindV1Schema,
     requesterRef: BrowserAutomationRequesterRefV1Schema,
     actionKind: BrowserAutomationActionKindV1Schema,
-    payload: z.record(z.string(), z.unknown()).optional().default({}),
+    payload: z._default(z.optional(z.record(z.string(), z.unknown())), {}),
     timeoutMs: PositiveTimeoutMsSchema,
-  })
-  .strict()
-  .superRefine((request, context) => {
+  }).check(z.superRefine((request, context) => {
     if (request.actionKind !== 'evaluate') return;
 
     const payload = request.payload;
@@ -177,7 +171,7 @@ export const BrowserAutomationActionRequestV1Schema = lazyZodSchema(() => z
     const parsedEvalRequest = BrowserDiagnosticsEvalRequestV1Schema.safeParse(evalRequest);
     if (!parsedEvalRequest.success) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['payload', 'diagnosticsEvalRequest'],
         message: 'Browser automation eval actions must carry a BRW-10 diagnostics eval request.',
       });
@@ -185,19 +179,19 @@ export const BrowserAutomationActionRequestV1Schema = lazyZodSchema(() => z
     }
     if (parsedEvalRequest.data.viewId !== request.viewId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['payload', 'diagnosticsEvalRequest', 'viewId'],
         message: 'Diagnostics eval request viewId must match the automation request viewId.',
       });
     }
     if (parsedEvalRequest.data.navigationGeneration !== request.navigationGeneration) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['payload', 'diagnosticsEvalRequest', 'navigationGeneration'],
         message: 'Diagnostics eval request navigationGeneration must match the automation request generation.',
       });
     }
-  }));
+  })));
 export type BrowserAutomationActionRequestV1 = z.infer<typeof BrowserAutomationActionRequestV1Schema>;
 
 export const BrowserAutomationActionStatusV1Schema = lazyZodSchema(() => z.enum([
@@ -227,19 +221,16 @@ export type BrowserAutomationJavaScriptDialogKindV1 = z.infer<
  *
  * Metadata only. Dialog messages and prompt default values are page content and never egress.
  */
-export const BrowserAutomationJavaScriptDialogSummaryV1Schema = lazyZodSchema(() => z
-  .object({
-    count: z.number().int().positive().max(50),
-    kinds: z.array(BrowserAutomationJavaScriptDialogKindV1Schema).min(1).max(3),
+export const BrowserAutomationJavaScriptDialogSummaryV1Schema = lazyZodSchema(() => z.strictObject({
+    count: z.number().check(z.int(), z.positive(), z.maximum(50)),
+    kinds: z.array(BrowserAutomationJavaScriptDialogKindV1Schema).check(z.minLength(1), z.maxLength(3)),
     handling: z.literal('dismissed'),
-  })
-  .strict());
+  }));
 export type BrowserAutomationJavaScriptDialogSummaryV1 = z.infer<
   typeof BrowserAutomationJavaScriptDialogSummaryV1Schema
 >;
 
-export const BrowserAutomationActionResultV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserAutomationActionResultV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     automationRequestId: IdSchema,
     status: BrowserAutomationActionStatusV1Schema,
@@ -251,59 +242,57 @@ export const BrowserAutomationActionResultV1Schema = lazyZodSchema(() => z
     navigationGenerationAfter: NonNegativeIntSchema,
     controlEpochBefore: NonNegativeIntSchema,
     controlEpochAfter: NonNegativeIntSchema,
-    errorCode: BrowserAutomationErrorCodeV1Schema.optional(),
-    diagnostics: TimelineDetailsSchema.optional().default({}),
-    resultSummary: TimelineDetailsSchema.optional().default({}),
-  })
-  .strict());
+    errorCode: z.optional(BrowserAutomationErrorCodeV1Schema),
+    diagnostics: z._default(z.optional(TimelineDetailsSchema), {}),
+    resultSummary: z._default(z.optional(TimelineDetailsSchema), {}),
+  }));
 export type BrowserAutomationActionResultV1 = z.infer<typeof BrowserAutomationActionResultV1Schema>;
 
 /** An issued effect lost its acknowledgement; engine result metadata is not known. */
-export const BrowserAutomationInterruptedResultV1Schema = lazyZodSchema(() => z.object({
+export const BrowserAutomationInterruptedResultV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   status: z.literal('interrupted'),
   completion: z.literal('unknown'),
-  automationRequestId: IdSchema.optional(),
-}).strict());
+  automationRequestId: z.optional(IdSchema),
+}));
 
 /**
  * Canceling is a command over the active automation set, not a result for one
  * request. Caller provenance remains host-stamped at the action admission
  * boundary, so this contract carries only the target browser view.
  */
-export const BrowserAutomationCancelActiveInputV1Schema = lazyZodSchema(() => z.object({
+export const BrowserAutomationCancelActiveInputV1Schema = lazyZodSchema(() => z.strictObject({
   browserSessionId: IdSchema,
   viewId: IdSchema,
-}).strict());
+}));
 export type BrowserAutomationCancelActiveInputV1 = z.infer<
   typeof BrowserAutomationCancelActiveInputV1Schema
 >;
 
 export const BrowserAutomationCancelActiveResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('outcome', [
-  z.object({
+  z.strictObject({
     v: z.literal(1),
     outcome: z.literal('canceled'),
-    canceledCount: z.number().int().positive(),
+    canceledCount: z.number().check(z.int(), z.positive()),
     // Cancel acknowledgement reports drain certainty, never rollback of dispatched effects.
-    completion: z.enum(['stopped', 'uncertain']).default('uncertain'),
-  }).strict(),
-  z.object({
+    completion: z._default(z.enum(['stopped', 'uncertain']), 'uncertain'),
+  }),
+  z.strictObject({
     v: z.literal(1),
     outcome: z.literal('no_active'),
     canceledCount: z.literal(0),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     v: z.literal(1),
     outcome: z.literal('owner_mismatch'),
     canceledCount: z.literal(0),
-  }).strict(),
+  }),
 ]));
 export type BrowserAutomationCancelActiveResultV1 = z.infer<
   typeof BrowserAutomationCancelActiveResultV1Schema
 >;
 
-export const BrowserAutomationTimelineEntryV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserAutomationTimelineEntryV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     timelineEntryId: IdSchema,
     automationRequestId: IdSchema,
@@ -316,38 +305,34 @@ export const BrowserAutomationTimelineEntryV1Schema = lazyZodSchema(() => z
     fidelity: BrowserAutomationFidelityV1Schema,
     trustedInput: z.boolean(),
     queuedAtMs: NonNegativeIntSchema,
-    startedAtMs: NonNegativeIntSchema.optional(),
-    finishedAtMs: NonNegativeIntSchema.optional(),
-    durationMs: NonNegativeIntSchema.optional(),
+    startedAtMs: z.optional(NonNegativeIntSchema),
+    finishedAtMs: z.optional(NonNegativeIntSchema),
+    durationMs: z.optional(NonNegativeIntSchema),
     navigationGenerationBefore: NonNegativeIntSchema,
     navigationGenerationAfter: NonNegativeIntSchema,
     controlEpochBefore: NonNegativeIntSchema,
     controlEpochAfter: NonNegativeIntSchema,
-    targetSummary: TimelineDetailsSchema.optional().default({}),
-    resultSummary: TimelineDetailsSchema.optional().default({}),
-    reasonCode: BrowserAutomationErrorCodeV1Schema.optional(),
-  })
-  .strict());
+    targetSummary: z._default(z.optional(TimelineDetailsSchema), {}),
+    resultSummary: z._default(z.optional(TimelineDetailsSchema), {}),
+    reasonCode: z.optional(BrowserAutomationErrorCodeV1Schema),
+  }));
 export type BrowserAutomationTimelineEntryV1 = z.infer<typeof BrowserAutomationTimelineEntryV1Schema>;
 
-export const BrowserAutomationTimelineV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserAutomationTimelineV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     browserSessionId: IdSchema,
     viewId: IdSchema,
-    maxEntries: z.number().int().positive().max(500).optional().default(500),
-    entries: z.array(BrowserAutomationTimelineEntryV1Schema).max(500),
-  })
-  .strict()
-  .superRefine((timeline, context) => {
+    maxEntries: z._default(z.optional(z.number().check(z.int(), z.positive(), z.maximum(500))), 500),
+    entries: z.array(BrowserAutomationTimelineEntryV1Schema).check(z.maxLength(500)),
+  }).check(z.superRefine((timeline, context) => {
     if (timeline.entries.length > timeline.maxEntries) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['entries'],
         message: 'Browser automation timelines must not exceed maxEntries.',
       });
     }
-  }));
+  })));
 export type BrowserAutomationTimelineV1 = z.infer<typeof BrowserAutomationTimelineV1Schema>;
 
 /**
@@ -359,31 +344,27 @@ export type BrowserAutomationTimelineV1 = z.infer<typeof BrowserAutomationTimeli
  * mutating verb undispatchable. Concurrency is single-flight, consent is the action-approval
  * danger floor, and human takeover is the human-input cancel path.
  */
-export const BrowserAutomationControllerStateV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserAutomationControllerStateV1Schema = lazyZodSchema(() => z.strictObject({
     browserSessionId: IdSchema,
     viewId: IdSchema,
     controller: BrowserAutomationControllerKindV1Schema,
     controlEpoch: NonNegativeIntSchema,
-    activeAutomationRequestId: IdSchema.optional(),
-    activeActionKind: BrowserAutomationActionKindV1Schema.optional(),
-    activeTarget: BrowserActiveTargetV1Schema.optional(),
-    interruptionSettling: z.boolean().optional(),
-    uncertain: z.boolean().optional(),
+    activeAutomationRequestId: z.optional(IdSchema),
+    activeActionKind: z.optional(BrowserAutomationActionKindV1Schema),
+    activeTarget: z.optional(BrowserActiveTargetV1Schema),
+    interruptionSettling: z.optional(z.boolean()),
+    uncertain: z.optional(z.boolean()),
     /** Advisory privacy projection; only the source/input owner can release its observation hold. */
-    confidentialityHeld: z.boolean().optional(),
-  })
-  .strict());
+    confidentialityHeld: z.optional(z.boolean()),
+  }));
 export type BrowserAutomationControllerStateV1 = z.infer<typeof BrowserAutomationControllerStateV1Schema>;
 
-export const BrowserAutomationActionCapabilityV1Schema = lazyZodSchema(() => z
-  .object({
-    available: z.boolean().optional().default(false),
-    fidelity: BrowserAutomationFidelityV1Schema.optional().default('unavailable'),
-    trustedInput: z.boolean().optional().default(false),
-    disabledReasons: z.array(z.string().trim().min(1)).optional().default([]),
-  })
-  .strict());
+export const BrowserAutomationActionCapabilityV1Schema = lazyZodSchema(() => z.strictObject({
+    available: z._default(z.optional(z.boolean()), false),
+    fidelity: z._default(z.optional(BrowserAutomationFidelityV1Schema), 'unavailable'),
+    trustedInput: z._default(z.optional(z.boolean()), false),
+    disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
+  }));
 export type BrowserAutomationActionCapabilityV1 = z.infer<typeof BrowserAutomationActionCapabilityV1Schema>;
 
 const UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY: BrowserAutomationActionCapabilityV1 = {
@@ -415,41 +396,27 @@ export const DEFAULT_BROWSER_AUTOMATION_ACTION_CAPABILITIES = {
   crossOriginFrameAccess: UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY,
 } satisfies Record<BrowserAutomationAdapterCapabilityKindV1, BrowserAutomationActionCapabilityV1>;
 
-export const BrowserAutomationActionCapabilityMapV1Schema = lazyZodSchema(() => z
-  .object({
-    snapshot: BrowserAutomationActionCapabilityV1Schema.optional().default(UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
-    semanticSnapshot: BrowserAutomationActionCapabilityV1Schema.optional().default(
-      UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY,
-    ),
-    locatorQuery: BrowserAutomationActionCapabilityV1Schema.optional().default(
-      UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY,
-    ),
-    navigate: BrowserAutomationActionCapabilityV1Schema.optional().default(UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
-    click: BrowserAutomationActionCapabilityV1Schema.optional().default(UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
-    tap: BrowserAutomationActionCapabilityV1Schema.optional().default(UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
-    type: BrowserAutomationActionCapabilityV1Schema.optional().default(UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
-    press: BrowserAutomationActionCapabilityV1Schema.optional().default(UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
-    scroll: BrowserAutomationActionCapabilityV1Schema.optional().default(UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
-    hover: BrowserAutomationActionCapabilityV1Schema.optional().default(UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
-    upload: BrowserAutomationActionCapabilityV1Schema.optional().default(UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
-    drag: BrowserAutomationActionCapabilityV1Schema.optional().default(UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
-    waitFor: BrowserAutomationActionCapabilityV1Schema.optional().default(UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
-    evaluate: BrowserAutomationActionCapabilityV1Schema.optional().default(UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
-    elementPicker: BrowserAutomationActionCapabilityV1Schema.optional().default(
-      UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY,
-    ),
-    screenshotReference: BrowserAutomationActionCapabilityV1Schema.optional().default(
-      UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY,
-    ),
-    recording: BrowserAutomationActionCapabilityV1Schema.optional().default(UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
-    trustedInput: BrowserAutomationActionCapabilityV1Schema.optional().default(
-      UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY,
-    ),
-    crossOriginFrameAccess: BrowserAutomationActionCapabilityV1Schema.optional().default(
-      UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY,
-    ),
-  })
-  .strict());
+export const BrowserAutomationActionCapabilityMapV1Schema = lazyZodSchema(() => z.strictObject({
+    snapshot: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    semanticSnapshot: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    locatorQuery: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    navigate: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    click: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    tap: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    type: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    press: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    scroll: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    hover: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    upload: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    drag: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    waitFor: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    evaluate: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    elementPicker: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    screenshotReference: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    recording: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    trustedInput: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+    crossOriginFrameAccess: z._default(z.optional(BrowserAutomationActionCapabilityV1Schema), UNAVAILABLE_AUTOMATION_ACTION_CAPABILITY),
+  }));
 export type BrowserAutomationActionCapabilityMapV1 = z.infer<
   typeof BrowserAutomationActionCapabilityMapV1Schema
 >;
@@ -462,8 +429,7 @@ export const BrowserInjectedRuntimeModuleV1Schema = lazyZodSchema(() => z.enum([
 ]));
 export type BrowserInjectedRuntimeModuleV1 = z.infer<typeof BrowserInjectedRuntimeModuleV1Schema>;
 
-export const BrowserInjectedRuntimeCommandMessageV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserInjectedRuntimeCommandMessageV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     kind: z.literal('browser.injectedRuntime.command'),
     runtimeId: IdSchema,
@@ -472,43 +438,40 @@ export const BrowserInjectedRuntimeCommandMessageV1Schema = lazyZodSchema(() => 
     browserSessionId: IdSchema,
     viewId: IdSchema,
     navigationGeneration: NonNegativeIntSchema,
-    frameId: IdSchema.optional(),
+    frameId: z.optional(IdSchema),
     commandId: IdSchema,
-    capabilityVersion: z.string().trim().min(1).max(64),
+    capabilityVersion: z.string().check(z.trim(), z.minLength(1), z.maxLength(64)),
     module: BrowserInjectedRuntimeModuleV1Schema,
-    commandName: z.string().trim().min(1).max(128),
-    payload: z.record(z.string(), z.unknown()).optional().default({}),
-  })
-  .strict());
+    commandName: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+    payload: z._default(z.optional(z.record(z.string(), z.unknown())), {}),
+  }));
 export type BrowserInjectedRuntimeCommandMessageV1 = z.infer<
   typeof BrowserInjectedRuntimeCommandMessageV1Schema
 >;
 
-export const BrowserInjectedRuntimeResultMessageV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserInjectedRuntimeResultMessageV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     kind: z.literal('browser.injectedRuntime.result'),
-    phase: z.enum(['target', 'complete']).optional(),
-    activeTarget: BrowserActiveTargetV1Schema.optional(),
+    phase: z.optional(z.enum(['target', 'complete'])),
+    activeTarget: z.optional(BrowserActiveTargetV1Schema),
     runtimeId: IdSchema,
     collectorId: IdSchema,
     nonce: IdSchema,
     browserSessionId: IdSchema,
     viewId: IdSchema,
     navigationGeneration: NonNegativeIntSchema,
-    frameId: IdSchema.optional(),
+    frameId: z.optional(IdSchema),
     commandId: IdSchema,
-    capabilityVersion: z.string().trim().min(1).max(64),
+    capabilityVersion: z.string().check(z.trim(), z.minLength(1), z.maxLength(64)),
     module: BrowserInjectedRuntimeModuleV1Schema,
     ok: z.boolean(),
     fidelity: z.literal('injectedPage'),
     trusted: z.literal(false),
-    stale: z.boolean().optional().default(false),
+    stale: z._default(z.optional(z.boolean()), false),
     durationMs: NonNegativeIntSchema,
-    errorCode: BrowserAutomationErrorCodeV1Schema.optional(),
-    data: TimelineDetailsSchema.optional().default({}),
-  })
-  .strict());
+    errorCode: z.optional(BrowserAutomationErrorCodeV1Schema),
+    data: z._default(z.optional(TimelineDetailsSchema), {}),
+  }));
 export type BrowserInjectedRuntimeResultMessageV1 = z.infer<
   typeof BrowserInjectedRuntimeResultMessageV1Schema
 >;

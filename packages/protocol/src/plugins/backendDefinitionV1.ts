@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   PluginLooseJsonObjectSchema,
@@ -11,58 +11,58 @@ import { findBackendExternalSessionSourceReferenceIssues } from './backendExtern
 import { ConnectedServiceIdSchema } from '../connect/connectedServiceBindings.js';
 import { MAX_PLUGIN_TRANSCRIPT_SOURCES_PER_CONTRIBUTION } from './contributionLimits.js';
 
-export const PluginBackendLaunchV1Schema = lazyZodSchema(() => z.object({
+export const PluginBackendLaunchV1Schema = lazyZodSchema(() => z.looseObject({
   binaryName: PluginOptionalStringSchema,
   command: PluginOptionalStringSchema,
-  args: PluginStringArraySchema.optional(),
-  env: z.record(z.string(), z.string()).optional(),
+  args: z.optional(PluginStringArraySchema),
+  env: z.optional(z.record(z.string(), z.string())),
   resolutionPolicy: PluginOptionalStringSchema,
-}).passthrough());
+}));
 export type PluginBackendLaunchV1 = z.infer<typeof PluginBackendLaunchV1Schema>;
 
-export const PluginBackendInstallV1Schema = lazyZodSchema(() => z.object({
-  managedInstall: PluginLooseJsonObjectSchema.optional(),
-  manualInstall: PluginLooseJsonObjectSchema.optional(),
+export const PluginBackendInstallV1Schema = lazyZodSchema(() => z.looseObject({
+  managedInstall: z.optional(PluginLooseJsonObjectSchema),
+  manualInstall: z.optional(PluginLooseJsonObjectSchema),
   sourcePreference: PluginOptionalStringSchema,
-}).passthrough());
+}));
 export type PluginBackendInstallV1 = z.infer<typeof PluginBackendInstallV1Schema>;
 
-export const PluginBackendProbeV1Schema = lazyZodSchema(() => z.object({
-  models: PluginLooseJsonObjectSchema.optional(),
-  modes: PluginLooseJsonObjectSchema.optional(),
-  configOptions: PluginLooseJsonObjectSchema.optional(),
-  authStatus: PluginLooseJsonObjectSchema.optional(),
-}).passthrough());
+export const PluginBackendProbeV1Schema = lazyZodSchema(() => z.looseObject({
+  models: z.optional(PluginLooseJsonObjectSchema),
+  modes: z.optional(PluginLooseJsonObjectSchema),
+  configOptions: z.optional(PluginLooseJsonObjectSchema),
+  authStatus: z.optional(PluginLooseJsonObjectSchema),
+}));
 export type PluginBackendProbeV1 = z.infer<typeof PluginBackendProbeV1Schema>;
 
-export const PluginBackendExternalSessionSourceWhenV1Schema = lazyZodSchema(() => z.object({
-  field: z.string().trim().min(1),
-  equals: z.string().trim().min(1),
-}).strict());
+export const PluginBackendExternalSessionSourceWhenV1Schema = lazyZodSchema(() => z.strictObject({
+  field: z.string().check(z.trim(), z.minLength(1)),
+  equals: z.string().check(z.trim(), z.minLength(1)),
+}));
 export type PluginBackendExternalSessionSourceWhenV1 =
   z.infer<typeof PluginBackendExternalSessionSourceWhenV1Schema>;
 
-const PluginBackendExternalSessionSourceFieldBaseV1Schema = lazyZodSchema(() => z.object({
-  name: z.string().trim().min(1),
-  optional: z.boolean().optional(),
-  nullish: z.boolean().optional(),
-  min: z.number().int().nonnegative().optional(),
-  max: z.number().int().positive().optional(),
-}).strict());
+const PluginBackendExternalSessionSourceFieldBaseV1Schema = lazyZodSchema(() => z.strictObject({
+  name: z.string().check(z.trim(), z.minLength(1)),
+  optional: z.optional(z.boolean()),
+  nullish: z.optional(z.boolean()),
+  min: z.optional(z.number().check(z.int(), z.nonnegative())),
+  max: z.optional(z.number().check(z.int(), z.positive())),
+}));
 
 export const PluginBackendExternalSessionSourceSchemaFieldV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  PluginBackendExternalSessionSourceFieldBaseV1Schema.extend({
+  z.extend(PluginBackendExternalSessionSourceFieldBaseV1Schema, {
     kind: z.literal('literal'),
-    value: z.string().trim().min(1),
+    value: z.string().check(z.trim(), z.minLength(1)),
   }),
-  PluginBackendExternalSessionSourceFieldBaseV1Schema.extend({
+  z.extend(PluginBackendExternalSessionSourceFieldBaseV1Schema, {
     kind: z.literal('string'),
   }),
-  PluginBackendExternalSessionSourceFieldBaseV1Schema.extend({
+  z.extend(PluginBackendExternalSessionSourceFieldBaseV1Schema, {
     kind: z.literal('enum'),
-    values: z.array(z.string().trim().min(1)).min(1),
+    values: z.array(z.string().check(z.trim(), z.minLength(1))).check(z.minLength(1)),
   }),
-  PluginBackendExternalSessionSourceFieldBaseV1Schema.extend({
+  z.extend(PluginBackendExternalSessionSourceFieldBaseV1Schema, {
     kind: z.literal('unknown'),
   }),
 ]));
@@ -70,96 +70,93 @@ export type PluginBackendExternalSessionSourceSchemaFieldV1 =
   z.infer<typeof PluginBackendExternalSessionSourceSchemaFieldV1Schema>;
 
 export const PluginBackendExternalSessionSourceSchemaRefinementV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('requiresWhenEquals'),
-    field: z.string().trim().min(1),
+    field: z.string().check(z.trim(), z.minLength(1)),
     when: PluginBackendExternalSessionSourceWhenV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('forbidsWhenEquals'),
-    fields: z.array(z.string().trim().min(1)).min(1),
+    fields: z.array(z.string().check(z.trim(), z.minLength(1))).check(z.minLength(1)),
     when: PluginBackendExternalSessionSourceWhenV1Schema,
-  }).strict(),
+  }),
 ]));
 export type PluginBackendExternalSessionSourceSchemaRefinementV1 =
   z.infer<typeof PluginBackendExternalSessionSourceSchemaRefinementV1Schema>;
 
-export const PluginBackendExternalSessionSourceSchemaV1Schema = lazyZodSchema(() => z.object({
-  fields: z.array(PluginBackendExternalSessionSourceSchemaFieldV1Schema).min(1).refine(
-    (fields) => new Set(fields.map((field) => field.name)).size === fields.length,
-    'External-session source field names must be unique',
-  ),
-  refinements: z.array(PluginBackendExternalSessionSourceSchemaRefinementV1Schema).optional(),
-}).strict());
+export const PluginBackendExternalSessionSourceSchemaV1Schema = lazyZodSchema(() => z.strictObject({
+  fields: z.array(PluginBackendExternalSessionSourceSchemaFieldV1Schema).check(z.minLength(1), z.refine((fields) => new Set(fields.map((field) => field.name)).size === fields.length, 'External-session source field names must be unique')),
+  refinements: z.optional(z.array(PluginBackendExternalSessionSourceSchemaRefinementV1Schema)),
+}));
 export type PluginBackendExternalSessionSourceSchemaV1 =
   z.infer<typeof PluginBackendExternalSessionSourceSchemaV1Schema>;
 
 export const PluginBackendExternalSessionSourceKeySegmentV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('literal'),
-    value: z.string().trim().min(1),
-  }).strict(),
-  z.object({
+    value: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  z.strictObject({
     kind: z.literal('field'),
-    field: z.string().trim().min(1),
-  }).strict(),
-  z.object({
+    field: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  z.strictObject({
     kind: z.literal('homeMode'),
-    field: z.string().trim().min(1),
-  }).strict(),
-  z.object({
+    field: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  z.strictObject({
     kind: z.literal('conditionalField'),
-    field: z.string().trim().min(1),
+    field: z.string().check(z.trim(), z.minLength(1)),
     when: PluginBackendExternalSessionSourceWhenV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('connectedServiceScope'),
-    groupField: z.string().trim().min(1),
-    profileField: z.string().trim().min(1),
+    groupField: z.string().check(z.trim(), z.minLength(1)),
+    profileField: z.string().check(z.trim(), z.minLength(1)),
     when: PluginBackendExternalSessionSourceWhenV1Schema,
-  }).strict(),
+  }),
 ]));
 export type PluginBackendExternalSessionSourceKeySegmentV1 =
   z.infer<typeof PluginBackendExternalSessionSourceKeySegmentV1Schema>;
 
-export const PluginBackendExternalSessionSourceKeyV1Schema = lazyZodSchema(() => z.object({
-  segments: z.array(PluginBackendExternalSessionSourceKeySegmentV1Schema).min(1),
-}).strict());
+export const PluginBackendExternalSessionSourceKeyV1Schema = lazyZodSchema(() => z.strictObject({
+  segments: z.array(PluginBackendExternalSessionSourceKeySegmentV1Schema).check(z.minLength(1)),
+}));
 export type PluginBackendExternalSessionSourceKeyV1 =
   z.infer<typeof PluginBackendExternalSessionSourceKeyV1Schema>;
 
 const PluginBackendExternalSessionSourceInstanceConstantV1Schema = lazyZodSchema(() => z.union([
   z.string(),
-  z.number().finite(),
+  z.number(),
   z.boolean(),
   z.null(),
 ]));
 
 export const PluginBackendExternalSessionSourceInstanceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('default'),
-    constants: z.record(z.string().trim().min(1), PluginBackendExternalSessionSourceInstanceConstantV1Schema).default({}),
-  }).strict(),
-  z.object({
+    constants: z._default(z.record(z.string().check(z.trim(), z.minLength(1)), PluginBackendExternalSessionSourceInstanceConstantV1Schema), {}),
+  }),
+  z.strictObject({
     kind: z.literal('connectedServiceProfiles'),
     serviceId: ConnectedServiceIdSchema,
-    constants: z.record(z.string().trim().min(1), PluginBackendExternalSessionSourceInstanceConstantV1Schema).default({}),
-    fields: z.object({
-      serviceId: z.string().trim().min(1),
-      profileId: z.string().trim().min(1),
-    }).strict(),
-  }).strict(),
-  z.object({
+    constants: z._default(z.record(z.string().check(z.trim(), z.minLength(1)), PluginBackendExternalSessionSourceInstanceConstantV1Schema), {}),
+    fields: z.strictObject({
+      serviceId: z.string().check(z.trim(), z.minLength(1)),
+      profileId: z.string().check(z.trim(), z.minLength(1)),
+    }),
+  }),
+  z.strictObject({
     kind: z.literal('agentSetting'),
-    settingId: z.string().trim().min(1),
-    byServerIdSettingId: z.string().trim().min(1).optional(),
-    field: z.string().trim().min(1),
+    settingId: z.string().check(z.trim(), z.minLength(1)),
+    byServerIdSettingId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    field: z.string().check(z.trim(), z.minLength(1)),
     // How the host turns the raw setting value into the field value; a value the
     // policy rejects yields no source at all rather than a broken one.
     normalization: z.literal('httpOrigin'),
-    constants: z.record(z.string().trim().min(1), PluginBackendExternalSessionSourceInstanceConstantV1Schema).default({}),
-  }).strict(),
-  z.object({
+    constants: z._default(z.record(z.string().check(z.trim(), z.minLength(1)), PluginBackendExternalSessionSourceInstanceConstantV1Schema), {}),
+  }),
+  z.strictObject({
     /**
      * A configured source which replaces the declaration's paired default.
      * It stays a distinct kind from `agentSetting` because replacement is part
@@ -167,17 +164,17 @@ export const PluginBackendExternalSessionSourceInstanceV1Schema = lazyZodSchema(
      * than inferred from a flag every materializer would have to reconcile.
      */
     kind: z.literal('agentSettingOverride'),
-    settingId: z.string().trim().min(1),
-    byServerIdSettingId: z.string().trim().min(1).optional(),
-    field: z.string().trim().min(1),
+    settingId: z.string().check(z.trim(), z.minLength(1)),
+    byServerIdSettingId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    field: z.string().check(z.trim(), z.minLength(1)),
     // Whether a configured source REPLACES the paired default is independent of
     // how its raw setting value is normalized: a declared server endpoint
     // replaces a managed default for the same reason a declared agent directory
     // replaces an ambient one. Both normalizations are already materialized
     // identically by the shared instance owner.
     normalization: z.enum(['httpOrigin', 'configuredPath']),
-    constants: z.record(z.string().trim().min(1), PluginBackendExternalSessionSourceInstanceConstantV1Schema).default({}),
-  }).strict(),
+    constants: z._default(z.record(z.string().check(z.trim(), z.minLength(1)), PluginBackendExternalSessionSourceInstanceConstantV1Schema), {}),
+  }),
 ]));
 export type PluginBackendExternalSessionSourceInstanceV1 =
   z.infer<typeof PluginBackendExternalSessionSourceInstanceV1Schema>;
@@ -189,9 +186,7 @@ export type PluginBackendExternalSessionSourceInstanceV1 =
  * the only spelling an author can act on.
  */
 const PluginBackendExternalSessionSourceInstancesV1Schema =
-  lazyZodSchema(() => z.array(PluginBackendExternalSessionSourceInstanceV1Schema)
-    .min(1)
-    .max(MAX_PLUGIN_TRANSCRIPT_SOURCES_PER_CONTRIBUTION));
+  lazyZodSchema(() => z.array(PluginBackendExternalSessionSourceInstanceV1Schema).check(z.minLength(1), z.maxLength(MAX_PLUGIN_TRANSCRIPT_SOURCES_PER_CONTRIBUTION)));
 
 function isStructurallyCompleteExternalSessionSourceInstance(
   instance: PluginBackendExternalSessionSourceInstanceV1,
@@ -220,28 +215,28 @@ function externalSessionInstanceConstantMatchesField(
     && (field.max === undefined || value.length <= field.max);
 }
 
-export const PluginBackendExternalSessionSourceDeclarationV1Schema = lazyZodSchema(() => z.object({
-  sourceKind: z.string().trim().min(1),
+export const PluginBackendExternalSessionSourceDeclarationV1Schema = lazyZodSchema(() => z.strictObject({
+  sourceKind: z.string().check(z.trim(), z.minLength(1)),
   /** Only positive source evidence admits conversation-content search. */
-  contentSearch: z.boolean().optional(),
+  contentSearch: z.optional(z.boolean()),
   schema: PluginBackendExternalSessionSourceSchemaV1Schema,
   key: PluginBackendExternalSessionSourceKeyV1Schema,
-  instances: PluginBackendExternalSessionSourceInstancesV1Schema.optional(),
+  instances: z.optional(PluginBackendExternalSessionSourceInstancesV1Schema),
   /**
    * This source can discover provider sessions only for the existing
    * resume-in-Happier flow. It does not claim link, transcript, follow,
    * takeover, terminal attachment, or writer-safety semantics.
    */
-  resumeOnly: z.literal(true).optional(),
+  resumeOnly: z.optional(z.literal(true)),
   /**
    * Cold, declarative opt-in for terminal transcript follow. Omission is
    * deliberately unavailable: read/import remain usable, while terminal
    * follow requires provider-owned explicit user-row classification.
    */
-  terminalFollow: z.object({
+  terminalFollow: z.optional(z.strictObject({
     userRowClassification: z.literal('explicitV1'),
-  }).strict().optional(),
-}).strict().superRefine((declaration, ctx) => {
+  })),
+}).check(z.superRefine((declaration, ctx) => {
   for (const issue of findBackendExternalSessionSourceReferenceIssues(declaration)) {
     ctx.addIssue({
       code: 'custom',
@@ -352,7 +347,7 @@ export const PluginBackendExternalSessionSourceDeclarationV1Schema = lazyZodSche
       });
     }
   }
-}));
+})));
 export type PluginBackendExternalSessionSourceDeclarationV1 =
   z.infer<typeof PluginBackendExternalSessionSourceDeclarationV1Schema>;
 
@@ -364,23 +359,20 @@ export type PluginAgentExternalLinkedTakeoverWriterSafetyV1 = z.infer<
   typeof PluginAgentExternalLinkedTakeoverWriterSafetyV1Schema
 >;
 
-const PluginAgentExternalLinkedTakeoverV1Schema = lazyZodSchema(() => z.object({
+const PluginAgentExternalLinkedTakeoverV1Schema = lazyZodSchema(() => z.strictObject({
   writerSafety: PluginAgentExternalLinkedTakeoverWriterSafetyV1Schema,
-}).strict());
+}));
 
-export const PluginBackendExternalSessionSurfaceV1Schema = lazyZodSchema(() => z.object({
-  sources: z.array(PluginBackendExternalSessionSourceDeclarationV1Schema).default([]).refine(
-    (sources) => new Set(sources.map((source) => source.sourceKind)).size === sources.length,
-    'External-session source kinds must be unique within an Agent contribution',
-  ),
-  externalLinkedTakeover: PluginAgentExternalLinkedTakeoverV1Schema.optional(),
-}).strict());
+export const PluginBackendExternalSessionSurfaceV1Schema = lazyZodSchema(() => z.strictObject({
+  sources: z._default(z.array(PluginBackendExternalSessionSourceDeclarationV1Schema), []).check(z.refine((sources) => new Set(sources.map((source) => source.sourceKind)).size === sources.length, 'External-session source kinds must be unique within an Agent contribution')),
+  externalLinkedTakeover: z.optional(PluginAgentExternalLinkedTakeoverV1Schema),
+}));
 export type PluginBackendExternalSessionSurfaceV1 =
   z.infer<typeof PluginBackendExternalSessionSurfaceV1Schema>;
 
-export const PluginBackendSurfacesV1Schema = lazyZodSchema(() => z.object({
-  externalSession: PluginBackendExternalSessionSurfaceV1Schema.optional(),
-}).strict());
+export const PluginBackendSurfacesV1Schema = lazyZodSchema(() => z.strictObject({
+  externalSession: z.optional(PluginBackendExternalSessionSurfaceV1Schema),
+}));
 export type PluginBackendSurfacesV1 = z.infer<typeof PluginBackendSurfacesV1Schema>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -412,44 +404,44 @@ function normalizePluginBackendCapabilitiesInput(value: unknown): unknown {
   return normalized;
 }
 
-export const PluginBackendStructuredOutputRecoveryV1Schema = lazyZodSchema(() => z.object({
-  plan: z.enum(['loose-sections', 'none']).optional(),
-  delegate: z.enum(['loose-deliverables', 'loose-deliverables-with-single-fallback', 'none']).optional(),
-}).passthrough());
+export const PluginBackendStructuredOutputRecoveryV1Schema = lazyZodSchema(() => z.looseObject({
+  plan: z.optional(z.enum(['loose-sections', 'none'])),
+  delegate: z.optional(z.enum(['loose-deliverables', 'loose-deliverables-with-single-fallback', 'none'])),
+}));
 export type PluginBackendStructuredOutputRecoveryV1 =
   z.infer<typeof PluginBackendStructuredOutputRecoveryV1Schema>;
 
-export const PluginBackendExecutionRunCapabilitiesV1Schema = lazyZodSchema(() => z.object({
-  supported: z.boolean().default(true),
-  structuredOutputRecovery: PluginBackendStructuredOutputRecoveryV1Schema.optional(),
-}).passthrough());
+export const PluginBackendExecutionRunCapabilitiesV1Schema = lazyZodSchema(() => z.looseObject({
+  supported: z._default(z.boolean(), true),
+  structuredOutputRecovery: z.optional(PluginBackendStructuredOutputRecoveryV1Schema),
+}));
 export type PluginBackendExecutionRunCapabilitiesV1 = z.infer<typeof PluginBackendExecutionRunCapabilitiesV1Schema>;
 
-export const PluginBackendSessionMediaCapabilitySupportV1Schema = lazyZodSchema(() => z.object({
-  supported: z.boolean().default(false),
-}).passthrough());
+export const PluginBackendSessionMediaCapabilitySupportV1Schema = lazyZodSchema(() => z.looseObject({
+  supported: z._default(z.boolean(), false),
+}));
 export type PluginBackendSessionMediaCapabilitySupportV1 = z.infer<typeof PluginBackendSessionMediaCapabilitySupportV1Schema>;
 
-export const PluginBackendSessionMediaOutputCapabilitiesV1Schema = lazyZodSchema(() => z.object({
-  supported: z.boolean().default(false),
-  mediaKinds: z.array(z.literal('image')).optional(),
-  sources: z.array(z.enum(['provider-generated', 'tool-output', 'acp-content', 'mcp-content'])).optional(),
-  storage: z.literal('session-media-file').optional(),
-}).passthrough());
+export const PluginBackendSessionMediaOutputCapabilitiesV1Schema = lazyZodSchema(() => z.looseObject({
+  supported: z._default(z.boolean(), false),
+  mediaKinds: z.optional(z.array(z.literal('image'))),
+  sources: z.optional(z.array(z.enum(['provider-generated', 'tool-output', 'acp-content', 'mcp-content']))),
+  storage: z.optional(z.literal('session-media-file')),
+}));
 export type PluginBackendSessionMediaOutputCapabilitiesV1 = z.infer<typeof PluginBackendSessionMediaOutputCapabilitiesV1Schema>;
 
-export const PluginBackendNativeImageGenerationCapabilitiesV1Schema = lazyZodSchema(() => z.object({
-  supported: z.boolean().default(false),
-  mediaKinds: z.array(z.literal('image')).optional(),
-  streamingPartials: z.boolean().optional(),
-}).passthrough());
+export const PluginBackendNativeImageGenerationCapabilitiesV1Schema = lazyZodSchema(() => z.looseObject({
+  supported: z._default(z.boolean(), false),
+  mediaKinds: z.optional(z.array(z.literal('image'))),
+  streamingPartials: z.optional(z.boolean()),
+}));
 export type PluginBackendNativeImageGenerationCapabilitiesV1 = z.infer<typeof PluginBackendNativeImageGenerationCapabilitiesV1Schema>;
 
-export const PluginBackendSessionMediaCapabilitiesV1Schema = lazyZodSchema(() => z.object({
-  acceptsImageInput: PluginBackendSessionMediaCapabilitySupportV1Schema.default({ supported: false }),
-  emitsSessionMedia: PluginBackendSessionMediaOutputCapabilitiesV1Schema.default({ supported: false }),
-  nativeImageGeneration: PluginBackendNativeImageGenerationCapabilitiesV1Schema.default({ supported: false }),
-}).passthrough().default({
+export const PluginBackendSessionMediaCapabilitiesV1Schema = lazyZodSchema(() => z._default(z.looseObject({
+  acceptsImageInput: z._default(PluginBackendSessionMediaCapabilitySupportV1Schema, { supported: false }),
+  emitsSessionMedia: z._default(PluginBackendSessionMediaOutputCapabilitiesV1Schema, { supported: false }),
+  nativeImageGeneration: z._default(PluginBackendNativeImageGenerationCapabilitiesV1Schema, { supported: false }),
+}), {
   acceptsImageInput: { supported: false },
   emitsSessionMedia: { supported: false },
   nativeImageGeneration: { supported: false },
@@ -458,34 +450,34 @@ export type PluginBackendSessionMediaCapabilitiesV1 = z.infer<typeof PluginBacke
 
 const ContextCompactionPhaseV1Schema = lazyZodSchema(() => z.enum(['started', 'progress', 'completed', 'failed', 'cancelled']));
 
-export const PluginBackendSessionContextCompactionEventsCapabilitiesV1Schema = lazyZodSchema(() => z.object({
-  supported: z.boolean().default(false),
-  phases: z.array(ContextCompactionPhaseV1Schema).optional(),
-  tokenCounts: z.boolean().optional(),
-  progress: z.boolean().optional(),
-}).passthrough().default({ supported: false }));
+export const PluginBackendSessionContextCompactionEventsCapabilitiesV1Schema = lazyZodSchema(() => z._default(z.looseObject({
+  supported: z._default(z.boolean(), false),
+  phases: z.optional(z.array(ContextCompactionPhaseV1Schema)),
+  tokenCounts: z.optional(z.boolean()),
+  progress: z.optional(z.boolean()),
+}), { supported: false }));
 export type PluginBackendSessionContextCompactionEventsCapabilitiesV1 =
   z.infer<typeof PluginBackendSessionContextCompactionEventsCapabilitiesV1Schema>;
 
-export const PluginBackendSessionContextCompactionManualTriggerCapabilitiesV1Schema = lazyZodSchema(() => z.object({
-  supported: z.boolean().default(false),
-  transport: z.enum(['native-runtime-hook', 'raw-provider-command']).optional(),
-  acceptsInstructions: z.boolean().optional(),
-}).passthrough().default({ supported: false }));
+export const PluginBackendSessionContextCompactionManualTriggerCapabilitiesV1Schema = lazyZodSchema(() => z._default(z.looseObject({
+  supported: z._default(z.boolean(), false),
+  transport: z.optional(z.enum(['native-runtime-hook', 'raw-provider-command'])),
+  acceptsInstructions: z.optional(z.boolean()),
+}), { supported: false }));
 export type PluginBackendSessionContextCompactionManualTriggerCapabilitiesV1 =
   z.infer<typeof PluginBackendSessionContextCompactionManualTriggerCapabilitiesV1Schema>;
 
-export const PluginBackendSessionContextCompactionTranscriptInferenceCapabilitiesV1Schema = lazyZodSchema(() => z.object({
-  supported: z.boolean().default(false),
-}).passthrough().default({ supported: false }));
+export const PluginBackendSessionContextCompactionTranscriptInferenceCapabilitiesV1Schema = lazyZodSchema(() => z._default(z.looseObject({
+  supported: z._default(z.boolean(), false),
+}), { supported: false }));
 export type PluginBackendSessionContextCompactionTranscriptInferenceCapabilitiesV1 =
   z.infer<typeof PluginBackendSessionContextCompactionTranscriptInferenceCapabilitiesV1Schema>;
 
-export const PluginBackendSessionContextCompactionCapabilitiesV1Schema = lazyZodSchema(() => z.object({
+export const PluginBackendSessionContextCompactionCapabilitiesV1Schema = lazyZodSchema(() => z._default(z.looseObject({
   events: PluginBackendSessionContextCompactionEventsCapabilitiesV1Schema,
   manualTrigger: PluginBackendSessionContextCompactionManualTriggerCapabilitiesV1Schema,
   transcriptInference: PluginBackendSessionContextCompactionTranscriptInferenceCapabilitiesV1Schema,
-}).passthrough().default({
+}), {
   events: { supported: false },
   manualTrigger: { supported: false },
   transcriptInference: { supported: false },
@@ -493,10 +485,10 @@ export const PluginBackendSessionContextCompactionCapabilitiesV1Schema = lazyZod
 export type PluginBackendSessionContextCompactionCapabilitiesV1 =
   z.infer<typeof PluginBackendSessionContextCompactionCapabilitiesV1Schema>;
 
-export const PluginBackendSessionCapabilitiesV1Schema = lazyZodSchema(() => z.object({
+export const PluginBackendSessionCapabilitiesV1Schema = lazyZodSchema(() => z._default(z.looseObject({
   media: PluginBackendSessionMediaCapabilitiesV1Schema,
   contextCompaction: PluginBackendSessionContextCompactionCapabilitiesV1Schema,
-}).passthrough().default({
+}), {
   media: {
     acceptsImageInput: { supported: false },
     emitsSessionMedia: { supported: false },
@@ -510,12 +502,10 @@ export const PluginBackendSessionCapabilitiesV1Schema = lazyZodSchema(() => z.ob
 }));
 export type PluginBackendSessionCapabilitiesV1 = z.infer<typeof PluginBackendSessionCapabilitiesV1Schema>;
 
-export const PluginBackendCapabilitiesV1Schema = lazyZodSchema(() => z.preprocess(
-  normalizePluginBackendCapabilitiesInput,
-  z.object({
-    executionRun: PluginBackendExecutionRunCapabilitiesV1Schema.default({ supported: true }),
+export const PluginBackendCapabilitiesV1Schema = lazyZodSchema(() => z.pipe(z.transform(normalizePluginBackendCapabilitiesInput), z._default(z.looseObject({
+    executionRun: z._default(PluginBackendExecutionRunCapabilitiesV1Schema, { supported: true }),
     session: PluginBackendSessionCapabilitiesV1Schema,
-  }).passthrough().default({
+  }), {
     executionRun: { supported: true },
     session: {
       media: {
@@ -529,24 +519,23 @@ export const PluginBackendCapabilitiesV1Schema = lazyZodSchema(() => z.preproces
         transcriptInference: { supported: false },
       },
     },
-  }),
-));
+  })));
 export type PluginBackendCapabilitiesV1 = z.infer<typeof PluginBackendCapabilitiesV1Schema>;
 
 export function normalizePluginBackendCapabilitiesV1(input: unknown): PluginBackendCapabilitiesV1 {
   return PluginBackendCapabilitiesV1Schema.parse(input);
 }
 
-export const PluginBackendDefinitionV1BaseSchema = lazyZodSchema(() => z.object({
-  kindVersion: z.literal(1).default(1),
-  id: z.string().trim().min(1),
+export const PluginBackendDefinitionV1BaseSchema = lazyZodSchema(() => z.looseObject({
+  kindVersion: z._default(z.literal(1), 1),
+  id: z.string().check(z.trim(), z.minLength(1)),
   providerId: PluginOptionalStringSchema,
   agentId: PluginOptionalStringSchema,
   catalogAgentId: PluginOptionalStringSchema,
   iconAgentId: PluginOptionalStringSchema,
-  launch: PluginBackendLaunchV1Schema.optional(),
-  install: PluginBackendInstallV1Schema.optional(),
-  capabilities: PluginBackendCapabilitiesV1Schema.default({
+  launch: z.optional(PluginBackendLaunchV1Schema),
+  install: z.optional(PluginBackendInstallV1Schema),
+  capabilities: z._default(PluginBackendCapabilitiesV1Schema, {
     executionRun: { supported: true },
     session: {
       media: {
@@ -561,49 +550,49 @@ export const PluginBackendDefinitionV1BaseSchema = lazyZodSchema(() => z.object(
       },
     },
   }),
-  surfaceHandlers: z.array(BackendSurfaceDeclarationV1Schema).default([]),
-  surfaces: PluginBackendSurfacesV1Schema.optional(),
-  runtimeOptionsSchema: PluginLooseJsonObjectSchema.optional(),
-  probe: PluginBackendProbeV1Schema.optional(),
-}).passthrough());
+  surfaceHandlers: z._default(z.array(BackendSurfaceDeclarationV1Schema), []),
+  surfaces: z.optional(PluginBackendSurfacesV1Schema),
+  runtimeOptionsSchema: z.optional(PluginLooseJsonObjectSchema),
+  probe: z.optional(PluginBackendProbeV1Schema),
+}));
 
-export const PluginBackendDefinitionV1Schema = lazyZodSchema(() => PluginBackendDefinitionV1BaseSchema.superRefine((value, ctx) => {
+export const PluginBackendDefinitionV1Schema = lazyZodSchema(() => PluginBackendDefinitionV1BaseSchema.check(z.superRefine((value, ctx) => {
   const providerId = typeof value.providerId === 'string' ? value.providerId.trim() : '';
   const legacyAgentId = typeof value.agentId === 'string' ? value.agentId.trim() : '';
   if (!providerId && !legacyAgentId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['providerId'],
       message: 'Plugin backend manifests must declare providerId.',
     });
   }
   if (providerId && legacyAgentId && providerId !== legacyAgentId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['agentId'],
       message: 'Legacy agentId must match providerId when both are declared.',
     });
   }
   if (hasOwn(value, 'runtimeAdapters')) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['runtimeAdapters'],
       message: 'Manifest-declared backend runtime handlers are retired; runtimeAdapters is not accepted.',
     });
   }
   if (hasOwn(value, 'runtimeCoreHooks')) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['runtimeCoreHooks'],
       message: 'Manifest-declared backend runtime handlers are retired; runtimeCoreHooks is not accepted.',
     });
   }
   if (value.surfaceHandlers.length > 0) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['surfaceHandlers'],
       message: 'Manifest-declared backend surface handlers are retired; executable handlers must be published by the authoritative activated runtime.',
     });
   }
-}));
+})));
 export type PluginBackendDefinitionV1 = z.infer<typeof PluginBackendDefinitionV1Schema>;

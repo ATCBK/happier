@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import * as protocol from './managedMachinePresetV1.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
@@ -33,7 +33,7 @@ describe('managed preset recipe contracts', () => {
     expect(ManagedMachineActionInputSchemasV1['machines.managed.retention.update'].parse(live)).toEqual(live);
   });
   it('keeps revisioned environment references canonical on mutation and tolerantly reads stored additions', () => {
-    const schema = protocol.createManagedMachinePresetV1Schema(z.object({ cores: z.number().int().positive() }).strict());
+    const schema = protocol.createManagedMachinePresetV1Schema(z.strictObject({ cores: z.number().check(z.int(), z.positive()) }));
     const environment = { toolchain: { adapterId: 'mise', config: '[tools]\nnode = "22"' }, setupScript: 'echo setup',
       secretRefs: { v: 1, bindings: { API_TOKEN: { ref: 'setup-token' } } } };
     const preset = { id: 'environment-preset', homeId: 'home', revision: 2, name: 'Tools', owner: { kind: 'account', accountId: 'owner' },
@@ -51,7 +51,7 @@ describe('managed preset recipe contracts', () => {
   });
   it('validates contributed choices once and drops stored extras without relaxing mutation admission', () => {
     // The contribution supplies its launch schema; all surrounding host admission stays real.
-    const schema = protocol.createManagedMachinePresetV1Schema(z.object({ cores: z.number().int().positive() }).strict());
+    const schema = protocol.createManagedMachinePresetV1Schema(z.strictObject({ cores: z.number().check(z.int(), z.positive()) }));
     const preset = {
       id: 'preset-a', homeId: 'home-a', revision: 1, name: 'My VM',
       owner: { kind: 'account', accountId: 'owner' },

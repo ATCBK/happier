@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /** The existing native shell family, shared by canonicalization and typed bridge provenance. */
 export function isShellToolNameAlias(name: string): boolean {

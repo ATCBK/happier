@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { MachineLiveStreamStartRequestV1Schema } from './v1.js';
 
@@ -18,26 +18,22 @@ import { MachineLiveStreamStartRequestV1Schema } from './v1.js';
  * RPC only moves the already-signed request to the machine that must act on it, over a channel
  * that is itself account-scoped (only the owning account can RPC its machines).
  */
-export const DaemonMachineLiveStreamRelayStartRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const DaemonMachineLiveStreamRelayStartRequestV1Schema = lazyZodSchema(() => z.strictObject({
     protocolVersion: z.literal(1),
-    machineId: z.string().min(1),
+    machineId: z.string().check(z.minLength(1)),
     startRequest: MachineLiveStreamStartRequestV1Schema,
-  })
-  .strict());
+  }));
 export type DaemonMachineLiveStreamRelayStartRequestV1 = z.infer<
   typeof DaemonMachineLiveStreamRelayStartRequestV1Schema
 >;
 
-export const DaemonMachineLiveStreamRelayStartResponseV1Schema = lazyZodSchema(() => z
-  .object({
+export const DaemonMachineLiveStreamRelayStartResponseV1Schema = lazyZodSchema(() => z.strictObject({
     protocolVersion: z.literal(1),
     result: z.discriminatedUnion('ok', [
-      z.object({ ok: z.literal(true), streamId: z.string().min(1) }).strict(),
-      z.object({ ok: z.literal(false), reasonCode: z.string().min(1) }).strict(),
+      z.strictObject({ ok: z.literal(true), streamId: z.string().check(z.minLength(1)) }),
+      z.strictObject({ ok: z.literal(false), reasonCode: z.string().check(z.minLength(1)) }),
     ]),
-  })
-  .strict());
+  }));
 export type DaemonMachineLiveStreamRelayStartResponseV1 = z.infer<
   typeof DaemonMachineLiveStreamRelayStartResponseV1Schema
 >;

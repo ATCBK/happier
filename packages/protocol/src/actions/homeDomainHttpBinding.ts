@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 
 export type HomeDomainHttpRequestV1 = Readonly<{
   method: string;
@@ -29,7 +29,7 @@ function appendQueryValue(query: URLSearchParams, key: string, value: unknown): 
  */
 export function bindHomeDomainHttpRequestV1(params: Readonly<{
   transport: Readonly<{ method: string; path: string }>;
-  inputSchema: z.ZodTypeAny;
+  inputSchema: z.ZodMiniType;
   input: unknown;
 }>): HomeDomainHttpRequestV1 {
   const parsed = params.inputSchema.parse(params.input);

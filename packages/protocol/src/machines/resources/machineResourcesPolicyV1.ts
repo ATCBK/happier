@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
@@ -8,45 +8,45 @@ import { MachineGuardPolicyV1Schema, MachineGuardPolicyPatchV1Schema, mergeMachi
 import { getMachineMetadataFieldV1, readMachineMetadataFieldV1, readMachineMetadataSnapshotV1, mutateMachineMetadataFieldV1,
   type MachineMetadataFieldPortV1 } from '../machineMetadataFieldV1.js';
 
-export const MachineProcessesPolicyV1Schema = lazyZodSchema(() => z.object({
-  allProcessesVisible: z.boolean().default(false),
-  toolIdleCloseMs: z.number().int().min(1_000).max(Number.MAX_SAFE_INTEGER).nullable().default(300_000),
+export const MachineProcessesPolicyV1Schema = lazyZodSchema(() => z.strictObject({
+  allProcessesVisible: z._default(z.boolean(), false),
+  toolIdleCloseMs: z._default(z.nullable(z.number().check(z.int(), z.minimum(1_000), z.maximum(Number.MAX_SAFE_INTEGER))), 300_000),
   // null uses the launch owner's RAM-derived admission; custom counts have only
   // the numeric representation boundary, not Auto's four-engine maximum.
-  browserMaxConcurrent: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).nullable().default(null),
-}).strict());
+  browserMaxConcurrent: z._default(z.nullable(z.number().check(z.int(), z.minimum(1), z.maximum(Number.MAX_SAFE_INTEGER))), null),
+}));
 export type MachineProcessesPolicyV1 = z.infer<typeof MachineProcessesPolicyV1Schema>;
-export const MachineProcessesPolicyPatchV1Schema = lazyZodSchema(() => z.object({
-  allProcessesVisible: MachineProcessesPolicyV1Schema.shape.allProcessesVisible.removeDefault().optional(),
-  toolIdleCloseMs: MachineProcessesPolicyV1Schema.shape.toolIdleCloseMs.removeDefault().optional(),
-  browserMaxConcurrent: MachineProcessesPolicyV1Schema.shape.browserMaxConcurrent.removeDefault().optional(),
-}).strict());
+export const MachineProcessesPolicyPatchV1Schema = lazyZodSchema(() => z.strictObject({
+  allProcessesVisible: z.optional(MachineProcessesPolicyV1Schema.shape.allProcessesVisible._zod.def.innerType),
+  toolIdleCloseMs: z.optional(MachineProcessesPolicyV1Schema.shape.toolIdleCloseMs._zod.def.innerType),
+  browserMaxConcurrent: z.optional(MachineProcessesPolicyV1Schema.shape.browserMaxConcurrent._zod.def.innerType),
+}));
 
-export const MachineResourcesPolicyV1Schema = lazyZodSchema(() => z.object({
-  v: z.literal(1), alerts: MachineVitalsAlertsPolicyV1Schema.default(() => MachineVitalsAlertsPolicyV1Schema.parse({})),
-  processes: MachineProcessesPolicyV1Schema.default(() => MachineProcessesPolicyV1Schema.parse({})),
-  storage: MachineStoragePolicyV1Schema.default(() => MachineStoragePolicyV1Schema.parse({})),
-  guard: MachineGuardPolicyV1Schema.default(() => MachineGuardPolicyV1Schema.parse({})),
-}).strict());
+export const MachineResourcesPolicyV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1), alerts: z._default(MachineVitalsAlertsPolicyV1Schema, () => MachineVitalsAlertsPolicyV1Schema.parse({})),
+  processes: z._default(MachineProcessesPolicyV1Schema, () => MachineProcessesPolicyV1Schema.parse({})),
+  storage: z._default(MachineStoragePolicyV1Schema, () => MachineStoragePolicyV1Schema.parse({})),
+  guard: z._default(MachineGuardPolicyV1Schema, () => MachineGuardPolicyV1Schema.parse({})),
+}));
 export type MachineResourcesPolicyV1 = z.infer<typeof MachineResourcesPolicyV1Schema>;
 export const MachineResourcesPolicyV1StoredSchema = createStoredReadSchema(MachineResourcesPolicyV1Schema);
-export const MachineResourcesPolicyPatchV1Schema = lazyZodSchema(() => z.object({ alerts: MachineVitalsAlertsPolicyPatchV1Schema.optional(),
-  processes: MachineProcessesPolicyPatchV1Schema.optional(),
-  storage: MachineStoragePolicyPatchV1Schema.optional(),
-  guard: MachineGuardPolicyPatchV1Schema.optional(),
-}).strict());
+export const MachineResourcesPolicyPatchV1Schema = lazyZodSchema(() => z.strictObject({ alerts: z.optional(MachineVitalsAlertsPolicyPatchV1Schema),
+  processes: z.optional(MachineProcessesPolicyPatchV1Schema),
+  storage: z.optional(MachineStoragePolicyPatchV1Schema),
+  guard: z.optional(MachineGuardPolicyPatchV1Schema),
+}));
 export type MachineResourcesPolicyPatchV1 = z.infer<typeof MachineResourcesPolicyPatchV1Schema>;
-export const MachineResourcesPolicyMutationV1Schema = lazyZodSchema(() => z.object({
-  expectedRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), patch: MachineResourcesPolicyPatchV1Schema,
-}).strict());
+export const MachineResourcesPolicyMutationV1Schema = lazyZodSchema(() => z.strictObject({
+  expectedRevision: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)), patch: MachineResourcesPolicyPatchV1Schema,
+}));
 export const MachineResourcesPolicyGetResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({ status: z.literal('ready'), policy: MachineResourcesPolicyV1Schema, revision: z.number().int().nonnegative(), source: z.enum(['stored', 'default']) }).strict(),
-  z.object({ status: z.enum(['locked', 'invalid', 'unavailable']) }).strict(),
+  z.strictObject({ status: z.literal('ready'), policy: MachineResourcesPolicyV1Schema, revision: z.number().check(z.int(), z.nonnegative()), source: z.enum(['stored', 'default']) }),
+  z.strictObject({ status: z.enum(['locked', 'invalid', 'unavailable']) }),
 ]));
 export type MachineResourcesPolicyGetResultV1 = z.infer<typeof MachineResourcesPolicyGetResultV1Schema>;
 export const MachineResourcesPolicyMutationResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({ status: z.enum(['applied', 'unchanged', 'conflict']), policy: MachineResourcesPolicyV1Schema, revision: z.number().int().nonnegative() }).strict(),
-  z.object({ status: z.enum(['unavailable', 'unsupported']), reason: z.string().min(1) }).strict(),
+  z.strictObject({ status: z.enum(['applied', 'unchanged', 'conflict']), policy: MachineResourcesPolicyV1Schema, revision: z.number().check(z.int(), z.nonnegative()) }),
+  z.strictObject({ status: z.enum(['unavailable', 'unsupported']), reason: z.string().check(z.minLength(1)) }),
 ]));
 export type MachineResourcesPolicyMutationResultV1 = z.infer<typeof MachineResourcesPolicyMutationResultV1Schema>;
 const definition = { field: 'resourcesPolicyV1', storedSchema: MachineResourcesPolicyV1StoredSchema,

@@ -1,9 +1,9 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /** Exact creator-authored workspace policy for a Temporary Computer endpoint. */
 export const TemporaryComputerWorkspaceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('choose_on_endpoint') }).strict(),
-  z.object({ kind: z.literal('endpoint_home') }).strict(),
+  z.strictObject({ kind: z.literal('choose_on_endpoint') }),
+  z.strictObject({ kind: z.literal('endpoint_home') }),
 ]));
 export type TemporaryComputerWorkspaceV1 = z.infer<typeof TemporaryComputerWorkspaceV1Schema>;

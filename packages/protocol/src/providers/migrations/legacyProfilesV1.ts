@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '../../backends/targets/backendTargetRefV2.js';
 import { AIBackendProfileSchema, type AIBackendProfile } from '../../profiles/backendProfileSchema.js';
@@ -477,23 +477,20 @@ export function migrateLegacyAiLaunchProfilesV1(
 export const LegacyProfileCredentialStyleV1Schema = lazyZodSchema(() => z.enum(['bearer', 'x-api-key', 'api-key']));
 export type LegacyProfileCredentialStyleV1 = z.infer<typeof LegacyProfileCredentialStyleV1Schema>;
 
-export const LegacyProfileReviewedMappingV1Schema = lazyZodSchema(() => z.object({
-  connection: ProviderConnectionV1Schema.refine(
-    (connection) => connection.source.kind === 'custom' && connection.role === 'named',
-    'Guided legacy migration creates a named custom connection',
-  ),
-  credentialMoves: z.array(z.object({
-    legacyEnvVarName: z.string().regex(/^[A-Z_][A-Z0-9_]*$/u).max(128),
+export const LegacyProfileReviewedMappingV1Schema = lazyZodSchema(() => z.strictObject({
+  connection: ProviderConnectionV1Schema.check(z.refine((connection) => connection.source.kind === 'custom' && connection.role === 'named', 'Guided legacy migration creates a named custom connection')),
+  credentialMoves: z.array(z.strictObject({
+    legacyEnvVarName: z.string().check(z.regex(/^[A-Z_][A-Z0-9_]*$/u), z.maxLength(128)),
     credentialSlotId: ProviderLocalIdSchema,
     credentialStyle: LegacyProfileCredentialStyleV1Schema,
-  }).strict()).max(1),
-  routingEnvironmentVariableNames: z.array(z.string().regex(/^[A-Z_][A-Z0-9_]*$/u).max(128)).max(32).default([]),
-  manualModelIds: z.array(ProviderModelIdSchema).max(500),
-  selectedModel: z.object({
+  })).check(z.maxLength(1)),
+  routingEnvironmentVariableNames: z._default(z.array(z.string().check(z.regex(/^[A-Z_][A-Z0-9_]*$/u), z.maxLength(128))).check(z.maxLength(32)), []),
+  manualModelIds: z.array(ProviderModelIdSchema).check(z.maxLength(500)),
+  selectedModel: z.optional(z.strictObject({
     agentTargetKey: ProviderAgentTargetKeySchema,
     modelId: ProviderModelIdSchema,
-  }).strict().optional(),
-}).strict().superRefine((mapping, ctx) => {
+  })),
+}).check(z.superRefine((mapping, ctx) => {
   if (mapping.credentialMoves.length === 0) return;
   if (mapping.connection.source.kind !== 'custom') return;
   const credential = mapping.connection.source.template.credential;
@@ -518,7 +515,7 @@ export const LegacyProfileReviewedMappingV1Schema = lazyZodSchema(() => z.object
       ctx.addIssue({ code: 'custom', path: ['credentialMoves', index, 'credentialStyle'], message: 'Authentication token variables require bearer style' });
     }
   }
-}));
+})));
 export type LegacyProfileReviewedMappingV1 = z.infer<typeof LegacyProfileReviewedMappingV1Schema>;
 
 function findRawProfile(rawSettings: Readonly<Record<string, unknown>>, sourceProfileId: string): unknown {

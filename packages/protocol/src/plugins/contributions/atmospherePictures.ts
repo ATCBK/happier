@@ -1,28 +1,28 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { asProtocolZod } from '../actions/internalProtocolZodAdapter.js';
 import { PluginContributionLocalIdSchema } from '../contributionIdentity.js';
 
 /** Closed data-only picture declaration; rendering remains with the host atmosphere owner. */
-export const PluginAtmospherePictureContributionV1Schema = lazyZodSchema(() => z.object({
+export const PluginAtmospherePictureContributionV1Schema = lazyZodSchema(() => z.strictObject({
     id: asProtocolZod(PluginContributionLocalIdSchema),
     kind: z.enum(['photo', 'painting']),
-    title: z.string().min(1),
-    credit: z.object({ author: z.string().min(1), source: z.string().min(1), url: z.string().url(), licence: z.string().min(1), note: z.string().optional() }).strict(),
-    src: z.object({ full: z.string().url(), thumb: z.string().url() }).strict(),
-    horizon: z.object({ src: z.number().optional(), at: z.number().optional() }).strict(),
-    focus: z.object({ x: z.number().optional(), y: z.number().optional(), zoom: z.number().optional() }).strict(),
+    title: z.string().check(z.minLength(1)),
+    credit: z.strictObject({ author: z.string().check(z.minLength(1)), source: z.string().check(z.minLength(1)), url: z.string().check(z.url()), licence: z.string().check(z.minLength(1)), note: z.optional(z.string()) }),
+    src: z.strictObject({ full: z.string().check(z.url()), thumb: z.string().check(z.url()) }),
+    horizon: z.strictObject({ src: z.optional(z.number()), at: z.optional(z.number()) }),
+    focus: z.strictObject({ x: z.optional(z.number()), y: z.optional(z.number()), zoom: z.optional(z.number()) }),
     hour: z.number(),
-    grades: z.object({ light: z.number(), dusk: z.number(), night: z.number() }).strict(),
+    grades: z.strictObject({ light: z.number(), dusk: z.number(), night: z.number() }),
     dark: z.enum(['dusk', 'night']),
-    look: z.object({
-        effect: z.enum(['original', 'fine', 'painted-fine', 'halftone', 'mosaic', 'painted', 'haze', 'engraving']).optional(),
-        params: z.record(z.string(), z.number()).optional(),
-        dissolve: z.object({ style: z.enum(['ordered', 'gradient', 'haze', 'shrink', 'rows']).optional(), from: z.number().optional(), to: z.number().optional() }).strict().optional(),
-        strength: z.number().optional(),
-    }).strict(),
-    adjust: z.object({ exposure: z.number().optional(), contrast: z.number().optional(), saturation: z.number().optional(), temperature: z.number().optional() }).strict().optional(),
-    themes: z.array(z.enum(['light', 'dark'])).optional(),
-}).strict());
+    look: z.strictObject({
+        effect: z.optional(z.enum(['original', 'fine', 'painted-fine', 'halftone', 'mosaic', 'painted', 'haze', 'engraving'])),
+        params: z.optional(z.record(z.string(), z.number())),
+        dissolve: z.optional(z.strictObject({ style: z.optional(z.enum(['ordered', 'gradient', 'haze', 'shrink', 'rows'])), from: z.optional(z.number()), to: z.optional(z.number()) })),
+        strength: z.optional(z.number()),
+    }),
+    adjust: z.optional(z.strictObject({ exposure: z.optional(z.number()), contrast: z.optional(z.number()), saturation: z.optional(z.number()), temperature: z.optional(z.number()) })),
+    themes: z.optional(z.array(z.enum(['light', 'dark']))),
+}));
 
 export type PluginAtmospherePictureContributionV1 = z.infer<typeof PluginAtmospherePictureContributionV1Schema>;

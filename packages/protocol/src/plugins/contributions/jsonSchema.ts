@@ -5,7 +5,7 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
  * lets protocol roots use the canonical schema constructors without a module
  * initialization cycle through contribution identity.
  */
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * Mutable structural JSON authored into declarations and carried on wire
@@ -26,14 +26,14 @@ export type PluginJsonValueV2 =
   | { [key: string]: PluginJsonValueV2 };
 
 const PluginJsonValueShallowSchema = lazyZodSchema(() => z.union([
-  z.null(), z.boolean(), z.number().finite(), z.string(),
+  z.null(), z.boolean(), z.number(), z.string(),
   z.array(z.unknown()), z.record(z.string(), z.unknown()),
 ]));
 
 // Stored Workflow envelopes reach this structural JSON owner before their
 // purpose-specific schema. Parse its existing dialect without recursive calls;
 // strict normalization and transport byte limits remain separate owners.
-export const PluginJsonValueV2Schema: z.ZodType<PluginJsonValueV2> = z.unknown().transform((value, context): PluginJsonValueV2 => {
+export const PluginJsonValueV2Schema: z.ZodMiniType<PluginJsonValueV2> = z.pipe(z.unknown(), z.transform((value, context): PluginJsonValueV2 => {
   let output: unknown;
   let failed = false;
   const ancestors = new WeakSet<object>();
@@ -45,7 +45,7 @@ export const PluginJsonValueV2Schema: z.ZodType<PluginJsonValueV2> = z.unknown()
     if ('finish' in task) { ancestors.delete(task.finish); continue; }
     if (task.value !== null && typeof task.value === 'object') {
       if (ancestors.has(task.value)) {
-        context.addIssue({ code: 'custom', path: task.path, message: 'JSON values cannot contain cycles' });
+        context.issues.push({ code: 'custom', path: task.path, message: 'JSON values cannot contain cycles', input: context.value });
         failed = true;
         continue;
       }
@@ -55,7 +55,7 @@ export const PluginJsonValueV2Schema: z.ZodType<PluginJsonValueV2> = z.unknown()
     const parsed = PluginJsonValueShallowSchema.safeParse(task.value);
     if (!parsed.success) {
       failed = true;
-      for (const issue of parsed.error.issues) context.addIssue({ ...issue, path: [...task.path, ...issue.path] });
+      for (const issue of parsed.error.issues) context.issues.push({ ...issue, path: [...task.path, ...issue.path], input: ('input' in issue ? issue.input ?? context.value : context.value) });
       continue;
     }
     const result = parsed.data;
@@ -73,10 +73,10 @@ export const PluginJsonValueV2Schema: z.ZodType<PluginJsonValueV2> = z.unknown()
     }
   }
   return failed ? z.NEVER : output as PluginJsonValueV2;
-});
+}));
 
 const PluginJsonValueProjectionSchema = z.lazy(() => z.union([
-  z.null(), z.boolean(), z.number().finite(), z.string(),
+  z.null(), z.boolean(), z.number(), z.string(),
   z.array(PluginJsonValueV2Schema),
   z.record(z.string(), PluginJsonValueV2Schema),
 ]));
@@ -122,26 +122,26 @@ export type PluginJsonSchemaV2 = {
   not?: PluginJsonSchemaV2;
 };
 
-export const PluginJsonSchemaV2Schema: z.ZodType<PluginJsonSchemaV2> = z.lazy(() => z.object({
-  $schema: z.literal('http://json-schema.org/draft-07/schema#').optional(),
-  $ref: z.string().regex(/^#(?:\/.*)?$/u, 'Schema references must be document-local JSON Pointers').optional(),
-  definitions: z.record(z.string(), PluginJsonSchemaV2Schema).optional(),
-  $defs: z.record(z.string(), PluginJsonSchemaV2Schema).optional(),
-  type: z.enum(['null', 'boolean', 'number', 'integer', 'string', 'array', 'object']).optional(),
-  format: z.enum(['date-time', 'time', 'date', 'duration', 'uri', 'uri-reference', 'uri-template', 'url', 'email', 'hostname', 'ipv4', 'ipv6', 'regex', 'uuid', 'json-pointer', 'relative-json-pointer']).optional(),
-  title: z.string().optional(), description: z.string().optional(),
-  default: PluginJsonValueV2Schema.optional(), enum: z.array(PluginJsonValueV2Schema).optional(), const: PluginJsonValueV2Schema.optional(),
-  properties: z.record(z.string(), PluginJsonSchemaV2Schema).optional(), required: z.array(z.string()).optional(),
-  propertyNames: PluginJsonSchemaV2Schema.optional(),
-  additionalProperties: z.union([z.boolean(), PluginJsonSchemaV2Schema]).optional(), items: PluginJsonSchemaV2Schema.optional(),
-  minItems: z.number().int().nonnegative().optional(), maxItems: z.number().int().nonnegative().optional(),
-  uniqueItems: z.boolean().optional(),
-  minimum: z.number().finite().optional(), maximum: z.number().finite().optional(),
-  multipleOf: z.number().finite().positive().optional(),
-  exclusiveMinimum: z.number().finite().optional(), exclusiveMaximum: z.number().finite().optional(),
-  minLength: z.number().int().nonnegative().optional(), maxLength: z.number().int().nonnegative().optional(), pattern: z.string().optional(),
-  'x-happier-max-utf8-bytes': z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
-  'x-happier-max-serialized-utf8-bytes': z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
-  anyOf: z.array(PluginJsonSchemaV2Schema).optional(), oneOf: z.array(PluginJsonSchemaV2Schema).optional(), allOf: z.array(PluginJsonSchemaV2Schema).optional(),
-  not: PluginJsonSchemaV2Schema.optional(),
-}).strict());
+export const PluginJsonSchemaV2Schema: z.ZodMiniType<PluginJsonSchemaV2> = z.lazy(() => z.strictObject({
+  $schema: z.optional(z.literal('http://json-schema.org/draft-07/schema#')),
+  $ref: z.optional(z.string().check(z.regex(/^#(?:\/.*)?$/u, 'Schema references must be document-local JSON Pointers'))),
+  definitions: z.optional(z.record(z.string(), PluginJsonSchemaV2Schema)),
+  $defs: z.optional(z.record(z.string(), PluginJsonSchemaV2Schema)),
+  type: z.optional(z.enum(['null', 'boolean', 'number', 'integer', 'string', 'array', 'object'])),
+  format: z.optional(z.enum(['date-time', 'time', 'date', 'duration', 'uri', 'uri-reference', 'uri-template', 'url', 'email', 'hostname', 'ipv4', 'ipv6', 'regex', 'uuid', 'json-pointer', 'relative-json-pointer'])),
+  title: z.optional(z.string()), description: z.optional(z.string()),
+  default: z.optional(PluginJsonValueV2Schema), enum: z.optional(z.array(PluginJsonValueV2Schema)), const: z.optional(PluginJsonValueV2Schema),
+  properties: z.optional(z.record(z.string(), PluginJsonSchemaV2Schema)), required: z.optional(z.array(z.string())),
+  propertyNames: z.optional(PluginJsonSchemaV2Schema),
+  additionalProperties: z.optional(z.union([z.boolean(), PluginJsonSchemaV2Schema])), items: z.optional(PluginJsonSchemaV2Schema),
+  minItems: z.optional(z.number().check(z.int(), z.nonnegative())), maxItems: z.optional(z.number().check(z.int(), z.nonnegative())),
+  uniqueItems: z.optional(z.boolean()),
+  minimum: z.optional(z.number()), maximum: z.optional(z.number()),
+  multipleOf: z.optional(z.number().check(z.positive())),
+  exclusiveMinimum: z.optional(z.number()), exclusiveMaximum: z.optional(z.number()),
+  minLength: z.optional(z.number().check(z.int(), z.nonnegative())), maxLength: z.optional(z.number().check(z.int(), z.nonnegative())), pattern: z.optional(z.string()),
+  'x-happier-max-utf8-bytes': z.optional(z.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER))),
+  'x-happier-max-serialized-utf8-bytes': z.optional(z.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER))),
+  anyOf: z.optional(z.array(PluginJsonSchemaV2Schema)), oneOf: z.optional(z.array(PluginJsonSchemaV2Schema)), allOf: z.optional(z.array(PluginJsonSchemaV2Schema)),
+  not: z.optional(PluginJsonSchemaV2Schema),
+}));

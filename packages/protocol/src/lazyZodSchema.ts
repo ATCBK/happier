@@ -1,21 +1,9 @@
-import { _default, core, globalRegistry, lazy, toJSONSchema, ZodType } from 'zod';
+import { core, globalRegistry, lazy } from 'zod/mini';
 
-const SCHEMA_METHODS = new Set([
-  'check', 'with', 'clone', 'refine', 'superRefine', 'overwrite', 'optional',
-  'exactOptional', 'nullable', 'nullish', 'nonoptional', 'array', 'or', 'and',
-  'transform', 'default', 'prefault', 'catch', 'pipe', 'readonly', 'describe',
-  'extend', 'safeExtend', 'merge', 'pick', 'omit', 'partial', 'required',
-  'strict', 'strip', 'passthrough', 'loose', 'catchall',
-  'trim', 'min', 'max', 'regex', 'keyof',
-]);
-const PARSE_METHODS = new Set([
-  'parse', 'safeParse', 'parseAsync', 'safeParseAsync', 'spa', 'encode', 'decode',
-  'encodeAsync', 'decodeAsync', 'safeEncode', 'safeDecode', 'safeEncodeAsync', 'safeDecodeAsync',
-]);
+const PARSE_METHODS = new Set(['parse', 'safeParse', 'parseAsync', 'safeParseAsync']);
 type DefinitionLifetime = {
   readonly resolve: () => object;
   readonly canonicalZodIdentity: boolean;
-  readonly deferZodMethods: boolean;
   readonly nativeZodSchema: boolean;
   parserSchema?: core.$ZodType;
 };
@@ -37,8 +25,8 @@ export function deferZodSchemaForParser(schema: unknown): unknown {
   return lifetime.parserSchema ??= lazy(() => schema as core.$ZodType);
 }
 
-/** Keeps the concrete Zod contract while admitting construction on demand. */
-export function lazyZodSchema<TSchema extends ZodType>(create: () => TSchema): TSchema {
+/** Keeps the concrete Core/Mini schema identity while admitting construction on demand. */
+export function lazyZodSchema<TSchema extends core.$ZodType>(create: () => TSchema): TSchema {
   return createLazyDefinition(create, true);
 }
 
@@ -47,25 +35,17 @@ export function lazyDefinition<TDefinition extends object>(create: () => TDefini
 export function lazyDefinition<TSchema extends core.$ZodType>(
   create: () => TSchema,
   schemaSource: core.$ZodType,
-  preserveSourceClass?: boolean,
 ): TSchema;
 export function lazyDefinition<TDefinition extends object>(
   create: () => TDefinition,
   schemaSource?: core.$ZodType,
-  preserveSourceClass = true,
 ): TDefinition {
-  // Derived Classic readers keep their fluent composition cold without
-  // assuming that genuine Mini/Core definitions expose Classic methods.
-  const sourceLifetime = schemaSource === undefined ? undefined : definitionLifetimes.get(schemaSource);
-  const deferZodMethods = schemaSource !== undefined && preserveSourceClass
-    && (sourceLifetime ? sourceLifetime.deferZodMethods : schemaSource instanceof ZodType);
-  return createLazyDefinition(create, false, deferZodMethods, schemaSource !== undefined);
+  return createLazyDefinition(create, false, schemaSource !== undefined);
 }
 
 function createLazyDefinition<TSchema extends object>(
   create: () => TSchema,
   canonicalZodIdentity: boolean,
-  deferZodMethods = canonicalZodIdentity,
   nativeZodSchema = canonicalZodIdentity,
 ): TSchema {
   const target = {} as TSchema;
@@ -129,14 +109,6 @@ function createLazyDefinition<TSchema extends object>(
           }),
         };
       }
-      if (canonicalZodIdentity && concrete instanceof ZodType) {
-        // Keep the concrete root's projection identity while using Zod's
-        // native processors for genuine Core/Mini child definitions.
-        descriptors.toJSONSchema = {
-          ...descriptors.toJSONSchema,
-          value: (params?: core.ToJSONSchemaParams) => toJSONSchema(concrete, params),
-        };
-      }
       Object.defineProperties(target, descriptors);
       schema = concrete;
       if (concreteSchema && canonicalZodIdentity) {
@@ -149,11 +121,6 @@ function createLazyDefinition<TSchema extends object>(
     return schema;
   };
   const invoke = (key: PropertyKey, args: unknown[]): unknown => {
-    if (deferZodMethods && key === 'default') {
-      // Native defaults can admit absent input without inspecting their base.
-      // Compose around the facade so that short circuit stays construction-cold.
-      return _default(definition as unknown as ZodType, args[0] as Parameters<typeof _default>[1]);
-    }
     const concrete = resolve();
     const method: unknown = Reflect.get(concrete, key);
     if (typeof method !== 'function') throw new TypeError(`Invalid Zod method: ${String(key)}`);
@@ -162,11 +129,12 @@ function createLazyDefinition<TSchema extends object>(
   const definition = new Proxy(target, {
     get(_target, key) {
       if (schema) return Reflect.get(target, key);
-      if (deferZodMethods && typeof key === 'string' && (SCHEMA_METHODS.has(key) || PARSE_METHODS.has(key))) {
+      if (canonicalZodIdentity && typeof key === 'string'
+        && (key === 'check' || key === 'with' || PARSE_METHODS.has(key))) {
         let method = methods.get(key);
         if (!method) {
-          method = SCHEMA_METHODS.has(key)
-            ? (...args) => lazyZodSchema(() => invoke(key, args) as ZodType)
+          method = key === 'check' || key === 'with'
+            ? (...args) => lazyZodSchema(() => invoke(key, args) as core.$ZodType)
             : (...args) => invoke(key, args);
           methods.set(key, method);
         }
@@ -184,6 +152,6 @@ function createLazyDefinition<TSchema extends object>(
     deleteProperty(_target, key) { resolve(); return Reflect.deleteProperty(target, key); },
     preventExtensions() { resolve(); return Reflect.preventExtensions(target); },
   });
-  definitionLifetimes.set(definition, { resolve, canonicalZodIdentity, deferZodMethods, nativeZodSchema });
+  definitionLifetimes.set(definition, { resolve, canonicalZodIdentity, nativeZodSchema });
   return definition;
 }

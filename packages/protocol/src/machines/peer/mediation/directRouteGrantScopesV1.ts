@@ -1,66 +1,66 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { VoiceMediaApplicationKindV1Schema } from './voiceMediaV1.js';
 import { LocalServicePreviewDirectBindingV1Schema } from '../../../local/services/preview/v1.js';
 
-const PositiveIntSchema = lazyZodSchema(() => z.number().int().positive());
+const PositiveIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.positive()));
 
-export const BoundedTransferSingleGrantScopeV1Schema = lazyZodSchema(() => z.object({
+export const BoundedTransferSingleGrantScopeV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('bounded_transfer'),
   mode: z.literal('single'),
-  transferId: z.string().min(1),
+  transferId: z.string().check(z.minLength(1)),
   maxBytes: PositiveIntSchema,
-}).strict());
+}));
 
-export const BoundedTransferScopedGrantScopeV1Schema = lazyZodSchema(() => z.object({
+export const BoundedTransferScopedGrantScopeV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('bounded_transfer'),
   mode: z.literal('scope'),
-  transferScopeId: z.string().min(1),
-  allowedTransferIdPrefix: z.string().min(1).optional(),
+  transferScopeId: z.string().check(z.minLength(1)),
+  allowedTransferIdPrefix: z.optional(z.string().check(z.minLength(1))),
   maxTransfers: PositiveIntSchema,
   maxBytesPerTransfer: PositiveIntSchema,
   maxTotalBytes: PositiveIntSchema,
   maxIdleMs: PositiveIntSchema,
-}).strict());
+}));
 
-export const TcpTunnelGrantScopeV1Schema = lazyZodSchema(() => z.object({
+export const TcpTunnelGrantScopeV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('tcp_tunnel'),
-  tunnelId: z.string().min(1),
-  allowedPorts: z.array(z.number().int().min(1).max(65_535)).min(1),
-  preview: LocalServicePreviewDirectBindingV1Schema.optional(),
-}).strict());
+  tunnelId: z.string().check(z.minLength(1)),
+  allowedPorts: z.array(z.number().check(z.int(), z.minimum(1), z.maximum(65_535))).check(z.minLength(1)),
+  preview: z.optional(LocalServicePreviewDirectBindingV1Schema),
+}));
 
-export const VoiceMediaGrantScopeV1Schema = lazyZodSchema(() => z.object({
+export const VoiceMediaGrantScopeV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('voice_media'),
-  tunnelId: z.string().min(1),
+  tunnelId: z.string().check(z.minLength(1)),
   applicationKind: VoiceMediaApplicationKindV1Schema,
-  applicationAttemptId: z.string().min(1).max(256),
-  applicationAuthorityDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/u),
-  maxIdleMs: PositiveIntSchema.optional(),
-  maxDurationMs: PositiveIntSchema.optional(),
-  maxTotalBytes: PositiveIntSchema.optional(),
-}).strict());
+  applicationAttemptId: z.string().check(z.minLength(1), z.maxLength(256)),
+  applicationAuthorityDigest: z.string().check(z.regex(/^sha256:[0-9a-f]{64}$/u)),
+  maxIdleMs: z.optional(PositiveIntSchema),
+  maxDurationMs: z.optional(PositiveIntSchema),
+  maxTotalBytes: z.optional(PositiveIntSchema),
+}));
 
-export const LiveStreamGrantScopeV1Schema = lazyZodSchema(() => z.object({
+export const LiveStreamGrantScopeV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('live_stream'),
-  streamId: z.string().min(1),
-  streamFamily: z.string().min(1),
-  sourceId: z.string().min(1).optional(),
-  maxBitrateBps: PositiveIntSchema.optional(),
-  maxDurationMs: PositiveIntSchema.optional(),
-  maxTotalBytes: PositiveIntSchema.optional(),
-}).strict());
+  streamId: z.string().check(z.minLength(1)),
+  streamFamily: z.string().check(z.minLength(1)),
+  sourceId: z.optional(z.string().check(z.minLength(1))),
+  maxBitrateBps: z.optional(PositiveIntSchema),
+  maxDurationMs: z.optional(PositiveIntSchema),
+  maxTotalBytes: z.optional(PositiveIntSchema),
+}));
 
-export const MachineRpcGrantScopeV1Schema = lazyZodSchema(() => z.object({
+export const MachineRpcGrantScopeV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('machine_rpc'),
-  rpcScopeId: z.string().min(1),
-  allowedMethods: z.array(z.string().min(1)).min(1),
-  sessionId: z.string().min(1).optional(),
+  rpcScopeId: z.string().check(z.minLength(1)),
+  allowedMethods: z.array(z.string().check(z.minLength(1))).check(z.minLength(1)),
+  sessionId: z.optional(z.string().check(z.minLength(1))),
   maxCalls: PositiveIntSchema,
   maxIdleMs: PositiveIntSchema,
-  highRiskSingleUseMethods: z.array(z.string().min(1)).optional(),
-}).strict());
+  highRiskSingleUseMethods: z.optional(z.array(z.string().check(z.minLength(1)))),
+}));
 
 export const DirectRouteGrantScopeV1Schema = lazyZodSchema(() => z.union([
   BoundedTransferSingleGrantScopeV1Schema,

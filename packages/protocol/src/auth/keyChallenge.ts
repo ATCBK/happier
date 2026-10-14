@@ -1,15 +1,15 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { encodeBase64 } from '../crypto/base64.js';
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import { normalizeServerIdentityIdCapability } from '../features/payload/capabilities/serverIdentityCapabilities.js';
 import { TeamInvitationAccountAdmissionV1Schema } from './accountAdmission.js';
 
-const ExpectedAccountIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(256));
-const ChallengeIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(128));
-const ChallengeNonceSchema = lazyZodSchema(() => z.string().min(1).max(256));
-const ChallengeInstantSchema = lazyZodSchema(() => z.string().datetime({ offset: true }));
+const ExpectedAccountIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
+const ChallengeIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(128)));
+const ChallengeNonceSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(256)));
+const ChallengeInstantSchema = lazyZodSchema(() => z.string().check(z.iso.datetime({ offset: true })));
 
 export function canonicalizeKeyChallengeV2AudienceOrigin(
   value: unknown,
@@ -27,56 +27,40 @@ export function canonicalizeKeyChallengeV2AudienceOrigin(
 }
 
 const KeyChallengeV2AudienceOriginSchema = lazyZodSchema(() => z
-  .string()
-  .trim()
-  .min(1)
-  .max(191)
-  .refine(
-    (value) => canonicalizeKeyChallengeV2AudienceOrigin(value) === value,
-    'origin must be a canonical HTTP(S) origin',
-  ));
+  .string().check(z.trim(), z.minLength(1), z.maxLength(191), z.refine((value) => canonicalizeKeyChallengeV2AudienceOrigin(value) === value, 'origin must be a canonical HTTP(S) origin')));
 
-const KeyChallengeV2ServerIdentityIdSchema = lazyZodSchema(() => z.preprocess(
-  normalizeServerIdentityIdCapability,
-  z.string().optional(),
-));
+const KeyChallengeV2ServerIdentityIdSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeServerIdentityIdCapability), z.optional(z.string())));
 
-export const KeyChallengeV2AudienceSchema = lazyZodSchema(() => z
-  .object({
+export const KeyChallengeV2AudienceSchema = lazyZodSchema(() => z.strictObject({
     origin: KeyChallengeV2AudienceOriginSchema,
     serverIdentityId: KeyChallengeV2ServerIdentityIdSchema,
-  })
-  .strict());
+  }));
 export type KeyChallengeV2Audience = z.infer<
   typeof KeyChallengeV2AudienceSchema
 >;
 
-export const KeyChallengeV2IssueRequestSchema = lazyZodSchema(() => z
-  .object({
-    expectedAccountId: ExpectedAccountIdSchema.optional(),
-  })
-  .strict());
+export const KeyChallengeV2IssueRequestSchema = lazyZodSchema(() => z.strictObject({
+    expectedAccountId: z.optional(ExpectedAccountIdSchema),
+  }));
 export type KeyChallengeV2IssueRequest = z.infer<
   typeof KeyChallengeV2IssueRequestSchema
 >;
 
-export const KeyChallengeV2IssueResponseSchema = lazyZodSchema(() => z
-  .object({
+export const KeyChallengeV2IssueResponseSchema = lazyZodSchema(() => z.strictObject({
     challengeId: ChallengeIdSchema,
     nonce: ChallengeNonceSchema,
     issuedAt: ChallengeInstantSchema,
     expiresAt: ChallengeInstantSchema,
     audience: KeyChallengeV2AudienceSchema,
-  })
-  .strict());
+  }));
 export type KeyChallengeV2IssueResponse = z.infer<
   typeof KeyChallengeV2IssueResponseSchema
 >;
 
-const KeyChallengeV2SigningFactsSchema = lazyZodSchema(() => KeyChallengeV2IssueResponseSchema.extend({
-  expectedAccountId: ExpectedAccountIdSchema.optional(),
-  requireExistingAccount: z.literal(true).optional(),
-}).strict());
+const KeyChallengeV2SigningFactsSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(KeyChallengeV2IssueResponseSchema, {
+  expectedAccountId: z.optional(ExpectedAccountIdSchema),
+  requireExistingAccount: z.optional(z.literal(true)),
+})));
 
 const KEY_CHALLENGE_SIGNING_DOMAIN_V2 = 'happier.key-challenge.v2';
 
@@ -115,53 +99,47 @@ function validateContentKeyPair(
     contentPublicKey?: string;
     contentPublicKeySig?: string;
   }>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   const hasContentKey = value.contentPublicKey !== undefined;
   const hasContentSignature = value.contentPublicKeySig !== undefined;
   if (hasContentKey !== hasContentSignature) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message:
         'contentPublicKey and contentPublicKeySig must be provided together',
     });
   }
 }
 
-export const KeyChallengeV1AuthRequestSchema = lazyZodSchema(() => z
-  .object({
+export const KeyChallengeV1AuthRequestSchema = lazyZodSchema(() => z.strictObject({
     // The released route owns its legacy size/error semantics. Keep the old
     // fields wire-compatible here and let that boundary apply its existing
     // limits after parsing.
     publicKey: z.string(),
     challenge: z.string(),
     signature: z.string(),
-    contentPublicKey: z.string().optional(),
-    contentPublicKeySig: z.string().optional(),
-    expectedAccountId: ExpectedAccountIdSchema.optional(),
-    admission: TeamInvitationAccountAdmissionV1Schema.optional(),
-  })
-  .strict()
-  .superRefine(validateContentKeyPair));
+    contentPublicKey: z.optional(z.string()),
+    contentPublicKeySig: z.optional(z.string()),
+    expectedAccountId: z.optional(ExpectedAccountIdSchema),
+    admission: z.optional(TeamInvitationAccountAdmissionV1Schema),
+  }).check(z.superRefine(validateContentKeyPair)));
 export type KeyChallengeV1AuthRequest = z.infer<
   typeof KeyChallengeV1AuthRequestSchema
 >;
 
-export const KeyChallengeV2AuthRequestSchema = lazyZodSchema(() => z
-  .object({
+export const KeyChallengeV2AuthRequestSchema = lazyZodSchema(() => z.strictObject({
     challengeId: ChallengeIdSchema,
     publicKey: z.string(),
     signature: z.string(),
-    contentPublicKey: z.string().optional(),
-    contentPublicKeySig: z.string().optional(),
-    expectedAccountId: ExpectedAccountIdSchema.optional(),
-    admission: TeamInvitationAccountAdmissionV1Schema.optional(),
-    requireExistingAccount: z.literal(true).optional(),
+    contentPublicKey: z.optional(z.string()),
+    contentPublicKeySig: z.optional(z.string()),
+    expectedAccountId: z.optional(ExpectedAccountIdSchema),
+    admission: z.optional(TeamInvitationAccountAdmissionV1Schema),
+    requireExistingAccount: z.optional(z.literal(true)),
     /** Narrows a Home login to a terminal credential; never widens authority. */
-    credentialKind: z.literal('terminal').optional(),
-  })
-  .strict()
-  .superRefine(validateContentKeyPair));
+    credentialKind: z.optional(z.literal('terminal')),
+  }).check(z.superRefine(validateContentKeyPair)));
 export type KeyChallengeV2AuthRequest = z.infer<
   typeof KeyChallengeV2AuthRequestSchema
 >;

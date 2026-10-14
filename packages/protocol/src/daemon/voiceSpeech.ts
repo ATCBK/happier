@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   PluginContributionIdentityV1Schema,
@@ -27,13 +27,13 @@ export const DAEMON_VOICE_SPEECH_TRANSFER_CHUNK_MAX_BYTES =
   Math.floor(DAEMON_VOICE_SPEECH_TRANSFER_CHUNK_ENCODED_MAX_LENGTH / 4) * 3
   - TRANSFER_ENCRYPTED_CHUNK_OVERHEAD_BYTES;
 
-const VoiceSpeechRequestIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(DAEMON_VOICE_SPEECH_REQUEST_ID_MAX_LENGTH));
-const VoiceSpeechRequiredStringSchema = (maxLength: number) => z.string().trim().min(1).max(maxLength);
-const VoiceSpeechNullableStringSchema = (maxLength: number) => VoiceSpeechRequiredStringSchema(maxLength).nullable();
-const VoiceSpeechOperationErrorSchema = lazyZodSchema(() => z.object({
+const VoiceSpeechRequestIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(DAEMON_VOICE_SPEECH_REQUEST_ID_MAX_LENGTH)));
+const VoiceSpeechRequiredStringSchema = (maxLength: number) => z.string().check(z.trim(), z.minLength(1), z.maxLength(maxLength));
+const VoiceSpeechNullableStringSchema = (maxLength: number) => z.nullable(VoiceSpeechRequiredStringSchema(maxLength));
+const VoiceSpeechOperationErrorSchema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(false),
   errorCode: VoiceProviderOperationErrorCodeSchema,
-}).strict());
+}));
 
 const VoiceSpeechTransferErrorCodeSchema = lazyZodSchema(() => z.enum([
   'invalid_parameters',
@@ -41,17 +41,17 @@ const VoiceSpeechTransferErrorCodeSchema = lazyZodSchema(() => z.enum([
   'transfer_failed',
   'cancelled',
 ]));
-const VoiceSpeechTransferFailureSchema = lazyZodSchema(() => z.object({
+const VoiceSpeechTransferFailureSchema = lazyZodSchema(() => z.strictObject({
   success: z.literal(false),
   error: VoiceSpeechTransferErrorCodeSchema,
   errorCode: VoiceSpeechTransferErrorCodeSchema,
-}).strict());
-const VoiceSpeechTransferSuccessSchema = lazyZodSchema(() => z.object({ success: z.literal(true) }).strict());
+}));
+const VoiceSpeechTransferSuccessSchema = lazyZodSchema(() => z.strictObject({ success: z.literal(true) }));
 
-export const DaemonVoiceSpeechCatalogRequestSchema = lazyZodSchema(() => z.object({
+export const DaemonVoiceSpeechCatalogRequestSchema = lazyZodSchema(() => z.strictObject({
   target: asProtocolZod(PluginContributionIdentityV1Schema),
   catalog: z.enum(['models', 'voices']),
-}).strict());
+}));
 export type DaemonVoiceSpeechCatalogRequest = z.infer<
   typeof DaemonVoiceSpeechCatalogRequestSchema
 >;
@@ -60,55 +60,55 @@ export type DaemonVoiceSpeechCatalogRequest = z.infer<
  * The Account Settings revision is an admission fence. The daemon reads the
  * matching canonical settings snapshot; the UI remains the sole CAS/patch owner.
  */
-export const DaemonVoiceSpeechSettingsActionRequestSchema = lazyZodSchema(() => z.object({
+export const DaemonVoiceSpeechSettingsActionRequestSchema = lazyZodSchema(() => z.strictObject({
   target: asProtocolZod(PluginContributionIdentityV1Schema),
   actionId: asProtocolZod(PluginContributionLocalIdSchema),
-  expectedSettingsVersion: z.number().int().nonnegative(),
-}).strict());
+  expectedSettingsVersion: z.number().check(z.int(), z.nonnegative()),
+}));
 export type DaemonVoiceSpeechSettingsActionRequest = z.infer<
   typeof DaemonVoiceSpeechSettingsActionRequestSchema
 >;
 
 export const DaemonVoiceSpeechSettingsActionResponseSchema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     patch: z.record(PluginSettingFieldIdV2Schema, PluginJsonValueV2Schema),
-  }).strict(),
+  }),
   VoiceSpeechOperationErrorSchema,
 ]));
 export type DaemonVoiceSpeechSettingsActionResponse = z.infer<
   typeof DaemonVoiceSpeechSettingsActionResponseSchema
 >;
 
-export const DaemonVoiceSpeechTranscribeUploadInitRequestSchema = lazyZodSchema(() => z.object({
+export const DaemonVoiceSpeechTranscribeUploadInitRequestSchema = lazyZodSchema(() => z.strictObject({
   target: asProtocolZod(PluginContributionIdentityV1Schema),
-  sizeBytes: z.number().int().positive().max(DAEMON_VOICE_SPEECH_INPUT_MAX_BYTES),
+  sizeBytes: z.number().check(z.int(), z.positive(), z.maximum(DAEMON_VOICE_SPEECH_INPUT_MAX_BYTES)),
   mimeType: VoiceSpeechInputMimeTypeSchema,
-  fileName: z.string().trim().min(1).max(256).regex(/^[^/\\\u0000-\u001f\u007f]+$/u),
-}).strict());
+  fileName: z.string().check(z.trim(), z.minLength(1), z.maxLength(256), z.regex(/^[^/\\\u0000-\u001f\u007f]+$/u)),
+}));
 export type DaemonVoiceSpeechTranscribeUploadInitRequest = z.infer<
   typeof DaemonVoiceSpeechTranscribeUploadInitRequestSchema
 >;
 
 export const DaemonVoiceSpeechTranscribeUploadInitResponseSchema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     success: z.literal(true),
     uploadId: TransferSessionIdSchema,
-    chunkSizeBytes: z.number().int().positive().max(DAEMON_VOICE_SPEECH_TRANSFER_CHUNK_MAX_BYTES),
-    recipientPublicKeyBase64: z.string().min(1).max(DAEMON_VOICE_SPEECH_TRANSFER_KEY_ENVELOPE_MAX_LENGTH),
-  }).strict(),
+    chunkSizeBytes: z.number().check(z.int(), z.positive(), z.maximum(DAEMON_VOICE_SPEECH_TRANSFER_CHUNK_MAX_BYTES)),
+    recipientPublicKeyBase64: z.string().check(z.minLength(1), z.maxLength(DAEMON_VOICE_SPEECH_TRANSFER_KEY_ENVELOPE_MAX_LENGTH)),
+  }),
   VoiceSpeechTransferFailureSchema,
 ]));
 export type DaemonVoiceSpeechTranscribeUploadInitResponse = z.infer<
   typeof DaemonVoiceSpeechTranscribeUploadInitResponseSchema
 >;
 
-export const DaemonVoiceSpeechTranscribeUploadChunkRequestSchema = lazyZodSchema(() => z.object({
+export const DaemonVoiceSpeechTranscribeUploadChunkRequestSchema = lazyZodSchema(() => z.strictObject({
   uploadId: TransferSessionIdSchema,
-  index: z.number().int().min(0),
-  payloadBase64: z.string().min(1).max(DAEMON_VOICE_SPEECH_TRANSFER_CHUNK_ENCODED_MAX_LENGTH),
-  encryptedDataKeyEnvelopeBase64: z.string().min(1).max(DAEMON_VOICE_SPEECH_TRANSFER_KEY_ENVELOPE_MAX_LENGTH),
-}).strict());
+  index: z.number().check(z.int(), z.minimum(0)),
+  payloadBase64: z.string().check(z.minLength(1), z.maxLength(DAEMON_VOICE_SPEECH_TRANSFER_CHUNK_ENCODED_MAX_LENGTH)),
+  encryptedDataKeyEnvelopeBase64: z.string().check(z.minLength(1), z.maxLength(DAEMON_VOICE_SPEECH_TRANSFER_KEY_ENVELOPE_MAX_LENGTH)),
+}));
 export type DaemonVoiceSpeechTranscribeUploadChunkRequest = z.infer<
   typeof DaemonVoiceSpeechTranscribeUploadChunkRequestSchema
 >;
@@ -121,29 +121,29 @@ export type DaemonVoiceSpeechTranscribeUploadChunkResponse = z.infer<
   typeof DaemonVoiceSpeechTranscribeUploadChunkResponseSchema
 >;
 
-export const DaemonVoiceSpeechTranscribeUploadFinalizeRequestSchema = lazyZodSchema(() => z.object({
+export const DaemonVoiceSpeechTranscribeUploadFinalizeRequestSchema = lazyZodSchema(() => z.strictObject({
   uploadId: TransferSessionIdSchema,
-}).strict());
+}));
 export type DaemonVoiceSpeechTranscribeUploadFinalizeRequest = z.infer<
   typeof DaemonVoiceSpeechTranscribeUploadFinalizeRequestSchema
 >;
 
 export const DaemonVoiceSpeechTranscribeUploadFinalizeResponseSchema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     success: z.literal(true),
     uploadId: TransferSessionIdSchema,
-    sizeBytes: z.number().int().positive().max(DAEMON_VOICE_SPEECH_INPUT_MAX_BYTES),
-    sha256: z.string().regex(/^[a-f0-9]{64}$/u),
-  }).strict(),
+    sizeBytes: z.number().check(z.int(), z.positive(), z.maximum(DAEMON_VOICE_SPEECH_INPUT_MAX_BYTES)),
+    sha256: z.string().check(z.regex(/^[a-f0-9]{64}$/u)),
+  }),
   VoiceSpeechTransferFailureSchema,
 ]));
 export type DaemonVoiceSpeechTranscribeUploadFinalizeResponse = z.infer<
   typeof DaemonVoiceSpeechTranscribeUploadFinalizeResponseSchema
 >;
 
-export const DaemonVoiceSpeechTranscribeUploadAbortRequestSchema = lazyZodSchema(() => z.object({
+export const DaemonVoiceSpeechTranscribeUploadAbortRequestSchema = lazyZodSchema(() => z.strictObject({
   uploadId: TransferSessionIdSchema,
-}).strict());
+}));
 export type DaemonVoiceSpeechTranscribeUploadAbortRequest = z.infer<
   typeof DaemonVoiceSpeechTranscribeUploadAbortRequestSchema
 >;
@@ -156,41 +156,41 @@ export type DaemonVoiceSpeechTranscribeUploadAbortResponse = z.infer<
   typeof DaemonVoiceSpeechTranscribeUploadAbortResponseSchema
 >;
 
-export const DaemonVoiceSpeechTranscribeRequestSchema = lazyZodSchema(() => z.object({
+export const DaemonVoiceSpeechTranscribeRequestSchema = lazyZodSchema(() => z.strictObject({
   target: asProtocolZod(PluginContributionIdentityV1Schema),
   requestId: VoiceSpeechRequestIdSchema,
   mimeType: VoiceSpeechInputMimeTypeSchema,
   uploadId: TransferSessionIdSchema,
-  capturePurpose: z.enum(['conversation', 'dictation']).optional(),
-}).strict());
+  capturePurpose: z.optional(z.enum(['conversation', 'dictation'])),
+}));
 export type DaemonVoiceSpeechTranscribeRequest = z.infer<
   typeof DaemonVoiceSpeechTranscribeRequestSchema
 >;
 
-export const DaemonVoiceSpeechDownloadChunkRequestSchema = lazyZodSchema(() => z.object({
+export const DaemonVoiceSpeechDownloadChunkRequestSchema = lazyZodSchema(() => z.strictObject({
   downloadId: TransferSessionIdSchema,
-  index: z.number().int().min(0),
-}).strict());
+  index: z.number().check(z.int(), z.minimum(0)),
+}));
 export type DaemonVoiceSpeechDownloadChunkRequest = z.infer<
   typeof DaemonVoiceSpeechDownloadChunkRequestSchema
 >;
 
 export const DaemonVoiceSpeechDownloadChunkResponseSchema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     success: z.literal(true),
-    payloadBase64: z.string().min(1).max(DAEMON_VOICE_SPEECH_TRANSFER_CHUNK_ENCODED_MAX_LENGTH),
-    encryptedDataKeyEnvelopeBase64: z.string().min(1).max(DAEMON_VOICE_SPEECH_TRANSFER_KEY_ENVELOPE_MAX_LENGTH),
+    payloadBase64: z.string().check(z.minLength(1), z.maxLength(DAEMON_VOICE_SPEECH_TRANSFER_CHUNK_ENCODED_MAX_LENGTH)),
+    encryptedDataKeyEnvelopeBase64: z.string().check(z.minLength(1), z.maxLength(DAEMON_VOICE_SPEECH_TRANSFER_KEY_ENVELOPE_MAX_LENGTH)),
     isLast: z.boolean(),
-  }).strict(),
+  }),
   VoiceSpeechTransferFailureSchema,
 ]));
 export type DaemonVoiceSpeechDownloadChunkResponse = z.infer<
   typeof DaemonVoiceSpeechDownloadChunkResponseSchema
 >;
 
-export const DaemonVoiceSpeechDownloadFinalizeRequestSchema = lazyZodSchema(() => z.object({
+export const DaemonVoiceSpeechDownloadFinalizeRequestSchema = lazyZodSchema(() => z.strictObject({
   downloadId: TransferSessionIdSchema,
-}).strict());
+}));
 export type DaemonVoiceSpeechDownloadFinalizeRequest = z.infer<
   typeof DaemonVoiceSpeechDownloadFinalizeRequestSchema
 >;
@@ -203,9 +203,9 @@ export type DaemonVoiceSpeechDownloadFinalizeResponse = z.infer<
   typeof DaemonVoiceSpeechDownloadFinalizeResponseSchema
 >;
 
-export const DaemonVoiceSpeechDownloadAbortRequestSchema = lazyZodSchema(() => z.object({
+export const DaemonVoiceSpeechDownloadAbortRequestSchema = lazyZodSchema(() => z.strictObject({
   downloadId: TransferSessionIdSchema,
-}).strict());
+}));
 export type DaemonVoiceSpeechDownloadAbortRequest = z.infer<
   typeof DaemonVoiceSpeechDownloadAbortRequestSchema
 >;
@@ -218,24 +218,24 @@ export type DaemonVoiceSpeechDownloadAbortResponse = z.infer<
   typeof DaemonVoiceSpeechDownloadAbortResponseSchema
 >;
 
-export const DaemonVoiceSpeechSynthesizeRequestSchema = lazyZodSchema(() => z.object({
+export const DaemonVoiceSpeechSynthesizeRequestSchema = lazyZodSchema(() => z.strictObject({
   target: asProtocolZod(PluginContributionIdentityV1Schema),
   requestId: VoiceSpeechRequestIdSchema,
   input: VoiceSpeechRequiredStringSchema(200_000),
   /** Only the admitted declared voice field; Account credentials and remaining settings stay daemon-owned. */
-  voicePreference: SessionVoicePreferenceV1Schema.optional(),
-  recipientPublicKeyBase64: z.string().trim().min(1).max(DAEMON_VOICE_SPEECH_TRANSFER_KEY_ENVELOPE_MAX_LENGTH),
-}).strict());
+  voicePreference: z.optional(SessionVoicePreferenceV1Schema),
+  recipientPublicKeyBase64: z.string().check(z.trim(), z.minLength(1), z.maxLength(DAEMON_VOICE_SPEECH_TRANSFER_KEY_ENVELOPE_MAX_LENGTH)),
+}));
 export type DaemonVoiceSpeechSynthesizeRequest = z.infer<
   typeof DaemonVoiceSpeechSynthesizeRequestSchema
 >;
 
 export const DaemonVoiceSpeechTranscribeResponseSchema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     requestId: VoiceSpeechRequestIdSchema,
-    text: z.string().max(1_000_000),
-  }).strict(),
+    text: z.string().check(z.maxLength(1_000_000)),
+  }),
   VoiceSpeechOperationErrorSchema,
 ]));
 export type DaemonVoiceSpeechTranscribeResponse = z.infer<
@@ -243,15 +243,15 @@ export type DaemonVoiceSpeechTranscribeResponse = z.infer<
 >;
 
 export const DaemonVoiceSpeechSynthesizeResponseSchema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     requestId: VoiceSpeechRequestIdSchema,
     downloadId: TransferSessionIdSchema,
-    chunkSizeBytes: z.number().int().positive().max(DAEMON_VOICE_SPEECH_TRANSFER_CHUNK_MAX_BYTES),
-    sizeBytes: z.number().int().positive().max(DAEMON_VOICE_SPEECH_OUTPUT_MAX_BYTES),
+    chunkSizeBytes: z.number().check(z.int(), z.positive(), z.maximum(DAEMON_VOICE_SPEECH_TRANSFER_CHUNK_MAX_BYTES)),
+    sizeBytes: z.number().check(z.int(), z.positive(), z.maximum(DAEMON_VOICE_SPEECH_OUTPUT_MAX_BYTES)),
     mimeType: z.enum(['audio/mpeg', 'audio/wav']),
-    appliedVoice: SessionVoicePreferenceV1Schema.nullable().optional(),
-  }).strict(),
+    appliedVoice: z.optional(z.nullable(SessionVoicePreferenceV1Schema)),
+  }),
   VoiceSpeechOperationErrorSchema,
 ]));
 export type DaemonVoiceSpeechSynthesizeResponse = z.infer<

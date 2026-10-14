@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionMessageRoleSchema, type SessionMessageRole } from './sessionMessageRole.js';
 import { type SessionMessageProvenanceV1 } from './sessionInputAdmission.js';
@@ -10,25 +10,19 @@ export const MESSAGE_ACTION_VISIBLE_TEXT_MAX_UTF8_BYTES = 32 * 1024;
 export const MESSAGE_ACTION_STRUCTURED_PRESENTATION_SUMMARY_MAX_UTF8_BYTES = 8 * 1024;
 
 function strictNonBlankString(maxCharacters: number, label: string) {
-  return z.string()
-    .min(1)
-    .max(maxCharacters)
-    .refine((value) => value === value.trim(), `${label} must not have leading or trailing whitespace`);
+  return z.string().check(z.minLength(1), z.maxLength(maxCharacters), z.refine((value) => value === value.trim(), `${label} must not have leading or trailing whitespace`));
 }
 
 function boundedDisclosureText(maxUtf8Bytes: number, label: string) {
-  return z.string().refine(
-    (value) => textEncoder.encode(value).byteLength <= maxUtf8Bytes,
-    `${label} must contain at most ${maxUtf8Bytes} UTF-8 bytes`,
-  );
+  return z.string().check(z.refine((value) => textEncoder.encode(value).byteLength <= maxUtf8Bytes, `${label} must contain at most ${maxUtf8Bytes} UTF-8 bytes`));
 }
 
-export const MessageActionReferenceV1Schema = lazyZodSchema(() => z.object({
+export const MessageActionReferenceV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   sessionId: strictNonBlankString(512, 'sessionId'),
   messageId: strictNonBlankString(512, 'messageId'),
   observedRevision: strictNonBlankString(512, 'observedRevision'),
-}).strict());
+}));
 
 export type MessageActionReferenceV1 = z.infer<typeof MessageActionReferenceV1Schema>;
 
@@ -102,36 +96,36 @@ export function projectMessageActionProvenanceCategoryV1(
   }
 }
 
-export const MessageActionAvailableSnapshotV1Schema = lazyZodSchema(() => z.object({
+export const MessageActionAvailableSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: strictNonBlankString(512, 'sessionId'),
   messageId: strictNonBlankString(512, 'messageId'),
   observedRevision: strictNonBlankString(512, 'observedRevision'),
   role: SessionMessageRoleSchema,
   contentCategory: MessageActionContentCategoryV1Schema,
-  seq: z.number().int().min(0),
-  visibleText: boundedDisclosureText(
+  seq: z.number().check(z.int(), z.minimum(0)),
+  visibleText: z.nullable(boundedDisclosureText(
     MESSAGE_ACTION_VISIBLE_TEXT_MAX_UTF8_BYTES,
     'visibleText',
-  ).nullable(),
-  structuredPresentationSummary: boundedDisclosureText(
+  )),
+  structuredPresentationSummary: z.nullable(boundedDisclosureText(
     MESSAGE_ACTION_STRUCTURED_PRESENTATION_SUMMARY_MAX_UTF8_BYTES,
     'structuredPresentationSummary',
-  ).nullable(),
+  )),
   provenanceCategory: MessageActionProvenanceCategoryV1Schema,
-}).strict());
+}));
 
 export type MessageActionAvailableSnapshotV1 = z.infer<typeof MessageActionAvailableSnapshotV1Schema>;
 
 export const MessageActionResolutionV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({
+  z.strictObject({
     status: z.literal('available'),
     snapshot: MessageActionAvailableSnapshotV1Schema,
-  }).strict(),
-  z.object({ status: z.literal('stale') }).strict(),
-  z.object({ status: z.literal('deleted') }).strict(),
-  z.object({ status: z.literal('compacted') }).strict(),
-  z.object({ status: z.literal('ineligible') }).strict(),
-  z.object({ status: z.literal('unavailable') }).strict(),
+  }),
+  z.strictObject({ status: z.literal('stale') }),
+  z.strictObject({ status: z.literal('deleted') }),
+  z.strictObject({ status: z.literal('compacted') }),
+  z.strictObject({ status: z.literal('ineligible') }),
+  z.strictObject({ status: z.literal('unavailable') }),
 ]));
 
 export type MessageActionResolutionV1 = z.infer<typeof MessageActionResolutionV1Schema>;
@@ -143,20 +137,20 @@ export type MessageActionResolutionV1 = z.infer<typeof MessageActionResolutionV1
  * decrypted text, structured presentation data, or current SDK policy facts.
  */
 export const MessageActionDurableResolutionV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({
+  z.strictObject({
     status: z.literal('available'),
-    message: z.object({
+    message: z.strictObject({
       sessionId: strictNonBlankString(512, 'sessionId'),
       messageId: strictNonBlankString(512, 'messageId'),
       observedRevision: strictNonBlankString(512, 'observedRevision'),
-      seq: z.number().int().min(0),
-      messageRole: SessionMessageRoleSchema.nullable(),
-    }).strict(),
-  }).strict(),
-  z.object({ status: z.literal('stale') }).strict(),
-  z.object({ status: z.literal('deleted') }).strict(),
-  z.object({ status: z.literal('compacted') }).strict(),
-  z.object({ status: z.literal('unavailable') }).strict(),
+      seq: z.number().check(z.int(), z.minimum(0)),
+      messageRole: z.nullable(SessionMessageRoleSchema),
+    }),
+  }),
+  z.strictObject({ status: z.literal('stale') }),
+  z.strictObject({ status: z.literal('deleted') }),
+  z.strictObject({ status: z.literal('compacted') }),
+  z.strictObject({ status: z.literal('unavailable') }),
 ]));
 export type MessageActionDurableResolutionV1 = z.infer<typeof MessageActionDurableResolutionV1Schema>;
 

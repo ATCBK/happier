@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ExecutionRunStructuredRunRefSchema } from './executionRunStructuredRunRef.js';
 
 /**
@@ -9,19 +9,19 @@ import { ExecutionRunStructuredRunRefSchema } from './executionRunStructuredRunR
  * and a summary suitable for quickly feeding back into the parent session.
  */
 
-export const DelegateDeliverableV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().min(1).max(200),
-  title: z.string().min(1).max(400),
-  details: z.string().max(20_000).optional(),
-}).passthrough());
+export const DelegateDeliverableV1Schema = lazyZodSchema(() => z.looseObject({
+  id: z.string().check(z.minLength(1), z.maxLength(200)),
+  title: z.string().check(z.minLength(1), z.maxLength(400)),
+  details: z.optional(z.string().check(z.maxLength(20_000))),
+}));
 export type DelegateDeliverableV1 = z.infer<typeof DelegateDeliverableV1Schema>;
 
-export const DelegateOutputV1Schema = lazyZodSchema(() => z.object({
+export const DelegateOutputV1Schema = lazyZodSchema(() => z.looseObject({
   runRef: ExecutionRunStructuredRunRefSchema,
-  summary: z.string().min(1).max(20_000),
-  deliverables: z.array(DelegateDeliverableV1Schema).max(200),
-  generatedAtMs: z.number().int().nonnegative(),
-}).passthrough());
+  summary: z.string().check(z.minLength(1), z.maxLength(20_000)),
+  deliverables: z.array(DelegateDeliverableV1Schema).check(z.maxLength(200)),
+  generatedAtMs: z.number().check(z.int(), z.nonnegative()),
+}));
 export type DelegateOutputV1 = z.infer<typeof DelegateOutputV1Schema>;
 
 export function parseDelegateOutputV1(input: unknown): DelegateOutputV1 | null {

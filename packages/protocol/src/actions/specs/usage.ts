@@ -5,7 +5,7 @@ import { UsageRecapComposeInputSchema, UsageRecapComposeResultSchema, UsageRecap
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 import { UsageCalendarExportInputSchema } from '../../usage/usageCalendarExport.js';
 import { UsageModelPriceCatalogSchema } from '../../usage/usageModelPriceSchemas.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 
 export { USAGE_ACTION_IDS, type UsageActionId } from '../../usage/usageActionIdsV1.js';
@@ -19,11 +19,11 @@ const common = {
 export const USAGE_ACTION_SPECS = [
   { ...common, id: 'usage.prices.get', approval: {result: 'none'}, title: 'Read model prices',
     description: 'Read the current public standard API price catalog and its provenance. Account data is never sent to the price source.',
-    bindings: { mcpToolName: 'usage_prices_get' }, inputSchema: lazyZodSchema(() => z.object({}).strict()), outputSchema: UsageModelPriceCatalogSchema,
+    bindings: { mcpToolName: 'usage_prices_get' }, inputSchema: lazyZodSchema(() => z.strictObject({})), outputSchema: UsageModelPriceCatalogSchema,
     inputHints: { fields: [] } },
   { ...common, id: 'usage.prices.refresh', approval: {result: 'none'}, title: 'Refresh model prices', sideEffectClass: 'write',
     description: 'Fetch and cache the fixed public LiteLLM catalog when server configuration permits it. No Account or session data is sent; failure retains cached or bundled prices with visible provenance.',
-    bindings: { mcpToolName: 'usage_prices_refresh' }, inputSchema: lazyZodSchema(() => z.object({}).strict()), outputSchema: UsageModelPriceCatalogSchema,
+    bindings: { mcpToolName: 'usage_prices_refresh' }, inputSchema: lazyZodSchema(() => z.strictObject({})), outputSchema: UsageModelPriceCatalogSchema,
     inputHints: { fields: [] } },
   { ...common, id: 'usage.calendar.export', approval: {result: 'none'}, title: 'Export usage calendar',
     description: 'Return calendar file bytes for explicitly selected admitted quota resets and subscription renewals. This does not connect to or write a calendar service.',

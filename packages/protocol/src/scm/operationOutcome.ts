@@ -1,57 +1,57 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ScmOperationErrorCodeSchema, type ScmOperationErrorCode } from './operationError.js';
 import { ScmOperationStateSchema } from './operationState.js';
 import type { ScmCommitPublication } from './commitPublication.js';
 
-export const ScmOperationRepositoryStateSchema = lazyZodSchema(() => z.object({
-  headOid: z.string().optional(),
+export const ScmOperationRepositoryStateSchema = lazyZodSchema(() => z.strictObject({
+  headOid: z.optional(z.string()),
   hasConflicts: z.boolean(),
-  operation: ScmOperationStateSchema.nullable(),
-}).strict());
+  operation: z.nullable(ScmOperationStateSchema),
+}));
 export type ScmOperationRepositoryState = z.infer<typeof ScmOperationRepositoryStateSchema>;
 
 export const ScmOperationEffectSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('commit'), commitSha: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal('stash'), stashOid: z.string().min(1), stashRef: z.string().optional() }).strict(),
-  z.object({ kind: z.literal('pull_request'), url: z.string().min(1), number: z.number().int().positive().optional() }).strict(),
-  z.object({ kind: z.literal('branch'), name: z.string().min(1), headOid: z.string().optional() }).strict(),
-  z.object({ kind: z.literal('remote'), remote: z.string().min(1), branch: z.string().optional(), remoteOid: z.string().optional() }).strict(),
+  z.strictObject({ kind: z.literal('commit'), commitSha: z.string().check(z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('stash'), stashOid: z.string().check(z.minLength(1)), stashRef: z.optional(z.string()) }),
+  z.strictObject({ kind: z.literal('pull_request'), url: z.string().check(z.minLength(1)), number: z.optional(z.number().check(z.int(), z.positive())) }),
+  z.strictObject({ kind: z.literal('branch'), name: z.string().check(z.minLength(1)), headOid: z.optional(z.string()) }),
+  z.strictObject({ kind: z.literal('remote'), remote: z.string().check(z.minLength(1)), branch: z.optional(z.string()), remoteOid: z.optional(z.string()) }),
 ]));
 export type ScmOperationEffect = z.infer<typeof ScmOperationEffectSchema>;
 
 export const ScmOperationReconciliationSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('repository_status'), cwd: z.string().optional() }).strict(),
-  z.object({ kind: z.literal('commit'), commitSha: z.string().min(1) }).strict(),
+  z.strictObject({ kind: z.literal('repository_status'), cwd: z.optional(z.string()) }),
+  z.strictObject({ kind: z.literal('commit'), commitSha: z.string().check(z.minLength(1)) }),
   // A creation message is a read-only query when the creating process lost its result;
   // it is never permission to apply or drop a stash.
-  z.object({ kind: z.literal('stash'), stashOid: z.string().optional(), message: z.string().optional() }).strict(),
-  z.object({ kind: z.literal('remote_ref'), remote: z.string().min(1), branch: z.string().optional(), expectedOid: z.string().optional() }).strict(),
-  z.object({ kind: z.literal('pull_request'), head: z.string().min(1), base: z.string().optional(), providerId: z.string().optional(), repository: z.string().optional(), url: z.string().optional() }).strict(),
+  z.strictObject({ kind: z.literal('stash'), stashOid: z.optional(z.string()), message: z.optional(z.string()) }),
+  z.strictObject({ kind: z.literal('remote_ref'), remote: z.string().check(z.minLength(1)), branch: z.optional(z.string()), expectedOid: z.optional(z.string()) }),
+  z.strictObject({ kind: z.literal('pull_request'), head: z.string().check(z.minLength(1)), base: z.optional(z.string()), providerId: z.optional(z.string()), repository: z.optional(z.string()), url: z.optional(z.string()) }),
 ]));
 export type ScmOperationReconciliation = z.infer<typeof ScmOperationReconciliationSchema>;
 
 export const ScmOperationNextActionSchema = lazyZodSchema(() => z.union([
-  z.object({ kind: z.enum(['refresh', 'retry', 'resolve_conflicts', 'continue', 'skip', 'abort', 'reconcile_index', 'choose_dirty_policy', 'choose_reconcile', 'configure_upstream', 'authenticate']) }).strict(),
-  z.object({ kind: z.literal('open_url'), url: z.string().min(1) }).strict(),
+  z.strictObject({ kind: z.enum(['refresh', 'retry', 'resolve_conflicts', 'continue', 'skip', 'abort', 'reconcile_index', 'choose_dirty_policy', 'choose_reconcile', 'configure_upstream', 'authenticate']) }),
+  z.strictObject({ kind: z.literal('open_url'), url: z.string().check(z.minLength(1)) }),
 ]));
 export type ScmOperationNextAction = z.infer<typeof ScmOperationNextActionSchema>;
 
 const common = {
-  v: z.literal(1).default(1),
-  nextActions: z.array(ScmOperationNextActionSchema).default([]),
-  message: z.string().optional(),
-  recoveryStash: z.object({ stashOid: z.string().min(1), stashRef: z.string().optional() }).strict().optional(),
+  v: z._default(z.literal(1), 1),
+  nextActions: z._default(z.array(ScmOperationNextActionSchema), []),
+  message: z.optional(z.string()),
+  recoveryStash: z.optional(z.strictObject({ stashOid: z.string().check(z.minLength(1)), stashRef: z.optional(z.string()) })),
 };
-const repositoryState = ScmOperationRepositoryStateSchema.optional();
+const repositoryState = z.optional(ScmOperationRepositoryStateSchema);
 export const ScmOperationOutcomeSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ ...common, kind: z.literal('succeeded'), effect: ScmOperationEffectSchema.optional(), repositoryState }).strict(),
-  z.object({ ...common, kind: z.literal('needs_input'), errorCode: ScmOperationErrorCodeSchema, repositoryState }).strict(),
-  z.object({ ...common, kind: z.literal('conflicted'), errorCode: ScmOperationErrorCodeSchema, repositoryState: ScmOperationRepositoryStateSchema }).strict(),
-  z.object({ ...common, kind: z.literal('effect_applied_with_warning'), errorCode: ScmOperationErrorCodeSchema, effect: ScmOperationEffectSchema, repositoryState }).strict(),
-  z.object({ ...common, kind: z.literal('failed'), errorCode: ScmOperationErrorCodeSchema, repositoryState }).strict(),
-  z.object({ ...common, kind: z.literal('cancelled'), errorCode: ScmOperationErrorCodeSchema.optional(), repositoryState: ScmOperationRepositoryStateSchema }).strict(),
-  z.object({ ...common, kind: z.literal('outcome_unknown'), errorCode: ScmOperationErrorCodeSchema, reconciliation: ScmOperationReconciliationSchema, repositoryState }).strict(),
+  z.strictObject({ ...common, kind: z.literal('succeeded'), effect: z.optional(ScmOperationEffectSchema), repositoryState }),
+  z.strictObject({ ...common, kind: z.literal('needs_input'), errorCode: ScmOperationErrorCodeSchema, repositoryState }),
+  z.strictObject({ ...common, kind: z.literal('conflicted'), errorCode: ScmOperationErrorCodeSchema, repositoryState: ScmOperationRepositoryStateSchema }),
+  z.strictObject({ ...common, kind: z.literal('effect_applied_with_warning'), errorCode: ScmOperationErrorCodeSchema, effect: ScmOperationEffectSchema, repositoryState }),
+  z.strictObject({ ...common, kind: z.literal('failed'), errorCode: ScmOperationErrorCodeSchema, repositoryState }),
+  z.strictObject({ ...common, kind: z.literal('cancelled'), errorCode: z.optional(ScmOperationErrorCodeSchema), repositoryState: ScmOperationRepositoryStateSchema }),
+  z.strictObject({ ...common, kind: z.literal('outcome_unknown'), errorCode: ScmOperationErrorCodeSchema, reconciliation: ScmOperationReconciliationSchema, repositoryState }),
 ]));
 export type ScmOperationOutcome = z.infer<typeof ScmOperationOutcomeSchema>;
 

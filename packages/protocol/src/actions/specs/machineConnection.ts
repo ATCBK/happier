@@ -1,44 +1,44 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 import { InstallableCapabilityIdSchema } from '../../installables/descriptor.js';
 export { MachineTerminalOpenInputSchema, MachineTerminalListInputSchema } from './machineTerminal.js';
 
-const id = z.string().trim().min(1);
+const id = z.string().check(z.trim(), z.minLength(1));
 export const MACHINE_PAGE_ACTION_IDS = ['machines.metadata.update', 'machines.daemon.stop', 'machines.remove', 'machines.capabilities.install', 'machines.replacement.set', 'machines.replacement.clear'] as const;
 export type MachinePageActionId = typeof MACHINE_PAGE_ACTION_IDS[number];
-const machineTarget = { serverId: id.optional(), machineId: id };
-export const MachineMetadataUpdateInputSchema = lazyZodSchema(() => z.object({
+const machineTarget = { serverId: z.optional(id), machineId: id };
+export const MachineMetadataUpdateInputSchema = lazyZodSchema(() => z.strictObject({
   ...machineTarget,
-  expectedVersion: z.number().int().nonnegative().optional(),
-  patch: z.object({
-    displayName: z.string().nullable().optional(),
-    windowsRemoteSessionLaunchMode: z.enum(['hidden', 'windows_terminal', 'console']).nullable().optional(),
-  }).strict().refine(value => Object.keys(value).length > 0),
-}).strict());
-export const MachineStopDaemonInputSchema = lazyZodSchema(() => z.object(machineTarget).strict());
-export const MachineRemoveInputSchema = lazyZodSchema(() => z.object(machineTarget).strict());
-export const MachineCapabilityInstallInputSchema = lazyZodSchema(() => z.object({
+  expectedVersion: z.optional(z.number().check(z.int(), z.nonnegative())),
+  patch: z.strictObject({
+    displayName: z.optional(z.nullable(z.string())),
+    windowsRemoteSessionLaunchMode: z.optional(z.nullable(z.enum(['hidden', 'windows_terminal', 'console']))),
+  }).check(z.refine(value => Object.keys(value).length > 0)),
+}));
+export const MachineStopDaemonInputSchema = lazyZodSchema(() => z.strictObject(machineTarget));
+export const MachineRemoveInputSchema = lazyZodSchema(() => z.strictObject(machineTarget));
+export const MachineCapabilityInstallInputSchema = lazyZodSchema(() => z.strictObject({
   ...machineTarget,
   capabilityId: InstallableCapabilityIdSchema,
   method: z.enum(['install', 'upgrade']),
-}).strict());
+}));
 export const MachineCapabilityInstallOutputSchema = lazyZodSchema(() => z.discriminatedUnion('supported', [
-  z.object({ supported: z.literal(true), response: z.discriminatedUnion('ok', [
-    z.object({ ok: z.literal(true), result: StrictJsonValueSchema.optional() }).strict(),
-    z.object({ ok: z.literal(false), error: z.object({ message: z.string(), code: z.string().optional() }).strict(), logPath: z.string().optional() }).strict(),
-  ]) }).strict(),
-  z.object({ supported: z.literal(false), reason: z.enum(['not-supported', 'error']),
-    requestDisposition: z.enum(['notSent', 'outcomeUnknown']).optional() }).strict(),
+  z.strictObject({ supported: z.literal(true), response: z.discriminatedUnion('ok', [
+    z.strictObject({ ok: z.literal(true), result: z.optional(StrictJsonValueSchema) }),
+    z.strictObject({ ok: z.literal(false), error: z.strictObject({ message: z.string(), code: z.optional(z.string()) }), logPath: z.optional(z.string()) }),
+  ]) }),
+  z.strictObject({ supported: z.literal(false), reason: z.enum(['not-supported', 'error']),
+    requestDisposition: z.optional(z.enum(['notSent', 'outcomeUnknown'])) }),
 ]));
-export const MachineReplacementSetInputSchema = lazyZodSchema(() => z.object({
-  ...machineTarget, replacementMachineId: id, confirmActiveOldMachine: z.boolean().optional(),
-}).strict());
-export const MachineReplacementClearInputSchema = lazyZodSchema(() => z.object(machineTarget).strict());
+export const MachineReplacementSetInputSchema = lazyZodSchema(() => z.strictObject({
+  ...machineTarget, replacementMachineId: id, confirmActiveOldMachine: z.optional(z.boolean()),
+}));
+export const MachineReplacementClearInputSchema = lazyZodSchema(() => z.strictObject(machineTarget));
 export const MachineReplacementOutputSchema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true) }).strict(),
-  z.object({ ok: z.literal(false), status: z.number().int(), error: z.string() }).strict(),
+  z.strictObject({ ok: z.literal(true) }),
+  z.strictObject({ ok: z.literal(false), status: z.number().check(z.int()), error: z.string() }),
 ]));
 export const MACHINE_PAGE_ACTION_INPUT_SCHEMAS = {
   'machines.metadata.update': MachineMetadataUpdateInputSchema,
@@ -49,70 +49,70 @@ export const MACHINE_PAGE_ACTION_INPUT_SCHEMAS = {
   'machines.replacement.clear': MachineReplacementClearInputSchema,
 } as const;
 export const MACHINE_PAGE_ACTION_OUTPUT_SCHEMAS = {
-  'machines.metadata.update': lazyZodSchema(() => z.object({ version: z.number().int().nonnegative() }).strict()),
-  'machines.daemon.stop': lazyZodSchema(() => z.object({ message: z.string() }).strict()),
+  'machines.metadata.update': lazyZodSchema(() => z.strictObject({ version: z.number().check(z.int(), z.nonnegative()) })),
+  'machines.daemon.stop': lazyZodSchema(() => z.strictObject({ message: z.string() })),
   'machines.remove': lazyZodSchema(() => z.union([
-    z.object({ ok: z.literal(true), machineAlreadyRevoked: z.boolean(), providerCleanup: z.enum(['complete', 'not_needed']) }).strict(),
-    z.object({ ok: z.literal(false), status: z.number().int(), error: z.string(), machineRevoked: z.literal(true), providerCleanup: z.literal('pending'), retryable: z.boolean() }).strict(),
-    z.object({ ok: z.literal(false), status: z.number().int(), error: z.string() }).strict(),
+    z.strictObject({ ok: z.literal(true), machineAlreadyRevoked: z.boolean(), providerCleanup: z.enum(['complete', 'not_needed']) }),
+    z.strictObject({ ok: z.literal(false), status: z.number().check(z.int()), error: z.string(), machineRevoked: z.literal(true), providerCleanup: z.literal('pending'), retryable: z.boolean() }),
+    z.strictObject({ ok: z.literal(false), status: z.number().check(z.int()), error: z.string() }),
   ])),
   'machines.capabilities.install': MachineCapabilityInstallOutputSchema,
   'machines.replacement.set': MachineReplacementOutputSchema,
   'machines.replacement.clear': MachineReplacementOutputSchema,
 } as const;
 export type MachinePageActionInput = z.infer<(typeof MACHINE_PAGE_ACTION_INPUT_SCHEMAS)[MachinePageActionId]>;
-export const HomeConnectInputSchema = lazyZodSchema(() => z.object({
+export const HomeConnectInputSchema = lazyZodSchema(() => z.strictObject({
   address: id,
-  displayName: id.optional(),
-  acceptInsecureHttp: z.boolean().default(false),
-  acceptCanonicalUrl: z.boolean().default(false),
-}).strict());
+  displayName: z.optional(id),
+  acceptInsecureHttp: z._default(z.boolean(), false),
+  acceptCanonicalUrl: z._default(z.boolean(), false),
+}));
 export const HomeConnectOutputSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('connected'), serverId: id, serverUrl: id, name: z.string() }).strict(),
-  z.object({ kind: z.literal('invalid_address') }).strict(),
-  z.object({ kind: z.literal('declined') }).strict(),
-  z.object({ kind: z.literal('mixed_content') }).strict(),
-  z.object({ kind: z.literal('unreachable') }).strict(),
+  z.strictObject({ kind: z.literal('connected'), serverId: id, serverUrl: id, name: z.string() }),
+  z.strictObject({ kind: z.literal('invalid_address') }),
+  z.strictObject({ kind: z.literal('declined') }),
+  z.strictObject({ kind: z.literal('mixed_content') }),
+  z.strictObject({ kind: z.literal('unreachable') }),
 ]));
 export const MachineAddCommandInputSchema = lazyZodSchema(() => z.discriminatedUnion('method', [
-  z.object({ method: z.literal('another_computer'), serverId: id, os: z.enum(['macos', 'linux', 'windows']) }).strict(),
-  z.object({ method: z.literal('ssh'), serverId: id, os: z.enum(['macos', 'linux', 'windows']),
-    host: id, username: z.string().optional(), port: z.number().int().min(1).max(65535).optional(),
-    authMode: z.enum(['agent', 'keyfile', 'password']).default('agent'), identityFilePath: z.string().optional(),
-  }).strict(),
+  z.strictObject({ method: z.literal('another_computer'), serverId: id, os: z.enum(['macos', 'linux', 'windows']) }),
+  z.strictObject({ method: z.literal('ssh'), serverId: id, os: z.enum(['macos', 'linux', 'windows']),
+    host: id, username: z.optional(z.string()), port: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(65535))),
+    authMode: z._default(z.enum(['agent', 'keyfile', 'password']), 'agent'), identityFilePath: z.optional(z.string()),
+  }),
 ]));
-export const MachineAddCommandOutputSchema = lazyZodSchema(() => z.object({ command: id, descriptorFileRequired: z.boolean() }).strict());
-export const MachinePairingCreateInputSchema = lazyZodSchema(() => z.object({ serverId: id }).strict());
-export const MachinePairingCreateOutputSchema = lazyZodSchema(() => z.object({ pairId: id, link: id, expiresAtMs: z.number().int().nonnegative() }).strict());
+export const MachineAddCommandOutputSchema = lazyZodSchema(() => z.strictObject({ command: id, descriptorFileRequired: z.boolean() }));
+export const MachinePairingCreateInputSchema = lazyZodSchema(() => z.strictObject({ serverId: id }));
+export const MachinePairingCreateOutputSchema = lazyZodSchema(() => z.strictObject({ pairId: id, link: id, expiresAtMs: z.number().check(z.int(), z.nonnegative()) }));
 export const MACHINE_ADD_SSH_ACTION_IDS = ['machines.add.ssh.start', 'machines.add.ssh.status', 'machines.add.ssh.respond', 'machines.add.ssh.cancel'] as const;
 export type MachineAddSshActionId = typeof MACHINE_ADD_SSH_ACTION_IDS[number];
-export const MachineAddSshStartInputSchema = lazyZodSchema(() => z.union([z.object({ serverId: id, host: id, username: z.string().default(''),
-  port: z.number().int().min(1).max(65535).optional(), authMode: z.enum(['agent', 'keyfile', 'password']).default('agent'),
-  identityFilePath: z.string().optional(),
-}).strict(), z.object({ serverId: id, savedHostId: id,
-  expectedHostRevision: z.union([z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), z.literal('absent')]),
-}).strict()]));
-export const MachineAddSshTaskInputSchema = lazyZodSchema(() => z.object({ taskId: id }).strict());
-export const MachineAddSshCancelInputSchema = lazyZodSchema(() => z.object({ taskId: id.optional() }).strict());
+export const MachineAddSshStartInputSchema = lazyZodSchema(() => z.union([z.strictObject({ serverId: id, host: id, username: z._default(z.string(), ''),
+  port: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(65535))), authMode: z._default(z.enum(['agent', 'keyfile', 'password']), 'agent'),
+  identityFilePath: z.optional(z.string()),
+}), z.strictObject({ serverId: id, savedHostId: id,
+  expectedHostRevision: z.union([z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)), z.literal('absent')]),
+})]));
+export const MachineAddSshTaskInputSchema = lazyZodSchema(() => z.strictObject({ taskId: id }));
+export const MachineAddSshCancelInputSchema = lazyZodSchema(() => z.strictObject({ taskId: z.optional(id) }));
 export const MachineAddSshAnswerSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('ssh.password') }).strict(),
-  z.object({ kind: z.literal('ssh.trustHost'), trusted: z.boolean() }).strict(),
-  z.object({ kind: z.literal('ssh.replaceHostKey'), trusted: z.boolean() }).strict(),
-  z.object({ kind: z.literal('auth.approveRemoteProvisioning'), approved: z.boolean() }).strict(),
-  z.object({ kind: z.literal('daemon.replaceRemoteBackgroundServices'), replaceExistingServices: z.boolean() }).strict(),
-  z.object({ kind: z.literal('releaseChannel.switchDefaultForSetup'), switchDefaultReleaseChannel: z.boolean() }).strict(),
+  z.strictObject({ kind: z.literal('ssh.password') }),
+  z.strictObject({ kind: z.literal('ssh.trustHost'), trusted: z.boolean() }),
+  z.strictObject({ kind: z.literal('ssh.replaceHostKey'), trusted: z.boolean() }),
+  z.strictObject({ kind: z.literal('auth.approveRemoteProvisioning'), approved: z.boolean() }),
+  z.strictObject({ kind: z.literal('daemon.replaceRemoteBackgroundServices'), replaceExistingServices: z.boolean() }),
+  z.strictObject({ kind: z.literal('releaseChannel.switchDefaultForSetup'), switchDefaultReleaseChannel: z.boolean() }),
 ]));
-export const MachineAddSshRespondInputSchema = lazyZodSchema(() => MachineAddSshTaskInputSchema.extend({ answer: MachineAddSshAnswerSchema }).strict());
-export const MachineAddSshTaskOutputSchema = lazyZodSchema(() => z.object({ taskId: id }).strict());
+export const MachineAddSshRespondInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(MachineAddSshTaskInputSchema, { answer: MachineAddSshAnswerSchema })));
+export const MachineAddSshTaskOutputSchema = lazyZodSchema(() => z.strictObject({ taskId: id }));
 export const MachineAddSshCancelOutputSchema = lazyZodSchema(() => z.union([
-  MachineAddSshTaskOutputSchema, z.object({ pendingCanceled: z.literal(true) }).strict(),
+  MachineAddSshTaskOutputSchema, z.strictObject({ pendingCanceled: z.literal(true) }),
 ]));
-export const MachineAddSshStatusOutputSchema = lazyZodSchema(() => z.object({ taskId: id, status: z.enum(['running', 'canceling', 'succeeded', 'failed', 'canceled']),
-  currentStepId: z.string().nullable(), awaitingInput: z.boolean(),
-  prompt: z.object({ kind: id, message: z.string(), fingerprint: z.string().optional(), existingFingerprint: z.string().nullable().optional(),
-    target: z.string().optional(), publicKey: z.string().nullable().optional(), requiresPresentUser: z.boolean() }).strict().nullable(),
-  machineId: z.string().nullable(), errorCode: z.string().nullable(),
-}).strict());
+export const MachineAddSshStatusOutputSchema = lazyZodSchema(() => z.strictObject({ taskId: id, status: z.enum(['running', 'canceling', 'succeeded', 'failed', 'canceled']),
+  currentStepId: z.nullable(z.string()), awaitingInput: z.boolean(),
+  prompt: z.nullable(z.strictObject({ kind: id, message: z.string(), fingerprint: z.optional(z.string()), existingFingerprint: z.optional(z.nullable(z.string())),
+    target: z.optional(z.string()), publicKey: z.optional(z.nullable(z.string())), requiresPresentUser: z.boolean() })),
+  machineId: z.nullable(z.string()), errorCode: z.nullable(z.string()),
+}));
 export const MACHINE_ADD_SSH_INPUT_SCHEMAS = {
   'machines.add.ssh.start': MachineAddSshStartInputSchema, 'machines.add.ssh.status': MachineAddSshTaskInputSchema,
   'machines.add.ssh.respond': MachineAddSshRespondInputSchema, 'machines.add.ssh.cancel': MachineAddSshCancelInputSchema,

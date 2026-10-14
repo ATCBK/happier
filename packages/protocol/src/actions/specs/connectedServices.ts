@@ -3,7 +3,7 @@ import { redactObservationInputPaths } from './observationRedaction.js';
 import { CONNECTED_SERVICE_CONFIGURATION_ACTION_INPUT_SCHEMAS_V1 as inputs, CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1 as outputs,
   isConnectedServiceConfigurationMachineRequiredV1 } from '../../connect/configurationActionsV1.js';
 import { projectConnectedAccountAuthenticationObservation } from '../../connect/authenticationActionsV1.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } from '../../connect/qualifiedConnectedAccountPersistence.js';
 
 const common = {
@@ -101,9 +101,9 @@ export const CONNECTED_SERVICE_CONFIGURATION_ACTION_SPECS = [
     { path: 'hypothetical', title: 'Hypothetical strategy or time', widget: 'json' },
   ] } },
   { ...common, id: 'connectedServices.accounts.revoke', approval: {result: 'required'}, approvalPolicy: { uiConfirmation: 'policy' }, executionPlacement: 'machine', sideEffectClass: 'danger', surfaces: { ...common.surfaces, voice: true }, title: 'Revoke connected account', description: 'Review and revoke the exact qualified account through its current daemon owner. Ordinary removal discloses retained resource dependencies; explicit emergency revocation keeps its existing semantics.', bindings: { mcpToolName: 'connected_services_accounts_revoke' }, inputSchema: inputs['connectedServices.accounts.revoke'], outputSchema: outputs['connectedServices.accounts.revoke'],
-    cli: { acceptsServerId: true, inputSchema: z.object({ itemId: z.string().min(1), machineId: z.string().min(1) }).strict(),
+    cli: { acceptsServerId: true, inputSchema: z.strictObject({ itemId: z.string().check(z.minLength(1)), machineId: z.string().check(z.minLength(1)) }),
       commands: [{ path: ['mcp', 'servers', 'sign-out'], positionals: ['itemId'], visibility: 'canonical' as const }],
-      bindInput: value => { const input = z.object({ itemId: z.string().min(1), machineId: z.string().min(1) }).strict().parse(value);
+      bindInput: value => { const input = z.strictObject({ itemId: z.string().check(z.minLength(1)), machineId: z.string().check(z.minLength(1)) }).parse(value);
         return { machineId: input.machineId, account: { service: HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1, accountId: input.itemId }, cleanupGroupReferences: true }; } },
     inputHints: { fields: [
     { path: 'account', title: 'Qualified account', widget: 'json', required: true },

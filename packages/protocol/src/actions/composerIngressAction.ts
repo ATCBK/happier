@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { EntityDragScopeV1Schema } from '../plugins/ui/entityDragDrop.js';
 import { ComposerRefV1Schema, ComposerTransactionV1Schema, ComposerTransactionResultV1Schema } from '../plugins/ui/composer.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
@@ -7,23 +8,23 @@ import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdent
 import type { PreNormalizedActionSpec } from './actionSpecs.js';
 
 const composerAddress = { scope: EntityDragScopeV1Schema, ref: asProtocolZod(ComposerRefV1Schema) };
-export const ComposerTransactionApplyInputV1Schema = lazyZodSchema(() => z.object({
+export const ComposerTransactionApplyInputV1Schema = lazyZodSchema(() => z.strictObject({
   ...composerAddress, transaction: ComposerTransactionV1Schema,
-  attachmentContributor: asProtocolZod(PluginContributionIdentityV1Schema).optional(),
-}).strict());
-export const ComposerAttachmentsPickInputV1Schema = lazyZodSchema(() => z.object(composerAddress).strict());
-export const ComposerAttachmentsPickResultV1Schema = lazyZodSchema(() => z.object({
+  attachmentContributor: zMini.optional(asProtocolZod(PluginContributionIdentityV1Schema)),
+}));
+export const ComposerAttachmentsPickInputV1Schema = lazyZodSchema(() => z.strictObject(composerAddress));
+export const ComposerAttachmentsPickResultV1Schema = lazyZodSchema(() => z.strictObject({
   status: z.enum(['opened', 'notEditable', 'unavailable']),
-}).strict());
-export const RepositoryUploadPickInputV1Schema = lazyZodSchema(() => z.object({
+}));
+export const RepositoryUploadPickInputV1Schema = lazyZodSchema(() => z.strictObject({
   scope: EntityDragScopeV1Schema,
-  workspace: z.object({ serverId: z.string().trim().min(1), machineId: z.string().trim().min(1), rootPath: z.string().trim().min(1) }).strict(),
+  workspace: z.strictObject({ serverId: z.string().check(z.trim(), z.minLength(1)), machineId: z.string().check(z.trim(), z.minLength(1)), rootPath: z.string().check(z.trim(), z.minLength(1)) }),
   destinationDir: z.string(),
   kind: z.enum(['files', 'folder']),
-}).strict().refine(input => input.scope.serverId === input.workspace.serverId, { path: ['workspace', 'serverId'] }));
+}).check(z.refine(input => input.scope.serverId === input.workspace.serverId, { path: ['workspace', 'serverId'] })));
 export const RepositoryUploadPickResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.enum(['requested', 'unavailable', 'cancelled']) }).strict(),
-  z.object({ status: z.literal('refused'), reason: z.string().min(1) }).strict(),
+  z.strictObject({ status: z.enum(['requested', 'unavailable', 'cancelled']) }),
+  z.strictObject({ status: z.literal('refused'), reason: z.string().check(z.minLength(1)) }),
 ]));
 export type ComposerTransactionApplyInputV1 = z.infer<typeof ComposerTransactionApplyInputV1Schema>;
 export type ComposerAttachmentsPickInputV1 = z.infer<typeof ComposerAttachmentsPickInputV1Schema>;

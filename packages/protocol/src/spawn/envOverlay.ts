@@ -1,19 +1,19 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 const SESSION_ENV_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/u;
 
 export const SessionEnvOverlaySourceV1Schema = lazyZodSchema(() => z.enum(['profile', 'provider', 'system']));
 export type SessionEnvOverlaySourceV1 = z.infer<typeof SessionEnvOverlaySourceV1Schema>;
 
-export const SessionEnvOverlayEntryV1Schema = lazyZodSchema(() => z.object({
-  name: z.string().regex(SESSION_ENV_NAME_PATTERN, 'Invalid environment variable name'),
-  value: z.string().nullable(),
+export const SessionEnvOverlayEntryV1Schema = lazyZodSchema(() => z.strictObject({
+  name: z.string().check(z.regex(SESSION_ENV_NAME_PATTERN, 'Invalid environment variable name')),
+  value: z.nullable(z.string()),
   source: SessionEnvOverlaySourceV1Schema,
-}).strict());
+}));
 export type SessionEnvOverlayEntryV1 = z.infer<typeof SessionEnvOverlayEntryV1Schema>;
 
-export const SessionEnvOverlayV1Schema = lazyZodSchema(() => z.array(SessionEnvOverlayEntryV1Schema).superRefine((entries, ctx) => {
+export const SessionEnvOverlayV1Schema = lazyZodSchema(() => z.array(SessionEnvOverlayEntryV1Schema).check(z.superRefine((entries, ctx) => {
   const seenBySource = new Set<string>();
   for (const [index, entry] of entries.entries()) {
     const key = `${entry.source}\u0000${entry.name}`;
@@ -27,5 +27,5 @@ export const SessionEnvOverlayV1Schema = lazyZodSchema(() => z.array(SessionEnvO
     }
     seenBySource.add(key);
   }
-}));
+})));
 export type SessionEnvOverlayV1 = z.infer<typeof SessionEnvOverlayV1Schema>;

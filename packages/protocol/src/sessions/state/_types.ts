@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { SessionBotV1 } from '../identity/sessionBotV1.js';
 
 import type { ModelOverrideV1 } from '../metadata/metadataOverridesV1.js';

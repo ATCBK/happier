@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import type { AutomationDefinitionDetail } from '../../automations/automationApiV3.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import {
@@ -96,7 +97,7 @@ export function createAccountWorkflowTriggerActions(params: WorkflowTriggerAccou
   };
   const eventBinding = (automationId: string, triggerId: string, triggerRevision: number,
     eventRef: Extract<AutomationTriggerDefinitionBindingV1, { triggerKind: 'pluginEvent' }>['eventRef'], sourceSelectorId: string) => (
-    AutomationTriggerDefinitionBindingV1Schema.options[0].parse({ v: 1, automationId, triggerId, triggerRevision,
+    AutomationTriggerDefinitionBindingV1Schema._zod.def.options[0].parse({ v: 1, automationId, triggerId, triggerRevision,
       triggerKind: 'pluginEvent', eventRef, sourceSelectorId })
   );
   const pullRequestBinding = (automationId: string, triggerId: string, triggerRevision: number,

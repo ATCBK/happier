@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { AgentActivityStatusV1Schema } from '../agentActivity/agentActivityStatusV1.js';
 
@@ -72,7 +72,7 @@ export const SessionBackgroundTaskRecordV1Schema = lazyZodSchema(() => z
   .object({
     v: z.literal(1),
     /** Provider task id. Also the record's local-id component, so it is the join key. */
-    taskId: z.string().trim().min(1),
+    taskId: z.string().check(z.trim(), z.minLength(1)),
     /**
      * What this task IS, classified once at ingestion.
      *
@@ -95,19 +95,18 @@ export const SessionBackgroundTaskRecordV1Schema = lazyZodSchema(() => z
      *
      * The raw command is never persisted and never crosses the wire.
      */
-    label: z.string().trim().min(1).max(BACKGROUND_TASK_LABEL_MAX).optional(),
+    label: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(BACKGROUND_TASK_LABEL_MAX))),
     /**
      * Epoch ms. Optional and never synthesised: a `startedAt ?? updatedAt ?? endedAt` fallback one
      * layer up is what makes a finished 16-second run report `0:00`. Absent evidence of a start, the
      * field is absent and the surface shows no duration.
      */
-    startedAt: z.number().int().nonnegative().optional(),
+    startedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
     /** Epoch ms of the terminal transition. */
-    endedAt: z.number().int().nonnegative().optional(),
+    endedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
     /** Provider-authored terminal or progress summary. */
-    summary: z.string().trim().min(1).max(BACKGROUND_TASK_SUMMARY_MAX).optional(),
+    summary: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(BACKGROUND_TASK_SUMMARY_MAX))),
     /** Epoch ms of the most recent evidence about this task. */
-    updatedAt: z.number().int().nonnegative(),
-  })
-  .strip());
+    updatedAt: z.number().check(z.int(), z.nonnegative()),
+  }));
 export type SessionBackgroundTaskRecordV1 = z.infer<typeof SessionBackgroundTaskRecordV1Schema>;

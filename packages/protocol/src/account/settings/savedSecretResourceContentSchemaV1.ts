@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { decodeBase64, encodeBase64 } from '../../crypto/base64.js';
 import {
@@ -48,26 +48,24 @@ export const SAVED_SECRET_RESOURCE_MAX_CIPHERTEXT_BASE64_LENGTH_V1 = 4 * Math.ce
   SAVED_SECRET_RESOURCE_MAX_CIPHERTEXT_BYTES_V1
 ) / 3);
 
-export const SavedSecretResourceContentV1Schema = lazyZodSchema(() => z.object({
+export const SavedSecretResourceContentV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   name: SavedSecretSchema.shape.name,
-  kind: SavedSecretSchema.shape.kind.removeDefault(),
-  value: SecretStringV1Schema.shape.value.unwrap(),
-}).strict().superRefine((content, context) => {
+  kind: SavedSecretSchema.shape.kind._zod.def.innerType,
+  value: SecretStringV1Schema.shape.value._zod.def.innerType,
+}).check(z.superRefine((content, context) => {
   const issue = inspectAccountSettingValueBounds(
     content,
     SAVED_SECRET_RESOURCE_MAX_CONTENT_JSON_UTF8_BYTES_V1,
   );
-  if (issue) context.addIssue({ code: z.ZodIssueCode.custom, message: issue.message });
-}));
+  if (issue) context.addIssue({ code: "custom", message: issue.message });
+})));
 
 export type SavedSecretResourceContentV1 = Readonly<
   z.infer<typeof SavedSecretResourceContentV1Schema>
 >;
 
-const CanonicalPaddedBase64Schema = lazyZodSchema(() => z.string().min(1).max(
-  SAVED_SECRET_RESOURCE_MAX_CIPHERTEXT_BASE64_LENGTH_V1,
-).refine((value) => {
+const CanonicalPaddedBase64Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(SAVED_SECRET_RESOURCE_MAX_CIPHERTEXT_BASE64_LENGTH_V1), z.refine((value) => {
   try {
     const decoded = decodeBase64(value, 'base64');
     return decoded.byteLength >= (
@@ -77,17 +75,17 @@ const CanonicalPaddedBase64Schema = lazyZodSchema(() => z.string().min(1).max(
   } catch {
     return false;
   }
-}, 'Expected canonical padded base64'));
+}, 'Expected canonical padded base64')));
 
 export const SavedSecretResourceStoredContentV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({
+  z.strictObject({
     t: z.literal('plain'),
     v: SavedSecretResourceContentV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     t: z.literal('encrypted'),
     c: CanonicalPaddedBase64Schema,
-  }).strict(),
+  }),
 ]));
 
 export type SavedSecretResourceStoredContentV1 = Readonly<

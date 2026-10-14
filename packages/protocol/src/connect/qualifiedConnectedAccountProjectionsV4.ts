@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 
 import {
@@ -23,10 +24,7 @@ import {
 } from './qualifiedConnectedAccountPersistence.js';
 
 export const QualifiedConnectedAccountConfigurationRevisionV4Schema = lazyZodSchema(() => z
-  .string()
-  .trim()
-  .min(1)
-  .max(128));
+  .string().check(z.trim(), z.minLength(1), z.maxLength(128)));
 
 export const QualifiedConnectedAccountModeIdV4Schema =
   PluginContributionLocalIdSchema;
@@ -50,39 +48,39 @@ const QualifiedConnectedAccountLegacyUnfencedV4Shape = {
  * supply a CAS/currentness token to any consumer.
  */
 function createQualifiedConnectedAccountRevisionSemanticsV4Schema<
-  Shape extends z.ZodRawShape,
+  Shape extends z.core.$ZodShape,
 >(shape: Shape) {
   return z.discriminatedUnion('revisionSemantics', [
-    z.object({
+    z.strictObject({
       ...shape,
       ...QualifiedConnectedAccountRevisionedV4Shape,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       ...shape,
       ...QualifiedConnectedAccountLegacyUnfencedV4Shape,
-    }).strict(),
+    }),
   ]);
 }
 
 export const QualifiedConnectedAccountServiceRefSchema = ConnectedAccountServiceIdentityV1Schema;
 export const QualifiedConnectedServiceUsageSourceV4Schema = lazyZodSchema(() => z.discriminatedUnion('bindingKind', [
-  z.object({ ref: asProtocolZod(QualifiedConnectedAccountRefSchema), bindingKind: z.literal('account') }).strict(),
-  z.object({ ref: asProtocolZod(QualifiedConnectedAccountRefSchema), bindingKind: z.literal('group_member'), groupId: ConnectedServiceAuthGroupIdSchema, groupGeneration: z.number().int().nonnegative().optional() }).strict(),
+  z.strictObject({ ref: asProtocolZod(QualifiedConnectedAccountRefSchema), bindingKind: z.literal('account') }),
+  z.strictObject({ ref: asProtocolZod(QualifiedConnectedAccountRefSchema), bindingKind: z.literal('group_member'), groupId: ConnectedServiceAuthGroupIdSchema, groupGeneration: z.optional(z.number().check(z.int(), z.nonnegative())) }),
 ]));
-export const ProviderAccountUsageEncryptedContentV4Schema = lazyZodSchema(() => z.object({ t: z.literal('encrypted'), c: z.string().min(1), subscription: SealedProviderAccountSubscriptionV1Schema.optional(), recoveryCreditDetails: SealedProviderAccountUsageRecoveryCreditDetailsV1Schema.optional() }).strict());
-export const QualifiedProviderAccountUsageRecordResponseV4Schema = lazyZodSchema(() => z.object({
-  content: z.discriminatedUnion('t', [StoredJsonContentEnvelopeSchema.options[0], ProviderAccountUsageEncryptedContentV4Schema]),
-  metadata: z.object({ fetchedAt: z.number().int().nonnegative(), staleAfterMs: z.number().int().nonnegative(), status: z.enum(['ok', 'unavailable', 'estimated', 'error']), refreshRequestedAt: z.number().int().nonnegative().optional() }).strict(),
+export const ProviderAccountUsageEncryptedContentV4Schema = lazyZodSchema(() => z.strictObject({ t: z.literal('encrypted'), c: z.string().check(z.minLength(1)), subscription: zMini.optional(SealedProviderAccountSubscriptionV1Schema), recoveryCreditDetails: zMini.optional(SealedProviderAccountUsageRecoveryCreditDetailsV1Schema) }));
+export const QualifiedProviderAccountUsageRecordResponseV4Schema = lazyZodSchema(() => z.strictObject({
+  content: z.discriminatedUnion('t', [StoredJsonContentEnvelopeSchema._zod.def.options[0], ProviderAccountUsageEncryptedContentV4Schema]),
+  metadata: z.strictObject({ fetchedAt: z.number().check(z.int(), z.nonnegative()), staleAfterMs: z.number().check(z.int(), z.nonnegative()), status: z.enum(['ok', 'unavailable', 'estimated', 'error']), refreshRequestedAt: z.optional(z.number().check(z.int(), z.nonnegative())) }),
   sources: z.array(QualifiedConnectedServiceUsageSourceV4Schema),
-}).strict());
+}));
 const QualifiedConnectedAccountServiceRefZodSchema = asProtocolZod(
   QualifiedConnectedAccountServiceRefSchema,
 );
 
-export const QualifiedConnectedAccountGroupRefSchema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountGroupRefSchema = lazyZodSchema(() => z.strictObject({
   service: QualifiedConnectedAccountServiceRefZodSchema,
   groupId: ConnectedServiceAuthGroupIdSchema,
-}).strict());
+}));
 export type QualifiedConnectedAccountGroupRef = z.infer<
   typeof QualifiedConnectedAccountGroupRefSchema
 >;
@@ -103,30 +101,21 @@ export function sameQualifiedConnectedAccountGroupRef(
  * deleted and recreated.
  */
 export const QualifiedConnectedAccountGroupIncarnationV4Schema = lazyZodSchema(() => z
-  .string()
-  .trim()
-  .min(1)
-  .max(128));
+  .string().check(z.trim(), z.minLength(1), z.maxLength(128)));
 
-export const QualifiedConnectedAccountProviderIdentityV4Schema = lazyZodSchema(() => z.object({
-  accountId: z.string().trim().min(1).max(256).nullable().optional(),
-  email: z.string().trim().min(1).max(512).nullable().optional(),
-}).strict());
+export const QualifiedConnectedAccountProviderIdentityV4Schema = lazyZodSchema(() => z.strictObject({
+  accountId: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(256)))),
+  email: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(512)))),
+}));
 
-const QualifiedConnectedAccountScopesV4Schema = lazyZodSchema(() => z
-  .array(z.string().trim().min(1).max(256))
-  .max(128)
-  .refine(
-    (scopes) => new Set(scopes).size === scopes.length,
-    'Qualified Connected Account scopes must be unique',
-  )
-  .default([]));
+const QualifiedConnectedAccountScopesV4Schema = lazyZodSchema(() => z._default(z
+  .array(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))).check(z.maxLength(128), z.refine((scopes) => new Set(scopes).size === scopes.length, 'Qualified Connected Account scopes must be unique')), []));
 
-export const QualifiedConnectedAccountPresentationMetadataV4Schema = lazyZodSchema(() => z.object({
-  providerIdentity: QualifiedConnectedAccountProviderIdentityV4Schema.optional(),
-  displayName: z.string().trim().min(1).max(512).optional(),
+export const QualifiedConnectedAccountPresentationMetadataV4Schema = lazyZodSchema(() => z.strictObject({
+  providerIdentity: z.optional(QualifiedConnectedAccountProviderIdentityV4Schema),
+  displayName: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(512))),
   scopes: QualifiedConnectedAccountScopesV4Schema,
-}).strict());
+}));
 
 const QualifiedConnectedAccountProfileV4Shape = {
   ref: asProtocolZod(QualifiedConnectedAccountRefSchema),
@@ -136,13 +125,13 @@ const QualifiedConnectedAccountProfileV4Shape = {
     'needs_reauth',
     'refresh_failed_retryable',
   ]),
-  authenticationModeId: QualifiedConnectedAccountModeIdV4ZodSchema.nullable(),
+  authenticationModeId: zMini.nullable(QualifiedConnectedAccountModeIdV4ZodSchema),
   configurationReady: z.boolean(),
   configurationRevision:
-    QualifiedConnectedAccountConfigurationRevisionV4Schema.nullable(),
-  kind: z.enum(['oauth', 'token']).nullable().optional(),
-  expiresAt: z.number().int().nonnegative().nullable().optional(),
-  lastUsedAt: z.number().int().nonnegative().nullable().optional(),
+    z.nullable(QualifiedConnectedAccountConfigurationRevisionV4Schema),
+  kind: z.optional(z.nullable(z.enum(['oauth', 'token']))),
+  expiresAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+  lastUsedAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
   ...QualifiedConnectedAccountPresentationMetadataV4Schema.shape,
 } as const;
 
@@ -152,15 +141,15 @@ export const QualifiedConnectedAccountProfileV4Schema =
   );
 
 /** Every account the Account holds for the service. */
-export const QualifiedConnectedAccountListResponseV4Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountListResponseV4Schema = lazyZodSchema(() => z.strictObject({
   service: QualifiedConnectedAccountServiceRefZodSchema,
   accounts: z.array(QualifiedConnectedAccountProfileV4Schema),
-}).strict());
+}));
 
-export const QualifiedConnectedAccountConfigurationTargetV4Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountConfigurationTargetV4Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('account'),
   ref: asProtocolZod(QualifiedConnectedAccountRefSchema),
-}).strict());
+}));
 
 export const QualifiedConnectedAccountCredentialMetadataV4Schema =
   QualifiedConnectedAccountPresentationMetadataV4Schema;
@@ -168,7 +157,7 @@ export const QualifiedConnectedAccountCredentialMetadataV4Schema =
 export const QualifiedConnectedAccountConfigurationSnapshotV4Schema =
   createQualifiedConnectedAccountRevisionSemanticsV4Schema({
     target: QualifiedConnectedAccountConfigurationTargetV4Schema,
-    authenticationModeId: QualifiedConnectedAccountModeIdV4ZodSchema.nullable(),
+    authenticationModeId: zMini.nullable(QualifiedConnectedAccountModeIdV4ZodSchema),
     configurationRevision:
       QualifiedConnectedAccountConfigurationRevisionV4Schema,
     configurationContent: StoredJsonContentEnvelopeSchema,
@@ -177,137 +166,137 @@ export const QualifiedConnectedAccountConfigurationSnapshotV4Schema =
 export const QualifiedConnectedAccountCredentialSnapshotV4Schema =
   createQualifiedConnectedAccountRevisionSemanticsV4Schema({
     ref: asProtocolZod(QualifiedConnectedAccountRefSchema),
-    authenticationModeId: QualifiedConnectedAccountModeIdV4ZodSchema.nullable(),
+    authenticationModeId: zMini.nullable(QualifiedConnectedAccountModeIdV4ZodSchema),
     configurationRevision:
-      QualifiedConnectedAccountConfigurationRevisionV4Schema.nullable(),
+      z.nullable(QualifiedConnectedAccountConfigurationRevisionV4Schema),
     content: StoredJsonContentEnvelopeSchema,
     metadata: QualifiedConnectedAccountCredentialMetadataV4Schema,
   });
 
-export const QualifiedConnectedAccountGroupMemberV4Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountGroupMemberV4Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   connectedAccountId: asProtocolZod(QualifiedConnectedAccountIdSchema),
-  priority: z.number().int().default(100),
-  enabled: z.boolean().default(true),
+  priority: z._default(z.number().check(z.int()), 100),
+  enabled: z._default(z.boolean(), true),
   state: ConnectedServiceAuthGroupMemberStateV1Schema,
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-}).strict());
+  createdAt: z.number().check(z.int(), z.nonnegative()),
+  updatedAt: z.number().check(z.int(), z.nonnegative()),
+}));
 
-export const QualifiedConnectedAccountGroupV4Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountGroupV4Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   ref: QualifiedConnectedAccountGroupRefSchema,
   incarnation: QualifiedConnectedAccountGroupIncarnationV4Schema,
-  displayName: z.string().trim().min(1).nullable(),
+  displayName: z.nullable(z.string().check(z.trim(), z.minLength(1))),
   policy: ConnectedServiceAuthGroupPolicyV1Schema,
-  activeConnectedAccountId: asProtocolZod(QualifiedConnectedAccountIdSchema).nullable(),
-  generation: z.number().int().nonnegative(),
+  activeConnectedAccountId: zMini.nullable(asProtocolZod(QualifiedConnectedAccountIdSchema)),
+  generation: z.number().check(z.int(), z.nonnegative()),
   runtimeStateRevision: ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema,
   state: ConnectedServiceAuthGroupStateV1Schema,
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-  members: z.array(QualifiedConnectedAccountGroupMemberV4Schema).default([]),
-}).strict());
+  createdAt: z.number().check(z.int(), z.nonnegative()),
+  updatedAt: z.number().check(z.int(), z.nonnegative()),
+  members: z._default(z.array(QualifiedConnectedAccountGroupMemberV4Schema), []),
+}));
 
-export const QualifiedConnectedAccountGroupListQueryV4Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountGroupListQueryV4Schema = lazyZodSchema(() => z.strictObject({
   service: QualifiedConnectedAccountServiceRefZodSchema,
-}).strict());
+}));
 
-export const QualifiedConnectedAccountGroupCreateV4Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountGroupCreateV4Schema = lazyZodSchema(() => z.strictObject({
   service: QualifiedConnectedAccountServiceRefZodSchema,
-  group: z.object({
+  group: z.strictObject({
     groupId: ConnectedServiceAuthGroupIdSchema,
-    displayName: z.string().trim().min(1).max(512).nullable().optional(),
-    state: ConnectedServiceAuthGroupStateV1Schema.optional(),
-    policy: ConnectedServiceAuthGroupPolicyV1Schema.optional(),
-  }).strict(),
-}).strict());
+    displayName: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(512)))),
+    state: zMini.optional(ConnectedServiceAuthGroupStateV1Schema),
+    policy: zMini.optional(ConnectedServiceAuthGroupPolicyV1Schema),
+  }),
+}));
 
-export const QualifiedConnectedAccountGroupQueryV4Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountGroupQueryV4Schema = lazyZodSchema(() => z.strictObject({
   service: QualifiedConnectedAccountServiceRefZodSchema,
   groupId: ConnectedServiceAuthGroupIdSchema,
-  expectedRuntimeStateRevision: ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema.optional(),
-}).strict());
+  expectedRuntimeStateRevision: zMini.optional(ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema),
+}));
 
-export const QualifiedConnectedAccountGroupPatchV4Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountGroupPatchV4Schema = lazyZodSchema(() => z.strictObject({
   service: QualifiedConnectedAccountServiceRefZodSchema,
   groupId: ConnectedServiceAuthGroupIdSchema,
-  expectedGeneration: z.number().int().nonnegative(),
+  expectedGeneration: z.number().check(z.int(), z.nonnegative()),
   expectedIncarnation:
-    QualifiedConnectedAccountGroupIncarnationV4Schema.optional(),
-  displayName: z.string().trim().min(1).max(512).nullable().optional(),
-  state: ConnectedServiceAuthGroupStateV1Schema.removeDefault().optional(),
-  policy: ConnectedServiceAuthGroupPolicyV1Schema.optional(),
-  expectedRuntimeStateRevision: ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema.optional(),
-  overrideRuntimeCooldown: z.boolean().optional(),
-}).strict());
+    z.optional(QualifiedConnectedAccountGroupIncarnationV4Schema),
+  displayName: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(512)))),
+  state: zMini.optional(ConnectedServiceAuthGroupStateV1Schema._zod.def.innerType),
+  policy: zMini.optional(ConnectedServiceAuthGroupPolicyV1Schema),
+  expectedRuntimeStateRevision: zMini.optional(ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema),
+  overrideRuntimeCooldown: z.optional(z.boolean()),
+}));
 
-export const QualifiedConnectedAccountGroupRuntimeStatePatchV4Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountGroupRuntimeStatePatchV4Schema = lazyZodSchema(() => z.strictObject({
   service: QualifiedConnectedAccountServiceRefZodSchema,
   groupId: ConnectedServiceAuthGroupIdSchema,
-  expectedGeneration: z.number().int().nonnegative(),
+  expectedGeneration: z.number().check(z.int(), z.nonnegative()),
   expectedIncarnation:
-    QualifiedConnectedAccountGroupIncarnationV4Schema.optional(),
+    z.optional(QualifiedConnectedAccountGroupIncarnationV4Schema),
   expectedRuntimeStateRevision: ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema,
-  runtimeState: z.object({
-    state: ConnectedServiceAuthGroupStateV1Schema.removeDefault().optional(),
-    memberStates: z.array(z.object({
+  runtimeState: z.strictObject({
+    state: zMini.optional(ConnectedServiceAuthGroupStateV1Schema._zod.def.innerType),
+    memberStates: z._default(z.array(z.strictObject({
       connectedAccountId: asProtocolZod(QualifiedConnectedAccountIdSchema),
       state: ConnectedServiceAuthGroupMemberStateV1Schema,
-    }).strict()).default([]),
-  }).strict(),
-}).strict());
+    })), []),
+  }),
+}));
 
-export const QualifiedConnectedAccountGroupMemberMutationV4Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountGroupMemberMutationV4Schema = lazyZodSchema(() => z.strictObject({
   group: QualifiedConnectedAccountGroupRefSchema,
-  expectedGeneration: z.number().int().nonnegative(),
+  expectedGeneration: z.number().check(z.int(), z.nonnegative()),
   expectedIncarnation:
-    QualifiedConnectedAccountGroupIncarnationV4Schema.optional(),
+    z.optional(QualifiedConnectedAccountGroupIncarnationV4Schema),
   connectedAccountId: asProtocolZod(QualifiedConnectedAccountIdSchema),
-  priority: z.number().int().optional(),
-  enabled: z.boolean().optional(),
+  priority: z.optional(z.number().check(z.int())),
+  enabled: z.optional(z.boolean()),
   state:
-    ConnectedServiceAuthGroupMemberStateV1Schema.removeDefault().optional(),
-  expectedRuntimeStateRevision: ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema.optional(),
-}).strict());
+    zMini.optional(ConnectedServiceAuthGroupMemberStateV1Schema._zod.def.innerType),
+  expectedRuntimeStateRevision: zMini.optional(ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema),
+}));
 
-export const QualifiedConnectedAccountGroupMemberDeleteV4Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountGroupMemberDeleteV4Schema = lazyZodSchema(() => z.strictObject({
   group: QualifiedConnectedAccountGroupRefSchema,
-  expectedGeneration: z.number().int().nonnegative(),
+  expectedGeneration: z.number().check(z.int(), z.nonnegative()),
   expectedIncarnation:
-    QualifiedConnectedAccountGroupIncarnationV4Schema.optional(),
+    z.optional(QualifiedConnectedAccountGroupIncarnationV4Schema),
   connectedAccountId: asProtocolZod(QualifiedConnectedAccountIdSchema),
-  expectedRuntimeStateRevision: ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema.optional(),
-}).strict());
+  expectedRuntimeStateRevision: zMini.optional(ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema),
+}));
 
-export const QualifiedConnectedAccountGroupActiveAccountV4Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountGroupActiveAccountV4Schema = lazyZodSchema(() => z.strictObject({
   group: QualifiedConnectedAccountGroupRefSchema,
   expectedIncarnation:
-    QualifiedConnectedAccountGroupIncarnationV4Schema.optional(),
+    z.optional(QualifiedConnectedAccountGroupIncarnationV4Schema),
   connectedAccountId: asProtocolZod(QualifiedConnectedAccountIdSchema),
-  expectedGeneration: z.number().int().nonnegative(),
-  expectedRuntimeStateRevision: ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema.optional(),
-  expectedSource: z.object({
+  expectedGeneration: z.number().check(z.int(), z.nonnegative()),
+  expectedRuntimeStateRevision: zMini.optional(ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema),
+  expectedSource: z.optional(z.strictObject({
     connectedAccountId: asProtocolZod(QualifiedConnectedAccountIdSchema),
     credentialRevision: ConnectedServiceCredentialRevisionV1Schema,
-    configurationRevision: QualifiedConnectedAccountConfigurationRevisionV4Schema.nullable(),
-  }).strict().optional(),
-  overrideRuntimeCooldown: z.boolean().optional(),
-}).strict());
+    configurationRevision: z.nullable(QualifiedConnectedAccountConfigurationRevisionV4Schema),
+  })),
+  overrideRuntimeCooldown: z.optional(z.boolean()),
+}));
 
-export const QualifiedConnectedAccountGroupDeleteV4Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountGroupDeleteV4Schema = lazyZodSchema(() => z.strictObject({
   group: QualifiedConnectedAccountGroupRefSchema,
-  expectedGeneration: z.number().int().nonnegative(),
+  expectedGeneration: z.number().check(z.int(), z.nonnegative()),
   expectedIncarnation: QualifiedConnectedAccountGroupIncarnationV4Schema,
   expectedRuntimeStateRevision:
-    ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema.optional(),
-}).strict());
+    zMini.optional(ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema),
+}));
 
 /** Every group the Account holds. */
-export const QualifiedConnectedAccountGroupListResponseV4Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountGroupListResponseV4Schema = lazyZodSchema(() => z.strictObject({
   groups: z.array(QualifiedConnectedAccountGroupV4Schema),
-}).strict());
+}));
 
-export const QualifiedConnectedAccountGroupResponseV4Schema = lazyZodSchema(() => z.object({
+export const QualifiedConnectedAccountGroupResponseV4Schema = lazyZodSchema(() => z.strictObject({
   group: QualifiedConnectedAccountGroupV4Schema,
-}).strict());
+}));

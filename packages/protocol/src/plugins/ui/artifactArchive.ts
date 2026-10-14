@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { decodeBase64, encodeBase64 } from '../../crypto/base64.js';
@@ -26,27 +26,27 @@ export const PLUGIN_UI_ARTIFACT_ARCHIVE_VERSION_V1 = 1 as const;
  * This is the logical generic-Artifact header, not a new persistence envelope.
  * The surrounding Account Artifact owner still supplies plain/E2EE storage.
  */
-export const PluginUiArtifactArchiveHeaderV1Schema = z.object({
+export const PluginUiArtifactArchiveHeaderV1Schema = z.strictObject({
   v: z.literal(PLUGIN_UI_ARTIFACT_ARCHIVE_VERSION_V1),
   kind: z.literal(PLUGIN_UI_ARTIFACT_ARCHIVE_KIND_V1),
   title: z.null(),
   artifactGraph: PluginUiArtifactsManifestEntryV2Schema,
-}).strict();
+});
 export type PluginUiArtifactArchiveHeaderV1 =
   z.infer<typeof PluginUiArtifactArchiveHeaderV1Schema>;
 
-export const PluginUiArtifactArchiveFileV1Schema = z.object({
+export const PluginUiArtifactArchiveFileV1Schema = z.strictObject({
   relativePath: PluginUiArtifactRelativePathV1Schema,
   /** Canonical base64 bytes inside the one generic Artifact body. */
-  bytesBase64: z.string().min(1),
-}).strict();
+  bytesBase64: z.string().check(z.minLength(1)),
+});
 export type PluginUiArtifactArchiveFileV1 =
   z.infer<typeof PluginUiArtifactArchiveFileV1Schema>;
 
-export const PluginUiArtifactArchiveBodyV1Schema = z.object({
+export const PluginUiArtifactArchiveBodyV1Schema = z.strictObject({
   v: z.literal(PLUGIN_UI_ARTIFACT_ARCHIVE_VERSION_V1),
-  files: z.array(PluginUiArtifactArchiveFileV1Schema).min(1),
-}).strict();
+  files: z.array(PluginUiArtifactArchiveFileV1Schema).check(z.minLength(1)),
+});
 export type PluginUiArtifactArchiveBodyV1 =
   z.infer<typeof PluginUiArtifactArchiveBodyV1Schema>;
 

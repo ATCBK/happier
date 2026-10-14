@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { WorkspaceAddressV1Schema } from '../workspaces/workspaceRefV1.js';
 import { SpawnFailureV1Schema } from '../machines/processes/spawnFailureV1.js';
 import { TerminalGuardStateV1Schema } from '../machines/guard/terminalGuardStateV1.js';
@@ -19,120 +19,117 @@ export const DaemonTerminalErrorCodeSchema = lazyZodSchema(() => z.enum([
 ]));
 export type DaemonTerminalErrorCode = z.infer<typeof DaemonTerminalErrorCodeSchema>;
 
-export const DaemonTerminalErrorSchema = lazyZodSchema(() => z.object({
+export const DaemonTerminalErrorSchema = lazyZodSchema(() => z.looseObject({
   ok: z.literal(false),
   errorCode: DaemonTerminalErrorCodeSchema,
-  error: z.string().min(1),
-  spawnFailure: SpawnFailureV1Schema.optional(),
-}).passthrough());
+  error: z.string().check(z.minLength(1)),
+  spawnFailure: z.optional(SpawnFailureV1Schema),
+}));
 export type DaemonTerminalError = z.infer<typeof DaemonTerminalErrorSchema>;
 
-export const DaemonTerminalListRequestV1Schema = lazyZodSchema(() => z.object({
-  workspace: WorkspaceAddressV1Schema.optional(),
-}).strict());
+export const DaemonTerminalListRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  workspace: z.optional(WorkspaceAddressV1Schema),
+}));
 export type DaemonTerminalListRequestV1 = z.infer<typeof DaemonTerminalListRequestV1Schema>;
 
-export const DaemonTerminalListEntryV1Schema = lazyZodSchema(() => z.object({
-  terminalId: z.string().min(1),
-  terminalKey: z.string().min(1).max(2000),
-  cwd: z.string().min(1).max(10_000),
-  sessionId: z.string().min(1).max(256).optional(),
+export const DaemonTerminalListEntryV1Schema = lazyZodSchema(() => z.strictObject({
+  terminalId: z.string().check(z.minLength(1)),
+  terminalKey: z.string().check(z.minLength(1), z.maxLength(2000)),
+  cwd: z.string().check(z.minLength(1), z.maxLength(10_000)),
+  sessionId: z.optional(z.string().check(z.minLength(1), z.maxLength(256))),
   ended: z.boolean(),
-  terminalGuardStateV1: TerminalGuardStateV1Schema.optional(),
-  exit: z.object({
-    exitCode: z.number().int().nullable(),
-    signal: z.number().int().nullable(),
-  }).strict().nullable(),
-}).strict());
+  terminalGuardStateV1: z.optional(TerminalGuardStateV1Schema),
+  exit: z.nullable(z.strictObject({
+    exitCode: z.nullable(z.number().check(z.int())),
+    signal: z.nullable(z.number().check(z.int())),
+  })),
+}));
 export type DaemonTerminalListEntryV1 = z.infer<typeof DaemonTerminalListEntryV1Schema>;
 
 export const DaemonTerminalListResponseV1Schema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true), terminals: z.array(DaemonTerminalListEntryV1Schema) }).strict(),
-  DaemonTerminalErrorSchema.strict(),
+  z.strictObject({ ok: z.literal(true), terminals: z.array(DaemonTerminalListEntryV1Schema) }),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(DaemonTerminalErrorSchema),
 ]));
 export type DaemonTerminalListResponseV1 = z.infer<typeof DaemonTerminalListResponseV1Schema>;
 
 export const DaemonTerminalLaunchIntentSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('package_script'),
-    runTargetId: z.string().trim().min(1),
-  }).strict(),
-  z.object({
+    runTargetId: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  z.strictObject({
     kind: z.literal('agent_login'),
-    agentId: z.string().trim().min(1),
-    launchId: z.enum(['primary', 'device_code']).optional(),
-  }).strict(),
-  z.object({
+    agentId: z.string().check(z.trim(), z.minLength(1)),
+    launchId: z.optional(z.enum(['primary', 'device_code'])),
+  }),
+  z.strictObject({
     kind: z.literal('session_attach'),
-    sessionId: z.string().min(1).max(256),
-  }).strict(),
-  z.object({
+    sessionId: z.string().check(z.minLength(1), z.maxLength(256)),
+  }),
+  z.strictObject({
     kind: z.literal('happier_cli'),
-    args: z.array(z.string().min(1).max(1024)).min(1).max(64),
-  }).strict(),
+    args: z.array(z.string().check(z.minLength(1), z.maxLength(1024))).check(z.minLength(1), z.maxLength(64)),
+  }),
 ]));
 export type DaemonTerminalLaunchIntent = z.infer<typeof DaemonTerminalLaunchIntentSchema>;
 
-export const DaemonTerminalEnsureRequestSchema = lazyZodSchema(() => z.object({
-  terminalKey: z.string().min(1).max(2000),
-  cwd: z.string().min(1).max(10_000).optional(),
-  workspace: WorkspaceAddressV1Schema.optional(),
-  cols: z.number().int().min(2).max(500).optional(),
-  rows: z.number().int().min(2).max(500).optional(),
-  initialCommand: z.string().max(100_000).optional(),
-  launch: DaemonTerminalLaunchIntentSchema.optional(),
+export const DaemonTerminalEnsureRequestSchema = lazyZodSchema(() => z.strictObject({
+  terminalKey: z.string().check(z.minLength(1), z.maxLength(2000)),
+  cwd: z.optional(z.string().check(z.minLength(1), z.maxLength(10_000))),
+  workspace: z.optional(WorkspaceAddressV1Schema),
+  cols: z.optional(z.number().check(z.int(), z.minimum(2), z.maximum(500))),
+  rows: z.optional(z.number().check(z.int(), z.minimum(2), z.maximum(500))),
+  initialCommand: z.optional(z.string().check(z.maxLength(100_000))),
+  launch: z.optional(DaemonTerminalLaunchIntentSchema),
   // Attribution is not authority: the receiving Session owner must prove this
   // identity before admitting a Session-scoped terminal.
-  sessionId: z.string().min(1).max(256).optional(),
-}).strict().refine(
-  (value) => value.initialCommand === undefined || value.launch === undefined,
-  { message: 'initialCommand and launch are mutually exclusive' },
-));
+  sessionId: z.optional(z.string().check(z.minLength(1), z.maxLength(256))),
+}).check(z.refine((value) => value.initialCommand === undefined || value.launch === undefined, { message: 'initialCommand and launch are mutually exclusive' })));
 export type DaemonTerminalEnsureRequest = z.infer<typeof DaemonTerminalEnsureRequestSchema>;
 
 export const DaemonTerminalEnsureResponseSchema = lazyZodSchema(() => z.union([
-  z.object({
+  z.looseObject({
     ok: z.literal(true),
-    terminalId: z.string().min(1),
+    terminalId: z.string().check(z.minLength(1)),
     reused: z.boolean(),
-  }).passthrough(),
+  }),
   DaemonTerminalErrorSchema,
 ]));
 export type DaemonTerminalEnsureResponse = z.infer<typeof DaemonTerminalEnsureResponseSchema>;
 
-export const DaemonTerminalStreamReadRequestSchema = lazyZodSchema(() => z.object({
-  terminalId: z.string().min(1),
-  cursor: z.number().int().min(0),
-  maxBytes: z.number().int().min(1).max(1024 * 1024).optional(),
-  maxEvents: z.number().int().min(1).max(2048).optional(),
-}).strict());
+export const DaemonTerminalStreamReadRequestSchema = lazyZodSchema(() => z.strictObject({
+  terminalId: z.string().check(z.minLength(1)),
+  cursor: z.number().check(z.int(), z.minimum(0)),
+  maxBytes: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(1024 * 1024))),
+  maxEvents: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(2048))),
+}));
 export type DaemonTerminalStreamReadRequest = z.infer<typeof DaemonTerminalStreamReadRequestSchema>;
 
-export const DaemonTerminalStreamEventDataSchema = lazyZodSchema(() => z.object({
+export const DaemonTerminalStreamEventDataSchema = lazyZodSchema(() => z.looseObject({
   t: z.literal('data'),
   data: z.string(),
-}).passthrough());
+}));
 export type DaemonTerminalStreamEventData = z.infer<typeof DaemonTerminalStreamEventDataSchema>;
 
-export const DaemonTerminalStreamEventUrlSchema = lazyZodSchema(() => z.object({
+export const DaemonTerminalStreamEventUrlSchema = lazyZodSchema(() => z.looseObject({
   t: z.literal('url'),
-  url: z.string().url(),
+  url: z.string().check(z.url()),
   kind: z.enum(['auth', 'generic']),
-  suggestOpen: z.boolean().optional(),
-}).passthrough());
+  suggestOpen: z.optional(z.boolean()),
+}));
 export type DaemonTerminalStreamEventUrl = z.infer<typeof DaemonTerminalStreamEventUrlSchema>;
 
-export const DaemonTerminalStreamEventGapSchema = lazyZodSchema(() => z.object({
+export const DaemonTerminalStreamEventGapSchema = lazyZodSchema(() => z.looseObject({
   t: z.literal('gap'),
-  droppedBefore: z.number().int().min(0),
-}).passthrough());
+  droppedBefore: z.number().check(z.int(), z.minimum(0)),
+}));
 export type DaemonTerminalStreamEventGap = z.infer<typeof DaemonTerminalStreamEventGapSchema>;
 
-export const DaemonTerminalStreamEventExitSchema = lazyZodSchema(() => z.object({
+export const DaemonTerminalStreamEventExitSchema = lazyZodSchema(() => z.looseObject({
   t: z.literal('exit'),
-  exitCode: z.number().int().nullable(),
-  signal: z.number().int().nullable(),
-}).passthrough());
+  exitCode: z.nullable(z.number().check(z.int())),
+  signal: z.nullable(z.number().check(z.int())),
+}));
 export type DaemonTerminalStreamEventExit = z.infer<typeof DaemonTerminalStreamEventExitSchema>;
 
 export const DaemonTerminalStreamEventSchema = lazyZodSchema(() => z.discriminatedUnion('t', [
@@ -144,49 +141,49 @@ export const DaemonTerminalStreamEventSchema = lazyZodSchema(() => z.discriminat
 export type DaemonTerminalStreamEvent = z.infer<typeof DaemonTerminalStreamEventSchema>;
 
 export const DaemonTerminalStreamReadResponseSchema = lazyZodSchema(() => z.union([
-  z.object({
+  z.looseObject({
     ok: z.literal(true),
-    terminalId: z.string().min(1),
+    terminalId: z.string().check(z.minLength(1)),
     events: z.array(DaemonTerminalStreamEventSchema),
-    nextCursor: z.number().int().min(0),
+    nextCursor: z.number().check(z.int(), z.minimum(0)),
     done: z.boolean(),
-  }).passthrough(),
+  }),
   DaemonTerminalErrorSchema,
 ]));
 export type DaemonTerminalStreamReadResponse = z.infer<typeof DaemonTerminalStreamReadResponseSchema>;
 
-export const DaemonTerminalInputRequestSchema = lazyZodSchema(() => z.object({
-  terminalId: z.string().min(1),
+export const DaemonTerminalInputRequestSchema = lazyZodSchema(() => z.strictObject({
+  terminalId: z.string().check(z.minLength(1)),
   data: z.string(),
-}).strict());
+}));
 export type DaemonTerminalInputRequest = z.infer<typeof DaemonTerminalInputRequestSchema>;
 
 export const DaemonTerminalInputResponseSchema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true) }).passthrough(),
+  z.looseObject({ ok: z.literal(true) }),
   DaemonTerminalErrorSchema,
 ]));
 export type DaemonTerminalInputResponse = z.infer<typeof DaemonTerminalInputResponseSchema>;
 
-export const DaemonTerminalResizeRequestSchema = lazyZodSchema(() => z.object({
-  terminalId: z.string().min(1),
-  cols: z.number().int().min(2).max(500),
-  rows: z.number().int().min(2).max(500),
-}).strict());
+export const DaemonTerminalResizeRequestSchema = lazyZodSchema(() => z.strictObject({
+  terminalId: z.string().check(z.minLength(1)),
+  cols: z.number().check(z.int(), z.minimum(2), z.maximum(500)),
+  rows: z.number().check(z.int(), z.minimum(2), z.maximum(500)),
+}));
 export type DaemonTerminalResizeRequest = z.infer<typeof DaemonTerminalResizeRequestSchema>;
 
 export const DaemonTerminalResizeResponseSchema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true) }).passthrough(),
+  z.looseObject({ ok: z.literal(true) }),
   DaemonTerminalErrorSchema,
 ]));
 export type DaemonTerminalResizeResponse = z.infer<typeof DaemonTerminalResizeResponseSchema>;
 
-export const DaemonTerminalCloseRequestSchema = lazyZodSchema(() => z.object({
-  terminalId: z.string().min(1),
-}).strict());
+export const DaemonTerminalCloseRequestSchema = lazyZodSchema(() => z.strictObject({
+  terminalId: z.string().check(z.minLength(1)),
+}));
 export type DaemonTerminalCloseRequest = z.infer<typeof DaemonTerminalCloseRequestSchema>;
 
 export const DaemonTerminalCloseResponseSchema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true) }).passthrough(),
+  z.looseObject({ ok: z.literal(true) }),
   DaemonTerminalErrorSchema,
 ]));
 export type DaemonTerminalCloseResponse = z.infer<typeof DaemonTerminalCloseResponseSchema>;

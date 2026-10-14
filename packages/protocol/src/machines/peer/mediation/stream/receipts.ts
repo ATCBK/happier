@@ -1,11 +1,11 @@
 import { lazyZodSchema } from '../../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PEER_MEDIATION_RECEIPTS } from '../receipts.js';
 import { MachineLiveStreamRouteKindV1Schema } from './v1.js';
 
-const NonNegativeIntSchema = lazyZodSchema(() => z.number().int().nonnegative());
-const PositiveIntSchema = lazyZodSchema(() => z.number().int().positive());
+const NonNegativeIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
+const PositiveIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.positive()));
 const UNSAFE_RECEIPT_KEYS = new Set([
   'payload',
   'payloadBase64',
@@ -17,43 +17,40 @@ const UNSAFE_RECEIPT_KEYS = new Set([
   'endpointUrlWithToken',
 ]);
 
-export const MachineLiveStreamReceiptV1Schema = lazyZodSchema(() => z
-  .object({
+export const MachineLiveStreamReceiptV1Schema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
     id: z.enum([
       PEER_MEDIATION_RECEIPTS.streamStarted,
       PEER_MEDIATION_RECEIPTS.streamPaused,
       PEER_MEDIATION_RECEIPTS.streamBandwidthCapped,
     ]),
-    streamId: z.string().min(1),
+    streamId: z.string().check(z.minLength(1)),
     routeKind: MachineLiveStreamRouteKindV1Schema,
     flowKind: z.literal('live_stream'),
-    reasonCode: z.string().min(1).optional(),
-    terminal: z.boolean().optional(),
-    terminalOutcome: z.enum(['stopped', 'error']).optional(),
-    bytesSent: NonNegativeIntSchema.optional(),
-    bytesRelayed: NonNegativeIntSchema.optional(),
-    bytesDropped: NonNegativeIntSchema.optional(),
-    framesSent: NonNegativeIntSchema.optional(),
-    framesDropped: NonNegativeIntSchema.optional(),
-    durationMs: NonNegativeIntSchema.optional(),
-    maxBitrateBps: PositiveIntSchema.optional(),
-    maxFramesPerSecond: PositiveIntSchema.optional(),
-    maxFrameBytes: PositiveIntSchema.optional(),
-    maxDurationMs: PositiveIntSchema.optional(),
-    maxTotalBytes: PositiveIntSchema.optional(),
-  })
-  .passthrough()
-  .superRefine((receipt, ctx) => {
+    reasonCode: z.optional(z.string().check(z.minLength(1))),
+    terminal: z.optional(z.boolean()),
+    terminalOutcome: z.optional(z.enum(['stopped', 'error'])),
+    bytesSent: z.optional(NonNegativeIntSchema),
+    bytesRelayed: z.optional(NonNegativeIntSchema),
+    bytesDropped: z.optional(NonNegativeIntSchema),
+    framesSent: z.optional(NonNegativeIntSchema),
+    framesDropped: z.optional(NonNegativeIntSchema),
+    durationMs: z.optional(NonNegativeIntSchema),
+    maxBitrateBps: z.optional(PositiveIntSchema),
+    maxFramesPerSecond: z.optional(PositiveIntSchema),
+    maxFrameBytes: z.optional(PositiveIntSchema),
+    maxDurationMs: z.optional(PositiveIntSchema),
+    maxTotalBytes: z.optional(PositiveIntSchema),
+  }).check(z.superRefine((receipt, ctx) => {
     for (const key of Object.keys(receipt)) {
       if (!UNSAFE_RECEIPT_KEYS.has(key)) continue;
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: [key],
         message: 'Live-stream receipts must not contain payload, grant, token, or nonce material',
       });
     }
-  }));
+  })));
 export type MachineLiveStreamReceiptV1 = z.infer<typeof MachineLiveStreamReceiptV1Schema>;
 
 export function isMachineLiveStreamTerminalReceiptV1(receipt: MachineLiveStreamReceiptV1): boolean {

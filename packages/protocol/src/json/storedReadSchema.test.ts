@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import * as m from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from './storedReadSchema.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
@@ -12,7 +12,7 @@ describe('stored JSON schema derivation', () => {
         let constructions = 0;
         const canonical = z.lazy(() => {
             const fallback = `definition-${++constructions}`;
-            return z.object({ value: z.string().min(1).default(fallback) }).strict();
+            return z.strictObject({ value: z._default(z.string().check(z.minLength(1)), fallback) });
         });
         const stored = createStoredReadSchema(canonical);
         expect(constructions).toBe(0);
@@ -29,12 +29,12 @@ describe('stored JSON schema derivation', () => {
     });
     it('retains a registered lazy hidden-parser projection under optional array composition without eager construction', () => {
         let constructions = 0;
-        const shape = z.object({ value: z.string().min(1) }).strict();
+        const shape = z.strictObject({ value: z.string().check(z.minLength(1)) });
         const canonical = defineStoredReadProjection(lazyZodSchema(() => {
             constructions++;
-            return z.string().transform(value => shape.parse(JSON.parse(value)));
-        }), () => z.string().transform(value => createStoredReadSchema(shape).parse(JSON.parse(value))));
-        const parent = z.object({ items: z.array(canonical.optional()) }).strict();
+            return z.pipe(z.string(), z.transform(value => shape.parse(JSON.parse(value))));
+        }), () => z.pipe(z.string(), z.transform(value => createStoredReadSchema(shape).parse(JSON.parse(value)))));
+        const parent = z.strictObject({ items: z.array(z.optional(canonical)) });
         const stored = createStoredReadSchema(parent);
         expect(stored.parse({ items: [] })).toEqual({ items: [] });
         expect(constructions).toBe(0);
@@ -79,10 +79,10 @@ describe('stored JSON schema derivation', () => {
     });
     it('preserves native default factories and independent mutable default values', () => {
         let generated = 0;
-        const stored = createStoredReadSchema(z.object({
-            id: z.string().default(() => String(++generated)),
-            values: z.array(z.string()).default([]),
-        }).strict());
+        const stored = createStoredReadSchema(z.strictObject({
+            id: z._default(z.string(), () => String(++generated)),
+            values: z._default(z.array(z.string()), []),
+        }));
         expect(stored.parse({ id: 'present', values: ['kept'] })).toEqual({ id: 'present', values: ['kept'] });
         expect(generated).toBe(0);
         const first = stored.parse({});
@@ -98,16 +98,16 @@ describe('stored JSON schema derivation', () => {
         let secondConstructions = 0;
         const first = lazyZodSchema(() => {
             firstConstructions++;
-            return z.object({ value: z.string().min(1) }).strict();
+            return z.strictObject({ value: z.string().check(z.minLength(1)) });
         });
         const second = lazyZodSchema(() => {
             secondConstructions++;
-            return z.object({ value: z.string().min(1) }).strict();
+            return z.strictObject({ value: z.string().check(z.minLength(1)) });
         });
-        const canonical = z.object({
-            first: first.default({ value: 'first' }),
-            second: second.default({ value: 'second' }),
-        }).strict();
+        const canonical = z.strictObject({
+            first: z._default(first, { value: 'first' }),
+            second: z._default(second, { value: 'second' }),
+        });
         const stored = createStoredReadSchema(canonical);
         expect(stored.parse({})).toEqual({ first: { value: 'first' }, second: { value: 'second' } });
         expect([firstConstructions, secondConstructions]).toEqual([0, 0]);
@@ -118,16 +118,16 @@ describe('stored JSON schema derivation', () => {
         expect(stored.safeParse({ first: { value: '' } }).success).toBe(false);
         expect(canonical.safeParse({ first: { value: 'kept', extra: true } }).success).toBe(false);
     });
-    it('keeps composed Classic read projections cold until present data needs admission', () => {
+    it('keeps composed Mini read projections cold until present data needs admission', () => {
         let canonicalConstructions = 0;
         const canonical = lazyZodSchema(() => {
             canonicalConstructions++;
-            return z.object({ value: z.string().trim().min(1) }).strict();
+            return z.strictObject({ value: z.string().check(z.trim(), z.minLength(1)) });
         });
         const stored = createStoredReadSchema(canonical);
-        const optional = stored.optional();
-        const repeated = stored.array();
-        const parent = z.object({ item: optional.default({ value: 'fallback' }) }).strict();
+        const optional = z.optional(stored);
+        const repeated = z.array(stored);
+        const parent = z.strictObject({ item: z._default(optional, { value: 'fallback' }) });
         expect(parent.parse({})).toEqual({ item: { value: 'fallback' } });
         expect(canonicalConstructions).toBe(0);
 
@@ -137,9 +137,9 @@ describe('stored JSON schema derivation', () => {
         expect(canonicalConstructions).toBe(1);
         expect(createStoredReadSchema(canonical)).toBe(stored);
 
-        const concreteRead = z.object({ value: z.string().trim().min(1) }).strip();
+        const concreteRead = z.object({ value: z.string().check(z.trim(), z.minLength(1)) });
         const projected = z.object({ first: stored, optional, repeated });
-        const expected = z.object({ first: concreteRead, optional: concreteRead.optional(), repeated: concreteRead.array() });
+        const expected = z.object({ first: concreteRead, optional: z.optional(concreteRead), repeated: z.array(concreteRead) });
         for (const target of ['draft-7', 'draft-2020-12'] as const) {
             for (const io of ['input', 'output'] as const) {
                 expect(z.toJSONSchema(projected, { target, io })).toEqual(z.toJSONSchema(expected, { target, io }));
@@ -147,18 +147,18 @@ describe('stored JSON schema derivation', () => {
         }
     });
     it('drops passthrough object extras but preserves declared map data', () => {
-        const input = z.object({ fields: z.record(z.string(), z.unknown()) }).passthrough();
+        const input = z.looseObject({ fields: z.record(z.string(), z.unknown()) });
         expect(createStoredReadSchema(input).parse({ fields: { arbitrary: { retained: true } }, extra: true }))
             .toEqual({ fields: { arbitrary: { retained: true } } });
     });
     it('drops nested object extras without weakening required fields, refinements or inputs', () => {
-        const input = z.object({
+        const input = z.strictObject({
             ref: asProtocolZod(PluginContributionIdentityV1Schema),
             entries: z.record(z.string(), z.discriminatedUnion('kind', [
-                z.object({ kind: z.literal('value'), value: z.unknown() }).strict(),
-                z.object({ kind: z.literal('context'), slot: z.string().min(1) }).strict(),
+                z.strictObject({ kind: z.literal('value'), value: z.unknown() }),
+                z.strictObject({ kind: z.literal('context'), slot: z.string().check(z.minLength(1)) }),
             ])),
-        }).strict().refine(value => Object.keys(value.entries).length > 0);
+        }).check(z.refine(value => Object.keys(value.entries).length > 0));
         const stored = createStoredReadSchema(input);
         const canonical = { ref: { pluginId: 'happier.checks', localId: 'summary' }, entries: {
             first: { kind: 'context', slot: 'session' }, second: { kind: 'value', value: { arbitrary: 1 } },
@@ -175,12 +175,11 @@ describe('stored JSON schema derivation', () => {
 });
 
 it('constructs a captured custom reader on demand without weakening admission', () => {
-    const canonical = z.object({ value: z.string().trim().min(1) }).strict()
-        .refine(value => value.value !== 'forbidden');
+    const canonical = z.strictObject({ value: z.string().check(z.trim(), z.minLength(1)) }).check(z.refine(value => value.value !== 'forbidden'));
     let readProjectionReady = false;
     defineStoredReadProjection(canonical, () => {
         readProjectionReady = true;
-        return canonical.strip();
+        return z.core.clone(canonical, { ...canonical._zod.def, catchall: undefined });
     });
 
     const stored = createStoredReadSchema(canonical);
@@ -188,29 +187,22 @@ it('constructs a captured custom reader on demand without weakening admission', 
     expect(createStoredReadSchema(canonical)).toBe(stored);
 
     // A later registration cannot replace the read contract already selected.
-    defineStoredReadProjection(canonical, () => z.object({ value: z.literal('late') }).strict());
+    defineStoredReadProjection(canonical, () => z.strictObject({ value: z.literal('late') }));
     const raw = { value: ' kept ', extra: true };
     expect(canonical.safeParse(raw).success).toBe(false);
     expect(stored.parse(raw)).toEqual({ value: 'kept' });
     expect(readProjectionReady).toBe(true);
     expect(createStoredReadSchema(canonical)).toBe(stored);
-    expect(() => stored.parse({ value: 'forbidden' })).toThrow(z.ZodError);
+    expect(() => stored.parse({ value: 'forbidden' })).toThrow(z.core.$ZodError);
     const refused = stored.safeParse({ value: 'forbidden' });
     expect(refused.success).toBe(false);
     if (!refused.success) expect(refused.error.issues).toMatchObject([{ code: 'custom', path: [] }]);
 });
 
-it('projects deferred Classic, Mini and Core readers with their concrete reference identity', () => {
-    const classic = z.object({ value: z.string().min(1) }).strict();
-    const classicRead = classic.strip().describe('Classic read');
+it('projects deferred Mini and Core readers with their concrete reference identity', () => {
     const mini = m.strictObject({ value: m.string().check(m.minLength(1)) });
     const miniRead = m.object({ value: m.string().check(m.minLength(1)) })
         .register(z.globalRegistry, { id: 'StoredReadMiniProjection', title: 'Mini read' });
-    const classicWithMiniRead = z.object({ value: z.string().min(1) }).strict();
-    defineStoredReadProjection(classicWithMiniRead, () => miniRead);
-    const crossClassRead = createStoredReadSchema(classicWithMiniRead);
-    expect(Reflect.get(crossClassRead, 'optional')).toBeUndefined();
-    expect(z.core.parse(crossClassRead, { value: 'kept', extra: true })).toEqual({ value: 'kept' });
     const core = new z.core.$ZodObject({
         type: 'object',
         shape: { value: new z.core.$ZodString({ type: 'string', checks: [] }) },
@@ -222,7 +214,7 @@ it('projects deferred Classic, Mini and Core readers with their concrete referen
     });
     z.globalRegistry.add(coreRead, { title: 'Core read' });
 
-    for (const [canonical, concreteRead] of [[classic, classicRead], [mini, miniRead], [core, coreRead]] as const) {
+    for (const [canonical, concreteRead] of [[mini, miniRead], [core, coreRead]] as const) {
         defineStoredReadProjection(canonical, () => concreteRead);
         const stored = createStoredReadSchema(canonical);
         expect(createStoredReadSchema(canonical)).toBe(stored);
@@ -242,12 +234,12 @@ it('projects deferred Classic, Mini and Core readers with their concrete referen
             expect(refused.error.constructor).toBe(expectedRefusal.error.constructor);
             expect(refused.error.issues).toEqual(expectedRefusal.error.issues);
         }
-        if (canonical !== classic) expect(Reflect.get(stored, 'optional')).toBeUndefined();
+        expect(Reflect.get(stored, 'optional')).toBeUndefined();
     }
 
-    const atomic = z.string().min(1).describe('Atomic value');
-    const structural = z.object({ nested: z.object({ value: atomic.default('fallback') }).strict() }).strict();
-    const structuralRead = z.object({ nested: z.object({ value: atomic.default('fallback') }).strip() }).strip();
+    const atomic = z.string().check(z.minLength(1), z.describe('Atomic value'));
+    const structural = z.strictObject({ nested: z.strictObject({ value: z._default(atomic, 'fallback') }) });
+    const structuralRead = z.object({ nested: z.object({ value: z._default(atomic, 'fallback') }) });
     for (const [canonical, concreteRead] of [[atomic, atomic], [structural, structuralRead]] as const) {
         const stored = createStoredReadSchema(canonical);
         expect(createStoredReadSchema(canonical)).toBe(stored);
@@ -262,12 +254,12 @@ it('projects deferred Classic, Mini and Core readers with their concrete referen
         .toEqual({ nested: { value: 'fallback' } });
 
     type RecursiveRead = { value: string; next?: RecursiveRead };
-    const recursive: z.ZodType<RecursiveRead> = z.lazy(() => z.object({
-        value: z.string(), next: recursive.optional(),
-    }).strict());
-    const recursiveRead: z.ZodType<RecursiveRead> = z.lazy(() => z.object({
-        value: z.string(), next: recursiveRead.optional(),
-    }).strip());
+    const recursive: z.ZodMiniType<RecursiveRead> = z.lazy(() => z.strictObject({
+        value: z.string(), next: z.optional(recursive),
+    }));
+    const recursiveRead: z.ZodMiniType<RecursiveRead> = z.lazy(() => z.object({
+        value: z.string(), next: z.optional(recursiveRead),
+    }));
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
         for (const io of ['input', 'output'] as const) {
             expect(z.toJSONSchema(createStoredReadSchema(recursive), { target, io }))

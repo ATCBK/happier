@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
@@ -8,12 +8,12 @@ import { applyWidgetLayoutFragmentPatchV1, WidgetLayoutFragmentDraftV1Schema, Wi
     WidgetLayoutFragmentV1StoredSchema, type WidgetLayoutFragmentPatchV1, type WidgetLayoutFragmentV1 } from './widgetLayoutFragmentV1.js';
 
 export const WIDGET_LAYOUT_FRAGMENT_ARTIFACT_KIND_V1 = 'widget-layout-fragment.v1';
-export const WidgetLayoutFragmentSummaryV1Schema = lazyZodSchema(() => WidgetLayoutFragmentDraftV1Schema.extend({
-    artifactId: z.string().trim().min(1), childCount: z.number().int().positive(),
-    author: WidgetDefinitionAuthorV1Schema.optional(), createdAt: z.number().int().nonnegative().optional(),
-}).strict().superRefine((value, context) => {
+export const WidgetLayoutFragmentSummaryV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(WidgetLayoutFragmentDraftV1Schema, {
+    artifactId: z.string().check(z.trim(), z.minLength(1)), childCount: z.number().check(z.int(), z.positive()),
+    author: z.optional(WidgetDefinitionAuthorV1Schema), createdAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+})).check(z.superRefine((value, context) => {
     if (value.childCount !== value.group.children.length) context.addIssue({ code: 'custom', path: ['childCount'], message: 'Group child count mismatch' });
-}));
+})));
 export type WidgetLayoutFragmentSummaryV1 = z.infer<typeof WidgetLayoutFragmentSummaryV1Schema>;
 export const WidgetLayoutFragmentSummaryV1StoredSchema = createStoredReadSchema(WidgetLayoutFragmentSummaryV1Schema);
 export type WidgetLayoutFragmentArtifactPortV1 = Readonly<{

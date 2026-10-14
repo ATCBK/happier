@@ -1,4 +1,4 @@
-import type { input as ZodInput, output as ZodOutput, ZodTypeAny } from 'zod';
+import type { input as ZodInput, output as ZodOutput, ZodMiniType as ZodTypeAny } from 'zod/mini';
 
 export type SettingStorageScope = 'account' | 'local';
 export type SettingValueKind = 'boolean' | 'enum' | 'bucket' | 'count' | 'presence';

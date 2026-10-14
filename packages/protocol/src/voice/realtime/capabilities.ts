@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   VoiceProviderIdSchema,
@@ -36,64 +36,62 @@ export const VoiceRuntimePlatformSchema = z.enum([
 ]);
 export type VoiceRuntimePlatform = z.infer<typeof VoiceRuntimePlatformSchema>;
 
-function uniqueValues<T extends string>(schema: z.ZodType<T>, maximum: number) {
-  return z.array(schema).min(1).max(maximum).superRefine((values, context) => {
+function uniqueValues<T extends string>(schema: z.ZodMiniType<T>, maximum: number) {
+  return z.array(schema).check(z.minLength(1), z.maxLength(maximum), z.superRefine((values, context) => {
     if (new Set(values).size !== values.length) {
       context.addIssue({ code: 'custom', message: 'Expected unique values' });
     }
-  });
+  }));
 }
 
-const VoiceReadinessRequirementsSchema = z.array(VoiceReadinessRequirementSchema)
-  .max(VoiceReadinessRequirementSchema.options.length)
-  .superRefine((values, context) => {
+const VoiceReadinessRequirementsSchema = z.array(VoiceReadinessRequirementSchema).check(z.maxLength(VoiceReadinessRequirementSchema.options.length), z.superRefine((values, context) => {
     if (new Set(values).size !== values.length) {
       context.addIssue({ code: 'custom', message: 'Expected unique requirements' });
     }
-  });
+  }));
 
-export const VoiceProviderSelectionOptionV1Schema = z.object({
-  id: z.string().min(1).max(64).regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u),
-  modeId: z.string().min(1).max(64).regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u).nullable(),
-  order: z.number().int().min(-10_000).max(10_000),
-  titleKey: z.string().min(1).max(256),
-  subtitleKey: z.string().min(1).max(256),
-  configPatch: z.record(z.string().min(1).max(128), VoiceProviderSettingsJsonValueV1Schema).optional(),
-}).strict();
+export const VoiceProviderSelectionOptionV1Schema = z.strictObject({
+  id: z.string().check(z.minLength(1), z.maxLength(64), z.regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u)),
+  modeId: z.nullable(z.string().check(z.minLength(1), z.maxLength(64), z.regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u))),
+  order: z.number().check(z.int(), z.minimum(-10_000), z.maximum(10_000)),
+  titleKey: z.string().check(z.minLength(1), z.maxLength(256)),
+  subtitleKey: z.string().check(z.minLength(1), z.maxLength(256)),
+  configPatch: z.optional(z.record(z.string().check(z.minLength(1), z.maxLength(128)), VoiceProviderSettingsJsonValueV1Schema)),
+});
 export type VoiceProviderSelectionOptionV1 = z.infer<typeof VoiceProviderSelectionOptionV1Schema>;
 
-const VoiceBundledUiDescriptorBaseV1Schema = z.object({
-  pluginId: z.string().min(1).max(128),
+const VoiceBundledUiDescriptorBaseV1Schema = z.strictObject({
+  pluginId: z.string().check(z.minLength(1), z.maxLength(128)),
   providerId: VoiceProviderIdSchema,
-  settingsSectionId: z.string().min(1).max(128),
+  settingsSectionId: z.string().check(z.minLength(1), z.maxLength(128)),
   roles: uniqueValues(VoiceReadinessRoleSchema, VoiceReadinessRoleSchema.options.length),
   requirements: VoiceReadinessRequirementsSchema,
-  requirementsByMode: z.record(
-    z.string().min(1).max(64).regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u),
+  requirementsByMode: z.optional(z.record(
+    z.string().check(z.minLength(1), z.maxLength(64), z.regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u)),
     VoiceReadinessRequirementsSchema,
-  ).optional(),
-  supportedPlatforms: uniqueValues(VoiceRuntimePlatformSchema, VoiceRuntimePlatformSchema.options.length).optional(),
-  selectionOptions: z.array(VoiceProviderSelectionOptionV1Schema).max(16).superRefine((options, context) => {
+  )),
+  supportedPlatforms: z.optional(uniqueValues(VoiceRuntimePlatformSchema, VoiceRuntimePlatformSchema.options.length)),
+  selectionOptions: z.optional(z.array(VoiceProviderSelectionOptionV1Schema).check(z.maxLength(16), z.superRefine((options, context) => {
     if (new Set(options.map((option) => option.id)).size !== options.length) {
       context.addIssue({ code: 'custom', message: 'Expected unique selection option ids' });
     }
-  }).optional(),
-}).strict();
+  }))),
+});
 
-export const VoiceConversationProviderDescriptorV1Schema = VoiceBundledUiDescriptorBaseV1Schema.extend({
+export const VoiceConversationProviderDescriptorV1Schema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(VoiceBundledUiDescriptorBaseV1Schema, {
   kind: z.literal('voice.conversation-provider.v1'),
-}).strict();
+}));
 export type VoiceConversationProviderDescriptorV1 = z.infer<typeof VoiceConversationProviderDescriptorV1Schema>;
 
-export const VoiceSpeechEngineDescriptorV1Schema = VoiceBundledUiDescriptorBaseV1Schema.extend({
+export const VoiceSpeechEngineDescriptorV1Schema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(VoiceBundledUiDescriptorBaseV1Schema, {
   kind: z.literal('voice.speech-engine.v1'),
   role: z.enum(['stt', 'tts', 'both']),
-}).strict();
+}));
 export type VoiceSpeechEngineDescriptorV1 = z.infer<typeof VoiceSpeechEngineDescriptorV1Schema>;
 
-export const VoiceTurnSupportDescriptorV1Schema = VoiceBundledUiDescriptorBaseV1Schema.extend({
+export const VoiceTurnSupportDescriptorV1Schema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(VoiceBundledUiDescriptorBaseV1Schema, {
   kind: z.literal('voice.turn-support.v1'),
-}).strict();
+}));
 export type VoiceTurnSupportDescriptorV1 = z.infer<typeof VoiceTurnSupportDescriptorV1Schema>;
 
 /** Pure build-time facts. Executable settings/runtime factories remain bundled UI code. */

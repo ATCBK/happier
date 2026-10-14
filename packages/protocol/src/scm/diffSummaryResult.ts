@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { BackendTargetRefV2Schema } from '../backends/targets/backendTargetRefV2.js';
 import { ProviderBoundModelRefSchema } from '../providers/selection/v1.js';
 import { ScmCommitPlanApplicationSchema } from './diffSummaryCommitPlan.js';
@@ -11,92 +11,87 @@ import {
   ScmDiffSummaryOutputLanguageSchema,
 } from './diffSummary.js';
 
-export const ScmDiffSummaryGeneratorSelectionSchema = lazyZodSchema(() => z.object({ backendTarget: BackendTargetRefV2Schema,
-  investigateSurroundingFiles: z.boolean().optional(),
-  outputLanguage: ScmDiffSummaryOutputLanguageSchema.optional(),
-  modelId: z.string().min(1).optional(), profileId: z.string().min(1).optional(),
-  modelSelection: ProviderBoundModelRefSchema.optional(),
-}).strict());
+export const ScmDiffSummaryGeneratorSelectionSchema = lazyZodSchema(() => z.strictObject({ backendTarget: BackendTargetRefV2Schema,
+  investigateSurroundingFiles: z.optional(z.boolean()),
+  outputLanguage: z.optional(ScmDiffSummaryOutputLanguageSchema),
+  modelId: z.optional(z.string().check(z.minLength(1))), profileId: z.optional(z.string().check(z.minLength(1))),
+  modelSelection: z.optional(ProviderBoundModelRefSchema),
+}));
 export type ScmDiffSummaryGeneratorSelection = z.infer<typeof ScmDiffSummaryGeneratorSelectionSchema>;
 /** Presentation facts stamped by the revisioned result owner, never by the model. */
-export const ScmWalkthroughProvenanceSchema = lazyZodSchema(() => z.object({
+export const ScmWalkthroughProvenanceSchema = lazyZodSchema(() => z.strictObject({
   titleEdited: z.boolean(),
-  stops: z.array(z.object({ stopId: z.string().min(1), titleEdited: z.boolean(),
-    changedAtRevision: z.number().int().nonnegative().optional(), movedAtRevision: z.number().int().nonnegative().optional(),
-  }).strict()),
-}).strict());
-export const ScmResultUpdateNoticeSchema = lazyZodSchema(() => z.object({
-  kind: z.enum(['edit', 'generation', 'undo']), revision: z.number().int().nonnegative(),
-  affectedStopIds: z.array(z.string().min(1)), mergedStopIds: z.array(z.string().min(1)).optional(),
-}).strict());
-export const ScmDiffSummaryResultSchema = lazyZodSchema(() => z.object({
-  resultId: z.string().min(1), revision: z.number().int().nonnegative(),
+  stops: z.array(z.strictObject({ stopId: z.string().check(z.minLength(1)), titleEdited: z.boolean(),
+    changedAtRevision: z.optional(z.number().check(z.int(), z.nonnegative())), movedAtRevision: z.optional(z.number().check(z.int(), z.nonnegative())),
+  })),
+}));
+export const ScmResultUpdateNoticeSchema = lazyZodSchema(() => z.strictObject({
+  kind: z.enum(['edit', 'generation', 'undo']), revision: z.number().check(z.int(), z.nonnegative()),
+  affectedStopIds: z.array(z.string().check(z.minLength(1))), mergedStopIds: z.optional(z.array(z.string().check(z.minLength(1)))),
+}));
+export const ScmDiffSummaryResultSchema = lazyZodSchema(() => z.strictObject({
+  resultId: z.string().check(z.minLength(1)), revision: z.number().check(z.int(), z.nonnegative()),
   output: ScmDiffSummaryGenerateOutputSchema, canUndo: z.boolean(),
-  generator: ScmDiffSummaryGeneratorSelectionSchema.optional(),
-  application: ScmCommitPlanApplicationSchema.optional(),
-  walkthroughProvenance: ScmWalkthroughProvenanceSchema.optional(),
-  updateNotice: ScmResultUpdateNoticeSchema.optional(),
-}).strict().refine((result) => result.output.resultId === result.resultId && result.output.revision === result.revision,
-  'Result projection must identify its current revision'));
+  generator: z.optional(ScmDiffSummaryGeneratorSelectionSchema),
+  application: z.optional(ScmCommitPlanApplicationSchema),
+  walkthroughProvenance: z.optional(ScmWalkthroughProvenanceSchema),
+  updateNotice: z.optional(ScmResultUpdateNoticeSchema),
+}).check(z.refine((result) => result.output.resultId === result.resultId && result.output.revision === result.revision, 'Result projection must identify its current revision')));
 export type ScmDiffSummaryResult = z.infer<typeof ScmDiffSummaryResultSchema>;
 
-export const ScmDiffSummaryResultReadInputSchema = lazyZodSchema(() => z.object({ cwd: z.string().min(1), resultId: z.string().min(1) }).strict());
+export const ScmDiffSummaryResultReadInputSchema = lazyZodSchema(() => z.strictObject({ cwd: z.string().check(z.minLength(1)), resultId: z.string().check(z.minLength(1)) }));
 export type ScmDiffSummaryResultReadInput = z.infer<typeof ScmDiffSummaryResultReadInputSchema>;
-export const ScmDiffSummaryResultRevisionInputSchema = lazyZodSchema(() => ScmDiffSummaryResultReadInputSchema.extend({
-  expectedRevision: z.number().int().nonnegative(),
-}).strict());
+export const ScmDiffSummaryResultRevisionInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScmDiffSummaryResultReadInputSchema, {
+  expectedRevision: z.number().check(z.int(), z.nonnegative()),
+})));
 export type ScmDiffSummaryResultRevisionInput = z.infer<typeof ScmDiffSummaryResultRevisionInputSchema>;
 
-const ids = z.array(z.string().min(1)).min(1).refine((values) => new Set(values).size === values.length, 'Ids must be unique');
+const ids = z.array(z.string().check(z.minLength(1))).check(z.minLength(1), z.refine((values) => new Set(values).size === values.length, 'Ids must be unique'));
 const commitGroupTarget = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('group'), groupId: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal('newGroup'), group: z.object({ id: z.string().min(1),
-    message: z.string().trim().min(1), rationale: z.string() }).strict() }).strict(),
-  z.object({ kind: z.literal('leftOut') }).strict(),
+  z.strictObject({ kind: z.literal('group'), groupId: z.string().check(z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('newGroup'), group: z.strictObject({ id: z.string().check(z.minLength(1)),
+    message: z.string().check(z.trim(), z.minLength(1)), rationale: z.string() }) }),
+  z.strictObject({ kind: z.literal('leftOut') }),
 ]));
 export const ScmDiffSummaryResultEditSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('renameWalkthrough'), title: z.string().trim().min(1) }).strict(),
-  z.object({ kind: z.literal('renameStop'), stopId: z.string().min(1), title: z.string().trim().min(1) }).strict(),
-  z.object({ kind: z.literal('editStop'), stopId: z.string().min(1), explanationMarkdown: z.string().trim().min(1) }).strict(),
-  z.object({ kind: z.literal('reorderStops'), stopIds: ids }).strict(),
-  z.object({ kind: z.literal('mergeStops'), stopIds: ids, targetStopId: z.string().min(1),
-    title: z.string().trim().min(1).optional(), explanationMarkdown: z.string().trim().min(1) }).strict(),
-  z.object({ kind: z.literal('replaceSummary'), value: ScmDiffSummarySummarySchema }).strict(),
-  z.object({ kind: z.literal('replaceWalkthrough'), value: ScmDiffSummaryWalkthroughSchema }).strict(),
-  z.object({ kind: z.literal('replaceCommitPlan'), value: ScmDiffSummaryCommitPlanSchema }).strict(),
-  z.object({ kind: z.literal('editCommitGroup'), groupId: z.string().min(1),
-    message: z.string().trim().min(1).optional(), rationale: z.string().optional() }).strict(),
-  z.object({ kind: z.literal('reorderCommitGroups'), groupIds: ids }).strict(),
-  z.object({ kind: z.literal('mergeCommitGroups'), groupIds: ids, targetGroupId: z.string().min(1),
-    message: z.string().trim().min(1).optional(), rationale: z.string().optional() }).strict(),
-  z.object({ kind: z.literal('moveCommitChanges'), changeRefs: ids, target: commitGroupTarget }).strict(),
+  z.strictObject({ kind: z.literal('renameWalkthrough'), title: z.string().check(z.trim(), z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('renameStop'), stopId: z.string().check(z.minLength(1)), title: z.string().check(z.trim(), z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('editStop'), stopId: z.string().check(z.minLength(1)), explanationMarkdown: z.string().check(z.trim(), z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('reorderStops'), stopIds: ids }),
+  z.strictObject({ kind: z.literal('mergeStops'), stopIds: ids, targetStopId: z.string().check(z.minLength(1)),
+    title: z.optional(z.string().check(z.trim(), z.minLength(1))), explanationMarkdown: z.string().check(z.trim(), z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('replaceSummary'), value: ScmDiffSummarySummarySchema }),
+  z.strictObject({ kind: z.literal('replaceWalkthrough'), value: ScmDiffSummaryWalkthroughSchema }),
+  z.strictObject({ kind: z.literal('replaceCommitPlan'), value: ScmDiffSummaryCommitPlanSchema }),
+  z.strictObject({ kind: z.literal('editCommitGroup'), groupId: z.string().check(z.minLength(1)),
+    message: z.optional(z.string().check(z.trim(), z.minLength(1))), rationale: z.optional(z.string()) }),
+  z.strictObject({ kind: z.literal('reorderCommitGroups'), groupIds: ids }),
+  z.strictObject({ kind: z.literal('mergeCommitGroups'), groupIds: ids, targetGroupId: z.string().check(z.minLength(1)),
+    message: z.optional(z.string().check(z.trim(), z.minLength(1))), rationale: z.optional(z.string()) }),
+  z.strictObject({ kind: z.literal('moveCommitChanges'), changeRefs: ids, target: commitGroupTarget }),
   /** Discards one output (for example a commit proposal) while the result keeps its others; Undo restores it. */
-  z.object({ kind: z.literal('removeOutput'), output: ScmDiffSummaryOutputKindSchema }).strict(),
-]).refine((edit) => edit.kind !== 'editCommitGroup' || edit.message !== undefined || edit.rationale !== undefined,
-  'A commit group edit must change its message or rationale'));
+  z.strictObject({ kind: z.literal('removeOutput'), output: ScmDiffSummaryOutputKindSchema }),
+]).check(z.refine((edit) => edit.kind !== 'editCommitGroup' || edit.message !== undefined || edit.rationale !== undefined, 'A commit group edit must change its message or rationale')));
 export type ScmDiffSummaryResultEdit = z.infer<typeof ScmDiffSummaryResultEditSchema>;
-export const ScmDiffSummaryResultEditInputSchema = lazyZodSchema(() => ScmDiffSummaryResultRevisionInputSchema.extend({ edit: ScmDiffSummaryResultEditSchema }).strict());
+export const ScmDiffSummaryResultEditInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScmDiffSummaryResultRevisionInputSchema, { edit: ScmDiffSummaryResultEditSchema })));
 export type ScmDiffSummaryResultEditInput = z.infer<typeof ScmDiffSummaryResultEditInputSchema>;
-export const ScmDiffSummaryRefineInputSchema = lazyZodSchema(() => ScmDiffSummaryResultRevisionInputSchema.extend({
-  outputLanguage: ScmDiffSummaryOutputLanguageSchema.optional(),
-  output: ScmDiffSummaryOutputKindSchema, instructions: z.string().trim().min(1), stopIds: ids.optional(),
-  reviewExplanation: z.object({ targets: ScmReviewExplanationTargetsSchema }).strict().optional(),
-}).strict().refine((value) => !value.stopIds || value.output === 'walkthrough', 'Stop targeting requires walkthrough output')
-  .refine(value => !value.reviewExplanation || (value.output === 'walkthrough' && value.stopIds
+export const ScmDiffSummaryRefineInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScmDiffSummaryResultRevisionInputSchema, {
+  outputLanguage: z.optional(ScmDiffSummaryOutputLanguageSchema),
+  output: ScmDiffSummaryOutputKindSchema, instructions: z.string().check(z.trim(), z.minLength(1)), stopIds: z.optional(ids),
+  reviewExplanation: z.optional(z.strictObject({ targets: ScmReviewExplanationTargetsSchema })),
+})).check(z.refine((value) => !value.stopIds || value.output === 'walkthrough', 'Stop targeting requires walkthrough output'), z.refine(value => !value.reviewExplanation || (value.output === 'walkthrough' && value.stopIds
     && value.stopIds.length === value.reviewExplanation.targets.length
-    && value.reviewExplanation.targets.every(target => value.stopIds!.includes(target.stopId))),
-  'Finding explanations require exactly their selected walkthrough stops'));
+    && value.reviewExplanation.targets.every(target => value.stopIds!.includes(target.stopId))), 'Finding explanations require exactly their selected walkthrough stops')));
 export type ScmDiffSummaryRefineInput = z.infer<typeof ScmDiffSummaryRefineInputSchema>;
-export const ScmDiffSummaryAddOutputsInputSchema = lazyZodSchema(() => ScmDiffSummaryResultRevisionInputSchema.extend({
-  outputLanguage: ScmDiffSummaryOutputLanguageSchema.optional(),
-  outputs: z.array(ScmDiffSummaryOutputKindSchema).min(1)
-    .refine((values) => new Set(values).size === values.length, 'Outputs must be unique'),
-}).strict());
+export const ScmDiffSummaryAddOutputsInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScmDiffSummaryResultRevisionInputSchema, {
+  outputLanguage: z.optional(ScmDiffSummaryOutputLanguageSchema),
+  outputs: z.array(ScmDiffSummaryOutputKindSchema).check(z.minLength(1), z.refine((values) => new Set(values).size === values.length, 'Outputs must be unique')),
+})));
 export type ScmDiffSummaryAddOutputsInput = z.infer<typeof ScmDiffSummaryAddOutputsInputSchema>;
-export const ScmDiffSummaryDiscussInputSchema = lazyZodSchema(() => ScmDiffSummaryResultRevisionInputSchema.extend({
-  outputLanguage: ScmDiffSummaryOutputLanguageSchema.optional(),
-  message: z.string().trim().min(1), stopIds: ids.optional(), startNew: z.boolean().optional(),
-}).strict());
+export const ScmDiffSummaryDiscussInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScmDiffSummaryResultRevisionInputSchema, {
+  outputLanguage: z.optional(ScmDiffSummaryOutputLanguageSchema),
+  message: z.string().check(z.trim(), z.minLength(1)), stopIds: z.optional(ids), startNew: z.optional(z.boolean()),
+})));
 export type ScmDiffSummaryDiscussInput = z.infer<typeof ScmDiffSummaryDiscussInputSchema>;
 
 export const ScmDiffSummaryResultErrorCodeSchema = lazyZodSchema(() => z.enum([
@@ -105,61 +100,60 @@ export const ScmDiffSummaryResultErrorCodeSchema = lazyZodSchema(() => z.enum([
   'application_locked', 'application_unavailable', 'source_not_pending', 'plan_unavailable',
   'acceptance_mismatch', 'backend_unsupported', 'source_changed', 'head_moved', 'selection_conflict',
 ]));
-export const ScmDiffSummaryResultFailureSchema = lazyZodSchema(() => z.object({
+export const ScmDiffSummaryResultFailureSchema = lazyZodSchema(() => z.strictObject({
   success: z.literal(false), errorCode: ScmDiffSummaryResultErrorCodeSchema,
-  error: z.string().min(1), latestRevision: z.number().int().nonnegative().optional(),
-}).strict());
+  error: z.string().check(z.minLength(1)), latestRevision: z.optional(z.number().check(z.int(), z.nonnegative())),
+}));
 export type ScmDiffSummaryResultFailure = z.infer<typeof ScmDiffSummaryResultFailureSchema>;
 export const ScmDiffSummaryResultResponseSchema = lazyZodSchema(() => z.discriminatedUnion('success', [
-  z.object({ success: z.literal(true), result: ScmDiffSummaryResultSchema,
-    runId: z.string().min(1).optional(), seededFromRunId: z.string().min(1).optional(),
-    inputId: z.string().min(1).optional(),
-  }).strict(), ScmDiffSummaryResultFailureSchema,
+  z.strictObject({ success: z.literal(true), result: ScmDiffSummaryResultSchema,
+    runId: z.optional(z.string().check(z.minLength(1))), seededFromRunId: z.optional(z.string().check(z.minLength(1))),
+    inputId: z.optional(z.string().check(z.minLength(1))),
+  }), ScmDiffSummaryResultFailureSchema,
 ]));
 export type ScmDiffSummaryResultResponse = z.infer<typeof ScmDiffSummaryResultResponseSchema>;
 export const ScmDiffSummaryResultDeleteResponseSchema = lazyZodSchema(() => z.discriminatedUnion('success', [
-  z.object({ success: z.literal(true), resultId: z.string().min(1), comparisonId: z.string().min(1),
-    marksCleanup: z.object({ success: z.boolean(), errorCode: z.string().min(1).optional(), error: z.string().min(1).optional() }).strict().optional(),
-  }).strict(),
+  z.strictObject({ success: z.literal(true), resultId: z.string().check(z.minLength(1)), comparisonId: z.string().check(z.minLength(1)),
+    marksCleanup: z.optional(z.strictObject({ success: z.boolean(), errorCode: z.optional(z.string().check(z.minLength(1))), error: z.optional(z.string().check(z.minLength(1))) })),
+  }),
   ScmDiffSummaryResultFailureSchema,
 ]));
 export type ScmDiffSummaryResultDeleteResponse = z.infer<typeof ScmDiffSummaryResultDeleteResponseSchema>;
 
 /** Machine-owned inventory references; source evidence remains in the saved result. */
-export const ScmDiffSummarySavedResultReferenceSchema = lazyZodSchema(() => ScmDiffSummaryResultRevisionInputSchema.extend({
-  comparisonId: z.string().min(1), sessionId: z.string().min(1).optional(),
-}).strict());
+export const ScmDiffSummarySavedResultReferenceSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScmDiffSummaryResultRevisionInputSchema, {
+  comparisonId: z.string().check(z.minLength(1)), sessionId: z.optional(z.string().check(z.minLength(1))),
+})));
 export type ScmDiffSummarySavedResultReference = z.infer<typeof ScmDiffSummarySavedResultReferenceSchema>;
-export const ScmDiffSummarySavedResultItemSchema = lazyZodSchema(() => z.object({
-  cwd: z.string().min(1), sessionId: z.string().min(1).optional(), resultId: z.string().min(1),
-  revision: z.number().int().nonnegative(), comparisonId: z.string().min(1),
-  title: z.string().optional(), source: ScmDiffSummarySourceSchema, bytes: z.number().int().nonnegative(),
-  updatedAtMs: z.number().int().nonnegative(),
-}).strict());
+export const ScmDiffSummarySavedResultItemSchema = lazyZodSchema(() => z.strictObject({
+  cwd: z.string().check(z.minLength(1)), sessionId: z.optional(z.string().check(z.minLength(1))), resultId: z.string().check(z.minLength(1)),
+  revision: z.number().check(z.int(), z.nonnegative()), comparisonId: z.string().check(z.minLength(1)),
+  title: z.optional(z.string()), source: ScmDiffSummarySourceSchema, bytes: z.number().check(z.int(), z.nonnegative()),
+  updatedAtMs: z.number().check(z.int(), z.nonnegative()),
+}));
 export type ScmDiffSummarySavedResultItem = z.infer<typeof ScmDiffSummarySavedResultItemSchema>;
-export const ScmDiffSummarySevenDayCostSchema = lazyZodSchema(() => z.object({
-  status: z.enum(['partial', 'unavailable']), estimatedUsd: z.number().finite().nonnegative().optional(),
-  pricedRunCount: z.number().int().nonnegative(), unpricedRunCount: z.number().int().nonnegative(),
-  sinceMs: z.number().int().nonnegative(), untilMs: z.number().int().nonnegative(),
-}).strict());
+export const ScmDiffSummarySevenDayCostSchema = lazyZodSchema(() => z.strictObject({
+  status: z.enum(['partial', 'unavailable']), estimatedUsd: z.optional(z.number().check(z.nonnegative())),
+  pricedRunCount: z.number().check(z.int(), z.nonnegative()), unpricedRunCount: z.number().check(z.int(), z.nonnegative()),
+  sinceMs: z.number().check(z.int(), z.nonnegative()), untilMs: z.number().check(z.int(), z.nonnegative()),
+}));
 export type ScmDiffSummarySevenDayCost = z.infer<typeof ScmDiffSummarySevenDayCostSchema>;
-export const ScmDiffSummaryResultListInputSchema = lazyZodSchema(() => z.object({}).strict());
+export const ScmDiffSummaryResultListInputSchema = lazyZodSchema(() => z.strictObject({}));
 export const ScmDiffSummaryResultListResponseSchema = lazyZodSchema(() => z.discriminatedUnion('success', [
-  z.object({ success: z.literal(true), results: z.array(ScmDiffSummarySavedResultItemSchema),
-    count: z.number().int().nonnegative(), bytes: z.number().int().nonnegative(),
+  z.strictObject({ success: z.literal(true), results: z.array(ScmDiffSummarySavedResultItemSchema),
+    count: z.number().check(z.int(), z.nonnegative()), bytes: z.number().check(z.int(), z.nonnegative()),
     sevenDayCost: ScmDiffSummarySevenDayCostSchema,
-  }).strict(), ScmDiffSummaryResultFailureSchema,
+  }), ScmDiffSummaryResultFailureSchema,
 ]));
 export type ScmDiffSummaryResultListResponse = z.infer<typeof ScmDiffSummaryResultListResponseSchema>;
-export const ScmDiffSummaryResultClearInputSchema = lazyZodSchema(() => z.object({
-  results: z.array(ScmDiffSummarySavedResultReferenceSchema)
-    .refine((values) => new Set(values.map(value => value.resultId)).size === values.length, 'Saved result identities must be unique'),
-}).strict());
+export const ScmDiffSummaryResultClearInputSchema = lazyZodSchema(() => z.strictObject({
+  results: z.array(ScmDiffSummarySavedResultReferenceSchema).check(z.refine((values) => new Set(values.map(value => value.resultId)).size === values.length, 'Saved result identities must be unique')),
+}));
 export type ScmDiffSummaryResultClearInput = z.infer<typeof ScmDiffSummaryResultClearInputSchema>;
 export const ScmDiffSummaryResultClearResponseSchema = lazyZodSchema(() => z.discriminatedUnion('success', [
-  z.object({ success: z.literal(true),
-    deleted: z.array(ScmDiffSummaryResultDeleteResponseSchema.options[0]),
-    failures: z.array(z.object({ resultId: z.string().min(1), ...ScmDiffSummaryResultFailureSchema.shape }).strict()),
-  }).strict(), ScmDiffSummaryResultFailureSchema,
+  z.strictObject({ success: z.literal(true),
+    deleted: z.array(ScmDiffSummaryResultDeleteResponseSchema._zod.def.options[0]),
+    failures: z.array(z.strictObject({ resultId: z.string().check(z.minLength(1)), ...ScmDiffSummaryResultFailureSchema.shape })),
+  }), ScmDiffSummaryResultFailureSchema,
 ]));
 export type ScmDiffSummaryResultClearResponse = z.infer<typeof ScmDiffSummaryResultClearResponseSchema>;

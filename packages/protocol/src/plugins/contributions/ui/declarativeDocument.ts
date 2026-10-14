@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { type PluginDeclarativeDataNodeV1 } from './declarativeDataV1.js';
 import { ActionIdSchema, type ActionId } from '../../../actions/actionIds.js';
 import { asProtocolZod } from "../../actions/internalProtocolZodAdapter.js";
@@ -181,13 +181,13 @@ export type PluginDeclarativeSettingsInventoryEntryV1 = Readonly<{
 // Deliberately unannotated: the projected-model contract composes this schema
 // with `.extend`, and a `z.ZodType<T>` annotation would erase the object
 // internals (see providers/capabilities/v1.ts for the same ruling).
-export const PluginDeclarativeSettingsInventoryEntryV1Schema = lazyZodSchema(() => z.object({
+export const PluginDeclarativeSettingsInventoryEntryV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
   id: PluginSettingFieldIdV2Schema,
-  qualifiedId: z.string().trim().min(1).max(1_024),
+  qualifiedId: z.string().check(z.trim(), z.minLength(1), z.maxLength(1_024)),
   schema: PluginJsonSchemaV2Schema,
   secret: z.boolean(),
-}).strict());
+}));
 
 export type PluginDeclarativeQualifiedSettingBindingV1 = Readonly<{
   pluginId: string;
@@ -605,7 +605,7 @@ export type PluginDeclarativePreparedTargetedSurfaceInventoryEntryV1 = Readonly<
   inputNormalizer: ProtocolComposableSchema<ProtocolJsonValue, ProtocolJsonValue>;
 }>;
 
-const PluginDeclarativeTargetedSurfaceHandleV1Schema: z.ZodType<
+const PluginDeclarativeTargetedSurfaceHandleV1Schema: z.ZodMiniType<
   PluginDeclarativeTargetedSurfaceHandleV1
 > = PluginUiTargetedContributionSurfaceV1Schema;
 
@@ -1042,9 +1042,9 @@ export function normalizeDeclarativeDocumentV1Core(
     kind: 'destination',
   });
   const settings = buildSettingsInventory(pluginId ?? '', pluginInput?.settings);
-  const parsedDragSources = z.array(z.object({
+  const parsedDragSources = z.array(z.strictObject({
     identity: asProtocolZod(PluginContributionIdentityV1Schema), referenceSchema: PluginJsonSchemaV2Schema,
-  }).strict()).safeParse(cloneStrictPlainData(pluginInput?.dragSources ?? []));
+  })).safeParse(cloneStrictPlainData(pluginInput?.dragSources ?? []));
   if (!parsedDragSources.success) return fail('plugin_declarative_drag_inventory_invalid', 'Drag source inventory is invalid');
   const dragSources = parsedDragSources.data;
   const sourceIds = buildContributionIdentityInventory({ identities: dragSources.map((entry) => entry.identity), kind: 'drag' });

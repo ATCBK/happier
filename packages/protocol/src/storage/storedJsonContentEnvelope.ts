@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 // Canonical envelope for JSON-like content that may be plaintext or opaque ciphertext.
 //
@@ -13,7 +13,7 @@ export const StoredJsonContentEnvelopeSchema = lazyZodSchema(() => z.discriminat
   }),
   z.object({
     t: z.literal('encrypted'),
-    c: z.string().min(1),
+    c: z.string().check(z.minLength(1)),
   }),
 ]));
 

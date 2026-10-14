@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ConnectedServiceUxDiagnosticV1Schema } from '../../connect/connectedServiceUxDiagnostics.js';
 
@@ -40,56 +40,49 @@ export const SessionUsageLimitRecoveryOperationResultErrorStatusV1Schema = lazyZ
 export type SessionUsageLimitRecoveryOperationResultErrorStatusV1 =
   z.infer<typeof SessionUsageLimitRecoveryOperationResultErrorStatusV1Schema>;
 
-const OperationResultSessionIdSchema = lazyZodSchema(() => z.string().trim().min(1));
-const OperationResultIssueFingerprintSchema = lazyZodSchema(() => z.string().trim().min(1));
-const OperationResultErrorCodeSchema = lazyZodSchema(() => z.string().trim().min(1));
-const OperationResultRetryAfterMsSchema = lazyZodSchema(() => z
-  .number()
-  .finite()
-  .nonnegative()
-  .transform((value) => Math.trunc(value)));
+const OperationResultSessionIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const OperationResultIssueFingerprintSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const OperationResultErrorCodeSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const OperationResultRetryAfterMsSchema = lazyZodSchema(() => z.pipe(z
+  .number().check(z.nonnegative()), z.transform((value) => Math.trunc(value))));
 const OperationResultResumePromptModeSchema = lazyZodSchema(() => z.enum(['standard', 'off', 'custom']));
 type OperationResultResumePromptMode = z.infer<typeof OperationResultResumePromptModeSchema>;
 const INVALID_RESUME_PROMPT_MODE = Symbol('invalid resume prompt mode');
 
 const OperationResultDiagnosticScalarV1Schema = lazyZodSchema(() => z.union([
   z.string(),
-  z.number().finite(),
+  z.number(),
   z.boolean(),
   z.null(),
 ]));
 
 const OperationResultDiagnosticsV1Schema = lazyZodSchema(() => z.record(
-  z.string().trim().min(1),
+  z.string().check(z.trim(), z.minLength(1)),
   OperationResultDiagnosticScalarV1Schema,
 ));
 
 export const SessionUsageLimitRecoveryOperationResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z
-    .object({
+  z.strictObject({
       ok: z.literal(true),
       status: SessionUsageLimitRecoveryOperationResultOkStatusV1Schema,
       sessionId: OperationResultSessionIdSchema,
-      issueFingerprint: OperationResultIssueFingerprintSchema.optional(),
-      retryAfterMs: OperationResultRetryAfterMsSchema.optional(),
-      resumePromptMode: OperationResultResumePromptModeSchema.optional(),
-      uxDiagnostic: ConnectedServiceUxDiagnosticV1Schema.optional(),
-      diagnostics: OperationResultDiagnosticsV1Schema.optional(),
-    })
-    .strict(),
-  z
-    .object({
+      issueFingerprint: z.optional(OperationResultIssueFingerprintSchema),
+      retryAfterMs: z.optional(OperationResultRetryAfterMsSchema),
+      resumePromptMode: z.optional(OperationResultResumePromptModeSchema),
+      uxDiagnostic: z.optional(ConnectedServiceUxDiagnosticV1Schema),
+      diagnostics: z.optional(OperationResultDiagnosticsV1Schema),
+    }),
+  z.strictObject({
       ok: z.literal(false),
       status: SessionUsageLimitRecoveryOperationResultErrorStatusV1Schema,
-      sessionId: OperationResultSessionIdSchema.optional(),
+      sessionId: z.optional(OperationResultSessionIdSchema),
       errorCode: OperationResultErrorCodeSchema,
-      retryAfterMs: OperationResultRetryAfterMsSchema.optional(),
-      resumePromptMode: OperationResultResumePromptModeSchema.optional(),
-      issueFingerprint: OperationResultIssueFingerprintSchema.optional(),
-      uxDiagnostic: ConnectedServiceUxDiagnosticV1Schema.optional(),
-      diagnostics: OperationResultDiagnosticsV1Schema.optional(),
-    })
-    .strict(),
+      retryAfterMs: z.optional(OperationResultRetryAfterMsSchema),
+      resumePromptMode: z.optional(OperationResultResumePromptModeSchema),
+      issueFingerprint: z.optional(OperationResultIssueFingerprintSchema),
+      uxDiagnostic: z.optional(ConnectedServiceUxDiagnosticV1Schema),
+      diagnostics: z.optional(OperationResultDiagnosticsV1Schema),
+    }),
 ]));
 
 export type SessionUsageLimitRecoveryOperationResultV1 =

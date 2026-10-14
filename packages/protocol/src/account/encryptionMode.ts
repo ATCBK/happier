@@ -1,12 +1,12 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { AccountEncryptionModeSchema } from '../features/payload/capabilities/encryptionCapabilities.js';
 
-export const AccountEncryptionModeResponseSchema = lazyZodSchema(() => z.object({
+export const AccountEncryptionModeResponseSchema = lazyZodSchema(() => z.strictObject({
   mode: AccountEncryptionModeSchema,
-  updatedAt: z.number().int().min(0),
-}).strict());
+  updatedAt: z.number().check(z.int(), z.minimum(0)),
+}));
 
 export type AccountEncryptionModeResponse = z.infer<typeof AccountEncryptionModeResponseSchema>;
 
@@ -21,46 +21,46 @@ export type AccountRecipientEnvelopeUnavailableReason = z.infer<
 
 // A public projection of the server's Account readiness decision, without binding material.
 export const AccountRecipientEnvelopeReadinessSchema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('available') }).strict(),
-  z.object({
+  z.strictObject({ status: z.literal('available') }),
+  z.strictObject({
     status: z.literal('unavailable'),
     reason: AccountRecipientEnvelopeUnavailableReasonSchema,
-  }).strict(),
+  }),
 ]));
 export type AccountRecipientEnvelopeReadiness = z.infer<typeof AccountRecipientEnvelopeReadinessSchema>;
 
-export const AccountEncryptionCurrentnessResponseSchema = lazyZodSchema(() => z.object({
+export const AccountEncryptionCurrentnessResponseSchema = lazyZodSchema(() => z.strictObject({
   mode: AccountEncryptionModeSchema,
-  version: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  version: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
   // Additive presentation-currentness witness. Consumers that use it for
   // privacy must fail closed when an older Home omits it.
-  settingsVersion: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
-  signingKeyFingerprint: z.string().min(1).max(256).nullable(),
-  contentKeyFingerprint: z.string().min(1).max(256).nullable(),
-  updatedAt: z.number().int().min(0),
+  settingsVersion: z.optional(z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER))),
+  signingKeyFingerprint: z.nullable(z.string().check(z.minLength(1), z.maxLength(256))),
+  contentKeyFingerprint: z.nullable(z.string().check(z.minLength(1), z.maxLength(256))),
+  updatedAt: z.number().check(z.int(), z.minimum(0)),
   // Additive readiness witness: released Homes (and `../0.2`) answer this route
   // without it. Consumers that need readiness fail closed when it is absent
   // rather than rejecting the whole currentness read.
-  recipientEnvelopeReadiness: AccountRecipientEnvelopeReadinessSchema.optional(),
-}).strict());
+  recipientEnvelopeReadiness: z.optional(AccountRecipientEnvelopeReadinessSchema),
+}));
 
 export type AccountEncryptionCurrentnessResponse = z.infer<
   typeof AccountEncryptionCurrentnessResponseSchema
 >;
 
-export const AccountEncryptionCurrentnessErrorResponseSchema = lazyZodSchema(() => z.object({
+export const AccountEncryptionCurrentnessErrorResponseSchema = lazyZodSchema(() => z.strictObject({
   error: z.literal('migration-required'),
-  recipientEnvelopeReadiness: z.object({
+  recipientEnvelopeReadiness: z.strictObject({
     status: z.literal('unavailable'),
-    reason: AccountRecipientEnvelopeUnavailableReasonSchema.exclude(['plain_account']),
-  }).strict(),
-}).strict());
+    reason: z.enum(AccountRecipientEnvelopeUnavailableReasonSchema.options.filter((value): value is Exclude<(typeof AccountRecipientEnvelopeUnavailableReasonSchema.options)[number], 'plain_account'> => !(['plain_account'] as readonly string[]).includes(value))),
+  }),
+}));
 export type AccountEncryptionCurrentnessErrorResponse = z.infer<
   typeof AccountEncryptionCurrentnessErrorResponseSchema
 >;
 
-export const AccountEncryptionModeUpdateRequestSchema = lazyZodSchema(() => z.object({
+export const AccountEncryptionModeUpdateRequestSchema = lazyZodSchema(() => z.strictObject({
   mode: AccountEncryptionModeSchema,
-}).strict());
+}));
 
 export type AccountEncryptionModeUpdateRequest = z.infer<typeof AccountEncryptionModeUpdateRequestSchema>;

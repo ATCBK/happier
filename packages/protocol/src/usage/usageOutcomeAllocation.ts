@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { ScmPullRequestWorkEvidenceSchema, ScmPullRequestSummarySchema, type ScmPullRequestSummary, type ScmPullRequestWorkEvidence } from '../scm/pullRequests.js';
 import { UsageAnalyticsContributionSchema, type UsageAnalyticsContribution } from './usageAnalyticsContracts.js';
@@ -30,28 +30,28 @@ export type UsageWorkBranchAllocation = Readonly<{
   evidence: readonly ScmBranchWorkEvidence[];
 }>;
 
-const UsageWorkOutcomeSchema = lazyZodSchema(() => z.object({
-  key: z.string().min(1), repositoryKey: z.string().min(1), pullRequest: ScmPullRequestSummarySchema,
-  contributionIds: z.array(z.string().min(1)),
-}).strict());
-const UsageWorkBranchSchema = lazyZodSchema(() => z.object({
-  key: z.string().min(1), repositoryKey: z.string().min(1), branch: ScmBranchWorkIdentitySchema,
-  contributionIds: z.array(z.string().min(1)),
-}).strict());
-export const UsageWorkProjectionSchema = lazyZodSchema(() => z.object({
-  allocations: z.array(z.object({
-    contribution: UsageAnalyticsContributionSchema, outcome: UsageWorkOutcomeSchema.nullable(),
+const UsageWorkOutcomeSchema = lazyZodSchema(() => z.strictObject({
+  key: z.string().check(z.minLength(1)), repositoryKey: z.string().check(z.minLength(1)), pullRequest: ScmPullRequestSummarySchema,
+  contributionIds: z.array(z.string().check(z.minLength(1))),
+}));
+const UsageWorkBranchSchema = lazyZodSchema(() => z.strictObject({
+  key: z.string().check(z.minLength(1)), repositoryKey: z.string().check(z.minLength(1)), branch: ScmBranchWorkIdentitySchema,
+  contributionIds: z.array(z.string().check(z.minLength(1))),
+}));
+export const UsageWorkProjectionSchema = lazyZodSchema(() => z.strictObject({
+  allocations: z.array(z.strictObject({
+    contribution: UsageAnalyticsContributionSchema, outcome: z.nullable(UsageWorkOutcomeSchema),
     reason: z.enum(['allocated', 'missing_turn', 'missing_evidence', 'ambiguous_outcome', 'uncertain_writers']),
     evidence: z.array(ScmPullRequestWorkEvidenceSchema),
-  }).strict()),
+  })),
   outcomes: z.array(UsageWorkOutcomeSchema),
-  branchAllocations: z.array(z.object({
-    contribution: UsageAnalyticsContributionSchema, branch: UsageWorkBranchSchema.nullable(),
+  branchAllocations: z.array(z.strictObject({
+    contribution: UsageAnalyticsContributionSchema, branch: z.nullable(UsageWorkBranchSchema),
     reason: z.enum(['allocated', 'missing_turn', 'missing_evidence', 'ambiguous_outcome', 'uncertain_writers']),
     evidence: z.array(ScmBranchWorkEvidenceSchema),
-  }).strict()),
+  })),
   branches: z.array(UsageWorkBranchSchema),
-}).strict().superRefine((projection, context) => {
+}).check(z.superRefine((projection, context) => {
   try {
     const canonical = allocateUsageOutcomes({ contributions: projection.allocations.map(row => row.contribution),
       evidence: projection.allocations.flatMap(row => row.evidence),
@@ -59,7 +59,7 @@ export const UsageWorkProjectionSchema = lazyZodSchema(() => z.object({
     if (sameStrictJsonValue(projection, canonical)) return;
   } catch { /* Invalid contribution identities are rejected at this public boundary. */ }
   context.addIssue({ code: 'custom', message: 'Work must identify the canonical witnessed allocation' });
-}));
+})));
 
 export function allocateUsageOutcomes(input: Readonly<{
   contributions: readonly UsageWorkContribution[]; evidence: readonly UsageWorkEvidence[];

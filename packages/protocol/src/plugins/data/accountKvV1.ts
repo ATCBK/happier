@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import {
@@ -45,17 +45,17 @@ export const PLUGIN_ACCOUNT_STORAGE_LIMITS_V1 = Object.freeze({
   ),
 } as const);
 
-export const PluginAccountStorageValueEntryV1Schema = lazyZodSchema(() => z.object({
-  version: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+export const PluginAccountStorageValueEntryV1Schema = lazyZodSchema(() => z.strictObject({
+  version: z.number().check(z.int(), z.minimum(0), z.maximum(Number.MAX_SAFE_INTEGER)),
   value: PluginAccountStorageJsonValueV1Schema,
-}).strict());
+}));
 export type PluginAccountStorageValueEntryV1 = z.infer<typeof PluginAccountStorageValueEntryV1Schema>;
 
 /** A retained logical-key deletion is an identity/version, never absence. */
-export const PluginAccountStorageDeletedEntryV1Schema = lazyZodSchema(() => z.object({
-  version: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+export const PluginAccountStorageDeletedEntryV1Schema = lazyZodSchema(() => z.strictObject({
+  version: z.number().check(z.int(), z.minimum(0), z.maximum(Number.MAX_SAFE_INTEGER)),
   deleted: z.literal(true),
-}).strict());
+}));
 export type PluginAccountStorageDeletedEntryV1 = z.infer<typeof PluginAccountStorageDeletedEntryV1Schema>;
 
 export const PluginAccountStorageEntryV1Schema = lazyZodSchema(() => z.union([
@@ -64,13 +64,13 @@ export const PluginAccountStorageEntryV1Schema = lazyZodSchema(() => z.union([
 ]));
 export type PluginAccountStorageEntryV1 = z.infer<typeof PluginAccountStorageEntryV1Schema>;
 
-export const PluginAccountStorageRowV1Schema = lazyZodSchema(() => z.object({
+export const PluginAccountStorageRowV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   values: z.record(
     PluginAccountStorageLogicalKeyV1Schema,
     PluginAccountStorageEntryV1Schema,
   ),
-}).strict().superRefine((row, context) => {
+}).check(z.superRefine((row, context) => {
   const entries = Object.entries(row.values);
   if (entries.length > PLUGIN_ACCOUNT_STORAGE_LIMITS_V1.maximumLogicalKeys) {
     addCustomIssue(context, 'Plugin Account KV rows may contain at most 256 logical keys');
@@ -84,12 +84,11 @@ export const PluginAccountStorageRowV1Schema = lazyZodSchema(() => z.object({
   ) {
     addCustomIssue(context, 'Plugin Account KV row byte limit exceeded');
   }
-}));
+})));
 export type PluginAccountStorageRowV1 = z.infer<typeof PluginAccountStorageRowV1Schema>;
 export const PluginAccountStorageRowV1StoredSchema = createStoredReadSchema(PluginAccountStorageRowV1Schema);
 
-const PluginAccountStorageEncryptedCiphertextV1Schema = lazyZodSchema(() => z.string().min(1).superRefine(
-  (ciphertext, context) => {
+const PluginAccountStorageEncryptedCiphertextV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.superRefine((ciphertext, context) => {
     if (
       utf8ByteLength(ciphertext)
       > PLUGIN_ACCOUNT_STORAGE_LIMITS_V1.maximumEncryptedCiphertextUtf8Bytes
@@ -99,8 +98,7 @@ const PluginAccountStorageEncryptedCiphertextV1Schema = lazyZodSchema(() => z.st
         'Plugin Account KV encrypted ciphertext exceeds the maximum encoded row size',
       );
     }
-  },
-));
+  })));
 
 /**
  * The encrypted Account-KV row is its own Account-scoped cipher domain. It
@@ -144,14 +142,14 @@ export function openPluginAccountStoragePrivatePayloadV1(params: Readonly<{
  * never needs an Account content key just to read this envelope.
  */
 export const PluginAccountStorageEnvelopeV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({
+  z.strictObject({
     t: z.literal('plain'),
     v: PluginAccountStorageRowV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     t: z.literal('encrypted'),
     c: PluginAccountStorageEncryptedCiphertextV1Schema,
-  }).strict(),
+  }),
 ]));
 export type PluginAccountStorageEnvelopeV1 = z.infer<typeof PluginAccountStorageEnvelopeV1Schema>;
 
@@ -186,10 +184,7 @@ export function assertPluginAccountStorageEnvelopeForModeV1(
 }
 
 const PluginAccountStorageRevisionV1Schema = lazyZodSchema(() => z
-  .number()
-  .int()
-  .min(0)
-  .max(Number.MAX_SAFE_INTEGER));
+  .number().check(z.int(), z.minimum(0), z.maximum(Number.MAX_SAFE_INTEGER)));
 
 /**
  * Transport shapes deliberately move only the one opaque Account row. The
@@ -197,50 +192,50 @@ const PluginAccountStorageRevisionV1Schema = lazyZodSchema(() => z
  * UserKV identity or uses server-side callbacks for a transaction retry.
  */
 export const PluginAccountStorageReadResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({
+  z.strictObject({
     status: z.literal('present'),
     revision: PluginAccountStorageRevisionV1Schema,
     content: PluginAccountStorageEnvelopeV1Schema,
-  }).strict(),
-  z.object({ status: z.literal('absent') }).strict(),
-  z.object({
+  }),
+  z.strictObject({ status: z.literal('absent') }),
+  z.strictObject({
     status: z.literal('deleted'),
     revision: PluginAccountStorageRevisionV1Schema,
-  }).strict(),
+  }),
 ]));
 export type PluginAccountStorageReadResponseV1 = z.infer<
   typeof PluginAccountStorageReadResponseV1Schema
 >;
 
-export const PluginAccountStorageMutationRequestV1Schema = lazyZodSchema(() => z.object({
+export const PluginAccountStorageMutationRequestV1Schema = lazyZodSchema(() => z.strictObject({
   expectedRevision: z.union([
     PluginAccountStorageRevisionV1Schema,
     z.literal('absent'),
   ]),
-  content: PluginAccountStorageEnvelopeV1Schema.nullable(),
-}).strict());
+  content: z.nullable(PluginAccountStorageEnvelopeV1Schema),
+}));
 export type PluginAccountStorageMutationRequestV1 = z.infer<
   typeof PluginAccountStorageMutationRequestV1Schema
 >;
 
 export const PluginAccountStorageMutationResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({
+  z.strictObject({
     status: z.literal('updated'),
     revision: PluginAccountStorageRevisionV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('conflict'),
     revision: PluginAccountStorageRevisionV1Schema,
-  }).strict(),
+  }),
 ]));
 export type PluginAccountStorageMutationResponseV1 = z.infer<
   typeof PluginAccountStorageMutationResponseV1Schema
 >;
 
 /** Typed failure for an old server, incompatible Account mode, or unavailable key material. */
-export const PluginAccountStorageUnavailableV1Schema = lazyZodSchema(() => z.object({
+export const PluginAccountStorageUnavailableV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.literal('plugin_account_storage_unavailable'),
-}).strict());
+}));
 
 /**
  * The logical-key layer over one opaque Account KV row.

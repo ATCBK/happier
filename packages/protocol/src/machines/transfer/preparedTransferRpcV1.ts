@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 import { RPC_METHODS } from '../../rpc/methods.js';
@@ -21,22 +21,21 @@ export function resolvePreparedTransferRpcPhaseV1(path: string, httpMethod: stri
   return null;
 }
 
-export const PreparedTransferRpcRequestV1Schema = lazyZodSchema(() => z.object({
+export const PreparedTransferRpcRequestV1Schema = lazyZodSchema(() => z.strictObject({
   t: z.literal('prepared_machine_transfer_v1'),
-  path: z.string().min(1),
+  path: z.string().check(z.minLength(1)),
   httpMethod: z.enum(['GET', 'POST', 'PUT']),
-  authorizationToken: z.string().min(1).optional(),
-  recipientPublicKeyBase64: z.string().min(1).optional(),
-  body: StrictJsonValueSchema.optional(),
-}).strict().refine(value => resolvePreparedTransferRpcPhaseV1(value.path, value.httpMethod, value.body) !== null)
-  .refine(value => value.path.startsWith('/machine-transfers/direct/imports/') || Boolean(value.authorizationToken)));
+  authorizationToken: z.optional(z.string().check(z.minLength(1))),
+  recipientPublicKeyBase64: z.optional(z.string().check(z.minLength(1))),
+  body: z.optional(StrictJsonValueSchema),
+}).check(z.refine(value => resolvePreparedTransferRpcPhaseV1(value.path, value.httpMethod, value.body) !== null), z.refine(value => value.path.startsWith('/machine-transfers/direct/imports/') || Boolean(value.authorizationToken))));
 export type PreparedTransferRpcRequestV1 = z.infer<typeof PreparedTransferRpcRequestV1Schema>;
 
 /** HTTP framing only; encrypted chunk and terminal bodies keep their incumbent strict schemas. */
-export const PreparedTransferRpcResponseV1Schema = lazyZodSchema(() => z.object({
-  status: z.number().int().min(100).max(599),
+export const PreparedTransferRpcResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  status: z.number().check(z.int(), z.minimum(100), z.maximum(599)),
   body: z.string(),
-  contentType: z.string().optional(),
-  sessionExpiresAt: z.string().optional(),
-}).strict());
+  contentType: z.optional(z.string()),
+  sessionExpiresAt: z.optional(z.string()),
+}));
 export type PreparedTransferRpcResponseV1 = z.infer<typeof PreparedTransferRpcResponseV1Schema>;

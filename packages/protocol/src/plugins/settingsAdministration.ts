@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SERVER_IDENTITY_ID_PATTERN } from '../features/payload/capabilities/serverIdentityCapabilities.js';
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
@@ -35,9 +35,9 @@ export const PluginSettingsAdministrationActionIdV1Schema = lazyZodSchema(() => 
   PLUGIN_SETTINGS_ADMINISTRATION_ACTION_IDS_V1,
 ));
 
-export const PluginSettingsAdministrationAccountTargetV1Schema = lazyZodSchema(() => z.object({
+export const PluginSettingsAdministrationAccountTargetV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('account'),
-}).strict());
+}));
 export type PluginSettingsAdministrationAccountTargetV1 = z.infer<
   typeof PluginSettingsAdministrationAccountTargetV1Schema
 >;
@@ -46,11 +46,11 @@ export type PluginSettingsAdministrationAccountTargetV1 = z.infer<
  * This portable target carries the server identity stamped by canonical machine
  * selection together with the machine-owned Settings identity.
  */
-export const PluginSettingsAdministrationDaemonTargetV1Schema = lazyZodSchema(() => z.object({
+export const PluginSettingsAdministrationDaemonTargetV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('daemon'),
-  serverIdentityId: z.string().trim().regex(SERVER_IDENTITY_ID_PATTERN),
+  serverIdentityId: z.string().check(z.trim(), z.regex(SERVER_IDENTITY_ID_PATTERN)),
   machineId: ProviderMachineIdSchema,
-}).strict());
+}));
 export type PluginSettingsAdministrationDaemonTargetV1 = z.infer<
   typeof PluginSettingsAdministrationDaemonTargetV1Schema
 >;
@@ -63,7 +63,7 @@ export type PluginSettingsAdministrationTargetV1 = z.infer<
   typeof PluginSettingsAdministrationTargetV1Schema
 >;
 
-const ExpectedRevisionSchema = lazyZodSchema(() => z.string().trim().min(1).max(512));
+const ExpectedRevisionSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(512)));
 
 function requireScopeTargetMatch(
   value: Readonly<{
@@ -71,29 +71,29 @@ function requireScopeTargetMatch(
     target: PluginSettingsAdministrationTargetV1;
     bindingServerIdentityId?: string | null;
   }>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   if (value.scope.kind !== value.target.kind) context.addIssue({
-    code: z.ZodIssueCode.custom, path: ['target'],
+    code: "custom", path: ['target'],
     message: 'Plugin Settings administration target must match the selected scope.',
   });
   if (value.bindingServerIdentityId !== undefined && value.scope.kind !== 'account') context.addIssue({
-    code: z.ZodIssueCode.custom, path: ['bindingServerIdentityId'],
+    code: "custom", path: ['bindingServerIdentityId'],
     message: 'A per-server Settings binding belongs to an Account record.',
   });
 }
 
-const ScopeSelectedSettingsActionBaseSchema = lazyZodSchema(() => z.object({
+const ScopeSelectedSettingsActionBaseSchema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
   scope: PluginSettingsScopeRefV1Schema,
   target: PluginSettingsAdministrationTargetV1Schema,
-}).strict().superRefine(requireScopeTargetMatch));
+}).check(z.superRefine(requireScopeTargetMatch)));
 
-const ScopeSelectedSettingsFieldActionBaseSchema = lazyZodSchema(() => ScopeSelectedSettingsActionBaseSchema.extend({
+const ScopeSelectedSettingsFieldActionBaseSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScopeSelectedSettingsActionBaseSchema, {
   localId: PluginSettingFieldIdV2Schema,
   /** Explicit null selects the declared fallback; omission retains the original operation. */
-  bindingServerIdentityId: z.string().trim().regex(SERVER_IDENTITY_ID_PATTERN).nullable().optional(),
-}).strict().superRefine(requireScopeTargetMatch));
+  bindingServerIdentityId: z.optional(z.nullable(z.string().check(z.trim(), z.regex(SERVER_IDENTITY_ID_PATTERN)))),
+})).check(z.superRefine(requireScopeTargetMatch)));
 
 /**
  * Secret declarations are globally unique per plugin, so a direct secret can
@@ -102,7 +102,7 @@ const ScopeSelectedSettingsFieldActionBaseSchema = lazyZodSchema(() => ScopeSele
  * that secret's custody is daemon, `secretDaemonTarget` selects that existing
  * machine owner independently of its Settings scope.
  */
-const CanonicalSecretOriginV1Schema = lazyZodSchema(() => z.string().trim().min(1).refine((value) => {
+const CanonicalSecretOriginV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.refine((value) => {
   try {
     const url = new URL(value);
     return (url.protocol === 'http:' || url.protocol === 'https:') && url.origin === value
@@ -110,20 +110,20 @@ const CanonicalSecretOriginV1Schema = lazyZodSchema(() => z.string().trim().min(
   } catch {
     return false;
   }
-}, 'A canonical HTTP(S) origin is required.'));
+}, 'A canonical HTTP(S) origin is required.')));
 
-const SecretActionBaseSchema = lazyZodSchema(() => z.object({
+const SecretActionBaseSchema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
   localId: PluginSettingFieldIdV2Schema,
-  scope: PluginSettingsScopeRefV1Schema.optional(),
-  target: PluginSettingsAdministrationTargetV1Schema.optional(),
-  secretDaemonTarget: PluginSettingsAdministrationDaemonTargetV1Schema.optional(),
+  scope: z.optional(PluginSettingsScopeRefV1Schema),
+  target: z.optional(PluginSettingsAdministrationTargetV1Schema),
+  secretDaemonTarget: z.optional(PluginSettingsAdministrationDaemonTargetV1Schema),
   /** Credential partition selected before approval; it is never re-derived on replay. */
-  canonicalOrigin: CanonicalSecretOriginV1Schema.optional(),
-}).strict().superRefine((value, context) => {
+  canonicalOrigin: z.optional(CanonicalSecretOriginV1Schema),
+}).check(z.superRefine((value, context) => {
   if (value.scope && !value.target) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['target'],
       message: 'A selected Settings scope requires its exact target.',
     });
@@ -131,7 +131,7 @@ const SecretActionBaseSchema = lazyZodSchema(() => z.object({
   }
   if (value.target && !value.scope) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['scope'],
       message: 'A Settings target requires an explicit Settings scope.',
     });
@@ -139,23 +139,23 @@ const SecretActionBaseSchema = lazyZodSchema(() => z.object({
   }
   if (value.scope && value.target && value.scope.kind !== value.target.kind) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['target'],
       message: 'Plugin Settings administration target must match the selected scope.',
     });
   }
   if (value.scope?.kind === 'daemon' && value.secretDaemonTarget) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['secretDaemonTarget'],
       message: 'A daemon Settings scope already supplies the exact daemon secret target.',
     });
   }
-}));
+})));
 
-const SecretMutationActionBaseSchema = lazyZodSchema(() => SecretActionBaseSchema.extend({
-  expectedRevision: ExpectedRevisionSchema.optional(),
-}).strict());
+const SecretMutationActionBaseSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SecretActionBaseSchema, {
+  expectedRevision: z.optional(ExpectedRevisionSchema),
+})));
 
 export const PluginSettingsAdministrationListActionInputV1Schema =
   ScopeSelectedSettingsActionBaseSchema;
@@ -170,18 +170,18 @@ export type PluginSettingsAdministrationGetActionInputV1 = z.infer<
 >;
 
 export const PluginSettingsAdministrationSetActionInputV1Schema =
-  lazyZodSchema(() => ScopeSelectedSettingsFieldActionBaseSchema.extend({
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScopeSelectedSettingsFieldActionBaseSchema, {
     value: StrictJsonValueSchema,
-    expectedRevision: ExpectedRevisionSchema.optional(),
-  }).strict().superRefine(requireScopeTargetMatch));
+    expectedRevision: z.optional(ExpectedRevisionSchema),
+  })).check(z.superRefine(requireScopeTargetMatch)));
 export type PluginSettingsAdministrationSetActionInputV1 = z.infer<
   typeof PluginSettingsAdministrationSetActionInputV1Schema
 >;
 
 export const PluginSettingsAdministrationResetActionInputV1Schema =
-  lazyZodSchema(() => ScopeSelectedSettingsFieldActionBaseSchema.extend({
-    expectedRevision: ExpectedRevisionSchema.optional(),
-  }).strict().superRefine(requireScopeTargetMatch));
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ScopeSelectedSettingsFieldActionBaseSchema, {
+    expectedRevision: z.optional(ExpectedRevisionSchema),
+  })).check(z.superRefine(requireScopeTargetMatch)));
 export type PluginSettingsAdministrationResetActionInputV1 = z.infer<
   typeof PluginSettingsAdministrationResetActionInputV1Schema
 >;
@@ -194,9 +194,9 @@ export type PluginSettingsAdministrationSecretStatusActionInputV1 = z.infer<
 
 /** Existing SavedSecret identity only: raw create/replace stays UI-present. */
 export const PluginSettingsAdministrationSecretBindActionInputV1Schema =
-  lazyZodSchema(() => SecretMutationActionBaseSchema.extend({
-    savedSecretId: z.string().trim().min(1).max(512),
-  }).strict());
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SecretMutationActionBaseSchema, {
+    savedSecretId: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+  })));
 export type PluginSettingsAdministrationSecretBindActionInputV1 = z.infer<
   typeof PluginSettingsAdministrationSecretBindActionInputV1Schema
 >;
@@ -224,7 +224,7 @@ export const PluginSettingsAdministrationActionInputSchemasV1 = {
   'plugins.settings.secret.delete': PluginSettingsAdministrationSecretDeleteActionInputV1Schema,
 } as const satisfies Readonly<Record<
   PluginSettingsAdministrationActionIdV1,
-  z.ZodTypeAny
+  z.ZodMiniType
 >>;
 
 /** Schema-admitted selection shared by placement and approval custody. */
@@ -238,100 +238,100 @@ export function resolvePluginSettingsAdministrationTargetV1(
   return { kind: 'account' };
 }
 
-const PluginSettingsAdministrationResultTextV1Schema = lazyZodSchema(() => z.string().trim().min(1).max(4_096));
+const PluginSettingsAdministrationResultTextV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(4_096)));
 // A list result carries at most one entry per field the record itself admits,
 // so this cardinality is read from the canonical Settings bounds owner rather
 // than transcribed here.
 const PluginSettingsAdministrationResultFieldsV1Schema = lazyZodSchema(() => z.array(z.union([
-  z.object({
+  z.strictObject({
     localId: PluginSettingFieldIdV2Schema,
-    title: PluginSettingsAdministrationResultTextV1Schema.optional(),
-    description: PluginSettingsAdministrationResultTextV1Schema.optional(),
+    title: z.optional(PluginSettingsAdministrationResultTextV1Schema),
+    description: z.optional(PluginSettingsAdministrationResultTextV1Schema),
     secret: z.literal(true),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     localId: PluginSettingFieldIdV2Schema,
-    title: PluginSettingsAdministrationResultTextV1Schema.optional(),
-    description: PluginSettingsAdministrationResultTextV1Schema.optional(),
+    title: z.optional(PluginSettingsAdministrationResultTextV1Schema),
+    description: z.optional(PluginSettingsAdministrationResultTextV1Schema),
     secret: z.literal(false),
     value: StrictJsonValueSchema,
-  }).strict(),
-])).max(PLUGIN_ACCOUNT_SETTINGS_MAXIMUM_FIELDS_V1));
-const PluginSettingsAdministrationLiveApplicationV1Schema = lazyZodSchema(() => z.object({
+  }),
+])).check(z.maxLength(PLUGIN_ACCOUNT_SETTINGS_MAXIMUM_FIELDS_V1)));
+const PluginSettingsAdministrationLiveApplicationV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('live'),
-}).strict());
+}));
 
-const PluginSettingsAdministrationListResultDataV1Schema = lazyZodSchema(() => z.object({
+const PluginSettingsAdministrationListResultDataV1Schema = lazyZodSchema(() => z.strictObject({
   scope: PluginSettingsScopeRefV1Schema,
   target: PluginSettingsAdministrationTargetV1Schema,
   revision: ExpectedRevisionSchema,
   fields: PluginSettingsAdministrationResultFieldsV1Schema,
-}).strict().superRefine(requireScopeTargetMatch));
-const PluginSettingsAdministrationGetResultDataV1Schema = lazyZodSchema(() => z.object({
+}).check(z.superRefine(requireScopeTargetMatch)));
+const PluginSettingsAdministrationGetResultDataV1Schema = lazyZodSchema(() => z.strictObject({
   scope: PluginSettingsScopeRefV1Schema,
   target: PluginSettingsAdministrationTargetV1Schema,
   localId: PluginSettingFieldIdV2Schema,
   revision: ExpectedRevisionSchema,
   value: StrictJsonValueSchema,
-}).strict().superRefine(requireScopeTargetMatch));
-const PluginSettingsAdministrationMutationResultDataV1Schema = lazyZodSchema(() => z.object({
+}).check(z.superRefine(requireScopeTargetMatch)));
+const PluginSettingsAdministrationMutationResultDataV1Schema = lazyZodSchema(() => z.strictObject({
   scope: PluginSettingsScopeRefV1Schema,
   target: PluginSettingsAdministrationTargetV1Schema,
   localId: PluginSettingFieldIdV2Schema,
   revision: ExpectedRevisionSchema,
   application: PluginSettingsAdministrationLiveApplicationV1Schema,
-}).strict().superRefine(requireScopeTargetMatch));
+}).check(z.superRefine(requireScopeTargetMatch)));
 
-const PluginSettingsAdministrationAccountSecretStatusResultDataV1Schema = lazyZodSchema(() => z.object({
+const PluginSettingsAdministrationAccountSecretStatusResultDataV1Schema = lazyZodSchema(() => z.strictObject({
   localId: PluginSettingFieldIdV2Schema,
   custody: z.literal('account'),
   target: PluginSettingsAdministrationAccountTargetV1Schema,
   state: z.enum(['configured', 'missing']),
   revision: ExpectedRevisionSchema,
-}).strict());
-const PluginSettingsAdministrationDaemonSecretStatusResultDataV1Schema = lazyZodSchema(() => z.object({
+}));
+const PluginSettingsAdministrationDaemonSecretStatusResultDataV1Schema = lazyZodSchema(() => z.strictObject({
   localId: PluginSettingFieldIdV2Schema,
   custody: z.literal('daemon'),
   target: PluginSettingsAdministrationDaemonTargetV1Schema,
   state: z.enum(['configured', 'missing', 'denied', 'unavailable']),
   revision: ExpectedRevisionSchema,
-}).strict());
+}));
 const PluginSettingsAdministrationSecretStatusResultDataV1Schema = lazyZodSchema(() => z.union([
   PluginSettingsAdministrationAccountSecretStatusResultDataV1Schema,
   PluginSettingsAdministrationDaemonSecretStatusResultDataV1Schema,
 ]));
-const PluginSettingsAdministrationAccountSecretMutationResultDataV1Schema = lazyZodSchema(() => z.object({
+const PluginSettingsAdministrationAccountSecretMutationResultDataV1Schema = lazyZodSchema(() => z.strictObject({
   localId: PluginSettingFieldIdV2Schema,
   custody: z.literal('account'),
   target: PluginSettingsAdministrationAccountTargetV1Schema,
   revision: ExpectedRevisionSchema,
   application: PluginSettingsAdministrationLiveApplicationV1Schema,
-}).strict());
-const PluginSettingsAdministrationDaemonSecretDeleteResultDataV1Schema = lazyZodSchema(() => z.object({
+}));
+const PluginSettingsAdministrationDaemonSecretDeleteResultDataV1Schema = lazyZodSchema(() => z.strictObject({
   localId: PluginSettingFieldIdV2Schema,
   custody: z.literal('daemon'),
   target: PluginSettingsAdministrationDaemonTargetV1Schema,
   state: z.enum(['configured', 'missing', 'denied', 'unavailable']),
   revision: ExpectedRevisionSchema,
   application: PluginSettingsAdministrationLiveApplicationV1Schema,
-}).strict());
+}));
 
 /** The incumbent owner's safe settlement readback; never a second read or secret record. */
 export const PluginSettingsAdministrationFailureDetailsV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     kind: z.literal('settings_snapshot'),
     scope: PluginSettingsScopeRefV1Schema,
     target: PluginSettingsAdministrationTargetV1Schema,
     revision: ExpectedRevisionSchema,
     values: z.record(z.string(), StrictJsonValueSchema),
-  }).strict().superRefine(requireScopeTargetMatch),
-  PluginSettingsAdministrationAccountSecretStatusResultDataV1Schema.extend({
+  }).check(z.superRefine(requireScopeTargetMatch)),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PluginSettingsAdministrationAccountSecretStatusResultDataV1Schema, {
     kind: z.literal('secret_snapshot'),
-  }).strict(),
-  PluginSettingsAdministrationDaemonSecretStatusResultDataV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PluginSettingsAdministrationDaemonSecretStatusResultDataV1Schema, {
     kind: z.literal('secret_snapshot'),
-    canonicalOrigin: CanonicalSecretOriginV1Schema.optional(),
-  }).strict(),
+    canonicalOrigin: z.optional(CanonicalSecretOriginV1Schema),
+  })),
 ]));
 export type PluginSettingsAdministrationFailureDetailsV1 = z.infer<typeof PluginSettingsAdministrationFailureDetailsV1Schema>;
 
@@ -341,59 +341,59 @@ export type PluginSettingsAdministrationFailureDetailsV1 = z.infer<typeof Plugin
  * no raw secret material has a schema path.
  */
 export const PluginSettingsAdministrationActionOutputV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     kind: z.literal('plugins.settings.list'),
     data: PluginSettingsAdministrationListResultDataV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(true),
     kind: z.literal('plugins.settings.get'),
     data: PluginSettingsAdministrationGetResultDataV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(true),
     kind: z.literal('plugins.settings.set'),
     data: PluginSettingsAdministrationMutationResultDataV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(true),
     kind: z.literal('plugins.settings.reset'),
     data: PluginSettingsAdministrationMutationResultDataV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(true),
     kind: z.literal('plugins.settings.secret.status'),
     data: PluginSettingsAdministrationSecretStatusResultDataV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(true),
     kind: z.literal('plugins.settings.secret.bind'),
     data: PluginSettingsAdministrationAccountSecretMutationResultDataV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(true),
     kind: z.literal('plugins.settings.secret.unbind'),
     data: PluginSettingsAdministrationAccountSecretMutationResultDataV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(true),
     kind: z.literal('plugins.settings.secret.delete'),
     data: z.union([
       PluginSettingsAdministrationAccountSecretMutationResultDataV1Schema,
       PluginSettingsAdministrationDaemonSecretDeleteResultDataV1Schema,
     ]),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(false),
     kind: PluginSettingsAdministrationActionIdV1Schema,
-    errorCode: z.string().trim().min(1).max(128),
+    errorCode: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
     error: PluginSettingsAdministrationResultTextV1Schema,
-    details: PluginSettingsAdministrationFailureDetailsV1Schema.optional(),
-  }).strict().superRefine((value, context) => {
+    details: z.optional(PluginSettingsAdministrationFailureDetailsV1Schema),
+  }).check(z.superRefine((value, context) => {
     if (value.details && value.kind.startsWith('plugins.settings.secret.') !== (value.details.kind === 'secret_snapshot'))
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['details'], message: 'Settlement must match the Settings or Secret owner.' });
-  }),
+      context.addIssue({ code: "custom", path: ['details'], message: 'Settlement must match the Settings or Secret owner.' });
+  })),
 ]));
 export type PluginSettingsAdministrationActionOutputV1 = z.infer<
   typeof PluginSettingsAdministrationActionOutputV1Schema

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 const connectedServiceLimitCategoryCanonicalValues = [
     'usage_limit',
@@ -59,9 +59,8 @@ export function readConnectedServiceLimitCategoryV1(value: unknown): ConnectedSe
     return parsed.success ? parsed.data : null;
 }
 
-export const ConnectedServiceLimitCategoryV1Schema = lazyZodSchema(() => z
+export const ConnectedServiceLimitCategoryV1Schema = lazyZodSchema(() => z.pipe(z
     .union([
         ConnectedServiceLimitCategoryCanonicalV1Schema,
         ConnectedServiceLimitCategoryLegacyAliasSchema,
-    ])
-    .transform(normalizeConnectedServiceLimitCategoryV1));
+    ]), z.transform(normalizeConnectedServiceLimitCategoryV1)));

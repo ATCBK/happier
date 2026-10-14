@@ -1,6 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginIdSchema } from '../../plugins/pluginId.js';
 import { SessionTurnV1Schema } from '../turns/sessionTurnV1.js';
@@ -40,16 +40,13 @@ export function isExternalShareableTranscriptWirePayloadWithinLimitV1(value: unk
   }
 }
 
-const ExternalShareableTextV1Schema = lazyZodSchema(() => z.string().refine(
-  (value) => Array.from(value).length <= MAX_EXTERNAL_TRANSCRIPT_TEXT_CODE_POINTS,
-  `External transcript text must contain at most ${MAX_EXTERNAL_TRANSCRIPT_TEXT_CODE_POINTS} Unicode code points`,
-));
+const ExternalShareableTextV1Schema = lazyZodSchema(() => z.string().check(z.refine((value) => Array.from(value).length <= MAX_EXTERNAL_TRANSCRIPT_TEXT_CODE_POINTS, `External transcript text must contain at most ${MAX_EXTERNAL_TRANSCRIPT_TEXT_CODE_POINTS} Unicode code points`)));
 
-const ExternalShareableSourceAuthorityV1Schema = lazyZodSchema(() => SessionInputSourceAuthorityV1Schema.pick({
+const ExternalShareableSourceAuthorityV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.pick(SessionInputSourceAuthorityV1Schema, {
   mediatorPluginId: true,
   sourceRef: true,
   sourceRevisionOrEpoch: true,
-}).strict());
+})));
 
 export const ExternalShareableActorV1Schema = lazyZodSchema(() => z.enum(['owner', 'collaborator', 'machine']));
 export type ExternalShareableActorV1 = z.infer<typeof ExternalShareableActorV1Schema>;
@@ -70,90 +67,86 @@ export function deriveExternalShareableActorFromAdmissionReceiptV1(
   return receipt.data.sessionRelationship === 'owner' ? 'owner' : 'collaborator';
 }
 
-export const ExternalShareableOriginV1Schema = lazyZodSchema(() => z.object({
+export const ExternalShareableOriginV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   producer: SessionRoleUserProducerKindV1Schema,
   actor: ExternalShareableActorV1Schema,
-  sourceAuthority: ExternalShareableSourceAuthorityV1Schema.optional(),
-  externalActor: ExternalActorV1Schema.optional(),
-  contentProvenance: ContentProvenanceV1Schema.optional(),
-}).strict().superRefine((value, context) => {
+  sourceAuthority: z.optional(ExternalShareableSourceAuthorityV1Schema),
+  externalActor: z.optional(ExternalActorV1Schema),
+  contentProvenance: z.optional(ContentProvenanceV1Schema),
+}).check(z.superRefine((value, context) => {
   if ((value.externalActor === undefined) === (value.contentProvenance === undefined)) return;
   context.addIssue({
-    code: z.ZodIssueCode.custom,
+    code: "custom",
     path: value.externalActor === undefined ? ['externalActor'] : ['contentProvenance'],
     message: 'External actor and content provenance must be supplied together',
   });
-}));
+})));
 export type ExternalShareableOriginV1 = z.infer<typeof ExternalShareableOriginV1Schema>;
 
-const ExternalShareableConsumedInputV1Schema = lazyZodSchema(() => z.object({
-  localId: z.string().min(1),
+const ExternalShareableConsumedInputV1Schema = lazyZodSchema(() => z.strictObject({
+  localId: z.string().check(z.minLength(1)),
   origin: ExternalShareableOriginV1Schema,
-}).strict());
+}));
 
 export const ExternalShareableTranscriptItemV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('userText'),
-    sessionId: z.string().min(1),
-    seq: z.number().int().nonnegative(),
-    itemId: z.string().min(1),
-    localId: z.string().min(1),
+    sessionId: z.string().check(z.minLength(1)),
+    seq: z.number().check(z.int(), z.nonnegative()),
+    itemId: z.string().check(z.minLength(1)),
+    localId: z.string().check(z.minLength(1)),
     text: ExternalShareableTextV1Schema,
     origin: ExternalShareableOriginV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('assistantText'),
-    sessionId: z.string().min(1),
-    seq: z.number().int().nonnegative(),
-    itemId: z.string().min(1),
-    turnId: z.string().min(1),
+    sessionId: z.string().check(z.minLength(1)),
+    seq: z.number().check(z.int(), z.nonnegative()),
+    itemId: z.string().check(z.minLength(1)),
+    turnId: z.string().check(z.minLength(1)),
     final: z.literal('completed'),
     text: ExternalShareableTextV1Schema,
-    consumedInputs: z.array(ExternalShareableConsumedInputV1Schema)
-      .max(EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_CONSUMED_INPUTS_V1)
-      .readonly(),
-  }).strict(),
+    consumedInputs: z.readonly(z.array(ExternalShareableConsumedInputV1Schema).check(z.maxLength(EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_CONSUMED_INPUTS_V1))),
+  }),
 ]));
 export type ExternalShareableTranscriptItemV1 = z.infer<typeof ExternalShareableTranscriptItemV1Schema>;
 
-export const ExternalShareableTranscriptPageV1Schema = lazyZodSchema(() => z.object({
-  items: z.array(ExternalShareableTranscriptItemV1Schema)
-    .max(EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_PAGE_ROWS_V1)
-    .readonly(),
-  nextCursor: z.string().min(1).optional(),
-  scannedThroughSeq: z.number().int().nonnegative(),
+export const ExternalShareableTranscriptPageV1Schema = lazyZodSchema(() => z.strictObject({
+  items: z.readonly(z.array(ExternalShareableTranscriptItemV1Schema).check(z.maxLength(EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_PAGE_ROWS_V1))),
+  nextCursor: z.optional(z.string().check(z.minLength(1))),
+  scannedThroughSeq: z.number().check(z.int(), z.nonnegative()),
   hasMore: z.boolean(),
-}).strict().superRefine((page, context) => {
+}).check(z.superRefine((page, context) => {
   const consumedInputCount = page.items.reduce(
     (total, item) => total + (item.kind === 'assistantText' ? item.consumedInputs.length : 0),
     0,
   );
   if (consumedInputCount > EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_CONSUMED_INPUTS_V1) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: `External transcript page contains more than ${EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_CONSUMED_INPUTS_V1} consumed inputs`,
     });
   }
   if (!isExternalShareableTranscriptWirePayloadWithinLimitV1(page)) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: `External transcript page exceeds ${EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_SERIALIZED_BYTES_V1} serialized bytes`,
     });
   }
-}));
+})));
 export type ExternalShareableTranscriptPageV1 = z.infer<typeof ExternalShareableTranscriptPageV1Schema>;
 
-const ExternalShareableReferencedUserRowV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().min(1),
-  seq: z.number().int().nonnegative(),
-  localId: z.string().min(1),
+const ExternalShareableReferencedUserRowV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.minLength(1)),
+  seq: z.number().check(z.int(), z.nonnegative()),
+  localId: z.string().check(z.minLength(1)),
   messageRole: z.literal('user'),
   content: SessionStoredMessageContentSchema,
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-  externalShareableActor: ExternalShareableActorV1Schema.optional(),
-}).strict());
+  createdAt: z.number().check(z.int(), z.nonnegative()),
+  updatedAt: z.number().check(z.int(), z.nonnegative()),
+  externalShareableActor: z.optional(ExternalShareableActorV1Schema),
+}));
 
 /**
  * One database-transaction witness for an external transcript page. Its turns
@@ -162,24 +155,19 @@ const ExternalShareableReferencedUserRowV1Schema = lazyZodSchema(() => z.object(
  * visible. Referenced user rows are the exact, least-disclosure inputs needed
  * to project a final assistant row from the same transaction.
  */
-export const ExternalShareableTranscriptSnapshotV1Schema = lazyZodSchema(() => z.object({
-  turns: z.array(SessionTurnV1Schema)
-    .max(EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_SNAPSHOT_TURNS_V1)
-    .readonly(),
-  publicationBlockedFromSeq: z.number().int().nonnegative().optional(),
-  turnSettlementBlockedFromSeq: z.number().int().nonnegative().optional(),
-  referencedUserRows: z.array(ExternalShareableReferencedUserRowV1Schema)
-    .max(EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_REFERENCED_USER_ROWS_V1)
-    .readonly()
-    .optional(),
-}).strict().superRefine((snapshot, context) => {
+export const ExternalShareableTranscriptSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
+  turns: z.readonly(z.array(SessionTurnV1Schema).check(z.maxLength(EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_SNAPSHOT_TURNS_V1))),
+  publicationBlockedFromSeq: z.optional(z.number().check(z.int(), z.nonnegative())),
+  turnSettlementBlockedFromSeq: z.optional(z.number().check(z.int(), z.nonnegative())),
+  referencedUserRows: z.optional(z.readonly(z.array(ExternalShareableReferencedUserRowV1Schema).check(z.maxLength(EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_REFERENCED_USER_ROWS_V1)))),
+}).check(z.superRefine((snapshot, context) => {
   if (!isExternalShareableTranscriptWirePayloadWithinLimitV1(snapshot)) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: `External transcript snapshot exceeds ${EXTERNAL_SHAREABLE_TRANSCRIPT_MAX_SERIALIZED_BYTES_V1} serialized bytes`,
     });
   }
-}));
+})));
 export type ExternalShareableTranscriptSnapshotV1 = z.infer<
   typeof ExternalShareableTranscriptSnapshotV1Schema
 >;

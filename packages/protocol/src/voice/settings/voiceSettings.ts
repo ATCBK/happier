@@ -5,7 +5,7 @@ import { normalizePredecessorVoiceProviderIdV1 } from '../providerContributionId
 import {
   VoiceProviderIdSchema as QualifiedVoiceProviderIdSchema,
 } from '../realtime/index.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import {
   LEGACY_BUILT_IN_VOICE_ADAPTER_IDS,
@@ -52,8 +52,7 @@ const VoiceProviderSettingsRecordSchema = z.record(
 
 export const VOICE_LEGACY_CREDENTIAL_RECOVERY_MARKER = 'happierLegacyCredentialRecoveryV1' as const;
 
-const VoiceCredentialBindingsSchema = z.array(VoiceCredentialBindingV1Schema)
-  .superRefine((bindings, ctx) => {
+const VoiceCredentialBindingsSchema = z.array(VoiceCredentialBindingV1Schema).check(z.superRefine((bindings, ctx) => {
     const identities = new Set<string>();
     bindings.forEach((binding, index) => {
       const identity = `${binding.contribution.pluginId}\u0000${binding.contribution.localId}\u0000${binding.credentialSlotId}`;
@@ -66,45 +65,45 @@ const VoiceCredentialBindingsSchema = z.array(VoiceCredentialBindingV1Schema)
       }
       identities.add(identity);
     });
-  });
+  }));
 
 export type { VoiceCredentialBindingV1 };
 
 const VoicePrivacySchema = z.object({
-  shareSessionSummary: z.boolean().default(true),
-  shareRecentMessages: z.boolean().default(true),
-  recentMessagesCount: z.number().int().nonnegative().default(3),
-  shareToolNames: z.boolean().default(true),
-  sharePermissionRequests: z.boolean().default(true),
+  shareSessionSummary: z._default(z.boolean(), true),
+  shareRecentMessages: z._default(z.boolean(), true),
+  recentMessagesCount: z._default(z.number().check(z.int(), z.nonnegative()), 3),
+  shareToolNames: z._default(z.boolean(), true),
+  sharePermissionRequests: z._default(z.boolean(), true),
   // Allow voice tools to list non-sensitive device inventory (recent workspaces, machines, servers).
   // When disabled, inventory/discovery voice tools should fail closed.
-  shareDeviceInventory: z.boolean().default(true),
+  shareDeviceInventory: z._default(z.boolean(), true),
   // Privacy hardening: do not share file paths or tool arguments with voice providers by default.
-  shareFilePaths: z.boolean().default(false),
-  shareToolArgs: z.boolean().default(false),
+  shareFilePaths: z._default(z.boolean(), false),
+  shareToolArgs: z._default(z.boolean(), false),
   // Current UI context has an independent disclosure policy. It must not be
   // coupled to transcript-update settings because it governs a different
   // client-local source.
-  currentUiContextMode: z.enum(['off', 'on_demand', 'automatic']).default('on_demand'),
+  currentUiContextMode: z._default(z.enum(['off', 'on_demand', 'automatic']), 'on_demand'),
 });
 
 const VoiceUiUpdatesSchema = z.object({
-  activeSession: z.enum(['none', 'activity', 'summaries', 'snippets']).default('summaries'),
-  otherSessions: z.enum(['none', 'activity', 'summaries', 'snippets']).default('activity'),
-  snippetsMaxMessages: z.number().int().positive().default(3),
-  includeUserMessagesInSnippets: z.boolean().default(false),
-  otherSessionsSnippetsMode: z.enum(['never', 'on_demand_only', 'auto']).default('on_demand_only'),
+  activeSession: z._default(z.enum(['none', 'activity', 'summaries', 'snippets']), 'summaries'),
+  otherSessions: z._default(z.enum(['none', 'activity', 'summaries', 'snippets']), 'activity'),
+  snippetsMaxMessages: z._default(z.number().check(z.int(), z.positive()), 3),
+  includeUserMessagesInSnippets: z._default(z.boolean(), false),
+  otherSessionsSnippetsMode: z._default(z.enum(['never', 'on_demand_only', 'auto']), 'on_demand_only'),
 });
 
 const VoiceUiSchema = z.object({
-  scopeDefault: z.enum(['session', 'global']).default('global'),
-  surfaceLocation: z.enum(['sidebar', 'session', 'auto']).default('auto'),
-  activityFeedEnabled: z.boolean().default(false),
-  activityFeedAutoExpandOnStart: z.boolean().default(false),
-  updates: VoiceUiUpdatesSchema.prefault({}),
+  scopeDefault: z._default(z.enum(['session', 'global']), 'global'),
+  surfaceLocation: z._default(z.enum(['sidebar', 'session', 'auto']), 'auto'),
+  activityFeedEnabled: z._default(z.boolean(), false),
+  activityFeedAutoExpandOnStart: z._default(z.boolean(), false),
+  updates: z.prefault(VoiceUiUpdatesSchema, {}),
 });
 
-export const VoiceExecutionMachineSettingsSchema = z.preprocess((input) => {
+export const VoiceExecutionMachineSettingsSchema = z.pipe(z.transform((input) => {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
   const raw = input as Record<string, unknown>;
   const normalizeId = (value: unknown): unknown => {
@@ -118,9 +117,9 @@ export const VoiceExecutionMachineSettingsSchema = z.preprocess((input) => {
     mode: typeof raw.mode === 'string' ? raw.mode.trim() : raw.mode,
     machineId: normalizeId(raw.machineId),
   };
-}, z.object({
-  mode: z.enum(['auto', 'fixed']).default('auto'),
-  machineId: z.string().nullable().default(null),
+}), z.object({
+  mode: z._default(z.enum(['auto', 'fixed']), 'auto'),
+  machineId: z._default(z.nullable(z.string()), null),
 }));
 
 export { type VoiceProviderSettingsEnvelopeV1 };
@@ -138,16 +137,16 @@ export {
 
 function createCanonicalVoiceSettingsSchema(createDefaultProviderEnvelopes: () => Record<string, VoiceProviderSettingsEnvelopeV1>) {
   return z.object({
-  providerId: VoiceProviderIdSchema.nullable().default(null),
-  assistantLanguage: z.string().nullable().default(null),
-  dictation: VoiceDictationSettingsSchema.prefault({}),
-  welcome: VoiceWelcomeSchema.prefault({}),
-  executionMachine: VoiceExecutionMachineSettingsSchema.prefault({}),
-  ui: VoiceUiSchema.prefault({}),
-  privacy: VoicePrivacySchema.prefault({}),
-  diagnostics: VoiceSpeechDiagnosticsSettingsV1Schema.prefault({}),
-  credentialBindings: VoiceCredentialBindingsSchema.default([]),
-  providers: VoiceProviderSettingsRecordSchema.default(createDefaultProviderEnvelopes),
+  providerId: z._default(z.nullable(VoiceProviderIdSchema), null),
+  assistantLanguage: z._default(z.nullable(z.string()), null),
+  dictation: z.prefault(VoiceDictationSettingsSchema, {}),
+  welcome: z.prefault(VoiceWelcomeSchema, {}),
+  executionMachine: z.prefault(VoiceExecutionMachineSettingsSchema, {}),
+  ui: z.prefault(VoiceUiSchema, {}),
+  privacy: z.prefault(VoicePrivacySchema, {}),
+  diagnostics: z.prefault(VoiceSpeechDiagnosticsSettingsV1Schema, {}),
+  credentialBindings: z._default(VoiceCredentialBindingsSchema, []),
+  providers: z._default(VoiceProviderSettingsRecordSchema, createDefaultProviderEnvelopes),
 });
 }
 
@@ -659,7 +658,7 @@ function voiceSettingsParse(
     if (providerId.success) base.providerId = providerId.data;
   }
 
-  const canonicalAssistantLanguage = z.string().nullable().safeParse(raw.assistantLanguage);
+  const canonicalAssistantLanguage = z.nullable(z.string()).safeParse(raw.assistantLanguage);
   if (canonicalAssistantLanguage.success) base.assistantLanguage = canonicalAssistantLanguage.data;
 
   base.dictation = voiceDictationSettingsParse(raw.dictation);
@@ -730,7 +729,7 @@ function voiceSettingsParse(
       const otherSessions = z.enum(['none', 'activity', 'summaries', 'snippets']).safeParse(upd.otherSessions);
       if (otherSessions.success) base.ui.updates.otherSessions = otherSessions.data;
 
-      const snippetsMaxMessages = z.number().int().safeParse(upd.snippetsMaxMessages);
+      const snippetsMaxMessages = z.number().check(z.int()).safeParse(upd.snippetsMaxMessages);
       if (snippetsMaxMessages.success) {
         base.ui.updates.snippetsMaxMessages = Math.max(1, snippetsMaxMessages.data);
       }
@@ -751,7 +750,7 @@ function voiceSettingsParse(
   if (raw.privacy && typeof raw.privacy === 'object') {
     const p = raw.privacy as Record<string, unknown>;
     const parseBool = (k: keyof VoiceSettings['privacy']) => z.boolean().safeParse(p[k as string]);
-    const parseInt = (k: keyof VoiceSettings['privacy']) => z.number().int().safeParse(p[k as string]);
+    const parseInt = (k: keyof VoiceSettings['privacy']) => z.number().check(z.int()).safeParse(p[k as string]);
 
     const s1 = parseBool('shareSessionSummary');
     if (s1.success) base.privacy.shareSessionSummary = s1.data;

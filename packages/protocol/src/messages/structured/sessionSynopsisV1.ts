@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * Structured meta payload for a rolling "session so far" synopsis.
@@ -9,11 +9,11 @@ import { z } from 'zod';
  * This is intentionally short and frequently updated so UIs and agents can quickly
  * understand session context without fetching large transcript windows.
  */
-export const SessionSynopsisV1Schema = lazyZodSchema(() => z.object({
+export const SessionSynopsisV1Schema = lazyZodSchema(() => z.looseObject({
   v: z.literal(1),
-  seqTo: z.number().int().min(0),
-  updatedAtMs: z.number().int().min(0),
-  synopsis: z.string().min(1),
-}).passthrough());
+  seqTo: z.number().check(z.int(), z.minimum(0)),
+  updatedAtMs: z.number().check(z.int(), z.minimum(0)),
+  synopsis: z.string().check(z.minLength(1)),
+}));
 
 export type SessionSynopsisV1 = z.infer<typeof SessionSynopsisV1Schema>;

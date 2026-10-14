@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   MachineLiveStreamRelayCapsV1Schema,
@@ -17,15 +17,10 @@ export const MachineLiveStreamRelayDisabledReasonSchema = lazyZodSchema(() => z.
 
 export type MachineLiveStreamRelayDisabledReason = z.infer<typeof MachineLiveStreamRelayDisabledReasonSchema>;
 
-export const MachineLiveStreamServerRoutedCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    caps: MachineLiveStreamRelayCapsV1Schema.nullable().optional().default(null),
-    disabledReason: MachineLiveStreamRelayDisabledReasonSchema.nullable().optional().default('relay_not_enabled'),
-  })
-  .passthrough()
-  // Optional relay diagnostics cannot invalidate Home identity or unrelated features.
-  // Drop malformed policy rather than treating it as an uncapped relay.
-  .catch({ caps: null, disabledReason: 'relay_caps_missing' }));
+export const MachineLiveStreamServerRoutedCapabilitiesSchema = lazyZodSchema(() => z.catch(z.looseObject({
+    caps: z._default(z.optional(z.nullable(MachineLiveStreamRelayCapsV1Schema)), null),
+    disabledReason: z._default(z.optional(z.nullable(MachineLiveStreamRelayDisabledReasonSchema)), 'relay_not_enabled'),
+  }), { caps: null, disabledReason: 'relay_caps_missing' }));
 
 export type MachineLiveStreamServerRoutedCapabilities = z.infer<
   typeof MachineLiveStreamServerRoutedCapabilitiesSchema
@@ -37,9 +32,7 @@ export const DEFAULT_MACHINE_LIVE_STREAM_SERVER_ROUTED_CAPABILITIES: MachineLive
 };
 
 export const MachineLiveStreamCapabilitiesSchema = lazyZodSchema(() => z.object({
-  serverRouted: MachineLiveStreamServerRoutedCapabilitiesSchema.optional().default(
-    DEFAULT_MACHINE_LIVE_STREAM_SERVER_ROUTED_CAPABILITIES,
-  ),
+  serverRouted: z._default(z.optional(MachineLiveStreamServerRoutedCapabilitiesSchema), DEFAULT_MACHINE_LIVE_STREAM_SERVER_ROUTED_CAPABILITIES),
 }));
 
 export type MachineLiveStreamCapabilities = z.infer<typeof MachineLiveStreamCapabilitiesSchema>;

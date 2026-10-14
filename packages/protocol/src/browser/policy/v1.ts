@@ -1,11 +1,11 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { BrowserPermissionKindV1Schema } from '../permissions/v1.js';
 import { BrowserProfileStorageModeV1Schema } from '../profile/v1.js';
 import { BrowserViewTargetKindV1Schema } from '../target/v1.js';
 import { BrowserHttpOriginV1Schema, BrowserHttpUrlV1Schema } from '../url.js';
 
-const IdSchema = z.string().trim().min(1).max(256);
+const IdSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(256));
 
 export const BrowserPolicyDecisionStateV1Schema = z.enum(['allowed', 'prompt', 'denied', 'unavailable']);
 export type BrowserPolicyDecisionStateV1 = z.infer<typeof BrowserPolicyDecisionStateV1Schema>;
@@ -27,18 +27,16 @@ export type BrowserPolicyReasonCodeV1 = z.infer<typeof BrowserPolicyReasonCodeV1
 export const BrowserPermissionActionPolicyV1Schema = z.enum(['deny', 'prompt', 'allow']);
 export type BrowserPermissionActionPolicyV1 = z.infer<typeof BrowserPermissionActionPolicyV1Schema>;
 
-export const BrowserTargetPermissionPolicyV1Schema = z
-  .object({
-    downloads: BrowserPermissionActionPolicyV1Schema.optional().default('deny'),
-    uploads: BrowserPermissionActionPolicyV1Schema.optional().default('deny'),
-    clipboard: BrowserPermissionActionPolicyV1Schema.optional().default('deny'),
-    camera: BrowserPermissionActionPolicyV1Schema.optional().default('deny'),
-    microphone: BrowserPermissionActionPolicyV1Schema.optional().default('deny'),
-    fileAccess: BrowserPermissionActionPolicyV1Schema.optional().default('deny'),
-    popups: BrowserPermissionActionPolicyV1Schema.optional().default('deny'),
-    browserUse: BrowserPermissionActionPolicyV1Schema.optional().default('prompt'),
-  })
-  .strict();
+export const BrowserTargetPermissionPolicyV1Schema = z.strictObject({
+    downloads: z._default(z.optional(BrowserPermissionActionPolicyV1Schema), 'deny'),
+    uploads: z._default(z.optional(BrowserPermissionActionPolicyV1Schema), 'deny'),
+    clipboard: z._default(z.optional(BrowserPermissionActionPolicyV1Schema), 'deny'),
+    camera: z._default(z.optional(BrowserPermissionActionPolicyV1Schema), 'deny'),
+    microphone: z._default(z.optional(BrowserPermissionActionPolicyV1Schema), 'deny'),
+    fileAccess: z._default(z.optional(BrowserPermissionActionPolicyV1Schema), 'deny'),
+    popups: z._default(z.optional(BrowserPermissionActionPolicyV1Schema), 'deny'),
+    browserUse: z._default(z.optional(BrowserPermissionActionPolicyV1Schema), 'prompt'),
+  });
 export type BrowserTargetPermissionPolicyV1 = z.infer<typeof BrowserTargetPermissionPolicyV1Schema>;
 
 export const DEFAULT_BROWSER_TARGET_PERMISSION_POLICY_V1: BrowserTargetPermissionPolicyV1 = {
@@ -62,40 +60,33 @@ export const BrowserOriginSecurityLevelV1Schema = z.enum([
 ]);
 export type BrowserOriginSecurityLevelV1 = z.infer<typeof BrowserOriginSecurityLevelV1Schema>;
 
-export const BrowserOriginSecuritySummaryV1Schema = z
-  .object({
-    url: BrowserHttpUrlV1Schema.optional(),
-    origin: BrowserHttpOriginV1Schema.optional(),
+export const BrowserOriginSecuritySummaryV1Schema = z.strictObject({
+    url: z.optional(BrowserHttpUrlV1Schema),
+    origin: z.optional(BrowserHttpOriginV1Schema),
     securityLevel: BrowserOriginSecurityLevelV1Schema,
-    reasonCodes: z.array(BrowserPolicyReasonCodeV1Schema).optional(),
-  })
-  .strict();
+    reasonCodes: z.optional(z.array(BrowserPolicyReasonCodeV1Schema)),
+  });
 export type BrowserOriginSecuritySummaryV1 = z.infer<typeof BrowserOriginSecuritySummaryV1Schema>;
 
-export const BrowserTargetPolicyDecisionV1Schema = z
-  .object({
+export const BrowserTargetPolicyDecisionV1Schema = z.strictObject({
     targetKind: BrowserViewTargetKindV1Schema,
     state: BrowserPolicyDecisionStateV1Schema,
-    reasonCode: BrowserPolicyReasonCodeV1Schema.optional(),
-    profileId: IdSchema.optional(),
-    profileMode: BrowserProfileStorageModeV1Schema.optional(),
-    origin: BrowserHttpOriginV1Schema.optional(),
-    security: BrowserOriginSecuritySummaryV1Schema.optional(),
-    permissions: BrowserTargetPermissionPolicyV1Schema.optional().default(
-      DEFAULT_BROWSER_TARGET_PERMISSION_POLICY_V1,
-    ),
-    disabledReasons: z.array(z.string().trim().min(1).max(256)).optional(),
-  })
-  .strict()
-  .superRefine((decision, context) => {
+    reasonCode: z.optional(BrowserPolicyReasonCodeV1Schema),
+    profileId: z.optional(IdSchema),
+    profileMode: z.optional(BrowserProfileStorageModeV1Schema),
+    origin: z.optional(BrowserHttpOriginV1Schema),
+    security: z.optional(BrowserOriginSecuritySummaryV1Schema),
+    permissions: z._default(z.optional(BrowserTargetPermissionPolicyV1Schema), DEFAULT_BROWSER_TARGET_PERMISSION_POLICY_V1),
+    disabledReasons: z.optional(z.array(z.string().check(z.trim(), z.minLength(1), z.maxLength(256)))),
+  }).check(z.superRefine((decision, context) => {
     if (decision.state !== 'allowed' && decision.reasonCode == null) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['reasonCode'],
         message: 'Non-allowed browser policy decisions require a reason code.',
       });
     }
-  });
+  }));
 export type BrowserTargetPolicyDecisionV1 = z.infer<typeof BrowserTargetPolicyDecisionV1Schema>;
 
 export function isBrowserPermissionKindV1(value: unknown): value is z.infer<typeof BrowserPermissionKindV1Schema> {

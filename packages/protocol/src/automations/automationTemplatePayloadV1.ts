@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { AcpConfigOptionOverridesV1Schema, normalizeCodexBackendMode } from '../sessions/metadata/metadataOverridesV1.js';
 import { AgentExecutionTargetV1Schema } from '../agents/executionTargetV1.js';
@@ -14,51 +14,51 @@ import { WindowsRemoteSessionLaunchModeSchema } from '../sessions/metadata/windo
 import { WindowsTerminalWindowNameSchema } from '../sessions/metadata/windowsTerminalWindowName.js';
 
 /** The released Account Automation payload codec; hosts add execution-boundary validation. */
-export const AutomationTemplatePayloadV1Schema = lazyZodSchema(() => z.object({
-    executionTarget: SessionExecutionTargetV1Schema.optional(),
-    directory: z.string().trim().min(1),
-    checkoutCreationDraft: SessionAuthoringCheckoutCreationDraftV1Schema.optional(),
-    organizationPlacement: SessionOrganizationPlacementV1Schema.optional(),
-    prompt: z.string().optional(),
-    displayText: z.string().optional(),
-    agent: z.string().optional(),
-    agentTarget: AgentExecutionTargetV1Schema.optional(),
-    backendTarget: z.preprocess(normalizeBackendTargetRefV2InputToV2, BackendTargetRefV2Schema).optional(),
-    connectedServices: z.unknown().optional(),
-    transcriptStorage: z.enum(['persisted', 'direct']).optional(),
-    profileId: z.string().optional(),
-    environmentVariables: z.record(z.string(), z.string()).optional(),
-    resume: z.string().optional(),
-    permissionMode: z.string().optional(),
-    permissionModeUpdatedAt: z.number().int().optional(),
-    modelSelection: SessionModelSelectionV1Schema.nullable().optional(),
-    modelId: z.string().optional(),
-    modelUpdatedAt: z.number().int().optional(),
-    sessionConfigOptionOverrides: AcpConfigOptionOverridesV1Schema.optional(),
-    capabilitySelection: SessionCapabilitySelectionAuthoringV1Schema.optional(),
-    terminal: z.unknown().optional(),
-    windowsRemoteSessionLaunchMode: WindowsRemoteSessionLaunchModeSchema.optional(),
-    windowsRemoteSessionConsole: z.enum(['hidden', 'visible']).optional(),
-    windowsTerminalWindowName: WindowsTerminalWindowNameSchema.optional(),
-    runtimeDescriptorV1: RuntimeDescriptorV1Schema.optional(),
+export const AutomationTemplatePayloadV1Schema = lazyZodSchema(() => z.strictObject({
+    executionTarget: z.optional(SessionExecutionTargetV1Schema),
+    directory: z.string().check(z.trim(), z.minLength(1)),
+    checkoutCreationDraft: z.optional(SessionAuthoringCheckoutCreationDraftV1Schema),
+    organizationPlacement: z.optional(SessionOrganizationPlacementV1Schema),
+    prompt: z.optional(z.string()),
+    displayText: z.optional(z.string()),
+    agent: z.optional(z.string()),
+    agentTarget: z.optional(AgentExecutionTargetV1Schema),
+    backendTarget: z.optional(z.pipe(z.transform(normalizeBackendTargetRefV2InputToV2), BackendTargetRefV2Schema)),
+    connectedServices: z.optional(z.unknown()),
+    transcriptStorage: z.optional(z.enum(['persisted', 'direct'])),
+    profileId: z.optional(z.string()),
+    environmentVariables: z.optional(z.record(z.string(), z.string())),
+    resume: z.optional(z.string()),
+    permissionMode: z.optional(z.string()),
+    permissionModeUpdatedAt: z.optional(z.number().check(z.int())),
+    modelSelection: z.optional(z.nullable(SessionModelSelectionV1Schema)),
+    modelId: z.optional(z.string()),
+    modelUpdatedAt: z.optional(z.number().check(z.int())),
+    sessionConfigOptionOverrides: z.optional(AcpConfigOptionOverridesV1Schema),
+    capabilitySelection: z.optional(SessionCapabilitySelectionAuthoringV1Schema),
+    terminal: z.optional(z.unknown()),
+    windowsRemoteSessionLaunchMode: z.optional(WindowsRemoteSessionLaunchModeSchema),
+    windowsRemoteSessionConsole: z.optional(z.enum(['hidden', 'visible'])),
+    windowsTerminalWindowName: z.optional(WindowsTerminalWindowNameSchema),
+    runtimeDescriptorV1: z.optional(RuntimeDescriptorV1Schema),
     /**
      * Released remote-dev V2 account-template ingress only. Current writers
      * use runtimeDescriptorV1. Remove when those stored templates are no longer
      * a supported input to the Automation editor.
      */
-    experimentalCodexAcp: z.boolean().optional(),
+    experimentalCodexAcp: z.optional(z.boolean()),
     /** Same released remote-dev V2 account-template ingress as above. */
-    codexBackendMode: z.enum(['mcp', 'acp', 'appServer']).optional(),
-    agentModeId: z.string().optional(),
-    existingSessionId: z.string().optional(),
-    sessionEncryptionMode: z.enum(['e2ee', 'plain']).optional(),
-    sessionEncryptionKeyBase64: z.string().optional(),
-    sessionEncryptionVariant: z.literal('dataKey').optional(),
-}).strict());
+    codexBackendMode: z.optional(z.enum(['mcp', 'acp', 'appServer'])),
+    agentModeId: z.optional(z.string()),
+    existingSessionId: z.optional(z.string()),
+    sessionEncryptionMode: z.optional(z.enum(['e2ee', 'plain'])),
+    sessionEncryptionKeyBase64: z.optional(z.string()),
+    sessionEncryptionVariant: z.optional(z.literal('dataKey')),
+}));
 export type AutomationTemplatePayloadV1 = z.infer<typeof AutomationTemplatePayloadV1Schema>;
 type AutomationTemplate = AutomationTemplatePayloadV1;
 
-const AutomationTemplateSchema = lazyZodSchema(() => AutomationTemplatePayloadV1Schema.transform(({ experimentalCodexAcp: _experimentalCodexAcp, codexBackendMode, ...template }) => {
+const AutomationTemplateSchema = lazyZodSchema(() => z.pipe(AutomationTemplatePayloadV1Schema, z.transform(({ experimentalCodexAcp: _experimentalCodexAcp, codexBackendMode, ...template }) => {
     const normalizedCodexBackendMode = normalizeCodexBackendMode(codexBackendMode);
     const legacyRuntimeDescriptorV1 = normalizedCodexBackendMode || _experimentalCodexAcp === true
         ? readRuntimeDescriptorV1({
@@ -80,7 +80,7 @@ const AutomationTemplateSchema = lazyZodSchema(() => AutomationTemplatePayloadV1
             ? { runtimeDescriptorV1: template.runtimeDescriptorV1 ?? legacyRuntimeDescriptorV1 }
             : {}),
     };
-}));
+})));
 
 function normalizeOptionalString(value: string | null | undefined): string | undefined {
     if (typeof value !== 'string') return undefined;

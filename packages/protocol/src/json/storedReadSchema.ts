@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod/mini';
 
 import { getResolvedLazyDefinitionSource, lazyDefinition } from '../lazyZodSchema.js';
 
@@ -23,9 +23,7 @@ export function createStoredReadSchema<T extends z.core.$ZodType>(schema: T): T 
   // Registration after this admission must not replace the selected read contract.
   const source = getResolvedLazyDefinitionSource(schema);
   const custom = customReads.get(schema) ?? (source && customReads.get(source));
-  // Structural clones retain their source class. A custom reader may instead
-  // be a genuine Mini/Core parser and must not gain assumed Classic methods.
-  const read = lazyDefinition(() => deriveStoredReadSchema(schema, custom), schema, !custom);
+  const read = lazyDefinition(() => deriveStoredReadSchema(schema, custom), schema);
   reads.set(schema, read);
   return read as T;
 }

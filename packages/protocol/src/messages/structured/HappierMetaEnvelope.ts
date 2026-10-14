@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PluginContributionReferenceV2Schema } from '../../plugins/contributions/publicTypes.js';
 import { ConversationTurnOriginV1Schema } from './conversationTurnOriginV1.js';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
@@ -10,10 +10,10 @@ import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.
  * UI renderers must Zod-parse `payload` by kind and never deep-merge untrusted objects.
  */
 export const HappierMetaEnvelopeSchema = lazyZodSchema(() => z.object({
-  kind: z.string().min(1),
+  kind: z.string().check(z.minLength(1)),
   payload: z.unknown(),
-  resources: z.array(asProtocolZod(PluginContributionReferenceV2Schema)).optional(),
-  conversationTurnOriginV1: ConversationTurnOriginV1Schema.optional(),
+  resources: z.optional(z.array(asProtocolZod(PluginContributionReferenceV2Schema))),
+  conversationTurnOriginV1: z.optional(ConversationTurnOriginV1Schema),
 }));
 
 export type HappierMetaEnvelope = z.infer<typeof HappierMetaEnvelopeSchema>;

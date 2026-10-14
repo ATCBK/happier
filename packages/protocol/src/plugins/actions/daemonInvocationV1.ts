@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { MessageActionReferenceV1Schema } from '../../sessions/messages/messageActionReferenceV1.js';
 import { PluginContributionLocalIdSchema as CanonicalPluginContributionLocalIdSchema } from '../contributionIdentity.js';
@@ -21,33 +22,33 @@ const PluginRuntimeOccurrenceIdSchema = asProtocolZod(PluginUiRuntimeOccurrenceI
  * daemon matches it against the exact current registry lease, then derives the
  * invocation caller itself.
  */
-export const DaemonPluginStructuredMessageActionMountedBindingSchema = lazyZodSchema(() => z.object({
+export const DaemonPluginStructuredMessageActionMountedBindingSchema = lazyZodSchema(() => z.strictObject({
   pluginId: PluginIdWireSchema,
   contributionLocalId: PluginContributionLocalIdSchema,
   occurrenceId: PluginRuntimeOccurrenceIdSchema,
-  sourceCustody: PluginSourceCustodyV1Schema.optional(),
-  materializationRef: PluginMachineMaterializationRefV1Schema.optional(),
-}).strict());
+  sourceCustody: zMini.optional(PluginSourceCustodyV1Schema),
+  materializationRef: zMini.optional(PluginMachineMaterializationRefV1Schema),
+}));
 export type DaemonPluginStructuredMessageActionMountedBinding = z.infer<
   typeof DaemonPluginStructuredMessageActionMountedBindingSchema
 >;
 
-export const DaemonPluginHostPresentedComposerCurrentIntentV1Schema = lazyZodSchema(() => z.object({
+export const DaemonPluginHostPresentedComposerCurrentIntentV1Schema = lazyZodSchema(() => z.strictObject({
   composer: asProtocolZod(ComposerRefV1Schema),
-  revision: z.number().int().nonnegative(),
-}).strict());
+  revision: z.number().check(z.int(), z.nonnegative()),
+}));
 export type DaemonPluginHostPresentedComposerCurrentIntentV1 = z.infer<
   typeof DaemonPluginHostPresentedComposerCurrentIntentV1Schema
 >;
 
-const MountedPluginSurfaceInvocationSchema = lazyZodSchema(() => z.object({
+const MountedPluginSurfaceInvocationSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('mountedPluginSurface'),
   mountedBinding: DaemonPluginStructuredMessageActionMountedBindingSchema,
-}).strict());
-const ClientPluginActionInvocationSchema = lazyZodSchema(() => z.object({
+}));
+const ClientPluginActionInvocationSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('clientPluginAction'),
   clientActionBinding: DaemonPluginStructuredMessageActionMountedBindingSchema,
-}).strict());
+}));
 
 /** Only narrowing plugin claims are admitted on the Account root carrier. */
 export const DaemonPluginMountedInvocationV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
@@ -58,14 +59,14 @@ export type DaemonPluginMountedInvocationV1 = z.infer<typeof DaemonPluginMounted
 
 /** Closed provenance carrier; the daemon derives any caller after revalidation. */
 export const DaemonPluginStructuredMessageActionInvocationV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('hostPresentedComposer'),
     currentComposerIntent: DaemonPluginHostPresentedComposerCurrentIntentV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('hostPresentedMessage'),
     currentMessageIntent: MessageActionReferenceV1Schema,
-  }).strict(),
+  }),
   MountedPluginSurfaceInvocationSchema,
   ClientPluginActionInvocationSchema,
 ]));
@@ -99,14 +100,12 @@ function composerRefSessionId(ref: ComposerRefV1): string | null {
 const PluginActionDaemonInvocationV1Shape = {
   executionSurface: z.enum(['cli', 'ui', 'voice', 'agent', 'mcp']),
   expectedContributorOccurrenceId: PluginRuntimeOccurrenceIdSchema,
-  selectedActionInputCarrier: PluginUiSelectedActionInputCarrierV1Schema.optional(),
-  invocation: DaemonPluginStructuredMessageActionInvocationV1Schema.optional(),
-  messageActionReference: MessageActionReferenceV1Schema.optional(),
+  selectedActionInputCarrier: zMini.optional(PluginUiSelectedActionInputCarrierV1Schema),
+  invocation: z.optional(DaemonPluginStructuredMessageActionInvocationV1Schema),
+  messageActionReference: zMini.optional(MessageActionReferenceV1Schema),
 } as const;
 
-const PluginActionDaemonInvocationV1Schema = lazyZodSchema(() => z.object(
-  PluginActionDaemonInvocationV1Shape,
-).strict());
+const PluginActionDaemonInvocationV1Schema = lazyZodSchema(() => z.strictObject(PluginActionDaemonInvocationV1Shape));
 
 type PluginActionDaemonDispatchValidationInput = z.infer<
   typeof PluginActionDaemonInvocationV1Schema
@@ -121,12 +120,12 @@ function isAutomatedClientActionInvocation(request: PluginActionDaemonDispatchVa
 
 function validatePluginActionDaemonDispatch(
   request: PluginActionDaemonDispatchValidationInput,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   const automatedClientAction = isAutomatedClientActionInvocation(request);
   if (request.invocation !== undefined && request.executionSurface !== 'ui' && !automatedClientAction) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['invocation'],
       message: 'An Action provenance carrier requires a UI origin or an automated client Action binding.',
     });
@@ -142,7 +141,7 @@ function validatePluginActionDaemonDispatch(
     )
   ) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['selectedActionInputCarrier'],
       message: 'A selected Action settlement is valid only for a bound UI plugin caller.',
     });
@@ -155,14 +154,14 @@ function validatePluginActionDaemonDispatch(
       && request.sessionId !== intentSessionId
     ) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['sessionId'],
         message: 'A host-presented Composer Action must retain its current Composer Session.',
       });
     }
     if (request.messageActionReference !== undefined) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['messageActionReference'],
         message: 'A host-presented Composer Action cannot carry a Message Action reference.',
       });
@@ -171,7 +170,7 @@ function validatePluginActionDaemonDispatch(
   if (request.invocation?.kind === 'hostPresentedMessage') {
     if (request.messageActionReference === undefined) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['messageActionReference'],
         message: 'A host-presented Message Action requires its current Message reference.',
       });
@@ -180,7 +179,7 @@ function validatePluginActionDaemonDispatch(
       request.invocation.currentMessageIntent,
     )) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['invocation', 'currentMessageIntent'],
         message: 'A host-presented Message Action must retain its current Message reference.',
       });
@@ -190,7 +189,7 @@ function validatePluginActionDaemonDispatch(
       && request.sessionId !== request.invocation.currentMessageIntent.sessionId
     ) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['sessionId'],
         message: 'A host-presented Message Action must retain its current Message Session.',
       });
@@ -198,12 +197,12 @@ function validatePluginActionDaemonDispatch(
   }
 }
 
-export const DaemonPluginStructuredMessageActionExecuteRequestSchema = lazyZodSchema(() => z.object({
-  machineId: z.string().trim().min(1),
-  requestId: z.string().trim().min(1).max(2_000).optional(),
-  qualifiedActionId: z.string().trim().min(1),
-  input: PluginJsonValueV2Schema.optional(),
-  sessionId: z.string().trim().min(1).optional(),
+export const DaemonPluginStructuredMessageActionExecuteRequestSchema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.trim(), z.minLength(1)),
+  requestId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000))),
+  qualifiedActionId: z.string().check(z.trim(), z.minLength(1)),
+  input: zMini.optional(PluginJsonValueV2Schema),
+  sessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   executionSurface: PluginActionDaemonInvocationV1Shape.executionSurface,
   expectedContributorOccurrenceId:
     PluginActionDaemonInvocationV1Shape.expectedContributorOccurrenceId,
@@ -219,20 +218,20 @@ export const DaemonPluginStructuredMessageActionExecuteRequestSchema = lazyZodSc
    * asked nobody, so a daemon that requires a present-user decision refuses
    * rather than executing.
    */
-  presentUserIntent: z.literal('confirmed').optional(),
-}).strict().superRefine((request, context) => {
+  presentUserIntent: z.optional(z.literal('confirmed')),
+}).check(z.superRefine((request, context) => {
   validatePluginActionDaemonDispatch(request, context);
   if (request.presentUserIntent !== undefined
     && request.executionSurface !== 'ui'
     && request.executionSurface !== 'voice'
     && !isAutomatedClientActionInvocation(request)) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['presentUserIntent'],
       message: 'A present-user intent requires a UI or Voice origin or a bound client Action.',
     });
   }
-}));
+})));
 export type DaemonPluginStructuredMessageActionExecuteRequest = z.infer<
   typeof DaemonPluginStructuredMessageActionExecuteRequestSchema
 >;

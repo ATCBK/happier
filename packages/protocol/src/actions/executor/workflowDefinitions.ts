@@ -21,7 +21,7 @@ import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES, measureExternalActionRes
 import { validateWorkflowDefinition } from '../../workflows/workflowValidationV1.js';
 import type { WorkflowDefinitionV1, WorkflowIngressContextV1 } from '../../workflows/workflowV1.js';
 import type { WorkflowActionExecuteArgs } from './types.js';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { ArtifactCallerAccessV1 } from '../../artifacts/artifactAccessV1.js';
 import { artifactSavedByFromActionContextV1, type ArtifactBodyV1, type ArtifactRevisionProvenanceV1, type ArtifactSavedByV1 } from '../../artifacts/artifactBinaryV1.js';
 import { workflowDefinitionArtifactSharingAdapterV1 } from '../../artifacts/artifactSharingV1.js';

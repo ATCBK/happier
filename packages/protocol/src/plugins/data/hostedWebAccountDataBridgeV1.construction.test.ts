@@ -1,5 +1,5 @@
 import inspector from 'node:inspector';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { expect, it } from 'vitest';
 
 it('admits the hosted Account Data declarations without constructing unused operation validators', async () => {

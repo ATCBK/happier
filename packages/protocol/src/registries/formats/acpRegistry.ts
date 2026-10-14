@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { AcpRegistryAgentV1Schema, RegistryItemV1Schema, type AcpRegistryAgentV1, type RegistryItemSummaryV1 } from '../registryItemsV1.js';
 import { RegistryFetchErrorV1 } from '../registryListV1.js';
 import type { RegistrySourceV1 } from '../registrySourcesV1.js';
@@ -7,17 +7,17 @@ import { ACP_REGISTRY_PLATFORM_TARGETS_V1 as targets } from '../../acp/catalog/r
 import { summarizeAcpRegistryDistributionV1 } from '../../acp/catalog/registry/acpPlatformFitV1.js';
 
 // ACP Registry envelope 1.0.0 and agent.schema.json, observed from the public CDN on 2026-10-13.
-const metadataSchema = z.object({ id: z.string().regex(/^[a-z][a-z0-9-]*$/), name: z.string().min(1),
-  version: z.string().min(1), description: z.string().min(1), authors: z.array(z.string()).optional(),
-  license: z.string().optional(), license_url: z.string().optional(), repository: z.string().optional(),
-  website: z.string().optional(), icon: z.string().optional() });
-const targetSchema = z.object({ archive: z.string().url(), cmd: z.string().min(1), args: z.array(z.string()).default([]),
-  env: z.record(z.string(), z.string()).default({}), sha256: z.string().regex(/^[a-fA-F0-9]{64}$/).optional() }).strict();
-const packageSchema = z.object({ package: z.string().min(1), args: z.array(z.string()).default([]),
-  env: z.record(z.string(), z.string()).default({}) }).strict();
-const distributionSchema = z.object({ binary: z.partialRecord(z.enum(Object.keys(targets) as [keyof typeof targets, ...(keyof typeof targets)[]]), targetSchema).optional(),
-  npx: packageSchema.optional(), uvx: packageSchema.optional() }).strict();
-const entrySchema = metadataSchema.extend({ distribution: distributionSchema });
+const metadataSchema = z.object({ id: z.string().check(z.regex(/^[a-z][a-z0-9-]*$/)), name: z.string().check(z.minLength(1)),
+  version: z.string().check(z.minLength(1)), description: z.string().check(z.minLength(1)), authors: z.optional(z.array(z.string())),
+  license: z.optional(z.string()), license_url: z.optional(z.string()), repository: z.optional(z.string()),
+  website: z.optional(z.string()), icon: z.optional(z.string()) });
+const targetSchema = z.strictObject({ archive: z.string().check(z.url()), cmd: z.string().check(z.minLength(1)), args: z._default(z.array(z.string()), []),
+  env: z._default(z.record(z.string(), z.string()), {}), sha256: z.optional(z.string().check(z.regex(/^[a-fA-F0-9]{64}$/))) });
+const packageSchema = z.strictObject({ package: z.string().check(z.minLength(1)), args: z._default(z.array(z.string()), []),
+  env: z._default(z.record(z.string(), z.string()), {}) });
+const distributionSchema = z.strictObject({ binary: z.optional(z.partialRecord(z.enum(Object.keys(targets) as [keyof typeof targets, ...(keyof typeof targets)[]]), targetSchema)),
+  npx: z.optional(packageSchema), uvx: z.optional(packageSchema) });
+const entrySchema = z.extend(metadataSchema, { distribution: distributionSchema });
 const envelopeSchema = z.object({ version: z.string(), agents: z.array(z.unknown()) });
 
 function pinnedPackage(value: z.infer<typeof packageSchema>, ecosystem: 'npm' | 'uv') {

@@ -1,18 +1,17 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { VoiceProviderContribution } from '../../plugins/contributions/voiceProviders.js';
 import { VoiceProviderSettingsJsonValueV1Schema } from '../realtime/providerSettings.js';
 import type { VoiceReadinessRequirement, VoiceReadinessRole, VoiceRuntimePlatform } from '../realtime/capabilities.js';
 import { projectExternalVoiceProviderSettings, type ExternalVoiceProviderSettingsDescriptor } from './externalProviderSettings.js';
 import type { SessionVoiceDeclarationV1 } from '../../sessions/instructions/sessionVoicePreferenceV1.js';
 
-const VoiceProviderSettingsProjectionSchema = z.object({
+const VoiceProviderSettingsProjectionSchema = z.strictObject({
     status: z.enum(['ready', 'missing_required_setting', 'needs_migration', 'invalid', 'unsupported_version']),
-    modeId: z.string().min(1).max(64).regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u).nullable(),
-    requirements: z.array(z.enum(['server_feature', 'execution_machine', 'credential', 'endpoint', 'runtime', 'model']))
-        .max(6).superRefine((values, context) => {
+    modeId: z.nullable(z.string().check(z.minLength(1), z.maxLength(64), z.regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u))),
+    requirements: z.optional(z.array(z.enum(['server_feature', 'execution_machine', 'credential', 'endpoint', 'runtime', 'model'])).check(z.maxLength(6), z.superRefine((values, context) => {
             if (new Set(values).size !== values.length) context.addIssue({ code: 'custom', message: 'Expected unique requirements' });
-        }).optional(),
-}).strict();
+        }))),
+});
 const VoiceProviderSettingsJsonObjectV1Schema = z.record(z.string(), VoiceProviderSettingsJsonValueV1Schema);
 
 export type VoiceProviderSettingsProjection = z.infer<typeof VoiceProviderSettingsProjectionSchema>;

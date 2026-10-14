@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { buildSessionAuthoringFieldArtifacts } from './buildFieldArtifacts.js';
 import { defineSessionAuthoringFields } from './fieldDefinition.js';
@@ -20,7 +20,7 @@ describe('sessionAuthoring field artifacts', () => {
     let built = 0;
     const schema = lazyZodSchema(() => {
       built++;
-      return z.string().trim().min(1);
+      return z.string().check(z.trim(), z.minLength(1));
     });
     const definitions = defineSessionAuthoringFields({ title: {
       schema, default: ' kept ', description: 'Title', storageClass: 'template', draftStorage: 'sync',
@@ -41,7 +41,7 @@ describe('sessionAuthoring field artifacts', () => {
 
   it('rejects an invalid default when defaults are first consumed', () => {
     const artifacts = buildSessionAuthoringFieldArtifacts(defineSessionAuthoringFields({ title: {
-      schema: z.string().min(1), default: '', description: 'Title', storageClass: 'template', draftStorage: 'sync',
+      schema: z.string().check(z.minLength(1)), default: '', description: 'Title', storageClass: 'template', draftStorage: 'sync',
       contexts: ['newSession'], defaultSurface: 'chip', defaultEditabilityByContext: {},
     } }));
     expect(() => Object.keys(artifacts.defaults)).toThrow('Invalid default for session authoring field "title"');

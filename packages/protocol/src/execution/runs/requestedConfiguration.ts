@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { AcpConfigOptionOverridesV1 } from '../../sessions/metadata/metadataOverridesV1.js';
 import { ProviderBoundModelRefSchema, type ProviderBoundModelRef } from '../../providers/selection/v1.js';
@@ -7,13 +7,13 @@ import { TeamCredentialProviderModelSelectionV1Schema, type TeamCredentialProvid
 import { ConnectedServiceBindingsV2Schema, type ConnectedServiceBindingsV2 } from '../../connect/connectedServiceBindings.js';
 
 /** Safe projection of the host-admitted child choice, never an input or a credential materialization. */
-export const ExecutionRunResolvedSelectionSchema = lazyZodSchema(() => z.object({
+export const ExecutionRunResolvedSelectionSchema = lazyZodSchema(() => z.strictObject({
   source: z.enum(['inherited', 'explicit', 'independent', 'retained']),
-  modelSelection: ProviderBoundModelRefSchema.optional(),
-  teamCredentialModel: TeamCredentialProviderModelSelectionV1Schema.optional(),
-  modelId: z.string().trim().min(1).max(1000).optional(),
-  connectedServices: ConnectedServiceBindingsV2Schema.nullable().optional(),
-}).strict().superRefine((value, context) => {
+  modelSelection: z.optional(ProviderBoundModelRefSchema),
+  teamCredentialModel: z.optional(TeamCredentialProviderModelSelectionV1Schema),
+  modelId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(1000))),
+  connectedServices: z.optional(z.nullable(ConnectedServiceBindingsV2Schema)),
+}).check(z.superRefine((value, context) => {
   if (value.modelSelection && value.teamCredentialModel) {
     context.addIssue({ code: 'custom', message: 'Resolved model selections must not compete' });
   }
@@ -21,7 +21,7 @@ export const ExecutionRunResolvedSelectionSchema = lazyZodSchema(() => z.object(
   if (selectedModelId && value.modelId !== undefined && selectedModelId !== value.modelId) {
     context.addIssue({ code: 'custom', path: ['modelId'], message: 'Resolved model id must match its selection' });
   }
-}));
+})));
 export type ExecutionRunResolvedSelection = z.infer<typeof ExecutionRunResolvedSelectionSchema>;
 
 export function projectExecutionRunResolvedSelection(params: Readonly<{
@@ -47,12 +47,9 @@ export function projectExecutionRunResolvedSelection(params: Readonly<{
  * This is requested configuration, not proof of what the provider ultimately realized.
  */
 export const ExecutionRunRequestedConfigurationSchema = lazyZodSchema(() => z.object({
-  modelId: z.string().trim().min(1).max(1000).optional(),
-  reasoningEffort: z.string().trim().min(1).max(1000).optional(),
-}).refine(
-  (value) => value.modelId !== undefined || value.reasoningEffort !== undefined,
-  { message: 'requested configuration must contain at least one projected field' },
-));
+  modelId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(1000))),
+  reasoningEffort: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(1000))),
+}).check(z.refine((value) => value.modelId !== undefined || value.reasoningEffort !== undefined, { message: 'requested configuration must contain at least one projected field' })));
 export type ExecutionRunRequestedConfiguration = z.infer<typeof ExecutionRunRequestedConfigurationSchema>;
 
 function readBoundedNonEmptyString(value: unknown): string | undefined {

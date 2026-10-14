@@ -1,10 +1,10 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-export const FrameBridgeIdentityV1Schema = lazyZodSchema(() => z.object({
-  instanceId: z.string().trim().min(1),
-  mountNonce: z.string().trim().min(1),
-}).strict());
+export const FrameBridgeIdentityV1Schema = lazyZodSchema(() => z.strictObject({
+  instanceId: z.string().check(z.trim(), z.minLength(1)),
+  mountNonce: z.string().check(z.trim(), z.minLength(1)),
+}));
 export type FrameBridgeIdentityV1 = z.infer<typeof FrameBridgeIdentityV1Schema>;
 
 export function wireIdentitiesEqual(expected: FrameBridgeIdentityV1, actual: FrameBridgeIdentityV1): boolean {
@@ -21,22 +21,22 @@ export function isExactBridgeOriginV1(value: string): boolean {
   }
 }
 
-export const FrameBridgeEnvelopeBaseV1Schema = lazyZodSchema(() => z.object({
+export const FrameBridgeEnvelopeBaseV1Schema = lazyZodSchema(() => z.strictObject({
   version: z.literal(1),
   identity: FrameBridgeIdentityV1Schema,
-  sequence: z.number().int().nonnegative(),
-}).strict());
+  sequence: z.number().check(z.int(), z.nonnegative()),
+}));
 export type FrameBridgeEnvelopeBaseV1 = z.infer<typeof FrameBridgeEnvelopeBaseV1Schema>;
 
 export const FrameBridgeResponseKindV1Schema = lazyZodSchema(() => z.enum(['ack', 'result', 'error']));
 export type FrameBridgeResponseKindV1 = z.infer<typeof FrameBridgeResponseKindV1Schema>;
-export const FrameBridgeResponseEnvelopeBaseV1Schema = lazyZodSchema(() => FrameBridgeEnvelopeBaseV1Schema.extend({
-  requestSequence: z.number().int().nonnegative(),
+export const FrameBridgeResponseEnvelopeBaseV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(FrameBridgeEnvelopeBaseV1Schema, {
+  requestSequence: z.number().check(z.int(), z.nonnegative()),
   kind: FrameBridgeResponseKindV1Schema,
-}).strict());
+})));
 export type FrameBridgeResponseEnvelopeBaseV1 = z.infer<typeof FrameBridgeResponseEnvelopeBaseV1Schema>;
 
-export const FrameBridgeHostToFrameEnvelopeBaseV1Schema = lazyZodSchema(() => FrameBridgeEnvelopeBaseV1Schema.extend({
+export const FrameBridgeHostToFrameEnvelopeBaseV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(FrameBridgeEnvelopeBaseV1Schema, {
   direction: z.literal('hostToFrame'),
-}).strict());
+})));
 export type FrameBridgeHostToFrameEnvelopeBaseV1 = z.infer<typeof FrameBridgeHostToFrameEnvelopeBaseV1Schema>;

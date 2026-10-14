@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { RPC_ERROR_CODES } from '../rpc/index.js';
 import { RpcError } from '../rpc/errors.js';
@@ -737,8 +737,8 @@ describe('session.spawn_new canonical execution', () => {
     // choice to inline or reuse that shape.
     const discovery = z.object({ result: z.object({ actionSpec: z.object({ inputSchema: z.object({
       properties: z.object({ directory: z.record(z.string(), z.unknown()) }),
-      $defs: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
-      definitions: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+      $defs: z.optional(z.record(z.string(), z.record(z.string(), z.unknown()))),
+      definitions: z.optional(z.record(z.string(), z.record(z.string(), z.unknown()))),
     }) }) }) }).parse(getResult);
     const advertisedSchema = discovery.result.actionSpec.inputSchema;
     const reference = advertisedSchema.properties.directory.$ref;

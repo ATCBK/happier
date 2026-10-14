@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
   freezeActionCompletionContractV1, prepareActionCompletionV1, resumeActionCompletionV1,
   projectCommandActionCompletionV1,
@@ -9,9 +9,9 @@ import {
 // A declaring Action fixture, not a mock of the completion owner.
 const declaration: ActionCompletionDeclaration = {
   awaits: 'execution_runs',
-  terminalOutputSchema: z.object({ values: z.array(z.string()) }).strict(),
+  terminalOutputSchema: z.strictObject({ values: z.array(z.string()) }),
   launched: (output) => {
-    const parsed = z.object({ runId: z.string() }).strict().parse(output);
+    const parsed = z.strictObject({ runId: z.string() }).parse(output);
     return { runs: [{ key: 'a', runId: parsed.runId }], failed: [] };
   },
   terminal: (_output, runs) => ({ values: runs.map(({ outcome }) => outcome.kind) }),
@@ -48,7 +48,7 @@ describe('generic Action completion seam', () => {
     expect(compute?.operation?.visibility).toBe('activity');
   });
   it('settles only strict explicit no-launch results before joining finite acceptance', () => {
-    const immediateResultSchema = z.object({ kind: z.literal('notRequired'), reviewedEffectDigest: z.string().min(1) }).strict();
+    const immediateResultSchema = z.strictObject({ kind: z.literal('notRequired'), reviewedEffectDigest: z.string().check(z.minLength(1)) });
     const immediate = { ...projectCommandActionCompletionV1, immediateResultSchema };
     expect(prepareActionCompletionV1(immediate, { ok: true, result: { kind: 'notRequired', reviewedEffectDigest: 'reviewed' } }))
       .toEqual({ kind: 'completed', value: { kind: 'notRequired', reviewedEffectDigest: 'reviewed' } });
@@ -102,7 +102,7 @@ describe('generic Action completion seam', () => {
       cancellation: 'supported', domainRef: { kind: 'projectCommand', purpose: 'script', serverId: 'home',
         machineId: 'worker', workspaceRefId: 'workspace', cwd: '/project' } };
     const finite = { awaits: 'action_operations' as const,
-      terminalOutputSchema: z.object({ operation: z.unknown() }).strict(),
+      terminalOutputSchema: z.strictObject({ operation: z.unknown() }),
       launched: () => ({ operations: [{ key: 'command', serverId: 'home', machineId: 'worker', operationId: 'operation-a' }] }),
       terminal: (_output: unknown, settled: readonly { operation: unknown }[]) => ({ operation: settled[0]?.operation }),
     };

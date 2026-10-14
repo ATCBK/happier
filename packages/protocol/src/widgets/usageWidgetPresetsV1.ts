@@ -1,3 +1,5 @@
+import { lazyZodSchema } from '../lazyZodSchema.js';
+import * as z from 'zod/mini';
 import { instantiateWidgetLayoutFragmentGroupV1, type WidgetLayoutFragmentDraftV1, type WidgetLayoutFragmentGroupV1 } from './widgetLayoutFragmentV1.js';
 import { readBuiltinWidgetDescriptorV1 } from './builtinWidgetDescriptorV1.js';
 import type { WidgetAreaPresetV1 } from './widgetSurfaceArtifactV1.js';
@@ -10,9 +12,9 @@ export const USAGE_WIDGET_PRESET_IDS = ['overview', 'costs', 'work', 'usage', 'p
 export type UsageWidgetPresetId = typeof USAGE_WIDGET_PRESET_IDS[number];
 
 const scopes = USAGE_QUERY_INPUT_FIELDS.filter(field => field.contextMode === 'follow');
-const scopeSchema = (inventoryOnly: boolean) => PluginJsonSchemaV2Schema.parse((inventoryOnly ? UsageSourceInventoryScopeSchema : UsageQuerySchema.pick({
+const scopeSchema = (inventoryOnly: boolean) => PluginJsonSchemaV2Schema.parse(z.toJSONSchema((inventoryOnly ? UsageSourceInventoryScopeSchema : lazyZodSchema(() => z.pick(UsageQuerySchema, {
     period: true, agents: true, machines: true, projects: true, sources: true, session: true, costBasis: true,
-})).toJSONSchema({ io: 'input', target: 'draft-7' }));
+}))), { io: 'input', target: 'draft-7' }));
 
 type PresetWidget = Readonly<{ id: string; size: WidgetSizeV1; metric?: 'tokens' | 'cost';
     breakdown?: readonly UsageAnalyticsBreakdownDimension[] }>;

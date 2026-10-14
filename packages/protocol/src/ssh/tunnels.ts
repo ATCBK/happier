@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const SSH_TUNNEL_SYSTEM_TASK_KINDS = Object.freeze({
   ensure: 'daemon.sshTunnel.ensure.v1',
@@ -46,80 +46,80 @@ export const SshTunnelHealthStateSchema = lazyZodSchema(() => z.enum([
 ]));
 export type SshTunnelHealthState = z.infer<typeof SshTunnelHealthStateSchema>;
 
-export const SshTunnelSshConnectionConfigSchema = lazyZodSchema(() => z.object({
-  target: z.string().trim().min(1),
-  port: z.number().int().min(1).max(65_535).optional(),
-  auth: z.enum(['agent', 'keyfile', 'password']).default('agent'),
-  identityFile: z.string().min(1).optional(),
-  password: z.string().optional(),
-  sshConfigFile: z.string().min(1).optional(),
-  knownHostsPath: z.string().min(1).optional(),
-  trustedHostKey: z.string().optional(),
-}).passthrough());
+export const SshTunnelSshConnectionConfigSchema = lazyZodSchema(() => z.looseObject({
+  target: z.string().check(z.trim(), z.minLength(1)),
+  port: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(65_535))),
+  auth: z._default(z.enum(['agent', 'keyfile', 'password']), 'agent'),
+  identityFile: z.optional(z.string().check(z.minLength(1))),
+  password: z.optional(z.string()),
+  sshConfigFile: z.optional(z.string().check(z.minLength(1))),
+  knownHostsPath: z.optional(z.string().check(z.minLength(1))),
+  trustedHostKey: z.optional(z.string()),
+}));
 export type SshTunnelSshConnectionConfig = z.infer<typeof SshTunnelSshConnectionConfigSchema>;
 
-export const SshTunnelEnsureRequestSchema = lazyZodSchema(() => z.object({
-  remoteHostId: z.string().min(1).optional(),
-  serverId: z.string().min(1).optional(),
+export const SshTunnelEnsureRequestSchema = lazyZodSchema(() => z.looseObject({
+  remoteHostId: z.optional(z.string().check(z.minLength(1))),
+  serverId: z.optional(z.string().check(z.minLength(1))),
   ssh: SshTunnelSshConnectionConfigSchema,
-  remoteHost: z.string().trim().min(1),
-  remotePort: z.number().int().min(1).max(65_535),
-  requestedLocalPort: z.number().int().min(1).max(65_535).optional(),
+  remoteHost: z.string().check(z.trim(), z.minLength(1)),
+  remotePort: z.number().check(z.int(), z.minimum(1), z.maximum(65_535)),
+  requestedLocalPort: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(65_535))),
   purpose: SshTunnelPurposeSchema,
-  idleTtlMs: z.number().int().min(0).max(24 * 60 * 60 * 1000).optional(),
-}).passthrough());
+  idleTtlMs: z.optional(z.number().check(z.int(), z.minimum(0), z.maximum(24 * 60 * 60 * 1000))),
+}));
 export type SshTunnelEnsureRequest = z.infer<typeof SshTunnelEnsureRequestSchema>;
 
-export const SshTunnelLeaseSchema = lazyZodSchema(() => z.object({
-  leaseId: z.string().min(1),
-  tunnelKey: z.string().min(1),
-  httpBaseUrl: z.string().url(),
-  wsBaseUrl: z.string().url().optional(),
-  localPort: z.number().int().min(1).max(65_535),
-  remoteHost: z.string().min(1),
-  remotePort: z.number().int().min(1).max(65_535),
-  expiresAt: z.string().datetime().nullable(),
+export const SshTunnelLeaseSchema = lazyZodSchema(() => z.looseObject({
+  leaseId: z.string().check(z.minLength(1)),
+  tunnelKey: z.string().check(z.minLength(1)),
+  httpBaseUrl: z.string().check(z.url()),
+  wsBaseUrl: z.optional(z.string().check(z.url())),
+  localPort: z.number().check(z.int(), z.minimum(1), z.maximum(65_535)),
+  remoteHost: z.string().check(z.minLength(1)),
+  remotePort: z.number().check(z.int(), z.minimum(1), z.maximum(65_535)),
+  expiresAt: z.nullable(z.string().check(z.iso.datetime())),
   status: SshTunnelStatusSchema,
-}).passthrough());
+}));
 export type SshTunnelLease = z.infer<typeof SshTunnelLeaseSchema>;
 
-export const SshTunnelSnapshotSchema = lazyZodSchema(() => z.object({
-  tunnelKey: z.string().min(1),
-  httpBaseUrl: z.string().url(),
-  wsBaseUrl: z.string().url().optional(),
-  localPort: z.number().int().min(1).max(65_535),
-  remoteHost: z.string().min(1),
-  remotePort: z.number().int().min(1).max(65_535),
+export const SshTunnelSnapshotSchema = lazyZodSchema(() => z.looseObject({
+  tunnelKey: z.string().check(z.minLength(1)),
+  httpBaseUrl: z.string().check(z.url()),
+  wsBaseUrl: z.optional(z.string().check(z.url())),
+  localPort: z.number().check(z.int(), z.minimum(1), z.maximum(65_535)),
+  remoteHost: z.string().check(z.minLength(1)),
+  remotePort: z.number().check(z.int(), z.minimum(1), z.maximum(65_535)),
   purpose: SshTunnelPurposeSchema,
-  remoteHostId: z.string().min(1).optional(),
+  remoteHostId: z.optional(z.string().check(z.minLength(1))),
   status: SshTunnelStatusSchema,
-  leaseCount: z.number().int().min(0),
-  createdAt: z.string().datetime(),
-  lastProbeAt: z.string().datetime().nullable(),
-}).passthrough());
+  leaseCount: z.number().check(z.int(), z.minimum(0)),
+  createdAt: z.string().check(z.iso.datetime()),
+  lastProbeAt: z.nullable(z.string().check(z.iso.datetime())),
+}));
 export type SshTunnelSnapshot = z.infer<typeof SshTunnelSnapshotSchema>;
 
-export const SshTunnelHealthSchema = lazyZodSchema(() => z.object({
+export const SshTunnelHealthSchema = lazyZodSchema(() => z.looseObject({
   state: SshTunnelHealthStateSchema,
-  checkedAt: z.string().datetime(),
-  httpStatus: z.number().int().min(100).max(599).optional(),
-  detail: z.string().optional(),
-}).passthrough());
+  checkedAt: z.string().check(z.iso.datetime()),
+  httpStatus: z.optional(z.number().check(z.int(), z.minimum(100), z.maximum(599))),
+  detail: z.optional(z.string()),
+}));
 export type SshTunnelHealth = z.infer<typeof SshTunnelHealthSchema>;
 
-export const SshTunnelProbeRequestSchema = lazyZodSchema(() => z.object({
-  tunnelKey: z.string().min(1),
-}).passthrough());
+export const SshTunnelProbeRequestSchema = lazyZodSchema(() => z.looseObject({
+  tunnelKey: z.string().check(z.minLength(1)),
+}));
 export type SshTunnelProbeRequest = z.infer<typeof SshTunnelProbeRequestSchema>;
 
-export const SshTunnelReleaseRequestSchema = lazyZodSchema(() => z.object({
-  leaseId: z.string().min(1),
-}).passthrough());
+export const SshTunnelReleaseRequestSchema = lazyZodSchema(() => z.looseObject({
+  leaseId: z.string().check(z.minLength(1)),
+}));
 export type SshTunnelReleaseRequest = z.infer<typeof SshTunnelReleaseRequestSchema>;
 
-export const SshTunnelStopRequestSchema = lazyZodSchema(() => z.object({
-  tunnelKey: z.string().min(1),
-}).passthrough());
+export const SshTunnelStopRequestSchema = lazyZodSchema(() => z.looseObject({
+  tunnelKey: z.string().check(z.minLength(1)),
+}));
 export type SshTunnelStopRequest = z.infer<typeof SshTunnelStopRequestSchema>;
 
 export const SshTunnelErrorCodeSchema = lazyZodSchema(() => z.enum([
@@ -132,33 +132,33 @@ export const SshTunnelErrorCodeSchema = lazyZodSchema(() => z.enum([
 ]));
 export type SshTunnelErrorCode = z.infer<typeof SshTunnelErrorCodeSchema>;
 
-export const SshTunnelErrorResponseSchema = lazyZodSchema(() => z.object({
+export const SshTunnelErrorResponseSchema = lazyZodSchema(() => z.looseObject({
   ok: z.literal(false),
   errorCode: SshTunnelErrorCodeSchema,
-  error: z.string().min(1),
-}).passthrough());
+  error: z.string().check(z.minLength(1)),
+}));
 export type SshTunnelErrorResponse = z.infer<typeof SshTunnelErrorResponseSchema>;
 
 export const SshTunnelEnsureResponseSchema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true), lease: SshTunnelLeaseSchema }).passthrough(),
+  z.looseObject({ ok: z.literal(true), lease: SshTunnelLeaseSchema }),
   SshTunnelErrorResponseSchema,
 ]));
 export type SshTunnelEnsureResponse = z.infer<typeof SshTunnelEnsureResponseSchema>;
 
 export const SshTunnelListResponseSchema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true), tunnels: z.array(SshTunnelSnapshotSchema) }).passthrough(),
+  z.looseObject({ ok: z.literal(true), tunnels: z.array(SshTunnelSnapshotSchema) }),
   SshTunnelErrorResponseSchema,
 ]));
 export type SshTunnelListResponse = z.infer<typeof SshTunnelListResponseSchema>;
 
 export const SshTunnelProbeResponseSchema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true), health: SshTunnelHealthSchema }).passthrough(),
+  z.looseObject({ ok: z.literal(true), health: SshTunnelHealthSchema }),
   SshTunnelErrorResponseSchema,
 ]));
 export type SshTunnelProbeResponse = z.infer<typeof SshTunnelProbeResponseSchema>;
 
 export const SshTunnelMutationResponseSchema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true) }).passthrough(),
+  z.looseObject({ ok: z.literal(true) }),
   SshTunnelErrorResponseSchema,
 ]));
 export type SshTunnelMutationResponse = z.infer<typeof SshTunnelMutationResponseSchema>;

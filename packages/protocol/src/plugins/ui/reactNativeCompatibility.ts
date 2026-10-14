@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginUiFallbackRefV1Schema } from '../contributions/ui/actions.js';
 
@@ -22,11 +22,11 @@ export const PluginReactNativeCompatibilityDecisionReasonV1Schema = z.enum([
 export type PluginReactNativeCompatibilityDecisionReasonV1 =
   z.infer<typeof PluginReactNativeCompatibilityDecisionReasonV1Schema>;
 
-export const PluginReactNativeCompatibilityDecisionV1Schema = z.object({
+export const PluginReactNativeCompatibilityDecisionV1Schema = z.strictObject({
   state: PluginReactNativeCompatibilityDecisionStateV1Schema,
   reason: PluginReactNativeCompatibilityDecisionReasonV1Schema,
-  fallback: PluginUiFallbackRefV1Schema.optional(),
-  diagnostics: z.array(z.string().trim().min(1)).default([]),
-}).strict();
+  fallback: z.optional(PluginUiFallbackRefV1Schema),
+  diagnostics: z._default(z.array(z.string().check(z.trim(), z.minLength(1))), []),
+});
 export type PluginReactNativeCompatibilityDecisionV1 =
   z.infer<typeof PluginReactNativeCompatibilityDecisionV1Schema>;

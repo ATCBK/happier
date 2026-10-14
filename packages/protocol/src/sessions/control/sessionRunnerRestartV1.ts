@@ -1,11 +1,11 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const SessionRunnerSessionIdV1Schema = lazyZodSchema(() => z.string().trim().min(1));
-const SessionRunnerIdentityV1Schema = lazyZodSchema(() => z.string().trim().min(1));
-const SessionRunnerPidV1Schema = lazyZodSchema(() => z.number().int().positive());
-const SessionRunnerDiagnosticsV1Schema = lazyZodSchema(() => z.record(z.string().trim().min(1), z.unknown()));
-const NullableIdentityFieldV1Schema = lazyZodSchema(() => SessionRunnerIdentityV1Schema.nullable().optional());
+const SessionRunnerSessionIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const SessionRunnerIdentityV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const SessionRunnerPidV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.positive()));
+const SessionRunnerDiagnosticsV1Schema = lazyZodSchema(() => z.record(z.string().check(z.trim(), z.minLength(1)), z.unknown()));
+const NullableIdentityFieldV1Schema = lazyZodSchema(() => z.optional(z.nullable(SessionRunnerIdentityV1Schema)));
 
 export const SESSION_RUNNER_RESTART_MODES_V1 = [
   'if_stale',
@@ -84,77 +84,66 @@ export const SESSION_RUNNER_RESTART_STATUSES_V1 = [
 export const RestartSessionRunnerStatusV1Schema = lazyZodSchema(() => z.enum(SESSION_RUNNER_RESTART_STATUSES_V1));
 export type RestartSessionRunnerStatusV1 = z.infer<typeof RestartSessionRunnerStatusV1Schema>;
 
-export const RestartSessionRunnerRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const RestartSessionRunnerRequestV1Schema = lazyZodSchema(() => z.strictObject({
     sessionId: SessionRunnerSessionIdV1Schema,
-    mode: SessionRunnerRestartModeV1Schema.optional(),
-    dryRun: z.boolean().optional(),
+    mode: z.optional(SessionRunnerRestartModeV1Schema),
+    dryRun: z.optional(z.boolean()),
     reason: SessionRunnerRestartReasonV1Schema,
-    expectedRunnerPid: SessionRunnerPidV1Schema.nullable().optional(),
+    expectedRunnerPid: z.optional(z.nullable(SessionRunnerPidV1Schema)),
     expectedProcessCommandHash: NullableIdentityFieldV1Schema,
     expectedRunnerEntrypointIdentity: NullableIdentityFieldV1Schema,
-  })
-  .strict());
+  }));
 export type RestartSessionRunnerRequestV1 = z.infer<typeof RestartSessionRunnerRequestV1Schema>;
 
-const RestartSessionRunnerEndpointSummaryV1Schema = lazyZodSchema(() => z
-  .object({
-    pid: SessionRunnerPidV1Schema.nullable().optional(),
+const RestartSessionRunnerEndpointSummaryV1Schema = lazyZodSchema(() => z.strictObject({
+    pid: z.optional(z.nullable(SessionRunnerPidV1Schema)),
     cliVersion: NullableIdentityFieldV1Schema,
     entrypointVersion: NullableIdentityFieldV1Schema,
     processCommandHash: NullableIdentityFieldV1Schema,
-  })
-  .strict());
+  }));
 
-export const RestartSessionRunnerResultV1Schema = lazyZodSchema(() => z
-  .object({
+export const RestartSessionRunnerResultV1Schema = lazyZodSchema(() => z.strictObject({
     ok: z.boolean(),
     status: RestartSessionRunnerStatusV1Schema,
     sessionId: SessionRunnerSessionIdV1Schema,
-    previous: RestartSessionRunnerEndpointSummaryV1Schema.optional(),
-    next: RestartSessionRunnerEndpointSummaryV1Schema.optional(),
-    reasonCode: SessionRunnerRestartDisabledReasonSchema.nullable().optional(),
-    diagnostics: SessionRunnerDiagnosticsV1Schema.optional(),
-  })
-  .strict());
+    previous: z.optional(RestartSessionRunnerEndpointSummaryV1Schema),
+    next: z.optional(RestartSessionRunnerEndpointSummaryV1Schema),
+    reasonCode: z.optional(z.nullable(SessionRunnerRestartDisabledReasonSchema)),
+    diagnostics: z.optional(SessionRunnerDiagnosticsV1Schema),
+  }));
 export type RestartSessionRunnerResultV1 = z.infer<typeof RestartSessionRunnerResultV1Schema>;
 
-export const RestartAllSessionRunnersRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const RestartAllSessionRunnersRequestV1Schema = lazyZodSchema(() => z.strictObject({
     mode: SessionRunnerRestartModeV1Schema,
-    dryRun: z.boolean().optional(),
+    dryRun: z.optional(z.boolean()),
     reason: SessionRunnerRestartReasonV1Schema,
-  })
-  .strict());
+  }));
 export type RestartAllSessionRunnersRequestV1 =
   z.infer<typeof RestartAllSessionRunnersRequestV1Schema>;
 
-export const RestartAllSessionRunnersResultV1Schema = lazyZodSchema(() => z
-  .object({
+export const RestartAllSessionRunnersResultV1Schema = lazyZodSchema(() => z.strictObject({
     ok: z.boolean(),
     mode: SessionRunnerRestartModeV1Schema,
-    requestedCount: z.number().int().nonnegative(),
-    restartedCount: z.number().int().nonnegative(),
-    skippedCount: z.number().int().nonnegative(),
-    failedCount: z.number().int().nonnegative(),
+    requestedCount: z.number().check(z.int(), z.nonnegative()),
+    restartedCount: z.number().check(z.int(), z.nonnegative()),
+    skippedCount: z.number().check(z.int(), z.nonnegative()),
+    failedCount: z.number().check(z.int(), z.nonnegative()),
     results: z.array(RestartSessionRunnerResultV1Schema),
-  })
-  .strict()
-  .superRefine((value, ctx) => {
+  }).check(z.superRefine((value, ctx) => {
     if (value.requestedCount !== value.results.length) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['requestedCount'],
         message: 'requestedCount must match results length',
       });
     }
     if (value.restartedCount + value.skippedCount + value.failedCount !== value.requestedCount) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['requestedCount'],
         message: 'restart result counts must sum to requestedCount',
       });
     }
-  }));
+  })));
 export type RestartAllSessionRunnersResultV1 =
   z.infer<typeof RestartAllSessionRunnersResultV1Schema>;

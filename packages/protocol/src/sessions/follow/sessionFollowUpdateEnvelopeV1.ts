@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { isSessionAwarenessContentReadableV1 } from '../awareness/availability.js';
@@ -9,30 +9,30 @@ import { SessionMessageProvenanceV1Schema } from '../messages/sessionInputAdmiss
 import { SessionTranscriptObservationAckV1Schema } from '../messages/transcriptObservationV1.js';
 import { SessionFollowFrontierV1Schema } from './sessionFollowFrontierV1.js';
 
-export const SessionFollowMessageSummaryV1Schema = lazyZodSchema(() => z.object({
-  messageId: SessionTranscriptObservationAckV1Schema.options[0].shape.id,
-  seq: SessionTranscriptObservationAckV1Schema.options[0].shape.seq,
+export const SessionFollowMessageSummaryV1Schema = lazyZodSchema(() => z.strictObject({
+  messageId: SessionTranscriptObservationAckV1Schema._zod.def.options[0].shape.id,
+  seq: SessionTranscriptObservationAckV1Schema._zod.def.options[0].shape.seq,
   text: z.string(),
   /** Sanitized display label; protected provenance remains the authority for origin. */
-  authorLabel: z.string().trim().min(1).max(191).regex(/^[^\u0000-\u001f\u007f]+$/u).optional(),
-  provenance: SessionMessageProvenanceV1Schema.nullable(),
-}).strict());
+  authorLabel: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(191), z.regex(/^[^\u0000-\u001f\u007f]+$/u))),
+  provenance: z.nullable(SessionMessageProvenanceV1Schema),
+}));
 export type SessionFollowMessageSummaryV1 = z.infer<typeof SessionFollowMessageSummaryV1Schema>;
 
-export const SessionFollowUpdateEnvelopeV1Schema = lazyZodSchema(() => z.object({
+export const SessionFollowUpdateEnvelopeV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: z.literal('session_follow_update'),
-  edge: z.object({
+  edge: z.strictObject({
     sourceSessionId: asProtocolZod(SessionIdSchema),
     destinationSessionId: asProtocolZod(SessionIdSchema),
-  }).strict(),
+  }),
   reason: z.enum(['source_changed', 'source_unavailable', 'human_changed_source']),
   deliveryIntent: z.enum(['context_only', 'wake']),
   observed: SessionFollowFrontierV1Schema,
   awareness: SessionAwarenessProjectionV1Schema,
   recentMessages: z.array(SessionFollowMessageSummaryV1Schema),
   truncated: z.boolean(),
-}).strict().superRefine((update, context) => {
+}).check(z.superRefine((update, context) => {
   if ((update.reason === 'human_changed_source') !== (update.deliveryIntent === 'wake')) {
     context.addIssue({ code: 'custom', path: ['deliveryIntent'], message: 'Wake intent requires a human-change reason' });
   }
@@ -57,7 +57,7 @@ export const SessionFollowUpdateEnvelopeV1Schema = lazyZodSchema(() => z.object(
       }
     }
   }
-}));
+})));
 export type SessionFollowUpdateEnvelopeV1 = z.infer<typeof SessionFollowUpdateEnvelopeV1Schema>;
 
 /**

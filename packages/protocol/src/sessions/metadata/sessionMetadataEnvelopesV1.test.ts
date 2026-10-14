@@ -1,7 +1,8 @@
+import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { describe, expect, it } from 'vitest';
 import { projectSessionMetadataForWire } from './terminalMetadata.js';
 import { readSessionRoleIdV1, readSessionRolesV1, writeSessionRoleIdV1ToMetadata } from '../../prompts/roles/sessionRolesSnapshot.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { writeSessionWorkStateV1ToMetadata } from '../work/state/sessionWorkStateV1.js';
 import { SessionPublisherGenerationV1Schema } from '../control/machineSessionTerminalV1.js';
 import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
@@ -217,16 +218,16 @@ describe('metadata schema consumer contracts', () => {
     if (created.ok) expect(created.ownerMetadata.work).toEqual(opened.ownerMetadata.work);
   });
   it('preserves both JSON Schema dialects and classic fluent derivatives', () => {
-    const reference = z.object({
-      machineId: z.string().trim().min(1).max(256),
-      committedFenceMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    const reference = z.strictObject({
+      machineId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+      committedFenceMs: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
       publisherGeneration: SessionPublisherGenerationV1Schema,
-    }).strict();
+    });
     for (const target of ['draft-2020-12', 'draft-7'] as const) {
       expect(zodSchemaToJsonSchemaObject(SessionMetadataPublisherPreconditionV1Schema, { target }))
         .toEqual(zodSchemaToJsonSchemaObject(reference, { target }));
-      expect(zodSchemaToJsonSchemaObject(SessionMetadataPublisherPreconditionV1Schema.pick({ machineId: true }), { target }))
-        .toEqual(zodSchemaToJsonSchemaObject(reference.pick({ machineId: true }), { target }));
+      expect(zodSchemaToJsonSchemaObject(lazyZodSchema(() => z.pick(SessionMetadataPublisherPreconditionV1Schema, { machineId: true })), { target }))
+        .toEqual(zodSchemaToJsonSchemaObject(z.pick(reference, { machineId: true }), { target }));
     }
     expect(SessionMetadataPublisherPreconditionV1Schema.parse({ machineId: ' machine-1 ', committedFenceMs: 0, publisherGeneration: '1' }))
       .toEqual({ machineId: 'machine-1', committedFenceMs: 0, publisherGeneration: '1' });
@@ -243,14 +244,14 @@ describe('metadata schema consumer contracts', () => {
     const result = SessionMetadataPublisherPreconditionV1Schema.safeParse({ machineId: 42, committedFenceMs: -1, publisherGeneration: '1' });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error).toBeInstanceOf(z.ZodError);
+      expect(result.error).toBeInstanceOf(z.core.$ZodError);
       expect(result.error.issues).toMatchObject([
         { code: 'invalid_type', path: ['machineId'], expected: 'string' },
         { code: 'too_small', path: ['committedFenceMs'], minimum: 0 },
       ]);
     }
     expect(() => SessionMetadataPublisherPreconditionV1Schema.parse({}))
-      .toThrow(z.ZodError);
+      .toThrow(z.core.$ZodError);
   });
 });
 
@@ -610,23 +611,23 @@ const RemoteDevScalarValueAtFae505Schema = z.union([
 const RemoteDevCatalogValueOptionAtFae505Schema = z.object({
   value: RemoteDevScalarValueAtFae505Schema,
   name: z.string(),
-  description: z.string().optional(),
+  description: z.optional(z.string()),
 });
 const RemoteDevModelOptionAtFae505Schema = z.object({
   id: z.string(),
   name: z.string(),
-  description: z.string().optional(),
-  category: z.string().optional(),
+  description: z.optional(z.string()),
+  category: z.optional(z.string()),
   type: z.string(),
   currentValue: RemoteDevScalarValueAtFae505Schema,
-  options: z.array(RemoteDevCatalogValueOptionAtFae505Schema).optional(),
+  options: z.optional(z.array(RemoteDevCatalogValueOptionAtFae505Schema)),
 });
 const RemoteDevModelAtFae505Schema = z.object({
   id: z.string(),
   name: z.string(),
-  description: z.string().optional(),
-  contextWindowTokens: z.number().int().positive().optional(),
-  modelOptions: z.array(RemoteDevModelOptionAtFae505Schema).optional(),
+  description: z.optional(z.string()),
+  contextWindowTokens: z.optional(z.number().check(z.int(), z.positive())),
+  modelOptions: z.optional(z.array(RemoteDevModelOptionAtFae505Schema)),
 });
 const RemoteDevModeCatalogAtFae505Schema = z.object({
   v: z.literal(1),
@@ -636,7 +637,7 @@ const RemoteDevModeCatalogAtFae505Schema = z.object({
   availableModes: z.array(z.object({
     id: z.string(),
     name: z.string(),
-    description: z.string().optional(),
+    description: z.optional(z.string()),
   })),
 });
 const RemoteDevModelCatalogAtFae505Schema = z.object({
@@ -653,38 +654,38 @@ const RemoteDevConfigCatalogAtFae505Schema = z.object({
   configOptions: z.array(z.object({
     id: z.string(),
     name: z.string(),
-    description: z.string().optional(),
-    category: z.string().optional(),
+    description: z.optional(z.string()),
+    category: z.optional(z.string()),
     type: z.string(),
     currentValue: RemoteDevScalarValueAtFae505Schema,
-    options: z.array(RemoteDevCatalogValueOptionAtFae505Schema).optional(),
+    options: z.optional(z.array(RemoteDevCatalogValueOptionAtFae505Schema)),
   })),
 });
-const RemoteDevRuntimeDescriptorAtFae505Schema = z.object({
+const RemoteDevRuntimeDescriptorAtFae505Schema = z.looseObject({
   v: z.literal(1),
   providerId: z.string(),
-  provider: z.object({
-    backendMode: z.string().optional(),
-    vendorSessionId: z.string().optional(),
-    serverBaseUrl: z.string().optional(),
-    serverBaseUrlExplicit: z.boolean().optional(),
-    resumeStrategy: z.string().optional(),
-    sessionFile: z.string().optional(),
-    providerExtra: z.object({
+  provider: z.looseObject({
+    backendMode: z.optional(z.string()),
+    vendorSessionId: z.optional(z.string()),
+    serverBaseUrl: z.optional(z.string()),
+    serverBaseUrlExplicit: z.optional(z.boolean()),
+    resumeStrategy: z.optional(z.string()),
+    sessionFile: z.optional(z.string()),
+    providerExtra: z.optional(z.looseObject({
       owner: z.string(),
       schemaId: z.string(),
-      v: z.number().int().positive(),
-    }).passthrough().optional(),
-  }).passthrough(),
-}).passthrough();
-const RemoteDevMetadataReaderAtFae505Schema = z.object({
-  path: z.string().nullish().transform((value) =>
-    typeof value === 'string' ? value : ''),
-  host: z.string().nullish().transform((value) =>
-    typeof value === 'string' ? value : ''),
+      v: z.number().check(z.int(), z.positive()),
+    })),
+  }),
+});
+const RemoteDevMetadataReaderAtFae505Schema = z.looseObject({
+  path: z.pipe(z.nullish(z.string()), z.transform((value) =>
+    typeof value === 'string' ? value : '')),
+  host: z.pipe(z.nullish(z.string()), z.transform((value) =>
+    typeof value === 'string' ? value : '')),
   agentRuntimeDescriptorV1:
-    RemoteDevRuntimeDescriptorAtFae505Schema.optional(),
-  handoffV1: z.object({
+    z.optional(RemoteDevRuntimeDescriptorAtFae505Schema),
+  handoffV1: z.optional(z.object({
     v: z.literal(1),
     sourceMachineId: z.string(),
     targetMachineId: z.string(),
@@ -693,35 +694,35 @@ const RemoteDevMetadataReaderAtFae505Schema = z.object({
     sessionStorageAfter: z.enum(['direct', 'persisted']),
     transportStrategy: z.enum(['direct_peer', 'server_routed_stream']),
     completedAtMs: z.number(),
-    sourceWorkspaceRootPath: z.string().optional(),
-    targetWorkspaceRootPath: z.string().optional(),
-  }).optional(),
-  acpHistoryImportV1: z.object({
+    sourceWorkspaceRootPath: z.optional(z.string()),
+    targetWorkspaceRootPath: z.optional(z.string()),
+  })),
+  acpHistoryImportV1: z.optional(z.object({
     v: z.literal(1),
     provider: z.string(),
     remoteSessionId: z.string(),
     importedAt: z.number(),
-    lastImportedFingerprint: z.string().optional(),
-  }).optional(),
-  acpSessionModesV1: RemoteDevModeCatalogAtFae505Schema.optional(),
-  sessionModesV1: RemoteDevModeCatalogAtFae505Schema.optional(),
-  acpSessionModelsV1: RemoteDevModelCatalogAtFae505Schema.optional(),
-  sessionModelsV1: RemoteDevModelCatalogAtFae505Schema.optional(),
-  acpConfigOptionsV1: RemoteDevConfigCatalogAtFae505Schema.optional(),
-  sessionConfigOptionsV1: RemoteDevConfigCatalogAtFae505Schema.optional(),
-  forkV1: z.object({
+    lastImportedFingerprint: z.optional(z.string()),
+  })),
+  acpSessionModesV1: z.optional(RemoteDevModeCatalogAtFae505Schema),
+  sessionModesV1: z.optional(RemoteDevModeCatalogAtFae505Schema),
+  acpSessionModelsV1: z.optional(RemoteDevModelCatalogAtFae505Schema),
+  sessionModelsV1: z.optional(RemoteDevModelCatalogAtFae505Schema),
+  acpConfigOptionsV1: z.optional(RemoteDevConfigCatalogAtFae505Schema),
+  sessionConfigOptionsV1: z.optional(RemoteDevConfigCatalogAtFae505Schema),
+  forkV1: z.optional(z.object({
     v: z.literal(1),
     parentSessionId: z.string(),
     parentCutoffSeqInclusive: z.number(),
     createdAtMs: z.number(),
     strategy: z.string(),
-    providerHint: z.object({
-      providerId: z.string().optional(),
-      backendMode: z.string().optional(),
-      vendorSessionId: z.string().optional(),
-    }).optional(),
-  }).optional(),
-}).passthrough();
+    providerHint: z.optional(z.object({
+      providerId: z.optional(z.string()),
+      backendMode: z.optional(z.string()),
+      vendorSessionId: z.optional(z.string()),
+    })),
+  })),
+});
 
 describe('session metadata privacy envelopes v1', () => {
   it('preserves provider session identity bytes in owner-native and fork metadata', () => {
@@ -1442,14 +1443,14 @@ describe('session metadata privacy envelopes v1', () => {
     }).success).toBe(false);
 
     const releasedLegacyPatchSchema = z.object({
-      metadata: z.object({
+      metadata: z.optional(z.object({
         ciphertext: z.string(),
         expectedVersion: z.number(),
-      }).optional(),
-      agentState: z.object({
-        ciphertext: z.string().nullable(),
+      })),
+      agentState: z.optional(z.object({
+        ciphertext: z.nullable(z.string()),
         expectedVersion: z.number(),
-      }).optional(),
+      })),
     });
     expect(releasedLegacyPatchSchema.parse(conditionedLegacyPatch))
       .toEqual({});

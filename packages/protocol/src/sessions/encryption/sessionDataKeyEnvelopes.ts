@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { AccountRecipientEnvelopeUnavailableReasonSchema } from '../../account/encryptionMode.js';
 
 import {
@@ -82,16 +82,13 @@ const BASE64URL_ALPHABET_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder('utf-8', { fatal: true });
 
-export const SessionDataKeyEnvelopeRecipientAccountIdV1Schema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(SESSION_DATA_KEY_ENVELOPE_RECIPIENT_ACCOUNT_ID_MAX_LENGTH_V1)
-  .regex(NO_OUTER_WHITESPACE_PATTERN));
+export const SessionDataKeyEnvelopeRecipientAccountIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(SESSION_DATA_KEY_ENVELOPE_RECIPIENT_ACCOUNT_ID_MAX_LENGTH_V1), z.regex(NO_OUTER_WHITESPACE_PATTERN)));
 
-function canonicalBase64BytesSchema(exactBytes: number): z.ZodString {
-  return z.string().refine((value) => {
+function canonicalBase64BytesSchema(exactBytes: number): z.ZodMiniString {
+  return z.string().check(z.refine((value) => {
     if (readCanonicalPaddedBase64DecodedLength(value) !== exactBytes) return false;
     return encodeBase64(decodeBase64(value, 'base64')) === value;
-  }, { message: `Expected canonical Base64 of exactly ${exactBytes} bytes` });
+  }, { message: `Expected canonical Base64 of exactly ${exactBytes} bytes` }));
 }
 
 /**
@@ -103,9 +100,7 @@ export const SessionDataKeyEnvelopeBytesV1Schema = canonicalBase64BytesSchema(
   SESSION_DATA_KEY_ENVELOPE_BYTES_V1,
 );
 
-const AccountSigningPublicKeyHexV1Schema = lazyZodSchema(() => z.string().regex(
-  new RegExp(`^[0-9a-fA-F]{${ACCOUNT_SIGNING_PUBLIC_KEY_BYTES_V1 * 2}}$`, 'u'),
-));
+const AccountSigningPublicKeyHexV1Schema = lazyZodSchema(() => z.string().check(z.regex(new RegExp(`^[0-9a-fA-F]{${ACCOUNT_SIGNING_PUBLIC_KEY_BYTES_V1 * 2}}$`, 'u'))));
 
 export function encodeSessionDataKeyEnvelopeCursorV1(afterAccountId: string): string {
   const accountId = SessionDataKeyEnvelopeRecipientAccountIdV1Schema.parse(afterAccountId);
@@ -133,10 +128,7 @@ export function decodeSessionDataKeyEnvelopeCursorV1(cursor: string): string | n
     : null;
 }
 
-const SessionDataKeyEnvelopeCursorV1Schema = lazyZodSchema(() => z.string().refine(
-  (value) => decodeSessionDataKeyEnvelopeCursorV1(value) !== null,
-  { message: 'Invalid cursor' },
-));
+const SessionDataKeyEnvelopeCursorV1Schema = lazyZodSchema(() => z.string().check(z.refine((value) => decodeSessionDataKeyEnvelopeCursorV1(value) !== null, { message: 'Invalid cursor' })));
 
 /**
  * `action_required` is the working page: exceptions only, so a healthy Team
@@ -146,12 +138,11 @@ const SessionDataKeyEnvelopeCursorV1Schema = lazyZodSchema(() => z.string().refi
 export const SessionDataKeyEnvelopePageStateV1Schema = lazyZodSchema(() => z.enum(['action_required', 'all']));
 export type SessionDataKeyEnvelopePageStateV1 = z.infer<typeof SessionDataKeyEnvelopePageStateV1Schema>;
 
-export const SessionDataKeyEnvelopePageQueryV1Schema = lazyZodSchema(() => z.object({
-  state: SessionDataKeyEnvelopePageStateV1Schema.default('action_required'),
-  limit: z.coerce.number().int().min(1).max(SESSION_DATA_KEY_ENVELOPE_PAGE_MAX_ENTRIES_V1)
-    .default(SESSION_DATA_KEY_ENVELOPE_PAGE_MAX_ENTRIES_V1),
-  cursor: SessionDataKeyEnvelopeCursorV1Schema.optional(),
-}).strict());
+export const SessionDataKeyEnvelopePageQueryV1Schema = lazyZodSchema(() => z.strictObject({
+  state: z._default(SessionDataKeyEnvelopePageStateV1Schema, 'action_required'),
+  limit: z._default(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(SESSION_DATA_KEY_ENVELOPE_PAGE_MAX_ENTRIES_V1)), SESSION_DATA_KEY_ENVELOPE_PAGE_MAX_ENTRIES_V1),
+  cursor: z.optional(SessionDataKeyEnvelopeCursorV1Schema),
+}));
 export type SessionDataKeyEnvelopePageQueryV1 = Readonly<
   z.infer<typeof SessionDataKeyEnvelopePageQueryV1Schema>
 >;
@@ -166,18 +157,18 @@ export type SessionDataKeyRecipientUnavailableReasonV1 = z.infer<
 >;
 
 export const SessionDataKeyRecipientContentKeyV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({
+  z.strictObject({
     status: z.literal('available'),
     accountSigningPublicKey: AccountSigningPublicKeyHexV1Schema,
     contentPublicKey: canonicalBase64BytesSchema(ACCOUNT_CONTENT_PUBLIC_KEY_BYTES_V1),
     contentPublicKeySignature: canonicalBase64BytesSchema(
       ACCOUNT_CONTENT_KEY_BINDING_SIGNATURE_BYTES_V1,
     ),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('unavailable'),
     reason: SessionDataKeyRecipientUnavailableReasonV1Schema,
-  }).strict(),
+  }),
 ]));
 export type SessionDataKeyRecipientContentKeyV1 = Readonly<
   z.infer<typeof SessionDataKeyRecipientContentKeyV1Schema>
@@ -192,33 +183,33 @@ export type SessionDataKeyEnvelopeStateV1 = z.infer<typeof SessionDataKeyEnvelop
  * the Collaboration editor joins those display facts by Account ID through the
  * access owner's existing projection.
  */
-export const SessionDataKeyEnvelopeItemV1Schema = lazyZodSchema(() => z.object({
+export const SessionDataKeyEnvelopeItemV1Schema = lazyZodSchema(() => z.strictObject({
   recipientAccountId: SessionDataKeyEnvelopeRecipientAccountIdV1Schema,
   envelopeState: SessionDataKeyEnvelopeStateV1Schema,
   contentKey: SessionDataKeyRecipientContentKeyV1Schema,
-}).strict());
+}));
 export type SessionDataKeyEnvelopeItemV1 = Readonly<z.infer<typeof SessionDataKeyEnvelopeItemV1Schema>>;
 
-export const SessionDataKeyEnvelopeSummaryV1Schema = lazyZodSchema(() => z.object({
-  prepared: z.number().int().nonnegative(),
-  pending: z.number().int().nonnegative(),
-  invalid: z.number().int().nonnegative(),
-  recipientKeyUnavailable: z.number().int().nonnegative(),
-}).strict());
+export const SessionDataKeyEnvelopeSummaryV1Schema = lazyZodSchema(() => z.strictObject({
+  prepared: z.number().check(z.int(), z.nonnegative()),
+  pending: z.number().check(z.int(), z.nonnegative()),
+  invalid: z.number().check(z.int(), z.nonnegative()),
+  recipientKeyUnavailable: z.number().check(z.int(), z.nonnegative()),
+}));
 export type SessionDataKeyEnvelopeSummaryV1 = Readonly<
   z.infer<typeof SessionDataKeyEnvelopeSummaryV1Schema>
 >;
 
 export const SessionDataKeyEnvelopePageV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('not_required') }).strict(),
-  z.object({
+  z.strictObject({ status: z.literal('not_required') }),
+  z.strictObject({
     status: z.literal('required'),
     // Cursorless discovery/final recheck carries the authoritative aggregate;
     // a continuation is a bounded keyset page and deliberately carries none.
-    summary: SessionDataKeyEnvelopeSummaryV1Schema.nullable(),
-    items: z.array(SessionDataKeyEnvelopeItemV1Schema).max(SESSION_DATA_KEY_ENVELOPE_PAGE_MAX_ENTRIES_V1),
-    nextCursor: SessionDataKeyEnvelopeCursorV1Schema.nullable(),
-  }).strict(),
+    summary: z.nullable(SessionDataKeyEnvelopeSummaryV1Schema),
+    items: z.array(SessionDataKeyEnvelopeItemV1Schema).check(z.maxLength(SESSION_DATA_KEY_ENVELOPE_PAGE_MAX_ENTRIES_V1)),
+    nextCursor: z.nullable(SessionDataKeyEnvelopeCursorV1Schema),
+  }),
 ]));
 export type SessionDataKeyEnvelopePageV1 = Readonly<z.infer<typeof SessionDataKeyEnvelopePageV1Schema>>;
 
@@ -241,31 +232,25 @@ export function classifySessionDataKeyEnvelopeItemV1(
   }
 }
 
-export const PatchSessionDataKeyEnvelopeEntryV1Schema = lazyZodSchema(() => z.object({
+export const PatchSessionDataKeyEnvelopeEntryV1Schema = lazyZodSchema(() => z.strictObject({
   recipientAccountId: SessionDataKeyEnvelopeRecipientAccountIdV1Schema,
   encryptedDataKey: SessionDataKeyEnvelopeBytesV1Schema,
-}).strict());
+}));
 export type PatchSessionDataKeyEnvelopeEntryV1 = Readonly<
   z.infer<typeof PatchSessionDataKeyEnvelopeEntryV1Schema>
 >;
 
-export const PatchSessionDataKeyEnvelopesV1Schema = lazyZodSchema(() => z.object({
-  entries: z.array(PatchSessionDataKeyEnvelopeEntryV1Schema)
-    .min(1)
-    .max(SESSION_DATA_KEY_ENVELOPE_PAGE_MAX_ENTRIES_V1)
-    .refine(
-      (entries) => new Set(entries.map((entry) => entry.recipientAccountId)).size === entries.length,
-      { message: 'Duplicate recipientAccountId' },
-    ),
-}).strict());
+export const PatchSessionDataKeyEnvelopesV1Schema = lazyZodSchema(() => z.strictObject({
+  entries: z.array(PatchSessionDataKeyEnvelopeEntryV1Schema).check(z.minLength(1), z.maxLength(SESSION_DATA_KEY_ENVELOPE_PAGE_MAX_ENTRIES_V1), z.refine((entries) => new Set(entries.map((entry) => entry.recipientAccountId)).size === entries.length, { message: 'Duplicate recipientAccountId' })),
+}));
 export type PatchSessionDataKeyEnvelopesV1 = Readonly<{
   entries: readonly PatchSessionDataKeyEnvelopeEntryV1[];
 }>;
 
 /** The whole bounded request commits or rejects; there is no per-entry receipt. */
-export const PatchSessionDataKeyEnvelopesResultV1Schema = lazyZodSchema(() => z.object({
-  appliedCount: z.number().int().nonnegative(),
-}).strict());
+export const PatchSessionDataKeyEnvelopesResultV1Schema = lazyZodSchema(() => z.strictObject({
+  appliedCount: z.number().check(z.int(), z.nonnegative()),
+}));
 export type PatchSessionDataKeyEnvelopesResultV1 = Readonly<
   z.infer<typeof PatchSessionDataKeyEnvelopesResultV1Schema>
 >;
@@ -280,10 +265,10 @@ export type PatchSessionDataKeyEnvelopesResultV1 = Readonly<
  * Structural admission only: the sealed envelope still has to open against the
  * recipient's current binding, which stays with the Session envelope service.
  */
-export const SessionRecipientEnvelopeInputV1Schema = lazyZodSchema(() => z.object({
+export const SessionRecipientEnvelopeInputV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   encryptedDataKey: SessionDataKeyEnvelopeBytesV1Schema,
-}).strict());
+}));
 export type SessionRecipientEnvelopeInputV1 = Readonly<
   z.infer<typeof SessionRecipientEnvelopeInputV1Schema>
 >;

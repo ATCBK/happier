@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { CapabilitiesDetectRequest } from './index.js';
 import type { PluginProjectionV2 } from '../daemon/contributionRegistryProjection.js';
@@ -8,18 +8,18 @@ import type { AcpCatalogSnapshotV1 } from '../acp/catalog/catalogRowsV1.js';
 import { AcpPlatformFitV1Schema } from '../acp/catalog/registry/acpPlatformFitV1.js';
 
 /** Caller-owned executable facts only. Inventory never carries environment or secret material. */
-export const MachineAcpInventoryDefinitionSchema = lazyZodSchema(() => z.object({
+export const MachineAcpInventoryDefinitionSchema = lazyZodSchema(() => z.strictObject({
   definitionId: AcpBackendDefinitionV1Schema.shape.id,
-  title: z.string().min(1),
-  launch: AcpBackendLaunchV1Schema.refine(launch => !('envByPlatform' in launch)),
-}).strict());
+  title: z.string().check(z.minLength(1)),
+  launch: AcpBackendLaunchV1Schema.check(z.refine(launch => !('envByPlatform' in launch))),
+}));
 export type MachineAcpInventoryDefinition = z.output<typeof MachineAcpInventoryDefinitionSchema>;
-export const MachineAcpInventoryRequestSchema = lazyZodSchema(() => z.object({
-  definitions: z.array(MachineAcpInventoryDefinitionSchema).refine(definitions => new Set(definitions.map(definition => definition.definitionId)).size === definitions.length),
+export const MachineAcpInventoryRequestSchema = lazyZodSchema(() => z.strictObject({
+  definitions: z.array(MachineAcpInventoryDefinitionSchema).check(z.refine(definitions => new Set(definitions.map(definition => definition.definitionId)).size === definitions.length)),
   // The canonical capability service forwards its refresh metadata in params.
-  bypassCache: z.boolean().optional(),
-}).strict());
-const DefinitionCatalogUnavailableSchema = lazyZodSchema(() => z.object({ status: z.literal('unavailable'), reason: z.string().min(1) }).strict());
+  bypassCache: z.optional(z.boolean()),
+}));
+const DefinitionCatalogUnavailableSchema = lazyZodSchema(() => z.strictObject({ status: z.literal('unavailable'), reason: z.string().check(z.minLength(1)) }));
 type DefinitionInventoryInput = Readonly<{
   definitions?: readonly MachineAcpInventoryDefinition[];
   definitionCatalog?: z.output<typeof DefinitionCatalogUnavailableSchema>;
@@ -44,62 +44,62 @@ export function projectAcpCatalogForMachineInventory(catalog: AcpCatalogSnapshot
 
 const MachineAgentFactsSchema = lazyZodSchema(() => z.object({
   installed: z.boolean(),
-  managed: z.boolean().optional(),
-  fit: AcpPlatformFitV1Schema.optional(),
-  version: z.string().nullable(),
-  latestVersion: z.string().nullable(),
-  update: z.object({ supported: z.boolean(), command: z.string().nullable() }).strict(),
-  signIn: z.object({
+  managed: z.optional(z.boolean()),
+  fit: z.optional(AcpPlatformFitV1Schema),
+  version: z.nullable(z.string()),
+  latestVersion: z.nullable(z.string()),
+  update: z.strictObject({ supported: z.boolean(), command: z.nullable(z.string()) }),
+  signIn: z.strictObject({
     status: z.enum(['signedIn', 'signedOut', 'unknown']),
     /** Omission retains required authentication for older inventory producers. */
-    required: z.boolean().optional(),
-    accountLabel: z.string().optional(),
+    required: z.optional(z.boolean()),
+    accountLabel: z.optional(z.string()),
     loginSupport: z.enum(['login_terminal', 'status_only', 'manual_only', 'unsupported']),
-  }).strict(),
+  }),
   platform: z.discriminatedUnion('supported', [
-    z.object({ supported: z.literal(true) }).strict(),
-    z.object({ supported: z.literal(false), reason: z.enum(['os', 'arch']) }).strict(),
+    z.strictObject({ supported: z.literal(true) }),
+    z.strictObject({ supported: z.literal(false), reason: z.enum(['os', 'arch']) }),
   ]),
-  install: z.object({
+  install: z.strictObject({
     available: z.boolean(),
     mode: z.enum(['managed', 'vendor_recipe', 'manual', 'none']),
-    sizeBytes: z.number().nonnegative().nullable(),
-    guideUrl: z.string().nullable(),
-  }).strict(),
-  dependencies: z.array(z.object({
-    key: z.string().min(1), installed: z.boolean(), version: z.string().nullable(),
-  }).strict()),
+    sizeBytes: z.nullable(z.number().check(z.nonnegative())),
+    guideUrl: z.nullable(z.string()),
+  }),
+  dependencies: z.array(z.strictObject({
+    key: z.string().check(z.minLength(1)), installed: z.boolean(), version: z.nullable(z.string()),
+  })),
 }));
 
 /** Daemon facts, before connected-account or presentation-state composition. */
-export const MachineAgentInventoryItemSchema = lazyZodSchema(() => MachineAgentFactsSchema.extend({
-  agentId: z.string().min(1), definitionId: AcpBackendDefinitionV1Schema.shape.id.optional(), title: z.string().min(1),
-}).strict());
+export const MachineAgentInventoryItemSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(MachineAgentFactsSchema, {
+  agentId: z.string().check(z.minLength(1)), definitionId: z.optional(AcpBackendDefinitionV1Schema.shape.id), title: z.string().check(z.minLength(1)),
+})));
 export type MachineAgentInventoryItem = z.output<typeof MachineAgentInventoryItemSchema>;
 
 /** A failed probe carries no installation or readiness facts. */
-export const MachineAgentInventoryUnavailableSchema = lazyZodSchema(() => z.object({
-  agentId: z.string().min(1),
-  definitionId: AcpBackendDefinitionV1Schema.shape.id.optional(),
+export const MachineAgentInventoryUnavailableSchema = lazyZodSchema(() => z.strictObject({
+  agentId: z.string().check(z.minLength(1)),
+  definitionId: z.optional(AcpBackendDefinitionV1Schema.shape.id),
   reason: z.enum(['missing_result', 'probe_failed', 'invalid_facts']),
-  errorCode: z.string().optional(),
-}).strict());
+  errorCode: z.optional(z.string()),
+}));
 export type MachineAgentInventoryUnavailable = z.output<typeof MachineAgentInventoryUnavailableSchema>;
 
-export const MachinesAgentsListInputSchema = lazyZodSchema(() => z.object({
-  machineId: z.string().trim().min(1),
-  serverId: z.string().trim().min(1).optional(),
-  agentId: z.string().trim().min(1).optional(),
-  definitionId: AcpBackendDefinitionV1Schema.shape.id.optional(),
-  refresh: z.boolean().optional(),
-}).strict());
+export const MachinesAgentsListInputSchema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.trim(), z.minLength(1)),
+  serverId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  agentId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  definitionId: z.optional(AcpBackendDefinitionV1Schema.shape.id),
+  refresh: z.optional(z.boolean()),
+}));
 export type MachinesAgentsListInput = z.output<typeof MachinesAgentsListInputSchema>;
 
-export const MachinesAgentsListOutputSchema = lazyZodSchema(() => z.object({
+export const MachinesAgentsListOutputSchema = lazyZodSchema(() => z.strictObject({
   items: z.array(MachineAgentInventoryItemSchema),
-  unavailable: z.array(MachineAgentInventoryUnavailableSchema).optional(),
-  definitionCatalog: DefinitionCatalogUnavailableSchema.optional(),
-}).strict());
+  unavailable: z.optional(z.array(MachineAgentInventoryUnavailableSchema)),
+  definitionCatalog: z.optional(DefinitionCatalogUnavailableSchema),
+}));
 export type MachinesAgentsListOutput = z.output<typeof MachinesAgentsListOutputSchema>;
 
 export type MachineAgentInventoryDescriptor = Readonly<{ agentId: string; definitionId?: string; title: string }>;

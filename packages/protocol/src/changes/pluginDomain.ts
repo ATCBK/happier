@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginContributionLocalIdSchema } from '../plugins/contributionIdentity.js';
 import { PluginAccountStorageLogicalKeyV1Schema } from '../plugins/data/accountKvV1.js';
@@ -10,64 +10,58 @@ import {
 import { PluginIdSchema } from '../plugins/pluginId.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 
-const AccountChangeCursorSchema = lazyZodSchema(() => z.number().int().min(0).max(Number.MAX_SAFE_INTEGER));
-const AccountChangeTimestampSchema = lazyZodSchema(() => z.number().int().min(0).max(Number.MAX_SAFE_INTEGER));
-const AccountChangeRevisionSchema = lazyZodSchema(() => z.number().int().min(0).max(Number.MAX_SAFE_INTEGER));
+const AccountChangeCursorSchema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(0), z.maximum(Number.MAX_SAFE_INTEGER)));
+const AccountChangeTimestampSchema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(0), z.maximum(Number.MAX_SAFE_INTEGER)));
+const AccountChangeRevisionSchema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(0), z.maximum(Number.MAX_SAFE_INTEGER)));
 
 function uniqueArray<T>(values: readonly T[]): boolean {
   return new Set(values).size === values.length;
 }
 
-const PluginDomainDataKvKeysChangeHintSchema = lazyZodSchema(() => z.object({
+const PluginDomainDataKvKeysChangeHintSchema = lazyZodSchema(() => z.strictObject({
   pluginDomain: z.literal('dataKv'),
   pluginId: asProtocolZod(PluginIdSchema),
-  keys: z.array(PluginAccountStorageLogicalKeyV1Schema).min(1).max(200).refine(
-    uniqueArray,
-    'Plugin Account KV invalidation keys must be unique.',
-  ),
-}).strict());
-const PluginDomainDataKvFullChangeHintSchema = lazyZodSchema(() => z.object({
+  keys: z.array(PluginAccountStorageLogicalKeyV1Schema).check(z.minLength(1), z.maxLength(200), z.refine(uniqueArray, 'Plugin Account KV invalidation keys must be unique.')),
+}));
+const PluginDomainDataKvFullChangeHintSchema = lazyZodSchema(() => z.strictObject({
   pluginDomain: z.literal('dataKv'),
   pluginId: asProtocolZod(PluginIdSchema),
   full: z.literal(true),
-}).strict());
+}));
 export const PluginDomainDataKvChangeHintSchema = lazyZodSchema(() => z.union([
   PluginDomainDataKvKeysChangeHintSchema,
   PluginDomainDataKvFullChangeHintSchema,
 ]));
 export type PluginDomainDataKvChangeHint = z.infer<typeof PluginDomainDataKvChangeHintSchema>;
 
-const PluginDomainDataCollectionRowIdsChangeHintSchema = lazyZodSchema(() => z.object({
+const PluginDomainDataCollectionRowIdsChangeHintSchema = lazyZodSchema(() => z.strictObject({
   pluginDomain: z.literal('dataCollection'),
   pluginId: asProtocolZod(PluginIdSchema),
   collectionId: asProtocolZod(PluginContributionLocalIdSchema),
   contractDigest: PluginCollectionContractDigestV1Schema,
   revision: AccountChangeRevisionSchema,
-  rowIds: z.array(PluginCollectionRowIdV1Schema).min(1).max(200).refine(
-    uniqueArray,
-    'Collection invalidation row IDs must be unique.',
-  ),
-}).strict());
-const PluginDomainDataCollectionFullChangeHintSchema = lazyZodSchema(() => z.object({
+  rowIds: z.array(PluginCollectionRowIdV1Schema).check(z.minLength(1), z.maxLength(200), z.refine(uniqueArray, 'Collection invalidation row IDs must be unique.')),
+}));
+const PluginDomainDataCollectionFullChangeHintSchema = lazyZodSchema(() => z.strictObject({
   pluginDomain: z.literal('dataCollection'),
   pluginId: asProtocolZod(PluginIdSchema),
   collectionId: asProtocolZod(PluginContributionLocalIdSchema),
   contractDigest: PluginCollectionContractDigestV1Schema,
   revision: AccountChangeRevisionSchema,
   full: z.literal(true),
-}).strict());
+}));
 export const PluginDomainDataCollectionChangeHintSchema = lazyZodSchema(() => z.union([
   PluginDomainDataCollectionRowIdsChangeHintSchema,
   PluginDomainDataCollectionFullChangeHintSchema,
 ]));
 export type PluginDomainDataCollectionChangeHint = z.infer<typeof PluginDomainDataCollectionChangeHintSchema>;
 
-export const PluginDomainSettingsChangeHintSchema = lazyZodSchema(() => z.object({
+export const PluginDomainSettingsChangeHintSchema = lazyZodSchema(() => z.strictObject({
   pluginDomain: z.literal('settings'),
   pluginId: asProtocolZod(PluginIdSchema),
   scope: z.literal('account'),
   revision: AccountChangeRevisionSchema,
-}).strict());
+}));
 export type PluginDomainSettingsChangeHint = z.infer<typeof PluginDomainSettingsChangeHintSchema>;
 
 /**
@@ -75,17 +69,17 @@ export type PluginDomainSettingsChangeHint = z.infer<typeof PluginDomainSettings
  * re-read the canonical Availability projection rather than derive state from
  * the invalidation row.
  */
-export const PluginDomainAvailabilityChangeHintSchema = lazyZodSchema(() => z.object({
+export const PluginDomainAvailabilityChangeHintSchema = lazyZodSchema(() => z.strictObject({
   pluginDomain: z.literal('availability'),
   pluginId: asProtocolZod(PluginIdSchema),
-}).strict());
+}));
 export type PluginDomainAvailabilityChangeHint = z.infer<typeof PluginDomainAvailabilityChangeHintSchema>;
 
 /** Webhook consumers re-read bounded endpoint/queue status from its owner. */
-export const PluginDomainWebhookChangeHintSchema = lazyZodSchema(() => z.object({
+export const PluginDomainWebhookChangeHintSchema = lazyZodSchema(() => z.strictObject({
   pluginDomain: z.literal('webhook'),
   pluginId: asProtocolZod(PluginIdSchema),
-}).strict());
+}));
 export type PluginDomainWebhookChangeHint = z.infer<typeof PluginDomainWebhookChangeHintSchema>;
 
 /**
@@ -117,19 +111,19 @@ export function buildPluginDomainAccountChangeEntityId(input: unknown): string {
   }
 }
 
-export const PluginDomainChangeEntrySchema = lazyZodSchema(() => z.object({
+export const PluginDomainChangeEntrySchema = lazyZodSchema(() => z.strictObject({
   cursor: AccountChangeCursorSchema,
   kind: z.literal('pluginDomain'),
-  entityId: z.string().min(1),
+  entityId: z.string().check(z.minLength(1)),
   changedAt: AccountChangeTimestampSchema,
   hint: PluginDomainChangeHintSchema,
-}).strict().superRefine((entry, context) => {
+}).check(z.superRefine((entry, context) => {
   if (entry.entityId !== buildPluginDomainAccountChangeEntityId(entry.hint)) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['entityId'],
       message: 'pluginDomain AccountChange entityId does not match its hint identity.',
     });
   }
-}));
+})));
 export type PluginDomainChangeEntry = z.infer<typeof PluginDomainChangeEntrySchema>;

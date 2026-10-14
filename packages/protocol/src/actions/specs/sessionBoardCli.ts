@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionSurfaceItemIdSchema } from '../../sessions/board/ids.js';
 import { SessionSurfaceItemV1Schema, SessionSurfaceItemDestinationV1Schema } from '../../sessions/board/item.js';
@@ -27,14 +27,14 @@ export const SESSION_VISUAL_DESTINATION_HINT: ActionInputFieldHint = {
  * Session — `executeCommand` derives its default from this very field — so the
  * friendly spelling takes the Session as its first positional and requires it.
  */
-const SessionSelectorSchema = lazyZodSchema(() => z.string().trim().min(1));
+const SessionSelectorSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 
-export const SessionBoardGetCliInputSchema = lazyZodSchema(() => z.object({
+export const SessionBoardGetCliInputSchema = lazyZodSchema(() => z.strictObject({
   sessionId: SessionSelectorSchema,
-  itemIds: z.array(SessionSurfaceItemIdSchema).optional(),
-  cursor: z.string().trim().min(1).optional(),
-  limit: z.number().int().min(1).optional(),
-}).strict());
+  itemIds: z.optional(z.array(SessionSurfaceItemIdSchema)),
+  cursor: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  limit: z.optional(z.number().check(z.int(), z.minimum(1))),
+}));
 export type SessionBoardGetCliInput = z.infer<typeof SessionBoardGetCliInputSchema>;
 
 /**
@@ -43,36 +43,36 @@ export type SessionBoardGetCliInput = z.infer<typeof SessionBoardGetCliInputSche
  * required nullable optimistic-concurrency operand, so the binder supplies that
  * `null`; the canonical schema still validates the bound result.
  */
-export const SessionBoardItemUpsertCliInputSchema = lazyZodSchema(() => z.object({
+export const SessionBoardItemUpsertCliInputSchema = lazyZodSchema(() => z.strictObject({
   sessionId: SessionSelectorSchema,
   itemId: SessionSurfaceItemIdSchema,
-  expectedItemRevision: SessionSystemRecordRevisionSchema.optional(),
-  destination: SessionSurfaceItemDestinationV1Schema.optional(),
-  item: z.lazy(() => SessionSurfaceItemV1Schema).optional(),
-  copySource: SessionVisualCopySourceV1Schema.optional(),
-  placement: SessionBoardItemPlacementV1Schema.optional(),
-}).strict().superRefine((input, context) => {
+  expectedItemRevision: z.optional(SessionSystemRecordRevisionSchema),
+  destination: z.optional(SessionSurfaceItemDestinationV1Schema),
+  item: z.optional(z.lazy(() => SessionSurfaceItemV1Schema)),
+  copySource: z.optional(SessionVisualCopySourceV1Schema),
+  placement: z.optional(SessionBoardItemPlacementV1Schema),
+}).check(z.superRefine((input, context) => {
   const canonical = SessionBoardItemUpsertInputV1Schema.safeParse({ ...input, expectedItemRevision: input.expectedItemRevision ?? null });
   if (!canonical.success) for (const issue of canonical.error.issues) context.addIssue({
     code: 'custom', path: issue.path, message: issue.message,
   });
-}));
+})));
 export type SessionBoardItemUpsertCliInput = z.infer<typeof SessionBoardItemUpsertCliInputSchema>;
 
-export const SessionBoardItemRemoveCliInputSchema = lazyZodSchema(() => z.object({
+export const SessionBoardItemRemoveCliInputSchema = lazyZodSchema(() => z.strictObject({
   sessionId: SessionSelectorSchema,
   itemId: SessionSurfaceItemIdSchema,
   expectedItemRevision: SessionSystemRecordRevisionSchema,
-  expectedLayoutRevision: SessionSystemRecordRevisionSchema.optional(),
-}).strict());
+  expectedLayoutRevision: z.optional(SessionSystemRecordRevisionSchema),
+}));
 export type SessionBoardItemRemoveCliInput = z.infer<typeof SessionBoardItemRemoveCliInputSchema>;
 
 /** Same rule as the item upsert: an omitted expected revision means "no layout yet". */
-export const SessionBoardLayoutUpdateCliInputSchema = lazyZodSchema(() => z.object({
+export const SessionBoardLayoutUpdateCliInputSchema = lazyZodSchema(() => z.strictObject({
   sessionId: SessionSelectorSchema,
-  expectedLayoutRevision: SessionSystemRecordRevisionSchema.optional(),
+  expectedLayoutRevision: z.optional(SessionSystemRecordRevisionSchema),
   operation: SessionBoardLayoutOperationV1Schema,
-}).strict());
+}));
 export type SessionBoardLayoutUpdateCliInput = z.infer<typeof SessionBoardLayoutUpdateCliInputSchema>;
 
 export function bindSessionBoardItemUpsertCliInput(

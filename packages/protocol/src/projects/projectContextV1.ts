@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { PromptStackEntryAuthoringV1Schema, PromptStackSetEnabledIntentV1Schema, applyPromptStackIntentV1, type PromptStackEntryV1, type PromptStackMutationV1 } from '../prompts/library/promptStacksV1.js';
 import { ProjectAccountOrganizationKeyV1Schema, ProjectAccountOrganizationV1Schema, ProjectAccountRowExpectedRevisionV1Schema, type ProjectAccountOrganizationV1 } from './projectAccountRowsV1.js';
@@ -10,38 +10,38 @@ import type { QualifiedProjectKeyV1, WorkspaceRefV1 } from '../workspaces/worksp
 import { ProjectSourcesReadOutputV1Schema, ProjectSourcesUpdateOutputV1Schema,
   type ProjectSourcesReadInputV1, type ProjectSourcesUpdateInputV1 } from './sources/projectSourceV1.js';
 
-export const ProjectContextTargetV1Schema = lazyZodSchema(() => z.object({
+export const ProjectContextTargetV1Schema = lazyZodSchema(() => z.strictObject({
   serverId: ProjectAccountOrganizationKeyV1Schema.shape.serverId,
   projectKey: ProjectAccountOrganizationKeyV1Schema.shape.projectKey,
-}).strict());
+}));
 
 // Admission is narrower than retained stacks: only newly attached entries must
 // use system_append. Existing placement owners retain their established data.
-const NewContextEntrySchema = lazyZodSchema(() => PromptStackEntryAuthoringV1Schema.extend({
-  ref: PromptArtifactRefV1Schema.strict(),
-}).strict());
+const NewContextEntrySchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PromptStackEntryAuthoringV1Schema, {
+  ref: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(PromptArtifactRefV1Schema),
+})));
 
 export const ProjectContextIntentV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('attach'), entry: NewContextEntrySchema }).strict(),
-  z.object({ kind: z.literal('detach'), entryId: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal('reorder'), entryId: z.string().min(1), siblingId: z.string().min(1), position: z.enum(['before', 'after']) }).strict(),
-  z.object({ kind: z.literal('set_budget'), entryId: z.string().min(1), maxChars: z.number().int().positive().nullable() }).strict(),
+  z.strictObject({ kind: z.literal('attach'), entry: NewContextEntrySchema }),
+  z.strictObject({ kind: z.literal('detach'), entryId: z.string().check(z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('reorder'), entryId: z.string().check(z.minLength(1)), siblingId: z.string().check(z.minLength(1)), position: z.enum(['before', 'after']) }),
+  z.strictObject({ kind: z.literal('set_budget'), entryId: z.string().check(z.minLength(1)), maxChars: z.nullable(z.number().check(z.int(), z.positive())) }),
   PromptStackSetEnabledIntentV1Schema,
 ]));
 export type ProjectContextIntentV1 = z.infer<typeof ProjectContextIntentV1Schema>;
 
-export const ProjectContextUpdateInputV1Schema = lazyZodSchema(() => z.object({
+export const ProjectContextUpdateInputV1Schema = lazyZodSchema(() => z.strictObject({
   target: ProjectContextTargetV1Schema,
   expectedRevision: ProjectAccountRowExpectedRevisionV1Schema,
   intent: ProjectContextIntentV1Schema,
-}).strict());
+}));
 export type ProjectContextUpdateInputV1 = z.infer<typeof ProjectContextUpdateInputV1Schema>;
 
 export const ProjectContextUpdateOutputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true), row: ProjectAccountOrganizationV1Schema, revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) }).strict(),
-  z.object({ ok: z.literal(false), errorCode: z.enum(['invalid_parameters', 'entry_conflict', 'entry_not_found',
+  z.strictObject({ ok: z.literal(true), row: ProjectAccountOrganizationV1Schema, revision: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)) }),
+  z.strictObject({ ok: z.literal(false), errorCode: z.enum(['invalid_parameters', 'entry_conflict', 'entry_not_found',
     'project_context_conflict', 'project_context_unavailable', 'project_context_access_denied', 'artifact_unavailable', 'artifact_wrong_kind']),
-    currentRevision: z.optional(ProjectAccountRowExpectedRevisionV1Schema) }).strict(),
+    currentRevision: z.optional(ProjectAccountRowExpectedRevisionV1Schema) }),
 ]));
 export type ProjectContextUpdateOutputV1 = z.infer<typeof ProjectContextUpdateOutputV1Schema>;
 

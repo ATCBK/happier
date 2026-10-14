@@ -1,6 +1,6 @@
 import { sha256 } from '@noble/hashes/sha2';
 import { utf8ToBytes } from '@noble/hashes/utils';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { encodeBase64 } from '../crypto/base64.js';
 
@@ -25,9 +25,7 @@ export type ProviderFingerprintDomainV1 =
   | 'legacy-profile-migration-conflict';
 
 function canonicalFingerprintSchema(prefix: string) {
-  return z.string().min(1).max(256)
-    .refine((value) => value === value.trim(), 'Fingerprint must already be canonical')
-    .startsWith(prefix);
+  return z.string().check(z.minLength(1), z.maxLength(256), z.refine((value) => value === value.trim(), 'Fingerprint must already be canonical'), z.startsWith(prefix));
 }
 
 export const ProviderConnectionSecurityFingerprintV1Schema = canonicalFingerprintSchema(

@@ -1,5 +1,5 @@
 import { deriveWorkflowReplacementId } from '../../workflows/workflowInvocationIdentityV1.js';
-import { ZodError } from 'zod';
+import { z as zodMiniCore0 } from 'zod/mini';
 
 import { WorkflowAcceptedSnapshotV1Schema, type WorkflowDefinitionSavedByV1 } from '../../workflows/workflowDefinitionV1.js';
 import { deriveWorkflowDestinationsV1 } from '../../workflows/workflowDestinationsV1.js';
@@ -445,7 +445,7 @@ async function assertAcceptedAuthorizationCurrent(
 }
 
 function translateStorageError(error: unknown): never {
-  if (error instanceof ZodError) throw workflowError('content_unavailable');
+  if (error instanceof zodMiniCore0.core.$ZodError) throw workflowError('content_unavailable');
   const code = (error as { code?: unknown })?.code;
   if (code === 'ERR_CANCELED' || (error instanceof Error && error.name === 'AbortError')) throw error;
   const response = (error as { response?: { data?: { error?: unknown } } })?.response;

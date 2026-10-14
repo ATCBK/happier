@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SESSION_STATE_FIELD_CLASSES, SESSION_STATE_FIELD_IDS } from './_constants.js';
 
@@ -11,10 +11,8 @@ export const SessionStateFieldDeliveryClassSchema = lazyZodSchema(() => z.enum([
   'ephemeral_drop_ok',
 ]));
 
-export const SessionStateFieldDescriptorSchema = lazyZodSchema(() => z
-  .object({
+export const SessionStateFieldDescriptorSchema = lazyZodSchema(() => z.strictObject({
     id: SessionStateFieldIdSchema,
     class: SessionStateFieldClassSchema,
     deliveryClass: SessionStateFieldDeliveryClassSchema,
-  })
-  .strict());
+  }));

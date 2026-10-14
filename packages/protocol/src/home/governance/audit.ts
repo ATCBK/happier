@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { AccountDisplayProfileV1Schema } from '../../account/accountDisplayProfileV1.js';
 import { AccountStatusV1Schema, HomeRoleV1Schema } from './roles.js';
@@ -36,40 +36,40 @@ export type HomeGovernancePolicyFieldV1 = z.infer<typeof HomeGovernancePolicyFie
 const JsonValueSchema = lazyZodSchema(() => z.unknown());
 
 const SettingChangeSchema = lazyZodSchema(() => z.discriminatedUnion('secret', [
-  z.object({
+  z.strictObject({
     secret: z.literal(false),
-    key: z.string().min(1),
-    from: JsonValueSchema.nullable(),
-    to: JsonValueSchema.nullable(),
-  }).strict(),
-  z.object({
+    key: z.string().check(z.minLength(1)),
+    from: z.nullable(JsonValueSchema),
+    to: z.nullable(JsonValueSchema),
+  }),
+  z.strictObject({
     secret: z.literal(true),
-    key: z.string().min(1),
+    key: z.string().check(z.minLength(1)),
     from: z.enum(['unset', 'set']),
     to: z.enum(['unset', 'set']),
-  }).strict(),
+  }),
 ]));
 
 const EventBaseShape = {
-  id: z.string().min(1),
+  id: z.string().check(z.minLength(1)),
   /** Milliseconds since the epoch. */
-  at: z.number().int().min(0),
-  actor: z.object({
+  at: z.number().check(z.int(), z.minimum(0)),
+  actor: z.strictObject({
     kind: HomeAdministrationActorKindV1Schema,
-    accountId: z.string().min(1).nullable(),
-    profile: AccountDisplayProfileV1Schema.nullable(),
-  }).strict(),
-  target: z.object({
+    accountId: z.nullable(z.string().check(z.minLength(1))),
+    profile: z.nullable(AccountDisplayProfileV1Schema),
+  }),
+  target: z.nullable(z.strictObject({
     kind: HomeAdministrationTargetKindV1Schema,
-    id: z.string().min(1),
+    id: z.string().check(z.minLength(1)),
     /** Present for Account targets that still exist. */
-    profile: AccountDisplayProfileV1Schema.nullable(),
-  }).strict().nullable(),
+    profile: z.nullable(AccountDisplayProfileV1Schema),
+  })),
 };
 
-const IdentityProviderSummarySchema = lazyZodSchema(() => z.object({ displayName: z.string().min(1) }).strict());
+const IdentityProviderSummarySchema = lazyZodSchema(() => z.strictObject({ displayName: z.string().check(z.minLength(1)) }));
 /** A GitHub App by the name people see: its slug, or its App id when it has none. */
-const GitHubAppSummarySchema = lazyZodSchema(() => z.object({ name: z.string().min(1) }).strict());
+const GitHubAppSummarySchema = lazyZodSchema(() => z.strictObject({ name: z.string().check(z.minLength(1)) }));
 
 /**
  * Each action with its strict summary; adding an action is an additive protocol change.
@@ -81,27 +81,27 @@ const DETAIL_SHAPES = {
    * The first owner was assigned. The actor says who ran it; `via: 'claim_code'` marks a claim made
    * from the app with a one-time code printed by the server, whose actor is the claiming Account.
    */
-  'home.owner.claim': z.object({ via: z.literal('claim_code').optional() }).strict(),
-  'home.policy.set': z.object({
-    revision: z.number().int().min(1),
-    changes: z.array(z.object({
+  'home.owner.claim': z.strictObject({ via: z.optional(z.literal('claim_code')) }),
+  'home.policy.set': z.strictObject({
+    revision: z.number().check(z.int(), z.minimum(1)),
+    changes: z.array(z.strictObject({
       field: HomeGovernancePolicyFieldV1Schema,
-      from: JsonValueSchema.nullable(),
-      to: JsonValueSchema.nullable(),
-    }).strict()),
+      from: z.nullable(JsonValueSchema),
+      to: z.nullable(JsonValueSchema),
+    })),
     /** The change widened sign-in, admission or storage policy and the owner confirmed it. */
-    widening: z.literal(true).optional(),
-  }).strict(),
+    widening: z.optional(z.literal(true)),
+  }),
   'home.settings.set': SettingChangeSchema,
   /** A pending restart value went back to what the running server started with (Discard, §3.14 r3). */
   'home.settings.discard': SettingChangeSchema,
-  'account.role.set': z.object({ from: HomeRoleV1Schema, to: HomeRoleV1Schema }).strict(),
-  'account.status.set': z.object({ from: AccountStatusV1Schema, to: AccountStatusV1Schema }).strict(),
-  'account.delete': z.object({ outcome: z.enum(['deleted', 'disabled_pending_completion']) }).strict(),
+  'account.role.set': z.strictObject({ from: HomeRoleV1Schema, to: HomeRoleV1Schema }),
+  'account.status.set': z.strictObject({ from: AccountStatusV1Schema, to: AccountStatusV1Schema }),
+  'account.delete': z.strictObject({ outcome: z.enum(['deleted', 'disabled_pending_completion']) }),
   /** An administrator ended every signed-in session of the target (D-9); API tokens are unaffected. */
-  'account.sign_out_everywhere': z.object({}).strict(),
+  'account.sign_out_everywhere': z.strictObject({}),
   /** One ended Team membership lifetime; the Account target is its subject. */
-  'teams.members.remove': z.object({ teamId: z.string().min(1), membershipId: z.string().min(1), teamName: z.string().min(1) }).strict(),
+  'teams.members.remove': z.strictObject({ teamId: z.string().check(z.minLength(1)), membershipId: z.string().check(z.minLength(1)), teamName: z.string().check(z.minLength(1)) }),
   // Home-owned identity providers and GitHub Apps (Sign-in providers). The summary names the
   // provider or App; a secret change says only that it was replaced, never its value.
   'identity_provider.create': IdentityProviderSummarySchema,
@@ -111,9 +111,9 @@ const DETAIL_SHAPES = {
   'identity_provider.disable': IdentityProviderSummarySchema,
   'identity_provider.remove': IdentityProviderSummarySchema,
   'github_app.create': GitHubAppSummarySchema,
-  'github_app.update': GitHubAppSummarySchema.extend({ secretsReplaced: z.boolean() }).strict(),
-  'github_app.installation.verify': GitHubAppSummarySchema.extend({ organization: z.string().min(1) }).strict(),
-  'github_app.installation.remove': GitHubAppSummarySchema.extend({ organization: z.string().min(1) }).strict(),
+  'github_app.update': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(GitHubAppSummarySchema, { secretsReplaced: z.boolean() }))),
+  'github_app.installation.verify': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(GitHubAppSummarySchema, { organization: z.string().check(z.minLength(1)) }))),
+  'github_app.installation.remove': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(GitHubAppSummarySchema, { organization: z.string().check(z.minLength(1)) }))),
 } as const;
 
 type DetailShapes = typeof DETAIL_SHAPES;
@@ -129,7 +129,7 @@ export const HomeAdministrationActionV1Schema = lazyZodSchema(() => z.enum(
 ));
 
 function eventOption<A extends HomeAdministrationActionV1>(action: A) {
-  return z.object({ ...EventBaseShape, action: z.literal(action), summary: DETAIL_SHAPES[action] }).strict();
+  return z.strictObject({ ...EventBaseShape, action: z.literal(action), summary: DETAIL_SHAPES[action] });
 }
 
 export const HomeAdministrationEventV1Schema = lazyZodSchema(() => z.discriminatedUnion('action', [
@@ -168,17 +168,17 @@ export const HOME_AUDIT_PAGE_LIMIT_MAX_V1 = 100;
 export const HOME_AUDIT_PAGE_CURSOR_MAX_LENGTH_V1 = 512;
 
 /** Newest first, keyset over `(at, id)`; `targetId` narrows to events about one target. */
-export const HomeAuditListInputV1Schema = lazyZodSchema(() => z.object({
-  cursor: z.string().min(1).max(HOME_AUDIT_PAGE_CURSOR_MAX_LENGTH_V1).nullable().optional(),
-  limit: z.number().int().min(1).max(HOME_AUDIT_PAGE_LIMIT_MAX_V1).optional(),
-  targetId: z.string().min(1).max(256).optional(),
-}).strict());
+export const HomeAuditListInputV1Schema = lazyZodSchema(() => z.strictObject({
+  cursor: z.optional(z.nullable(z.string().check(z.minLength(1), z.maxLength(HOME_AUDIT_PAGE_CURSOR_MAX_LENGTH_V1)))),
+  limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(HOME_AUDIT_PAGE_LIMIT_MAX_V1))),
+  targetId: z.optional(z.string().check(z.minLength(1), z.maxLength(256))),
+}));
 
 export type HomeAuditListInputV1 = z.infer<typeof HomeAuditListInputV1Schema>;
 
-export const HomeAuditListResultV1Schema = lazyZodSchema(() => z.object({
+export const HomeAuditListResultV1Schema = lazyZodSchema(() => z.strictObject({
   items: z.array(HomeAdministrationEventV1Schema),
-  nextCursor: z.string().min(1).max(HOME_AUDIT_PAGE_CURSOR_MAX_LENGTH_V1).nullable(),
-}).strict());
+  nextCursor: z.nullable(z.string().check(z.minLength(1), z.maxLength(HOME_AUDIT_PAGE_CURSOR_MAX_LENGTH_V1))),
+}));
 
 export type HomeAuditListResultV1 = z.infer<typeof HomeAuditListResultV1Schema>;

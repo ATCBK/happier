@@ -1,52 +1,53 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { preservedBoundedNfcString } from '../strings/preservedBoundedNfcString.js';
 import type { ActionExecutorContext } from '../actions/executor/types.js';
 
 /** Sensitive file metadata stays inside the ordinary Artifact body envelope. */
-export const ArtifactBlobReferenceV1Schema = lazyZodSchema(() => z.object({
-  blobId: z.string().uuid(), mime: z.string().min(1),
-  sizeBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  sha256: z.string().regex(/^[a-f0-9]{64}$/),
-}).strict());
+export const ArtifactBlobReferenceV1Schema = lazyZodSchema(() => z.strictObject({
+  blobId: z.string().check(z.uuid()), mime: z.string().check(z.minLength(1)),
+  sizeBytes: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+  sha256: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
+}));
 export type ArtifactBlobReferenceV1 = z.infer<typeof ArtifactBlobReferenceV1Schema>;
 export const ArtifactBodyV1Schema = lazyZodSchema(() => z.union([z.string(), ArtifactBlobReferenceV1Schema]));
 export type ArtifactBodyV1 = z.infer<typeof ArtifactBodyV1Schema>;
 
 /** Save attribution is private metadata, outside public-share content custody. */
 export const ArtifactSavedByV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('person'), accountId: preservedBoundedNfcString(191, 'Account ids') }).strict(),
-  z.object({ kind: z.literal('agent'), accountId: preservedBoundedNfcString(191, 'Account ids'),
-    sessionId: preservedBoundedNfcString(191, 'Session ids').optional() }).strict(),
+  z.strictObject({ kind: z.literal('person'), accountId: preservedBoundedNfcString(191, 'Account ids') }),
+  z.strictObject({ kind: z.literal('agent'), accountId: preservedBoundedNfcString(191, 'Account ids'),
+    sessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')) }),
 ]));
 export type ArtifactSavedByV1 = z.infer<typeof ArtifactSavedByV1Schema>;
 /** Host-admitted workspace identity belongs to private revision custody, not public preview content. */
-export const ArtifactWorkspaceSourceV1Schema = lazyZodSchema(() => z.object({
+export const ArtifactWorkspaceSourceV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: preservedBoundedNfcString(191, 'Session ids'),
-  runId: preservedBoundedNfcString(191, 'Run ids').optional(),
+  runId: zMini.optional(preservedBoundedNfcString(191, 'Run ids')),
   machineId: preservedBoundedNfcString(191, 'Machine ids'),
-  path: z.string().min(1),
-  sha: z.string().regex(/^[a-f0-9]{64}$/),
-}).strict());
+  path: z.string().check(z.minLength(1)),
+  sha: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
+}));
 export type ArtifactWorkspaceSourceV1 = z.infer<typeof ArtifactWorkspaceSourceV1Schema>;
-export const ArtifactRevisionProvenanceV1Schema = lazyZodSchema(() => z.object({
+export const ArtifactRevisionProvenanceV1Schema = lazyZodSchema(() => z.strictObject({
   savedBy: ArtifactSavedByV1Schema,
-  source: ArtifactWorkspaceSourceV1Schema.optional(),
-  restoredFromBodyVersion: z.number().int().positive().safe().optional(),
-}).strict());
+  source: z.optional(ArtifactWorkspaceSourceV1Schema),
+  restoredFromBodyVersion: z.optional(z.number().check(z.int(), z.positive(), z.int())),
+}));
 export type ArtifactRevisionProvenanceV1 = z.infer<typeof ArtifactRevisionProvenanceV1Schema>;
 /** Separate owner/grant envelope, bound to the exact Artifact body revision. */
-export const ArtifactPrivateRevisionMetadataV1Schema = lazyZodSchema(() => z.object({
+export const ArtifactPrivateRevisionMetadataV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1), artifactId: preservedBoundedNfcString(191, 'Artifact ids'),
-  bodyVersion: z.number().int().nonnegative().safe(),
+  bodyVersion: z.number().check(z.int(), z.nonnegative(), z.int()),
   provenance: ArtifactRevisionProvenanceV1Schema,
-}).strict());
+}));
 export type ArtifactPrivateRevisionMetadataV1 = z.infer<typeof ArtifactPrivateRevisionMetadataV1Schema>;
 export const ArtifactPrivateRevisionMetadataV1StoredSchema = createStoredReadSchema(ArtifactPrivateRevisionMetadataV1Schema);
-export const ArtifactBodyEnvelopeV1Schema = lazyZodSchema(() => z.object({
-  body: ArtifactBodyV1Schema.nullable(),
-}).strict());
+export const ArtifactBodyEnvelopeV1Schema = lazyZodSchema(() => z.strictObject({
+  body: z.nullable(ArtifactBodyV1Schema),
+}));
 export type ArtifactBodyEnvelopeV1 = z.infer<typeof ArtifactBodyEnvelopeV1Schema>;
 export const ArtifactBodyEnvelopeV1StoredSchema = createStoredReadSchema(ArtifactBodyEnvelopeV1Schema);
 
@@ -60,38 +61,38 @@ export function artifactSavedByFromActionContextV1(caller?: ActionExecutorContex
 }
 
 /** Mode is explicit before any binary opening or disclosure. Payloads use standard base64. */
-const bytesBase64 = z.string().regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/);
+const bytesBase64 = z.string().check(z.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/));
 export const ArtifactBlobStoredContentV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('plain'), v: bytesBase64 }).strict(),
-  z.object({ t: z.literal('encrypted'), c: bytesBase64 }).strict(),
+  z.strictObject({ t: z.literal('plain'), v: bytesBase64 }),
+  z.strictObject({ t: z.literal('encrypted'), c: bytesBase64 }),
 ]));
 export type ArtifactBlobStoredContentV1 = z.infer<typeof ArtifactBlobStoredContentV1Schema>;
 /** Signed conversion directives identify staged bytes rather than carrying them inline. */
-export const ArtifactBlobAccountEncryptionStageV1Schema = lazyZodSchema(() => z.object({
-  t: z.enum(['plain', 'encrypted']), uploadId: z.string().uuid(),
-  contentSha256: z.string().regex(/^[a-f0-9]{64}$/),
-}).strict());
+export const ArtifactBlobAccountEncryptionStageV1Schema = lazyZodSchema(() => z.strictObject({
+  t: z.enum(['plain', 'encrypted']), uploadId: z.string().check(z.uuid()),
+  contentSha256: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
+}));
 export type ArtifactBlobAccountEncryptionStageV1 = z.infer<typeof ArtifactBlobAccountEncryptionStageV1Schema>;
 const uploadIdentity = {
-  artifactId: z.string().min(1), blobId: z.string().uuid(), t: z.enum(['plain', 'encrypted']),
-  sizeBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  artifactId: z.string().check(z.minLength(1)), blobId: z.string().check(z.uuid()), t: z.enum(['plain', 'encrypted']),
+  sizeBytes: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
 };
-const artifactUuid = z.string().uuid();
+const artifactUuid = z.string().check(z.uuid());
 /** Destination metadata stays small; file bytes use the finite-transfer chunk owner. */
 export const ArtifactBlobUploadInitV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('create'), ...uploadIdentity, artifactId: artifactUuid,
+  z.strictObject({ kind: z.literal('create'), ...uploadIdentity, artifactId: artifactUuid,
     header: z.string(), body: z.string(), dataEncryptionKey: z.string(),
-    provenance: z.string().nullable().optional(), provenanceDataEncryptionKey: z.string().nullable().optional() }).strict(),
-  z.object({ kind: z.literal('update'), ...uploadIdentity,
-    header: z.string().optional(), expectedHeaderVersion: z.number().int().nonnegative().optional(),
-    body: z.string(), expectedBodyVersion: z.number().int().nonnegative(),
-    provenance: z.string().nullable().optional(), provenanceDataEncryptionKey: z.string().nullable().optional() }).strict(),
-  z.object({ kind: z.literal('encryption-conversion'), ...uploadIdentity, artifactId: artifactUuid }).strict(),
+    provenance: z.optional(z.nullable(z.string())), provenanceDataEncryptionKey: z.optional(z.nullable(z.string())) }),
+  z.strictObject({ kind: z.literal('update'), ...uploadIdentity,
+    header: z.optional(z.string()), expectedHeaderVersion: z.optional(z.number().check(z.int(), z.nonnegative())),
+    body: z.string(), expectedBodyVersion: z.number().check(z.int(), z.nonnegative()),
+    provenance: z.optional(z.nullable(z.string())), provenanceDataEncryptionKey: z.optional(z.nullable(z.string())) }),
+  z.strictObject({ kind: z.literal('encryption-conversion'), ...uploadIdentity, artifactId: artifactUuid }),
 ]));
 export type ArtifactBlobUploadInitV1 = z.infer<typeof ArtifactBlobUploadInitV1Schema>;
-export const ArtifactBlobWriteV1Schema = lazyZodSchema(() => z.object({
-  blobId: z.string().uuid(), content: ArtifactBlobStoredContentV1Schema.optional(),
-}).strict());
+export const ArtifactBlobWriteV1Schema = lazyZodSchema(() => z.strictObject({
+  blobId: z.string().check(z.uuid()), content: z.optional(ArtifactBlobStoredContentV1Schema),
+}));
 export type ArtifactBlobWriteV1 = z.infer<typeof ArtifactBlobWriteV1Schema>;
-export const ArtifactBlobReadResponseV1Schema = lazyZodSchema(() => ArtifactBlobWriteV1Schema.required({ content: true }));
+export const ArtifactBlobReadResponseV1Schema = lazyZodSchema(() => z.required(ArtifactBlobWriteV1Schema, { content: true }));
 export type ArtifactBlobReadResponseV1 = z.infer<typeof ArtifactBlobReadResponseV1Schema>;

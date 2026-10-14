@@ -7,27 +7,27 @@ import { buildBackendTargetKeyV2 } from '../../backends/targets/backendTargetRef
 import { accountSettingsParse } from './accountSettings.js';
 import { SessionSpawnNewInputV2Schema } from '../../sessions/creation/sessionSpawnNewInputV2.js';
 import { ExecutionRunStartRequestBaseSchema } from '../../execution/runs/startRequest.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { SessionIndexedIdentifierMaxLengthV1 } from '../../sessions/idsV1.js';
 
 // Pinned predecessor schema: ../0.2 @17ba05df68, accountSettings.ts:94–126.
 // This is an old-reader contract vector, never a production policy decision.
-const predecessorPolicySchema = z.object({
-  v: z.literal(1).default(1),
-  allowCustomDirectory: z.boolean().default(true),
-  allowCrossMachine: z.boolean().default(true),
-  allowBackendTargetOverride: z.boolean().default(true),
-  allowModelOverride: z.boolean().default(true),
-  allowPermissionModeOverride: z.boolean().default(true),
-  allowAgentModeOverride: z.boolean().default(true),
-  allowConfigOptionOverrides: z.boolean().default(true),
-  allowProfileOverride: z.boolean().default(true),
-  allowEnvironmentVariables: z.boolean().default(true),
-  allowConnectedServicesOverride: z.boolean().default(true),
-  allowMcpSelectionOverride: z.boolean().default(true),
-  allowTranscriptStorageOverride: z.boolean().default(true),
-  permissionCeiling: z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'read-only', 'safe-yolo', 'yolo']).nullable().default(null),
-}).strict();
+const predecessorPolicySchema = z.strictObject({
+  v: z._default(z.literal(1), 1),
+  allowCustomDirectory: z._default(z.boolean(), true),
+  allowCrossMachine: z._default(z.boolean(), true),
+  allowBackendTargetOverride: z._default(z.boolean(), true),
+  allowModelOverride: z._default(z.boolean(), true),
+  allowPermissionModeOverride: z._default(z.boolean(), true),
+  allowAgentModeOverride: z._default(z.boolean(), true),
+  allowConfigOptionOverrides: z._default(z.boolean(), true),
+  allowProfileOverride: z._default(z.boolean(), true),
+  allowEnvironmentVariables: z._default(z.boolean(), true),
+  allowConnectedServicesOverride: z._default(z.boolean(), true),
+  allowMcpSelectionOverride: z._default(z.boolean(), true),
+  allowTranscriptStorageOverride: z._default(z.boolean(), true),
+  permissionCeiling: z._default(z.nullable(z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'read-only', 'safe-yolo', 'yolo'])), null),
+});
 
 const target: AgentExecutionTargetV1 = { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } };
 const otherTarget: AgentExecutionTargetV1 = { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } };

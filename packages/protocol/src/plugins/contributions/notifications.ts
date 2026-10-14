@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 
 import { PluginContributionLocalIdSchema } from '../contributionIdentity.js';
@@ -14,8 +14,8 @@ import {
 const DisplayBaseSchema = lazyZodSchema(() => z.object({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   title: PluginLocalizedStringV2Schema,
-  description: PluginLocalizedStringV2Schema.optional(),
-  metadata: z.record(z.string(), PluginJsonValueV2Schema).optional(),
+  description: z.optional(PluginLocalizedStringV2Schema),
+  metadata: z.optional(z.record(z.string(), PluginJsonValueV2Schema)),
 }));
 
 export const PluginNotificationCategoryKindV1Schema = lazyZodSchema(() => z.enum([
@@ -37,19 +37,19 @@ export const PluginNotificationChannelKindV1Schema = lazyZodSchema(() => z.enum(
 ]));
 export type PluginNotificationChannelKindV1 = z.infer<typeof PluginNotificationChannelKindV1Schema>;
 
-export const PluginNotificationCategoryContributionV2Schema = lazyZodSchema(() => DisplayBaseSchema.extend({
+export const PluginNotificationCategoryContributionV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(DisplayBaseSchema, {
   kind: PluginNotificationCategoryKindV1Schema,
   eventIds: z.array(asProtocolZod(PluginContributionReferenceV2Schema)),
-  defaultChannels: z.array(asProtocolZod(PluginContributionReferenceV2Schema)).optional(),
-  availability: PluginAvailabilityDescriptorV2Schema.optional(),
-}).strict());
+  defaultChannels: z.optional(z.array(asProtocolZod(PluginContributionReferenceV2Schema))),
+  availability: z.optional(PluginAvailabilityDescriptorV2Schema),
+})));
 export type PluginNotificationCategoryContributionV2 = z.infer<typeof PluginNotificationCategoryContributionV2Schema>;
 
-export const PluginNotificationChannelContributionV2Schema = lazyZodSchema(() => DisplayBaseSchema.extend({
+export const PluginNotificationChannelContributionV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(DisplayBaseSchema, {
   kind: PluginNotificationChannelKindV1Schema,
-  configurable: z.boolean().optional(),
-  defaultEnabled: z.boolean().optional(),
-  settings: z.array(PluginSettingFieldV2Schema).optional(),
-  availability: PluginAvailabilityDescriptorV2Schema.optional(),
-}).strict());
+  configurable: z.optional(z.boolean()),
+  defaultEnabled: z.optional(z.boolean()),
+  settings: z.optional(z.array(PluginSettingFieldV2Schema)),
+  availability: z.optional(PluginAvailabilityDescriptorV2Schema),
+})));
 export type PluginNotificationChannelContributionV2 = z.infer<typeof PluginNotificationChannelContributionV2Schema>;

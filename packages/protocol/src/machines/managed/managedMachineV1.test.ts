@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { createManagedMachineV1Schema } from './managedMachineV1.js';
 import { ManagedAdmissionInputV1Schema, ManagedCancelInputV1Schema } from './actionsV1.js';
@@ -8,8 +8,8 @@ import { isManagedDevcontainerChildProjectionCurrentV1 } from './devcontainerV1.
 
 describe('managed resource persistence and input contracts', () => {
   const schema = createManagedMachineV1Schema(
-    z.object({ image: z.string() }).strict(),
-    z.object({ instance: z.string(), store: z.string() }).strict(),
+    z.strictObject({ image: z.string() }),
+    z.strictObject({ instance: z.string(), store: z.string() }),
   );
   const row = {
     id: 'managed', homeId: 'home', custodianAccountId: 'owner',
@@ -108,9 +108,9 @@ describe('managed resource persistence and input contracts', () => {
   });
   it('validates declared pending handles strictly and tolerates stored extras without losing recovery identity', () => {
     const pendingSchema = createManagedMachineV1Schema(
-      z.object({ image: z.string() }).strict(),
-      z.object({ instance: z.string(), store: z.string() }).strict(),
-      z.object({ request: z.string(), region: z.string() }).strict(),
+      z.strictObject({ image: z.string() }),
+      z.strictObject({ instance: z.string(), store: z.string() }),
+      z.strictObject({ request: z.string(), region: z.string() }),
     );
     const nativeOperationRef = { contributionRef: row.launch.provider, schemaVersion: row.launch.schemaVersion,
       value: { request: 'submitted-native-request', region: 'reviewed-region' } };

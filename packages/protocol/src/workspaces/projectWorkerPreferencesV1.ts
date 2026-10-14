@@ -1,30 +1,30 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { MachinePoolIdV1Schema } from '../machines/pools/v1.js';
 import { ProjectServicePlacementV1Schema } from './projectServicePlacementV1.js';
 
-const IdentifierSchema = lazyZodSchema(() => z.string().trim().min(1));
+const IdentifierSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 // Manifest declaration names are exact identities; trimming dictionary keys can merge two entries.
-const DeclarationNameSchema = lazyZodSchema(() => z.string().min(1));
+const DeclarationNameSchema = lazyZodSchema(() => z.string().check(z.minLength(1)));
 
 /** Account is supplied by the authenticated Home transport, never this address. */
-export const WorkspaceExecutionConfigAddressV1Schema = lazyZodSchema(() => z.object({
+export const WorkspaceExecutionConfigAddressV1Schema = lazyZodSchema(() => z.strictObject({
   serverId: IdentifierSchema,
   refId: IdentifierSchema,
-}).strict());
+}));
 export type WorkspaceExecutionConfigAddressV1 = z.infer<typeof WorkspaceExecutionConfigAddressV1Schema>;
 
 export const WorkerDestinationV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('machine'), machineId: IdentifierSchema }).strict(),
-  z.object({ kind: z.literal('pool'), poolId: MachinePoolIdV1Schema, selection: z.enum(['automatic', 'ask']) }).strict(),
+  z.strictObject({ kind: z.literal('machine'), machineId: IdentifierSchema }),
+  z.strictObject({ kind: z.literal('pool'), poolId: MachinePoolIdV1Schema, selection: z.enum(['automatic', 'ask']) }),
 ]));
 export type WorkerDestinationV1 = z.infer<typeof WorkerDestinationV1Schema>;
 
 export const ProjectExecutionChoiceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('primary') }).strict(),
-  z.object({ kind: z.literal('workers'), destination: WorkerDestinationV1Schema }).strict(),
+  z.strictObject({ kind: z.literal('primary') }),
+  z.strictObject({ kind: z.literal('workers'), destination: WorkerDestinationV1Schema }),
 ]));
 export type ProjectExecutionChoiceV1 = z.infer<typeof ProjectExecutionChoiceV1Schema>;
 
@@ -33,12 +33,12 @@ const PreferenceFieldsSchema = lazyZodSchema(() => z.object({
   allowAdHoc: z.boolean(),
   scriptOverrides: z.record(DeclarationNameSchema, z.enum(['primary', 'workers'])),
 }));
-const DisabledPreferenceSchema = lazyZodSchema(() => PreferenceFieldsSchema.extend({
-  enabled: z.literal(false), destination: WorkerDestinationV1Schema.optional(),
-}).strict());
-const EnabledPreferenceSchema = lazyZodSchema(() => PreferenceFieldsSchema.extend({
+const DisabledPreferenceSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PreferenceFieldsSchema, {
+  enabled: z.literal(false), destination: z.optional(WorkerDestinationV1Schema),
+})));
+const EnabledPreferenceSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PreferenceFieldsSchema, {
   enabled: z.literal(true), destination: WorkerDestinationV1Schema,
-}).strict());
+})));
 
 /** Finite preference mutation inputs deliberately have no service field. */
 export const WorkspaceWorkerPreferenceV1Schema = lazyZodSchema(() => z.discriminatedUnion('enabled', [
@@ -49,8 +49,8 @@ export const WorkspaceWorkerPreferenceV1StoredSchema = createStoredReadSchema(Wo
 
 const ServicesSchema = lazyZodSchema(() => z.record(DeclarationNameSchema, ProjectServicePlacementV1Schema));
 export const WorkspaceExecutionSettingsV1Schema = lazyZodSchema(() => z.discriminatedUnion('enabled', [
-  DisabledPreferenceSchema.extend({ services: ServicesSchema }),
-  EnabledPreferenceSchema.extend({ services: ServicesSchema }),
+  z.extend(DisabledPreferenceSchema, { services: ServicesSchema }),
+  z.extend(EnabledPreferenceSchema, { services: ServicesSchema }),
 ]));
 export type WorkspaceExecutionSettingsV1 = z.infer<typeof WorkspaceExecutionSettingsV1Schema>;
 export const WorkspaceExecutionSettingsV1StoredSchema = createStoredReadSchema(WorkspaceExecutionSettingsV1Schema);
@@ -64,12 +64,12 @@ export function createDefaultWorkspaceExecutionSettingsV1(): WorkspaceExecutionS
 }
 
 export const WorkspaceExecutionConfigRevisionV1Schema = lazyZodSchema(() => z.union([
-  z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), z.literal('absent'),
+  z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)), z.literal('absent'),
 ]));
 export type WorkspaceExecutionConfigRevisionV1 = z.infer<typeof WorkspaceExecutionConfigRevisionV1Schema>;
 export const WorkspaceWorkerPreferenceExpectationV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('absent') }).strict(),
-  z.object({ kind: z.literal('value'), value: WorkspaceWorkerPreferenceV1Schema }).strict(),
+  z.strictObject({ kind: z.literal('absent') }),
+  z.strictObject({ kind: z.literal('value'), value: WorkspaceWorkerPreferenceV1Schema }),
 ]));
 export type WorkspaceWorkerPreferenceExpectationV1 = z.infer<typeof WorkspaceWorkerPreferenceExpectationV1Schema>;
 
@@ -79,13 +79,13 @@ const PreferenceObservationSchema = lazyZodSchema(() => z.object({
   provenance: z.enum(['default', 'saved']),
 }));
 export const WorkspaceWorkerPreferenceReadResultV1Schema = lazyZodSchema(() => z.union([
-  PreferenceObservationSchema.extend({ status: z.literal('ready') }).strict(),
-  z.object({ status: z.enum(['locked', 'invalid', 'unavailable']) }).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PreferenceObservationSchema, { status: z.literal('ready') })),
+  z.strictObject({ status: z.enum(['locked', 'invalid', 'unavailable']) }),
 ]));
 export type WorkspaceWorkerPreferenceReadResultV1 = z.infer<typeof WorkspaceWorkerPreferenceReadResultV1Schema>;
 export const WorkspaceWorkerPreferenceMutationResultV1Schema = lazyZodSchema(() => z.union([
-  PreferenceObservationSchema.extend({ status: z.enum(['applied', 'satisfied', 'unchanged', 'conflict']) }).strict(),
-  z.object({ status: z.enum(['outcomeUnknown', 'cancelled', 'locked', 'invalid', 'unavailable']) }).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PreferenceObservationSchema, { status: z.enum(['applied', 'satisfied', 'unchanged', 'conflict']) })),
+  z.strictObject({ status: z.enum(['outcomeUnknown', 'cancelled', 'locked', 'invalid', 'unavailable']) }),
 ]));
 export type WorkspaceWorkerPreferenceMutationResultV1 = z.infer<typeof WorkspaceWorkerPreferenceMutationResultV1Schema>;
 

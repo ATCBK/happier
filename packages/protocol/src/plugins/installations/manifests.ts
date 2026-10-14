@@ -1,25 +1,25 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1 = 'x-happier-plugin-installation-manifest-publisher' as const;
 
-export const PluginInstallationManifestPublisherProofV1Schema = lazyZodSchema(() => z.object({
+export const PluginInstallationManifestPublisherProofV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   alg: z.literal('ed25519-machine-installation-v1'),
-  machineId: z.string().trim().min(1),
-  installationId: z.string().trim().min(1),
-  issuedAt: z.number().int().nonnegative(),
-  nonce: z.string().trim().min(1),
+  machineId: z.string().check(z.trim(), z.minLength(1)),
+  installationId: z.string().check(z.trim(), z.minLength(1)),
+  issuedAt: z.number().check(z.int(), z.nonnegative()),
+  nonce: z.string().check(z.trim(), z.minLength(1)),
   method: z.enum(['GET', 'POST']),
-  path: z.string().trim().min(1),
-  bodySha256Base64Url: z.string().trim().min(1),
-  signatureBase64Url: z.string().trim().min(1),
-}).strict());
+  path: z.string().check(z.trim(), z.minLength(1)),
+  bodySha256Base64Url: z.string().check(z.trim(), z.minLength(1)),
+  signatureBase64Url: z.string().check(z.trim(), z.minLength(1)),
+}));
 export type PluginInstallationManifestPublisherProofV1 = z.infer<typeof PluginInstallationManifestPublisherProofV1Schema>;
 
-export const PluginInstallationManifestPublisherHeaderV1Schema = lazyZodSchema(() => z.object({
+export const PluginInstallationManifestPublisherHeaderV1Schema = lazyZodSchema(() => z.strictObject({
   proof: PluginInstallationManifestPublisherProofV1Schema,
-}).strict());
+}));
 export type PluginInstallationManifestPublisherHeaderV1 = z.infer<typeof PluginInstallationManifestPublisherHeaderV1Schema>;
 
 function normalizeCanonicalJsonValue(value: unknown): unknown {

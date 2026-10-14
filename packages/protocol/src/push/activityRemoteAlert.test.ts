@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { describe, expect, it } from 'vitest';
 
 import { AttentionDeliveryEventIdSchema } from '../account/settings/attentionDeliveryPolicy.js';
@@ -24,7 +25,7 @@ describe('ActivityRemoteAlertV1', () => {
   };
 
   it('publishes the complete strict event vocabulary for native capability consumers', () => {
-    const schemaEventTypes = ActivityRemoteAlertEventV1Schema.options.map(
+    const schemaEventTypes = ActivityRemoteAlertEventV1Schema._zod.def.options.map(
       (option) => option.shape.type.value,
     );
     expect([...ACTIVITY_REMOTE_ALERT_EVENT_TYPES_V1].sort()).toEqual(schemaEventTypes.sort());

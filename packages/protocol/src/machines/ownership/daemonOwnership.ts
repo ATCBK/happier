@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
     MachineInstallationProofV1Schema,
     MachineInstallationPublicKeySchema,
@@ -18,20 +18,20 @@ export const MACHINE_DAEMON_STARTUP_SOURCE_VALUES = [
 export const MachineDaemonStartupSourceSchema = lazyZodSchema(() => z.enum(MACHINE_DAEMON_STARTUP_SOURCE_VALUES));
 
 export const MachineDaemonOwnershipMetadataSchema = lazyZodSchema(() => z.object({
-    runtimeId: z.string().trim().min(1).optional(),
-    cliVersion: z.string().trim().min(1).optional(),
-    publicReleaseChannel: z.string().trim().min(1).optional(),
-    startupSource: MachineDaemonStartupSourceSchema.optional(),
-    serviceManaged: z.boolean().optional(),
-    serviceLabel: z.string().trim().min(1).optional(),
-    installationId: z.string().trim().min(1).optional(),
-    installationPublicKey: MachineInstallationPublicKeySchema.optional(),
-    installationProof: MachineInstallationProofV1Schema.optional(),
+    runtimeId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    cliVersion: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    publicReleaseChannel: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    startupSource: z.optional(MachineDaemonStartupSourceSchema),
+    serviceManaged: z.optional(z.boolean()),
+    serviceLabel: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    installationId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    installationPublicKey: z.optional(MachineInstallationPublicKeySchema),
+    installationProof: z.optional(MachineInstallationProofV1Schema),
 }));
 
 export type MachineDaemonOwnershipMetadata = z.infer<typeof MachineDaemonOwnershipMetadataSchema>;
 
-export const MachineOwnerConflictMetadataSchema = lazyZodSchema(() => MachineDaemonOwnershipMetadataSchema.omit({
+export const MachineOwnerConflictMetadataSchema = lazyZodSchema(() => z.omit(MachineDaemonOwnershipMetadataSchema, {
     runtimeId: true,
 }));
 
@@ -46,7 +46,7 @@ export const MachineOwnerConflictSocketPayloadSchema = lazyZodSchema(() => z.obj
 export type MachineOwnerConflictSocketPayload = z.infer<typeof MachineOwnerConflictSocketPayloadSchema>;
 
 function normalizeOptionalStringField(value: unknown): string | undefined {
-    const parsed = z.string().trim().min(1).safeParse(value);
+    const parsed = z.string().check(z.trim(), z.minLength(1)).safeParse(value);
     return parsed.success ? parsed.data : undefined;
 }
 

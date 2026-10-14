@@ -1,5 +1,5 @@
 import { lazyZodSchema } from './lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const StopSessionIncompleteReasonSchema = lazyZodSchema(() => z.enum([
   'invalid_session_id',
@@ -21,13 +21,13 @@ export const StopSessionIncompleteReasonSchema = lazyZodSchema(() => z.enum([
 export type StopSessionIncompleteReason = z.infer<typeof StopSessionIncompleteReasonSchema>;
 
 export const StopSessionResultSchema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('stopped') }).strict(),
-  z.object({ status: z.literal('requested') }).strict(),
-  z.object({ status: z.literal('not_found') }).strict(),
-  z.object({
+  z.strictObject({ status: z.literal('stopped') }),
+  z.strictObject({ status: z.literal('requested') }),
+  z.strictObject({ status: z.literal('not_found') }),
+  z.strictObject({
     status: z.literal('incomplete'),
     reason: StopSessionIncompleteReasonSchema,
-  }).strict(),
+  }),
 ]));
 
 export type StopSessionResult = z.infer<typeof StopSessionResultSchema>;

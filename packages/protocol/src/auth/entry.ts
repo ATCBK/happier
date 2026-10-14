@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { AccountDisplayProfileV1Schema } from '../account/accountDisplayProfileV1.js';
 import { AccountEncryptionModeSchema } from '../features/payload/capabilities/encryptionCapabilities.js';
@@ -19,59 +19,57 @@ export { AuthEntryMethodIdV1Schema } from './methodId.js';
 export const AUTH_ENTRY_RESPONSE_MAX_UTF8_BYTES_V1 = FEATURES_RESPONSE_MAX_UTF8_BYTES_V1;
 const AUTH_ENTRY_UTF8_ENCODER = new TextEncoder();
 
-function boundedAuthEntryString(schema: z.ZodString): z.ZodType<string> {
-  return schema
-    .max(AUTH_ENTRY_RESPONSE_MAX_UTF8_BYTES_V1)
-    .superRefine((value, context) => {
+function boundedAuthEntryString(schema: z.ZodMiniString): z.ZodMiniType<string> {
+  return schema.check(z.maxLength(AUTH_ENTRY_RESPONSE_MAX_UTF8_BYTES_V1), z.superRefine((value, context) => {
       if (AUTH_ENTRY_UTF8_ENCODER.encode(value).byteLength > AUTH_ENTRY_RESPONSE_MAX_UTF8_BYTES_V1) {
-        context.addIssue({ code: z.ZodIssueCode.custom, message: 'Auth entry string exceeds response byte budget' });
+        context.addIssue({ code: "custom", message: 'Auth entry string exceeds response byte budget' });
       }
-    });
+    }));
 }
 
 
-const HomeAuthEntryScopeV1Schema = z.object({ kind: z.literal('home') }).strict();
-const TeamAuthEntryRequestScopeV1Schema = z.object({
+const HomeAuthEntryScopeV1Schema = z.strictObject({ kind: z.literal('home') });
+const TeamAuthEntryRequestScopeV1Schema = z.strictObject({
   kind: z.literal('team'),
   teamId: TeamInvitationPreviewV1Schema.shape.team.shape.teamId,
-}).strict();
-const TeamAuthEntryProjectionScopeV1Schema = z.object({ kind: z.literal('team') }).strict();
-const InvitationAuthEntryRequestScopeV1Schema = z.union([z.object({
+});
+const TeamAuthEntryProjectionScopeV1Schema = z.strictObject({ kind: z.literal('team') });
+const InvitationAuthEntryRequestScopeV1Schema = z.union([z.strictObject({
   kind: z.literal('invitation'),
   token: TeamInvitationTokenV1Schema,
-}).strict(), z.object({
+}), z.strictObject({
   kind: z.literal('invitation'),
   continuation: TeamInvitationPostAuthContinuationV1Schema,
-}).strict()]);
-const NativeEmailVerificationAuthEntryRequestScopeV1Schema = z.object({
+})]);
+const NativeEmailVerificationAuthEntryRequestScopeV1Schema = z.strictObject({
   kind: z.literal('native_email_verification'),
   token: NativeAuthOneTimeBearerV1Schema,
-}).strict();
-const InvitationAuthEntryProjectionScopeV1Schema = z.object({ kind: z.literal('invitation') }).strict();
+});
+const InvitationAuthEntryProjectionScopeV1Schema = z.strictObject({ kind: z.literal('invitation') });
 
 export const AuthEntryRequestV1Schema = z.union([
-  z.object({
+  z.strictObject({
     v: z.literal(1),
     scope: HomeAuthEntryScopeV1Schema,
-    purpose: z.enum(['home', 'account_service']).optional(),
+    purpose: z.optional(z.enum(['home', 'account_service'])),
     /** Syntax-only company routing hint; never Account identity or admission evidence. */
-    email: z.string().refine((value) => normalizeVerifiedEmail(value) !== null).optional(),
-  }).strict(),
-  z.object({
+    email: z.optional(z.string().check(z.refine((value) => normalizeVerifiedEmail(value) !== null))),
+  }),
+  z.strictObject({
     v: z.literal(1),
     scope: TeamAuthEntryRequestScopeV1Schema,
-    purpose: z.literal('home').optional(),
-  }).strict(),
-  z.object({
+    purpose: z.optional(z.literal('home')),
+  }),
+  z.strictObject({
     v: z.literal(1),
     scope: InvitationAuthEntryRequestScopeV1Schema,
-    purpose: z.literal('home').optional(),
-  }).strict(),
-  z.object({
+    purpose: z.optional(z.literal('home')),
+  }),
+  z.strictObject({
     v: z.literal(1),
     scope: NativeEmailVerificationAuthEntryRequestScopeV1Schema,
-    purpose: z.literal('home').optional(),
-  }).strict(),
+    purpose: z.optional(z.literal('home')),
+  }),
 ]);
 export type AuthEntryRequestV1 = z.infer<typeof AuthEntryRequestV1Schema>;
 
@@ -81,14 +79,14 @@ export type AuthEntryRequestV1 = z.infer<typeof AuthEntryRequestV1Schema>;
  * recreates or discards them for a dynamic provider. Internal catalog source,
  * ownership, revisions, secret health and permissions are never carried.
  */
-export const AuthEntryProviderPresentationV1Schema = z.object({
-  displayName: boundedAuthEntryString(z.string().trim().min(1)),
-  iconHint: boundedAuthEntryString(z.string().trim().min(1)).nullable().optional(),
+export const AuthEntryProviderPresentationV1Schema = z.strictObject({
+  displayName: boundedAuthEntryString(z.string().check(z.trim(), z.minLength(1))),
+  iconHint: z.optional(z.nullable(boundedAuthEntryString(z.string().check(z.trim(), z.minLength(1))))),
   /** Present only for an identity provider from the catalog; native methods have none. */
-  providerKind: TeamIdentityProviderKindV1Schema.optional(),
-  connectButtonColor: boundedAuthEntryString(z.string().trim().min(1)).nullable().optional(),
-  supportsProfileBadge: z.boolean().optional(),
-}).strict();
+  providerKind: z.optional(TeamIdentityProviderKindV1Schema),
+  connectButtonColor: z.optional(z.nullable(boundedAuthEntryString(z.string().check(z.trim(), z.minLength(1))))),
+  supportsProfileBadge: z.optional(z.boolean()),
+});
 export type AuthEntryProviderPresentationV1 = z.infer<typeof AuthEntryProviderPresentationV1Schema>;
 
 /**
@@ -106,15 +104,15 @@ export const AuthEntryProviderUnavailableReasonV1Schema = z.enum([
 export type AuthEntryProviderUnavailableReasonV1 = z.infer<typeof AuthEntryProviderUnavailableReasonV1Schema>;
 
 /** An accepted provider choice shown, with its safe reason, but not startable. */
-export const AuthEntryProviderUnavailableActionV1Schema = z.object({
+export const AuthEntryProviderUnavailableActionV1Schema = z.strictObject({
   kind: z.literal('provider_unavailable'),
   methodId: AuthEntryMethodIdV1Schema,
   origin: z.enum(['home', 'team']),
   presentation: AuthEntryProviderPresentationV1Schema,
   reason: AuthEntryProviderUnavailableReasonV1Schema,
-}).strict();
+});
 
-export const AuthEntryAuthenticationActionV1Schema = z.object({
+export const AuthEntryAuthenticationActionV1Schema = z.strictObject({
   kind: z.literal('authenticate'),
   methodId: AuthEntryMethodIdV1Schema,
   action: z.enum(['login', 'provision', 'connect']),
@@ -127,16 +125,16 @@ export const AuthEntryAuthenticationActionV1Schema = z.object({
    * governance document), so a chooser seeds from it instead of re-deriving a
    * default from the permitted set. Absent means the Home states no preference.
    */
-  recommendedProvisionMode: AccountEncryptionModeSchema.nullable().optional(),
+  recommendedProvisionMode: z.optional(z.nullable(AccountEncryptionModeSchema)),
   /**
    * Carried only on the `email_password` `login` action, and only when this
    * server can mail a password-reset link right now. Absent means a
    * forgotten-password link cannot arrive, so a client must not offer it.
    * Mail availability is a deployment fact, never an Account fact.
    */
-  passwordReset: z.literal('email').optional(),
+  passwordReset: z.optional(z.literal('email')),
   presentation: AuthEntryProviderPresentationV1Schema,
-}).strict();
+});
 
 /**
  * The methodless control an already-admitted member gets instead of a login.
@@ -144,40 +142,40 @@ export const AuthEntryAuthenticationActionV1Schema = z.object({
  * canonical admission and authorization owners rather than replaying anything
  * this response said.
  */
-export const AuthEntryContinueActionV1Schema = z.object({ kind: z.literal('continue') }).strict();
+export const AuthEntryContinueActionV1Schema = z.strictObject({ kind: z.literal('continue') });
 
 export const AuthEntryActionV1Schema = z.discriminatedUnion('kind', [
   AuthEntryAuthenticationActionV1Schema,
   AuthEntryContinueActionV1Schema,
   AuthEntryProviderUnavailableActionV1Schema,
-  z.object({ kind: z.literal('switch_account') }).strict(),
+  z.strictObject({ kind: z.literal('switch_account') }),
 ]);
 export type AuthEntryActionV1 = z.infer<typeof AuthEntryActionV1Schema>;
 
 const InvitationAuthEntryActionV1Schema = z.discriminatedUnion('kind', [
   AuthEntryAuthenticationActionV1Schema,
   AuthEntryProviderUnavailableActionV1Schema,
-  z.object({ kind: z.literal('switch_account') }).strict(),
+  z.strictObject({ kind: z.literal('switch_account') }),
 ]);
 
-const AuthEntryAutoRedirectV1Schema = z.object({
+const AuthEntryAutoRedirectV1Schema = z.nullable(z.strictObject({
   methodId: AuthEntryMethodIdV1Schema,
   action: z.enum(['login', 'provision']),
   mode: z.enum(['keyed', 'keyless', 'either']),
-}).strict().nullable();
+}));
 
-const HomeProjectionBaseV1Schema = z.object({
+const HomeProjectionBaseV1Schema = z.strictObject({
   v: z.literal(1),
   scope: HomeAuthEntryScopeV1Schema,
-  signInService: HomeSignInServicePolicyV1Schema.optional(),
+  signInService: z.optional(HomeSignInServicePolicyV1Schema),
   autoRedirect: AuthEntryAutoRedirectV1Schema,
-}).strict();
-
-const HomeReadyProjectionV1Schema = HomeProjectionBaseV1Schema.extend({
-  state: z.literal('ready'),
-  actions: z.array(AuthEntryAuthenticationActionV1Schema).max(AUTH_ENTRY_RESPONSE_MAX_UTF8_BYTES_V1),
 });
-const HomeTerminalProjectionV1Schema = HomeProjectionBaseV1Schema.extend({
+
+const HomeReadyProjectionV1Schema = z.extend(HomeProjectionBaseV1Schema, {
+  state: z.literal('ready'),
+  actions: z.array(AuthEntryAuthenticationActionV1Schema).check(z.maxLength(AUTH_ENTRY_RESPONSE_MAX_UTF8_BYTES_V1)),
+});
+const HomeTerminalProjectionV1Schema = z.extend(HomeProjectionBaseV1Schema, {
   state: z.enum(['denied', 'unavailable', 'update_required']),
   reason: z.enum([
     'entry_not_available',
@@ -188,22 +186,22 @@ const HomeTerminalProjectionV1Schema = HomeProjectionBaseV1Schema.extend({
   autoRedirect: z.null(),
 });
 
-const InvitationAuthEntryTeamV1Schema = z.object({
+const InvitationAuthEntryTeamV1Schema = z.strictObject({
   teamId: TeamInvitationPreviewV1Schema.shape.team.shape.teamId,
-  name: boundedAuthEntryString(z.string().trim().min(1)),
+  name: boundedAuthEntryString(z.string().check(z.trim(), z.minLength(1))),
   logo: TeamInvitationPreviewV1Schema.shape.team.shape.logo,
-}).strict();
+});
 
 // Reuse the Home-owned invitation/join presentation verbatim. Auth entry must
 // not invent another Home label or storage-mode projection.
 const AuthEntryHomePresentationV1Schema = TeamInvitationPreviewV1Schema.shape.home;
 
-const TeamReadyProjectionV1Schema = z.object({
+const TeamReadyProjectionV1Schema = z.strictObject({
   v: z.literal(1),
   state: z.literal('admission_required'),
   scope: TeamAuthEntryProjectionScopeV1Schema,
   home: AuthEntryHomePresentationV1Schema,
-  account: AccountDisplayProfileV1Schema.optional(),
+  account: z.optional(AccountDisplayProfileV1Schema),
   team: InvitationAuthEntryTeamV1Schema,
   /**
    * Shares the invitation action union: signing in as the wrong Account is the
@@ -212,10 +210,10 @@ const TeamReadyProjectionV1Schema = z.object({
    * ignores every non-`authenticate` action here, so the offer simply does not
    * appear on it.
    */
-  actions: z.array(InvitationAuthEntryActionV1Schema).max(AUTH_ENTRY_RESPONSE_MAX_UTF8_BYTES_V1),
-  signInService: HomeSignInServicePolicyV1Schema.optional(),
+  actions: z.array(InvitationAuthEntryActionV1Schema).check(z.maxLength(AUTH_ENTRY_RESPONSE_MAX_UTF8_BYTES_V1)),
+  signInService: z.optional(HomeSignInServicePolicyV1Schema),
   autoRedirect: z.null(),
-}).strict();
+});
 
 /**
  * The Team result for a caller whose own current credential already proves an
@@ -227,7 +225,7 @@ const TeamReadyProjectionV1Schema = z.object({
  * exact authenticated Account, an anonymous or restricted credential keeps
  * receiving the ordinary admission projection and learns nothing.
  */
-const TeamAlreadyMemberProjectionV1Schema = z.object({
+const TeamAlreadyMemberProjectionV1Schema = z.strictObject({
   v: z.literal(1),
   state: z.literal('already_member'),
   scope: z.union([
@@ -239,7 +237,7 @@ const TeamAlreadyMemberProjectionV1Schema = z.object({
   team: InvitationAuthEntryTeamV1Schema,
   actions: z.tuple([AuthEntryContinueActionV1Schema]),
   autoRedirect: z.null(),
-}).strict();
+});
 
 /**
  * Why a Team or invitation destination cannot be entered right now.
@@ -265,24 +263,24 @@ const TeamEntryUnavailableReasonV1Schema = z.enum([
 ]);
 export type TeamEntryUnavailableReasonV1 = z.infer<typeof TeamEntryUnavailableReasonV1Schema>;
 
-const TeamUnavailableProjectionV1Schema = z.object({
+const TeamUnavailableProjectionV1Schema = z.strictObject({
   v: z.literal(1),
   state: z.literal('unavailable'),
   scope: TeamAuthEntryProjectionScopeV1Schema,
   reason: TeamEntryUnavailableReasonV1Schema,
   autoRedirect: z.null(),
-}).strict();
+});
 
-const InvitationReadyProjectionV1Schema = z.object({
+const InvitationReadyProjectionV1Schema = z.strictObject({
   v: z.literal(1),
   state: z.literal('admission_required'),
   scope: InvitationAuthEntryProjectionScopeV1Schema,
   home: AuthEntryHomePresentationV1Schema,
-  account: AccountDisplayProfileV1Schema.optional(),
+  account: z.optional(AccountDisplayProfileV1Schema),
   team: InvitationAuthEntryTeamV1Schema,
   /** The same bounded offer, resolved without disclosing a held bearer. */
-  preview: TeamInvitationPreviewV1Schema.optional(),
-  actions: z.array(InvitationAuthEntryActionV1Schema).max(AUTH_ENTRY_RESPONSE_MAX_UTF8_BYTES_V1),
+  preview: z.optional(TeamInvitationPreviewV1Schema),
+  actions: z.array(InvitationAuthEntryActionV1Schema).check(z.maxLength(AUTH_ENTRY_RESPONSE_MAX_UTF8_BYTES_V1)),
   /** Whether native fresh-Account provisioning must first prove mailbox control. */
   invitationEmailVerificationRequired: z.boolean(),
   /**
@@ -292,18 +290,18 @@ const InvitationReadyProjectionV1Schema = z.object({
    * existing mailbox evidence or atomically attaches the invitation's exact
    * normalized recipient to the Account that wins the one-time bearer.
    */
-  currentAccountRecipientStatus: z.enum(['already_verified', 'verification_required']).optional(),
-  signInService: HomeSignInServicePolicyV1Schema.optional(),
+  currentAccountRecipientStatus: z.optional(z.enum(['already_verified', 'verification_required'])),
+  signInService: z.optional(HomeSignInServicePolicyV1Schema),
   autoRedirect: z.null(),
-}).strict();
+});
 
-const InvitationUnavailableProjectionV1Schema = z.object({
+const InvitationUnavailableProjectionV1Schema = z.strictObject({
   v: z.literal(1),
   state: z.literal('unavailable'),
   scope: InvitationAuthEntryProjectionScopeV1Schema,
   reason: TeamEntryUnavailableReasonV1Schema,
   autoRedirect: z.null(),
-}).strict();
+});
 
 export const AuthEntryProjectionV1Schema = z.union([
   HomeReadyProjectionV1Schema,

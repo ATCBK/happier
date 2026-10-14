@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import {
@@ -31,38 +31,33 @@ export { HOME_IDENTITY_ACTION_IDS_V1, HOME_IDENTITY_CONNECTION_USER_ACTION_IDS_V
   type HomeIdentityActionIdV1, type HomeIdentityConnectionUserActionIdV1 } from '../teams/identity/actionIds.js';
 
 /** Home and Team are strict projections of the same scoped identity owner. */
-export const HomeIdentityConnectionV1Schema = lazyZodSchema(() => IdentityConnectionV1Schema.safeExtend({
+export const HomeIdentityConnectionV1Schema = lazyZodSchema(() => z.safeExtend(IdentityConnectionV1Schema, {
   teamId: z.null(),
-  allowedActions: z.array(z.enum(HOME_IDENTITY_CONNECTION_USER_ACTION_IDS_V1))
-    .max(HOME_IDENTITY_CONNECTION_USER_ACTION_IDS_V1.length)
-    .refine((actions) => new Set(actions).size === actions.length),
+  allowedActions: z.array(z.enum(HOME_IDENTITY_CONNECTION_USER_ACTION_IDS_V1)).check(z.maxLength(HOME_IDENTITY_CONNECTION_USER_ACTION_IDS_V1.length), z.refine((actions) => new Set(actions).size === actions.length)),
 }));
 export type HomeIdentityConnectionV1 = z.infer<typeof HomeIdentityConnectionV1Schema>;
-export const HomeIdentityEligibleProviderV1Schema = lazyZodSchema(() => IdentityEligibleProviderV1Schema.refine(
-  (value) => value.owner === 'home' && !(value.availability.status === 'available'
+export const HomeIdentityEligibleProviderV1Schema = lazyZodSchema(() => IdentityEligibleProviderV1Schema.check(z.refine((value) => value.owner === 'home' && !(value.availability.status === 'available'
     && value.availability.setupChoice.kind === 'create_managed'
-    && value.availability.setupChoice.actionId === 'teams.identity.workos.connection.create'),
-));
+    && value.availability.setupChoice.actionId === 'teams.identity.workos.connection.create'))));
 export type HomeIdentityEligibleProviderV1 = z.infer<typeof HomeIdentityEligibleProviderV1Schema>;
-export const HomeIdentityConnectionListInputV1Schema = TeamIdentityConnectionListInputV1Schema.omit({ teamId: true });
-export const HomeIdentityConnectionRefInputV1Schema = TeamIdentityConnectionRefInputV1Schema.omit({ teamId: true });
+export const HomeIdentityConnectionListInputV1Schema = lazyZodSchema(() => z.omit(TeamIdentityConnectionListInputV1Schema, { teamId: true }));
+export const HomeIdentityConnectionRefInputV1Schema = lazyZodSchema(() => z.omit(TeamIdentityConnectionRefInputV1Schema, { teamId: true }));
 export const HomeIdentityConnectionCreateInputV1Schema = IdentityConnectionCreateInputV1Schema;
-export const HomeIdentityConnectionSettingsUpdateInputV1Schema = TeamIdentityConnectionSettingsUpdateInputV1Schema.omit({ teamId: true });
+export const HomeIdentityConnectionSettingsUpdateInputV1Schema = lazyZodSchema(() => z.omit(TeamIdentityConnectionSettingsUpdateInputV1Schema, { teamId: true }));
 export const HomeIdentityConnectionTestStartInputV1Schema = HomeIdentityConnectionRefInputV1Schema;
-export const HomeIdentityConnectionTestConsumeInputV1Schema = TeamIdentityConnectionTestConsumeInputV1Schema.omit({ teamId: true });
-export const HomeIdentityConnectionListResultV1Schema = lazyZodSchema(() => z.object({
+export const HomeIdentityConnectionTestConsumeInputV1Schema = lazyZodSchema(() => z.omit(TeamIdentityConnectionTestConsumeInputV1Schema, { teamId: true }));
+export const HomeIdentityConnectionListResultV1Schema = lazyZodSchema(() => z.strictObject({
   items: z.array(HomeIdentityConnectionV1Schema),
   eligibleProviders: z.array(HomeIdentityEligibleProviderV1Schema),
-}).strict());
+}));
 export type HomeIdentityConnectionListResultV1 = z.infer<typeof HomeIdentityConnectionListResultV1Schema>;
-export const HomeIdentityConnectionMutationResultV1Schema = lazyZodSchema(() => IdentityConnectionMutationResultV1Schema.safeExtend({ connection: HomeIdentityConnectionV1Schema }));
-export const HomeIdentityConnectionRemovalPreflightV1Schema = lazyZodSchema(() => IdentityConnectionRemovalPreflightV1Schema.safeExtend({ connection: HomeIdentityConnectionV1Schema }));
-export const HomeIdentityConnectionTestConsumeResultV1Schema = lazyZodSchema(() => IdentityConnectionTestConsumeResultV1Schema.safeExtend({ connection: HomeIdentityConnectionV1Schema }));
-export const HomeIdentityWorkosConnectionCreateInputV1Schema = lazyZodSchema(() => TeamIdentityWorkosConnectionCreateInputV1Schema.omit({ teamId: true }).required({ displayName: true }));
-export const HomeIdentityWorkosAdminPortalLinkCreateInputV1Schema = lazyZodSchema(() => TeamIdentityWorkosAdminPortalLinkCreateInputV1Schema
-  .omit({ teamId: true, directorySourceId: true }).safeExtend({ intent: z.literal('sso') }));
-export const HomeIdentityWorkosReconcileInputV1Schema = TeamIdentityWorkosReconcileInputV1Schema.omit({ teamId: true });
-export const HomeIdentityWorkosConnectionSetInputV1Schema = TeamIdentityWorkosConnectionSetInputV1Schema.omit({ teamId: true });
+export const HomeIdentityConnectionMutationResultV1Schema = lazyZodSchema(() => z.safeExtend(IdentityConnectionMutationResultV1Schema, { connection: HomeIdentityConnectionV1Schema }));
+export const HomeIdentityConnectionRemovalPreflightV1Schema = lazyZodSchema(() => z.safeExtend(IdentityConnectionRemovalPreflightV1Schema, { connection: HomeIdentityConnectionV1Schema }));
+export const HomeIdentityConnectionTestConsumeResultV1Schema = lazyZodSchema(() => z.safeExtend(IdentityConnectionTestConsumeResultV1Schema, { connection: HomeIdentityConnectionV1Schema }));
+export const HomeIdentityWorkosConnectionCreateInputV1Schema = lazyZodSchema(() => z.required(z.omit(TeamIdentityWorkosConnectionCreateInputV1Schema, { teamId: true }), { displayName: true }));
+export const HomeIdentityWorkosAdminPortalLinkCreateInputV1Schema = lazyZodSchema(() => z.safeExtend(z.omit(TeamIdentityWorkosAdminPortalLinkCreateInputV1Schema, { teamId: true, directorySourceId: true }), { intent: z.literal('sso') }));
+export const HomeIdentityWorkosReconcileInputV1Schema = lazyZodSchema(() => z.omit(TeamIdentityWorkosReconcileInputV1Schema, { teamId: true }));
+export const HomeIdentityWorkosConnectionSetInputV1Schema = lazyZodSchema(() => z.omit(TeamIdentityWorkosConnectionSetInputV1Schema, { teamId: true }));
 export const HomeIdentityWorkosReconcileResultV1Schema = lazyZodSchema(() => identityWorkosReconcileResultV1Schema(HomeIdentityConnectionV1Schema));
 export const HomeIdentityConnectionRemoveResultV1Schema = TeamIdentityConnectionRemoveResultV1Schema;
 export const HomeIdentityConnectionTestStartResultV1Schema = TeamIdentityConnectionTestStartResultV1Schema;

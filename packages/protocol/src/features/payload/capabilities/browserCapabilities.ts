@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { BrowserSemanticAdapterKindV1Schema } from '../../../browser/adapters/kinds.js';
 import {
@@ -18,16 +18,14 @@ import {
 } from '../../../browser/recording/v1.js';
 import { BrowserViewTargetKindV1Schema } from '../../../browser/target/v1.js';
 
-export const BrowserViewTargetCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().optional().default(false),
-    supportedTargetKinds: z.array(BrowserViewTargetKindV1Schema).optional().default([]),
-    iframeAvailable: z.boolean().optional().default(false),
-    webViewAvailable: z.boolean().optional().default(false),
-    streamedSurfaceAvailable: z.boolean().optional().default(false),
-    disabledReasons: z.array(z.string().trim().min(1)).optional().default([]),
-  })
-  .strict());
+export const BrowserViewTargetCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    enabled: z._default(z.optional(z.boolean()), false),
+    supportedTargetKinds: z._default(z.optional(z.array(BrowserViewTargetKindV1Schema)), []),
+    iframeAvailable: z._default(z.optional(z.boolean()), false),
+    webViewAvailable: z._default(z.optional(z.boolean()), false),
+    streamedSurfaceAvailable: z._default(z.optional(z.boolean()), false),
+    disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
+  }));
 export type BrowserViewTargetCapabilities = z.infer<typeof BrowserViewTargetCapabilitiesSchema>;
 
 export const DEFAULT_BROWSER_VIEW_TARGET_CAPABILITIES: BrowserViewTargetCapabilities = {
@@ -39,14 +37,12 @@ export const DEFAULT_BROWSER_VIEW_TARGET_CAPABILITIES: BrowserViewTargetCapabili
   disabledReasons: [],
 };
 
-export const BrowserInternalCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().optional().default(false),
-    supportedStorageModes: z.array(z.enum(['ephemeral', 'session', 'user', 'plugin'])).optional().default([]),
-    supportedPermissionKinds: z.array(BrowserPermissionKindV1Schema).optional().default([]),
-    disabledReasons: z.array(z.string().trim().min(1)).optional().default([]),
-  })
-  .strict());
+export const BrowserInternalCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    enabled: z._default(z.optional(z.boolean()), false),
+    supportedStorageModes: z._default(z.optional(z.array(z.enum(['ephemeral', 'session', 'user', 'plugin']))), []),
+    supportedPermissionKinds: z._default(z.optional(z.array(BrowserPermissionKindV1Schema)), []),
+    disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
+  }));
 export type BrowserInternalCapabilities = z.infer<typeof BrowserInternalCapabilitiesSchema>;
 
 export const DEFAULT_BROWSER_INTERNAL_CAPABILITIES: BrowserInternalCapabilities = {
@@ -56,13 +52,11 @@ export const DEFAULT_BROWSER_INTERNAL_CAPABILITIES: BrowserInternalCapabilities 
   disabledReasons: [],
 };
 
-export const BrowserSidecarCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().optional().default(false),
-    available: z.boolean().optional().default(false),
-    disabledReasons: z.array(z.string().trim().min(1)).optional().default([]),
-  })
-  .strict());
+export const BrowserSidecarCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    enabled: z._default(z.optional(z.boolean()), false),
+    available: z._default(z.optional(z.boolean()), false),
+    disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
+  }));
 export type BrowserSidecarCapabilities = z.infer<typeof BrowserSidecarCapabilitiesSchema>;
 
 export const DEFAULT_BROWSER_SIDECAR_CAPABILITIES: BrowserSidecarCapabilities = {
@@ -71,14 +65,12 @@ export const DEFAULT_BROWSER_SIDECAR_CAPABILITIES: BrowserSidecarCapabilities = 
   disabledReasons: [],
 };
 
-export const BrowserDiagnosticsRetentionCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    consoleEntriesPerView: z.number().int().positive().optional().default(1000),
-    networkEntriesPerView: z.number().int().positive().optional().default(500),
-    maxBytesPerView: z.number().int().positive().optional().default(8_388_608),
-    maxBatchIntervalMs: z.number().int().positive().optional().default(100),
-  })
-  .strict());
+export const BrowserDiagnosticsRetentionCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    consoleEntriesPerView: z._default(z.optional(z.number().check(z.int(), z.positive())), 1000),
+    networkEntriesPerView: z._default(z.optional(z.number().check(z.int(), z.positive())), 500),
+    maxBytesPerView: z._default(z.optional(z.number().check(z.int(), z.positive())), 8_388_608),
+    maxBatchIntervalMs: z._default(z.optional(z.number().check(z.int(), z.positive())), 100),
+  }));
 export type BrowserDiagnosticsRetentionCapabilities = z.infer<
   typeof BrowserDiagnosticsRetentionCapabilitiesSchema
 >;
@@ -92,21 +84,17 @@ export const DEFAULT_BROWSER_DIAGNOSTICS_RETENTION_CAPABILITIES: BrowserDiagnost
 
 const BrowserCaptureAvailabilitySchema = lazyZodSchema(() => z.enum(['unavailable', 'off', 'metadataOnly']));
 
-export const BrowserDiagnosticsCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().optional().default(false),
-    available: z.boolean().optional().default(false),
-    supportedFamilies: z.array(BrowserDiagnosticFamilyV1Schema).optional().default([]),
-    supportedFidelities: z.array(BrowserDiagnosticFidelityV1Schema).optional().default([]),
-    supportedAdapterKinds: z.array(BrowserSemanticAdapterKindV1Schema).optional().default([]),
-    retention: BrowserDiagnosticsRetentionCapabilitiesSchema.optional().default(
-      DEFAULT_BROWSER_DIAGNOSTICS_RETENTION_CAPABILITIES,
-    ),
-    bodyCapture: BrowserCaptureAvailabilitySchema.optional().default('unavailable'),
-    payloadCapture: BrowserCaptureAvailabilitySchema.optional().default('unavailable'),
-    disabledReasons: z.array(z.string().trim().min(1)).optional().default([]),
-  })
-  .strict());
+export const BrowserDiagnosticsCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    enabled: z._default(z.optional(z.boolean()), false),
+    available: z._default(z.optional(z.boolean()), false),
+    supportedFamilies: z._default(z.optional(z.array(BrowserDiagnosticFamilyV1Schema)), []),
+    supportedFidelities: z._default(z.optional(z.array(BrowserDiagnosticFidelityV1Schema)), []),
+    supportedAdapterKinds: z._default(z.optional(z.array(BrowserSemanticAdapterKindV1Schema)), []),
+    retention: z._default(z.optional(BrowserDiagnosticsRetentionCapabilitiesSchema), DEFAULT_BROWSER_DIAGNOSTICS_RETENTION_CAPABILITIES),
+    bodyCapture: z._default(z.optional(BrowserCaptureAvailabilitySchema), 'unavailable'),
+    payloadCapture: z._default(z.optional(BrowserCaptureAvailabilitySchema), 'unavailable'),
+    disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
+  }));
 export type BrowserDiagnosticsCapabilities = z.infer<typeof BrowserDiagnosticsCapabilitiesSchema>;
 
 export const DEFAULT_BROWSER_DIAGNOSTICS_CAPABILITIES: BrowserDiagnosticsCapabilities = {
@@ -121,23 +109,19 @@ export const DEFAULT_BROWSER_DIAGNOSTICS_CAPABILITIES: BrowserDiagnosticsCapabil
   disabledReasons: [],
 };
 
-export const BrowserContextScreenshotCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    supported: z.boolean().optional().default(false),
-    requiresAttachmentUploads: z.boolean().optional().default(true),
-    maxWidth: z.number().int().positive().optional(),
-    maxHeight: z.number().int().positive().optional(),
-    maxBytes: z.number().int().positive().optional(),
-  })
-  .strict());
+export const BrowserContextScreenshotCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    supported: z._default(z.optional(z.boolean()), false),
+    requiresAttachmentUploads: z._default(z.optional(z.boolean()), true),
+    maxWidth: z.optional(z.number().check(z.int(), z.positive())),
+    maxHeight: z.optional(z.number().check(z.int(), z.positive())),
+    maxBytes: z.optional(z.number().check(z.int(), z.positive())),
+  }));
 export type BrowserContextScreenshotCapabilities = z.infer<typeof BrowserContextScreenshotCapabilitiesSchema>;
 
-export const BrowserContextTextCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    maxSelectionChars: z.number().int().positive().optional().default(2048),
-    maxSummaryChars: z.number().int().positive().optional().default(8192),
-  })
-  .strict());
+export const BrowserContextTextCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    maxSelectionChars: z._default(z.optional(z.number().check(z.int(), z.positive())), 2048),
+    maxSummaryChars: z._default(z.optional(z.number().check(z.int(), z.positive())), 8192),
+  }));
 export type BrowserContextTextCapabilities = z.infer<typeof BrowserContextTextCapabilitiesSchema>;
 
 export const DEFAULT_BROWSER_CONTEXT_SCREENSHOT_CAPABILITIES: BrowserContextScreenshotCapabilities = {
@@ -150,20 +134,16 @@ export const DEFAULT_BROWSER_CONTEXT_TEXT_CAPABILITIES: BrowserContextTextCapabi
   maxSummaryChars: 8192,
 };
 
-export const BrowserContextCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().optional().default(false),
-    available: z.boolean().optional().default(false),
-    supportedContextKinds: z.array(BrowserContextKindV1Schema).optional().default([]),
-    supportedAdapterKinds: z.array(BrowserSemanticAdapterKindV1Schema).optional().default([]),
-    screenshot: BrowserContextScreenshotCapabilitiesSchema.optional().default(
-      DEFAULT_BROWSER_CONTEXT_SCREENSHOT_CAPABILITIES,
-    ),
-    text: BrowserContextTextCapabilitiesSchema.optional().default(DEFAULT_BROWSER_CONTEXT_TEXT_CAPABILITIES),
-    disabledReasons: z.array(z.string().trim().min(1)).optional().default([]),
-    policyDeniedReasons: z.array(z.string().trim().min(1)).optional().default([]),
-  })
-  .strict());
+export const BrowserContextCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    enabled: z._default(z.optional(z.boolean()), false),
+    available: z._default(z.optional(z.boolean()), false),
+    supportedContextKinds: z._default(z.optional(z.array(BrowserContextKindV1Schema)), []),
+    supportedAdapterKinds: z._default(z.optional(z.array(BrowserSemanticAdapterKindV1Schema)), []),
+    screenshot: z._default(z.optional(BrowserContextScreenshotCapabilitiesSchema), DEFAULT_BROWSER_CONTEXT_SCREENSHOT_CAPABILITIES),
+    text: z._default(z.optional(BrowserContextTextCapabilitiesSchema), DEFAULT_BROWSER_CONTEXT_TEXT_CAPABILITIES),
+    disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
+    policyDeniedReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
+  }));
 export type BrowserContextCapabilities = z.infer<typeof BrowserContextCapabilitiesSchema>;
 
 export const DEFAULT_BROWSER_CONTEXT_CAPABILITIES: BrowserContextCapabilities = {
@@ -187,12 +167,10 @@ export type BrowserAutomationFidelityCapabilities = z.infer<
   typeof BrowserAutomationFidelityCapabilitiesSchema
 >;
 
-export const BrowserAutomationTimelineCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    maxEntriesPerView: z.number().int().positive().optional().default(500),
-    retentionMs: z.number().int().positive().optional().default(300_000),
-  })
-  .strict());
+export const BrowserAutomationTimelineCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    maxEntriesPerView: z._default(z.optional(z.number().check(z.int(), z.positive())), 500),
+    retentionMs: z._default(z.optional(z.number().check(z.int(), z.positive())), 300_000),
+  }));
 export type BrowserAutomationTimelineCapabilities = z.infer<
   typeof BrowserAutomationTimelineCapabilitiesSchema
 >;
@@ -202,14 +180,12 @@ export const DEFAULT_BROWSER_AUTOMATION_TIMELINE_CAPABILITIES: BrowserAutomation
   retentionMs: 300_000,
 };
 
-export const BrowserAutomationInjectedPageCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().optional().default(false),
-    available: z.boolean().optional().default(false),
-    capabilityVersion: z.string().trim().min(1).max(64).optional(),
-    disabledReasons: z.array(z.string().trim().min(1)).optional().default([]),
-  })
-  .strict());
+export const BrowserAutomationInjectedPageCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    enabled: z._default(z.optional(z.boolean()), false),
+    available: z._default(z.optional(z.boolean()), false),
+    capabilityVersion: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(64))),
+    disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
+  }));
 export type BrowserAutomationInjectedPageCapabilities = z.infer<
   typeof BrowserAutomationInjectedPageCapabilitiesSchema
 >;
@@ -220,14 +196,12 @@ export const DEFAULT_BROWSER_AUTOMATION_INJECTED_PAGE_CAPABILITIES: BrowserAutom
   disabledReasons: [],
 };
 
-export const BrowserAutomationEvalCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().optional().default(false),
-    available: z.boolean().optional().default(false),
-    requiresDiagnosticsInteraction: z.boolean().optional().default(true),
-    disabledReasons: z.array(z.string().trim().min(1)).optional().default([]),
-  })
-  .strict());
+export const BrowserAutomationEvalCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    enabled: z._default(z.optional(z.boolean()), false),
+    available: z._default(z.optional(z.boolean()), false),
+    requiresDiagnosticsInteraction: z._default(z.optional(z.boolean()), true),
+    disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
+  }));
 export type BrowserAutomationEvalCapabilities = z.infer<typeof BrowserAutomationEvalCapabilitiesSchema>;
 
 export const DEFAULT_BROWSER_AUTOMATION_EVAL_CAPABILITIES: BrowserAutomationEvalCapabilities = {
@@ -237,24 +211,18 @@ export const DEFAULT_BROWSER_AUTOMATION_EVAL_CAPABILITIES: BrowserAutomationEval
   disabledReasons: [],
 };
 
-export const BrowserAutomationCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().optional().default(false),
-    available: z.boolean().optional().default(false),
-    supportedActions: z.array(BrowserAutomationActionKindCapabilitiesSchema).optional().default([]),
-    supportedFidelities: z.array(BrowserAutomationFidelityCapabilitiesSchema).optional().default([]),
-    supportedAdapterKinds: z.array(BrowserSemanticAdapterKindV1Schema).optional().default([]),
-    maxActionTimeoutMs: z.number().int().positive().optional().default(15_000),
-    timeline: BrowserAutomationTimelineCapabilitiesSchema.optional().default(
-      DEFAULT_BROWSER_AUTOMATION_TIMELINE_CAPABILITIES,
-    ),
-    injectedPage: BrowserAutomationInjectedPageCapabilitiesSchema.optional().default(
-      DEFAULT_BROWSER_AUTOMATION_INJECTED_PAGE_CAPABILITIES,
-    ),
-    eval: BrowserAutomationEvalCapabilitiesSchema.optional().default(DEFAULT_BROWSER_AUTOMATION_EVAL_CAPABILITIES),
-    disabledReasons: z.array(z.string().trim().min(1)).optional().default([]),
-  })
-  .strict());
+export const BrowserAutomationCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    enabled: z._default(z.optional(z.boolean()), false),
+    available: z._default(z.optional(z.boolean()), false),
+    supportedActions: z._default(z.optional(z.array(BrowserAutomationActionKindCapabilitiesSchema)), []),
+    supportedFidelities: z._default(z.optional(z.array(BrowserAutomationFidelityCapabilitiesSchema)), []),
+    supportedAdapterKinds: z._default(z.optional(z.array(BrowserSemanticAdapterKindV1Schema)), []),
+    maxActionTimeoutMs: z._default(z.optional(z.number().check(z.int(), z.positive())), 15_000),
+    timeline: z._default(z.optional(BrowserAutomationTimelineCapabilitiesSchema), DEFAULT_BROWSER_AUTOMATION_TIMELINE_CAPABILITIES),
+    injectedPage: z._default(z.optional(BrowserAutomationInjectedPageCapabilitiesSchema), DEFAULT_BROWSER_AUTOMATION_INJECTED_PAGE_CAPABILITIES),
+    eval: z._default(z.optional(BrowserAutomationEvalCapabilitiesSchema), DEFAULT_BROWSER_AUTOMATION_EVAL_CAPABILITIES),
+    disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
+  }));
 export type BrowserAutomationCapabilities = z.infer<typeof BrowserAutomationCapabilitiesSchema>;
 
 export const DEFAULT_BROWSER_AUTOMATION_CAPABILITIES: BrowserAutomationCapabilities = {
@@ -270,25 +238,23 @@ export const DEFAULT_BROWSER_AUTOMATION_CAPABILITIES: BrowserAutomationCapabilit
   disabledReasons: [],
 };
 
-export const BrowserRecordingCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
-    enabled: z.boolean().optional().default(false),
-    attachmentsEnabled: z.boolean().optional().default(false),
-    available: z.boolean().optional().default(false),
-    supportedCaptureKinds: z.array(BrowserRecordingCaptureKindV1Schema).optional().default([]),
-    supportedMimeTypes: z.array(z.string().trim().min(1).max(128)).optional().default([]),
-    supportedAdapterKinds: z.array(BrowserSemanticAdapterKindV1Schema).optional().default([]),
-    maxDurationMs: z.number().int().positive().optional().default(30_000),
-    maxBytes: z.number().int().positive().optional().default(16_000_000),
-    maxFps: z.number().positive().optional().default(12),
-    audioSupported: z.boolean().optional().default(false),
-    cursorOverlaySupported: z.boolean().optional().default(false),
-    actionTimelineChaptersSupported: z.boolean().optional().default(false),
-    supportedRetentionClasses: z.array(BrowserRecordingRetentionClassV1Schema).optional().default([]),
-    disabledReasons: z.array(z.string().trim().min(1)).optional().default([]),
-    policyDeniedReasons: z.array(z.string().trim().min(1)).optional().default([]),
-  })
-  .strict());
+export const BrowserRecordingCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+    enabled: z._default(z.optional(z.boolean()), false),
+    attachmentsEnabled: z._default(z.optional(z.boolean()), false),
+    available: z._default(z.optional(z.boolean()), false),
+    supportedCaptureKinds: z._default(z.optional(z.array(BrowserRecordingCaptureKindV1Schema)), []),
+    supportedMimeTypes: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1), z.maxLength(128)))), []),
+    supportedAdapterKinds: z._default(z.optional(z.array(BrowserSemanticAdapterKindV1Schema)), []),
+    maxDurationMs: z._default(z.optional(z.number().check(z.int(), z.positive())), 30_000),
+    maxBytes: z._default(z.optional(z.number().check(z.int(), z.positive())), 16_000_000),
+    maxFps: z._default(z.optional(z.number().check(z.positive())), 12),
+    audioSupported: z._default(z.optional(z.boolean()), false),
+    cursorOverlaySupported: z._default(z.optional(z.boolean()), false),
+    actionTimelineChaptersSupported: z._default(z.optional(z.boolean()), false),
+    supportedRetentionClasses: z._default(z.optional(z.array(BrowserRecordingRetentionClassV1Schema)), []),
+    disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
+    policyDeniedReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
+  }));
 export type BrowserRecordingCapabilities = z.infer<typeof BrowserRecordingCapabilitiesSchema>;
 
 export const DEFAULT_BROWSER_RECORDING_CAPABILITIES: BrowserRecordingCapabilities = {
@@ -311,15 +277,14 @@ export const DEFAULT_BROWSER_RECORDING_CAPABILITIES: BrowserRecordingCapabilitie
 
 export const BrowserCapabilitiesSchema = lazyZodSchema(() => z
   .object({
-    viewTargets: BrowserViewTargetCapabilitiesSchema.optional().default(DEFAULT_BROWSER_VIEW_TARGET_CAPABILITIES),
-    internal: BrowserInternalCapabilitiesSchema.optional().default(DEFAULT_BROWSER_INTERNAL_CAPABILITIES),
-    sidecar: BrowserSidecarCapabilitiesSchema.optional().default(DEFAULT_BROWSER_SIDECAR_CAPABILITIES),
-    diagnostics: BrowserDiagnosticsCapabilitiesSchema.optional().default(DEFAULT_BROWSER_DIAGNOSTICS_CAPABILITIES),
-    context: BrowserContextCapabilitiesSchema.optional().default(DEFAULT_BROWSER_CONTEXT_CAPABILITIES),
-    automation: BrowserAutomationCapabilitiesSchema.optional().default(DEFAULT_BROWSER_AUTOMATION_CAPABILITIES),
-    recording: BrowserRecordingCapabilitiesSchema.optional().default(DEFAULT_BROWSER_RECORDING_CAPABILITIES),
-  })
-  .strip());
+    viewTargets: z._default(z.optional(BrowserViewTargetCapabilitiesSchema), DEFAULT_BROWSER_VIEW_TARGET_CAPABILITIES),
+    internal: z._default(z.optional(BrowserInternalCapabilitiesSchema), DEFAULT_BROWSER_INTERNAL_CAPABILITIES),
+    sidecar: z._default(z.optional(BrowserSidecarCapabilitiesSchema), DEFAULT_BROWSER_SIDECAR_CAPABILITIES),
+    diagnostics: z._default(z.optional(BrowserDiagnosticsCapabilitiesSchema), DEFAULT_BROWSER_DIAGNOSTICS_CAPABILITIES),
+    context: z._default(z.optional(BrowserContextCapabilitiesSchema), DEFAULT_BROWSER_CONTEXT_CAPABILITIES),
+    automation: z._default(z.optional(BrowserAutomationCapabilitiesSchema), DEFAULT_BROWSER_AUTOMATION_CAPABILITIES),
+    recording: z._default(z.optional(BrowserRecordingCapabilitiesSchema), DEFAULT_BROWSER_RECORDING_CAPABILITIES),
+  }));
 export type BrowserCapabilities = z.infer<typeof BrowserCapabilitiesSchema>;
 
 export const DEFAULT_BROWSER_CAPABILITIES: BrowserCapabilities = {

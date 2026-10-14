@@ -1,29 +1,25 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { PendingLocalIdSchema, readPendingLocalId } from '../pending/pendingLocalId.js';
 
 export const SESSION_PENDING_QUEUE_HOLD_METADATA_KEY = 'sessionPendingQueueHoldV1' as const;
 export const SESSION_PENDING_QUEUE_HOLD_MAX_TTL_MS = 5 * 60_000;
 
-export const SessionPendingQueueHoldEntryV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionPendingQueueHoldEntryV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    holdId: z.string().trim().min(1),
+    holdId: z.string().check(z.trim(), z.minLength(1)),
     kind: z.literal('pending_message_edit'),
     localId: PendingLocalIdSchema,
-    updatedAtMs: z.number().int().nonnegative(),
-    expiresAtMs: z.number().int().nonnegative(),
-  })
-  .strict());
+    updatedAtMs: z.number().check(z.int(), z.nonnegative()),
+    expiresAtMs: z.number().check(z.int(), z.nonnegative()),
+  }));
 export type SessionPendingQueueHoldEntryV1 = z.infer<typeof SessionPendingQueueHoldEntryV1Schema>;
 
-export const SessionPendingQueueHoldV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionPendingQueueHoldV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    holdsById: z.record(z.string().trim().min(1), SessionPendingQueueHoldEntryV1Schema),
-  })
-  .strict());
+    holdsById: z.record(z.string().check(z.trim(), z.minLength(1)), SessionPendingQueueHoldEntryV1Schema),
+  }));
 export type SessionPendingQueueHoldV1 = z.infer<typeof SessionPendingQueueHoldV1Schema>;
 
 export type WriteSessionPendingQueueHoldV1Input = Readonly<{

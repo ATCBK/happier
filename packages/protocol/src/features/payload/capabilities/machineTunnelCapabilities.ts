@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
@@ -83,10 +83,7 @@ export function normalizeMachineTunnelPreferredEncoding(
 }
 
 export const MachineTunnelDirectPeerCapabilitiesSchema = lazyZodSchema(() => z.object({
-  allowedPorts: z
-    .preprocess((raw) => [...normalizeMachineTunnelAllowedPorts(raw)], z.array(z.number().int().min(1).max(65_535)))
-    .optional()
-    .default([...DEFAULT_MACHINE_TUNNEL_DIRECT_ALLOWED_PORTS]),
+  allowedPorts: z._default(z.optional(z.pipe(z.transform((raw) => [...normalizeMachineTunnelAllowedPorts(raw)]), z.array(z.number().check(z.int(), z.minimum(1), z.maximum(65_535))))), [...DEFAULT_MACHINE_TUNNEL_DIRECT_ALLOWED_PORTS]),
 }));
 export type MachineTunnelDirectPeerCapabilities = z.infer<typeof MachineTunnelDirectPeerCapabilitiesSchema>;
 
@@ -95,17 +92,11 @@ export const DEFAULT_MACHINE_TUNNEL_DIRECT_PEER_CAPABILITIES: MachineTunnelDirec
 };
 
 export const MachineTunnelSubstreamCapabilitiesSchema = lazyZodSchema(() => z.object({
-  maxConcurrentSubstreams: z
-    .preprocess(
-      (raw) => normalizeMachineTunnelPositiveInt(
+  maxConcurrentSubstreams: z._default(z.optional(z.pipe(z.transform((raw) => normalizeMachineTunnelPositiveInt(
         raw,
         DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_CONCURRENT_SUBSTREAMS,
         { max: MACHINE_TUNNEL_SERVER_ROUTED_MAX_ACTIVE_TUNNELS_PER_SOCKET_HARD_MAX },
-      ),
-      z.number().int().positive().max(MACHINE_TUNNEL_SERVER_ROUTED_MAX_ACTIVE_TUNNELS_PER_SOCKET_HARD_MAX),
-    )
-    .optional()
-    .default(DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_CONCURRENT_SUBSTREAMS),
+      )), z.number().check(z.int(), z.positive(), z.maximum(MACHINE_TUNNEL_SERVER_ROUTED_MAX_ACTIVE_TUNNELS_PER_SOCKET_HARD_MAX)))), DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_CONCURRENT_SUBSTREAMS),
 }));
 export type MachineTunnelSubstreamCapabilities = z.infer<typeof MachineTunnelSubstreamCapabilitiesSchema>;
 
@@ -114,61 +105,25 @@ export const DEFAULT_MACHINE_TUNNEL_SUBSTREAM_CAPABILITIES: MachineTunnelSubstre
 };
 
 export const MachineTunnelServerRoutedCapabilitiesSchema = lazyZodSchema(() => z.object({
-  maxActiveTunnelsPerSocket: z
-    .preprocess(
-      (raw) => normalizeMachineTunnelPositiveInt(raw, DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_ACTIVE_TUNNELS_PER_SOCKET, {
+  maxActiveTunnelsPerSocket: z._default(z.optional(z.pipe(z.transform((raw) => normalizeMachineTunnelPositiveInt(raw, DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_ACTIVE_TUNNELS_PER_SOCKET, {
         max: MACHINE_TUNNEL_SERVER_ROUTED_MAX_ACTIVE_TUNNELS_PER_SOCKET_HARD_MAX,
-      }),
-      z.number().int().positive().max(MACHINE_TUNNEL_SERVER_ROUTED_MAX_ACTIVE_TUNNELS_PER_SOCKET_HARD_MAX),
-    )
-    .optional()
-    .default(DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_ACTIVE_TUNNELS_PER_SOCKET),
-  maxFrameBytes: z
-    .preprocess(
-      (raw) => normalizeMachineTunnelPositiveInt(raw, DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAME_BYTES, {
+      })), z.number().check(z.int(), z.positive(), z.maximum(MACHINE_TUNNEL_SERVER_ROUTED_MAX_ACTIVE_TUNNELS_PER_SOCKET_HARD_MAX)))), DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_ACTIVE_TUNNELS_PER_SOCKET),
+  maxFrameBytes: z._default(z.optional(z.pipe(z.transform((raw) => normalizeMachineTunnelPositiveInt(raw, DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAME_BYTES, {
         max: MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAME_BYTES_HARD_MAX,
-      }),
-      z.number().int().positive().max(MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAME_BYTES_HARD_MAX),
-    )
-    .optional()
-    .default(DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAME_BYTES),
-  supportedEncodings: z
-    .preprocess((raw) => [...normalizeMachineTunnelSupportedEncodings(raw)], z.array(PeerTcpTunnelEncodingSchema))
-    .optional()
-    .default([...DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_SUPPORTED_ENCODINGS]),
-  preferredEncoding: z
-    .preprocess((raw) => normalizeMachineTunnelPreferredEncoding(raw), PeerTcpTunnelEncodingSchema)
-    .optional()
-    .default(DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_PREFERRED_ENCODING),
-  maxBinaryHeaderBytes: z
-    .preprocess(
-      (raw) => normalizeMachineTunnelPositiveInt(raw, DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_BINARY_HEADER_BYTES, {
+      })), z.number().check(z.int(), z.positive(), z.maximum(MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAME_BYTES_HARD_MAX)))), DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAME_BYTES),
+  supportedEncodings: z._default(z.optional(z.pipe(z.transform((raw) => [...normalizeMachineTunnelSupportedEncodings(raw)]), z.array(PeerTcpTunnelEncodingSchema))), [...DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_SUPPORTED_ENCODINGS]),
+  preferredEncoding: z._default(z.optional(z.pipe(z.transform((raw) => normalizeMachineTunnelPreferredEncoding(raw)), PeerTcpTunnelEncodingSchema)), DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_PREFERRED_ENCODING),
+  maxBinaryHeaderBytes: z._default(z.optional(z.pipe(z.transform((raw) => normalizeMachineTunnelPositiveInt(raw, DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_BINARY_HEADER_BYTES, {
         max: MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAME_BYTES_HARD_MAX,
-      }),
-      z.number().int().positive().max(MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAME_BYTES_HARD_MAX),
-    )
-    .optional()
-    .default(DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_BINARY_HEADER_BYTES),
-  maxRawPayloadBytes: z
-    .preprocess(
-      (raw) => normalizeMachineTunnelPositiveInt(raw, DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES, {
+      })), z.number().check(z.int(), z.positive(), z.maximum(MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAME_BYTES_HARD_MAX)))), DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_BINARY_HEADER_BYTES),
+  maxRawPayloadBytes: z._default(z.optional(z.pipe(z.transform((raw) => normalizeMachineTunnelPositiveInt(raw, DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES, {
         max: MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAME_BYTES_HARD_MAX,
-      }),
-      z.number().int().positive().max(MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAME_BYTES_HARD_MAX),
-    )
-    .optional()
-    .default(DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES),
-  maxFramedMessageBytes: z
-    .preprocess(
-      (raw) => normalizeMachineTunnelPositiveInt(raw, DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAMED_MESSAGE_BYTES, {
+      })), z.number().check(z.int(), z.positive(), z.maximum(MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAME_BYTES_HARD_MAX)))), DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES),
+  maxFramedMessageBytes: z._default(z.optional(z.pipe(z.transform((raw) => normalizeMachineTunnelPositiveInt(raw, DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAMED_MESSAGE_BYTES, {
         max: MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAME_BYTES_HARD_MAX,
-      }),
-      z.number().int().positive().max(MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAME_BYTES_HARD_MAX),
-    )
-    .optional()
-    .default(DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAMED_MESSAGE_BYTES),
-  substreams: MachineTunnelSubstreamCapabilitiesSchema.optional().default(DEFAULT_MACHINE_TUNNEL_SUBSTREAM_CAPABILITIES),
-  disabledReason: z.string().min(1).optional().default('relay_disabled_by_server_policy'),
+      })), z.number().check(z.int(), z.positive(), z.maximum(MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAME_BYTES_HARD_MAX)))), DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_FRAMED_MESSAGE_BYTES),
+  substreams: z._default(z.optional(MachineTunnelSubstreamCapabilitiesSchema), DEFAULT_MACHINE_TUNNEL_SUBSTREAM_CAPABILITIES),
+  disabledReason: z._default(z.optional(z.string().check(z.minLength(1))), 'relay_disabled_by_server_policy'),
 }));
 export type MachineTunnelServerRoutedCapabilities = z.infer<typeof MachineTunnelServerRoutedCapabilitiesSchema>;
 
@@ -185,8 +140,8 @@ export const DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_CAPABILITIES: MachineTunnelSer
 };
 
 export const MachineTunnelCapabilitiesSchema = lazyZodSchema(() => z.object({
-  directPeer: MachineTunnelDirectPeerCapabilitiesSchema.optional().default(DEFAULT_MACHINE_TUNNEL_DIRECT_PEER_CAPABILITIES),
-  serverRouted: MachineTunnelServerRoutedCapabilitiesSchema.optional().default(DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_CAPABILITIES),
+  directPeer: z._default(z.optional(MachineTunnelDirectPeerCapabilitiesSchema), DEFAULT_MACHINE_TUNNEL_DIRECT_PEER_CAPABILITIES),
+  serverRouted: z._default(z.optional(MachineTunnelServerRoutedCapabilitiesSchema), DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_CAPABILITIES),
 }));
 export type MachineTunnelCapabilities = z.infer<typeof MachineTunnelCapabilitiesSchema>;
 

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const AUTH_KEY_CHALLENGE_V2_ERROR_CODES = {
   required: 'key_challenge_v2_required',

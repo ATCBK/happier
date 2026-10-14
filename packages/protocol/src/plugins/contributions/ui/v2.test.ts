@@ -1,5 +1,6 @@
+import * as z from 'zod/mini';
 import { artifactHtmlBundleFromBodyV1 } from '../../../artifacts/artifactHtmlV1.js';
-import type { core } from 'zod';
+import type { core } from 'zod/mini';
 import { ActionJsonSchemaProjectionError, zodSchemaToJsonSchemaObject } from '../../../actions/actionInputJsonSchema.js';
 import { createPluginManifestJsonSchemaV2 } from '../../manifest/jsonSchema.js';
 import { PluginManifestV2Schema } from '../../manifest/v2.js';
@@ -35,7 +36,7 @@ describe('declarative node vocabulary v2', () => {
     expect(PluginUiViewV2Schema.safeParse(widget).success).toBe(true);
     expect(PluginUiViewV2Schema.safeParse({ ...widget, sizeDeclaration: undefined }).success).toBe(false);
     expect(PluginUiViewV2Schema.safeParse({ ...widget, container: 'appPage' }).success).toBe(false);
-    const validate = new Ajv2020({ strict: false, validateFormats: false }).compile(PluginUiViewV2Schema.toJSONSchema({ io: 'input', target: 'draft-2020-12', unrepresentable: 'any' }));
+    const validate = new Ajv2020({ strict: false, validateFormats: false }).compile(z.toJSONSchema(PluginUiViewV2Schema, { io: 'input', target: 'draft-2020-12', unrepresentable: 'any' }));
     expect(validate(widget)).toBe(true);
     expect(validate({ ...widget, sizeDeclaration: undefined })).toBe(false);
   });
@@ -49,7 +50,7 @@ describe('declarative node vocabulary v2', () => {
 
   it('emits App widget input value-admission requirements in its public authoring schema', () => {
     const ajv = new Ajv2020({ strict: false, validateFormats: false });
-    const validate = ajv.compile(PluginUiViewV2Schema.toJSONSchema({ io: 'input', target: 'draft-2020-12', unrepresentable: 'any' }));
+    const validate = ajv.compile(z.toJSONSchema(PluginUiViewV2Schema, { io: 'input', target: 'draft-2020-12', unrepresentable: 'any' }));
     const widget = { sizeDeclaration: { sizes: ['small', 'medium', 'wide', 'full', 'tall', 'large'], defaultSize: 'medium' }, id: 'app-inputs', container: 'widget', renderer: 'native', target: { kind: 'app' } };
     const inputs = { fields: [{ path: 'name', title: 'Name', widget: 'text' }] };
     expect(validate(widget)).toBe(true);
@@ -559,7 +560,7 @@ describe('UI contributions in the full public Manifest projection', () => {
   it('keeps the View union inline and bounded-label references unchanged in both dialects', () => {
     const projections = [createPluginManifestJsonSchemaV2()];
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
-      projections.push(PluginManifestV2Schema.toJSONSchema({ io: 'input', target, unrepresentable: 'any' }));
+      projections.push(z.toJSONSchema(PluginManifestV2Schema, { io: 'input', target, unrepresentable: 'any' }));
       expect(() => zodSchemaToJsonSchemaObject(PluginManifestV2Schema, { target }))
         .toThrow(ActionJsonSchemaProjectionError);
     }

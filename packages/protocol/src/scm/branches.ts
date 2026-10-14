@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   ScmRemoteResponseSchema,
@@ -12,84 +12,84 @@ import { RepositoryCheckpointCommitEvidenceSchema } from '../sessions/changes/sc
 import { ScmBranchSourceRefSchema } from './remoteNormalization.js';
 
 /** Ref labels only display identity; exact membership is witnessed against headSha. */
-export const ScmBranchWorkIdentitySchema = lazyZodSchema(() => z.object({
-  ref: ScmBranchSourceRefSchema.refine(ref => ref.startsWith('refs/heads/')), headSha: ScmCommitOidSchema,
-}).strict());
-export const ScmBranchWorkEvidenceSchema = lazyZodSchema(() => RepositoryCheckpointCommitEvidenceSchema.extend({
+export const ScmBranchWorkIdentitySchema = lazyZodSchema(() => z.strictObject({
+  ref: ScmBranchSourceRefSchema.check(z.refine(ref => ref.startsWith('refs/heads/'))), headSha: ScmCommitOidSchema,
+}));
+export const ScmBranchWorkEvidenceSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(RepositoryCheckpointCommitEvidenceSchema, {
   branch: ScmBranchWorkIdentitySchema,
-}).strict());
+})));
 export type ScmBranchWorkEvidence = z.infer<typeof ScmBranchWorkEvidenceSchema>;
 
 export const ScmBranchTypeSchema = lazyZodSchema(() => z.enum(['local', 'remote']));
 export type ScmBranchType = z.infer<typeof ScmBranchTypeSchema>;
 
-export const ScmBranchListRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
-  includeRemotes: z.boolean().optional(),
-  workEvidence: z.object({ sessionId: z.string().min(1) }).strict().optional(),
+export const ScmBranchListRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
+  includeRemotes: z.optional(z.boolean()),
+  workEvidence: z.optional(z.strictObject({ sessionId: z.string().check(z.minLength(1)) })),
 }));
 export type ScmBranchListRequest = z.infer<typeof ScmBranchListRequestSchema>;
 
 export const ScmBranchListEntrySchema = lazyZodSchema(() => z.object({
   name: z.string(),
   type: ScmBranchTypeSchema,
-  upstream: z.string().nullable().optional(),
-  isCurrent: z.boolean().optional(),
+  upstream: z.optional(z.nullable(z.string())),
+  isCurrent: z.optional(z.boolean()),
 }));
 export type ScmBranchListEntry = z.infer<typeof ScmBranchListEntrySchema>;
 
 export const ScmBranchListResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
-  branches: z.array(ScmBranchListEntrySchema).optional(),
-  branchEvidence: z.array(ScmBranchWorkEvidenceSchema).optional(),
-  branchEvidenceStatus: z.enum(['partial', 'unavailable']).optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  branches: z.optional(z.array(ScmBranchListEntrySchema)),
+  branchEvidence: z.optional(z.array(ScmBranchWorkEvidenceSchema)),
+  branchEvidenceStatus: z.optional(z.enum(['partial', 'unavailable'])),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }));
 export type ScmBranchListResponse = z.infer<typeof ScmBranchListResponseSchema>;
 
-export const ScmBranchCreateRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
-  name: z.string().min(1),
-  checkout: z.boolean().optional(),
-  startPoint: z.string().optional(),
+export const ScmBranchCreateRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
+  name: z.string().check(z.minLength(1)),
+  checkout: z.optional(z.boolean()),
+  startPoint: z.optional(z.string()),
 }));
 export type ScmBranchCreateRequest = z.infer<typeof ScmBranchCreateRequestSchema>;
 
 export const ScmBranchCreateResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
-  outcome: ScmOperationOutcomeSchema.optional(),
-  stdout: z.string().optional(),
-  stderr: z.string().optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  outcome: z.optional(ScmOperationOutcomeSchema),
+  stdout: z.optional(z.string()),
+  stderr: z.optional(z.string()),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }));
 export type ScmBranchCreateResponse = z.infer<typeof ScmBranchCreateResponseSchema>;
 
 export const ScmBranchCheckoutStrategySchema = lazyZodSchema(() => z.enum(['stash_on_current_branch', 'bring_changes']));
 export type ScmBranchCheckoutStrategy = z.infer<typeof ScmBranchCheckoutStrategySchema>;
 
-export const ScmBranchCheckoutRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
-  name: z.string().min(1),
+export const ScmBranchCheckoutRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
+  name: z.string().check(z.minLength(1)),
   strategy: ScmBranchCheckoutStrategySchema,
-  overwriteCurrentBranchStash: z.boolean().optional(),
+  overwriteCurrentBranchStash: z.optional(z.boolean()),
 }));
 export type ScmBranchCheckoutRequest = z.infer<typeof ScmBranchCheckoutRequestSchema>;
 
 export const ScmBranchCheckoutResponseSchema = lazyZodSchema(() => z.object({
   success: z.boolean(),
-  outcome: ScmOperationOutcomeSchema.optional(),
-  stdout: z.string().optional(),
-  stderr: z.string().optional(),
-  didCreateStash: z.boolean().optional(),
-  didPopStash: z.boolean().optional(),
-  stashRef: z.string().nullable().optional(),
-  stashOid: z.string().optional(),
-  error: z.string().optional(),
-  errorCode: ScmOperationErrorCodeSchema.optional(),
+  outcome: z.optional(ScmOperationOutcomeSchema),
+  stdout: z.optional(z.string()),
+  stderr: z.optional(z.string()),
+  didCreateStash: z.optional(z.boolean()),
+  didPopStash: z.optional(z.boolean()),
+  stashRef: z.optional(z.nullable(z.string())),
+  stashOid: z.optional(z.string()),
+  error: z.optional(z.string()),
+  errorCode: z.optional(ScmOperationErrorCodeSchema),
 }));
 export type ScmBranchCheckoutResponse = z.infer<typeof ScmBranchCheckoutResponseSchema>;
 
-export const ScmRemotePublishRequestSchema = lazyZodSchema(() => ScmRequestBaseSchema.extend({
-  remote: z.string().optional(),
+export const ScmRemotePublishRequestSchema = lazyZodSchema(() => z.extend(ScmRequestBaseSchema, {
+  remote: z.optional(z.string()),
 }));
 export type ScmRemotePublishRequest = z.infer<typeof ScmRemotePublishRequestSchema>;
 

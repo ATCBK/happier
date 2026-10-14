@@ -1,8 +1,8 @@
 import { resolveUsageBucketBounds, resolveUsageCalendarInstant } from './usageCalendar.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 
-export const UsageNightHoursV1Schema = lazyZodSchema(() => z.object({ startHour: z.number().int().min(0).max(23), endHour: z.number().int().min(0).max(23) }).strict().refine(value => value.startHour !== value.endHour));
+export const UsageNightHoursV1Schema = lazyZodSchema(() => z.strictObject({ startHour: z.number().check(z.int(), z.minimum(0), z.maximum(23)), endHour: z.number().check(z.int(), z.minimum(0), z.maximum(23)) }).check(z.refine(value => value.startHour !== value.endHour)));
 
 export type UsageWorkIntervalKind = 'busy' | 'permission_wait' | 'user_wait' | 'child_wait';
 
@@ -65,27 +65,27 @@ export interface UsageWorkIntervalsProjection {
     night: { startHour: number; endHour: number; busyMs: number; activityCount: number | null } | null;
 }
 
-const SpanSchema = lazyZodSchema(() => z.object({ startMs: z.number().int(), endMs: z.number().int() }).strict());
-const DurationSchema = lazyZodSchema(() => z.number().finite().nonnegative());
-export const UsageWorkIntervalsProjectionSchema = lazyZodSchema(() => z.object({
+const SpanSchema = lazyZodSchema(() => z.strictObject({ startMs: z.number().check(z.int()), endMs: z.number().check(z.int()) }));
+const DurationSchema = lazyZodSchema(() => z.number().check(z.nonnegative()));
+export const UsageWorkIntervalsProjectionSchema = lazyZodSchema(() => z.strictObject({
     method: z.literal('witnessed_intervals_v1'), period: SpanSchema,
-    timeZoneOffsetMinutes: z.number().int().min(-840).max(840),
+    timeZoneOffsetMinutes: z.number().check(z.int(), z.minimum(-840), z.maximum(840)),
     coverage: z.enum(['complete_for_supplied_facts', 'partial']),
-    unknownEndCount: z.number().int().nonnegative(), invalidIntervalCount: z.number().int().nonnegative(),
+    unknownEndCount: z.number().check(z.int(), z.nonnegative()), invalidIntervalCount: z.number().check(z.int(), z.nonnegative()),
     agentTimeMs: DurationSchema, elapsedBusyMs: DurationSchema, elapsedWaitMs: DurationSchema,
-    parallelBusyMs: DurationSchema, maxParallel: z.number().int().nonnegative(),
-    lanes: z.array(z.object({
-        workId: z.string().min(1), agentId: z.string().nullable(), machineId: z.string().nullable(), parentWorkId: z.string().nullable(),
-        busy: z.array(SpanSchema), waits: z.array(SpanSchema.extend({
-            kind: z.enum(['permission_wait', 'user_wait', 'child_wait']), evidenceId: z.string().min(1),
-        }).strict()),
-    }).strict()),
-    calendarDays: z.array(z.object({ date: z.string(), busyMs: DurationSchema, waitMs: DurationSchema }).strict()),
-    weekdayHourBuckets: z.array(z.object({ weekday: z.number().int().min(0).max(6), hour: z.number().int().min(0).max(23),
-        busyMs: DurationSchema, waitMs: DurationSchema }).strict()),
-    night: UsageNightHoursV1Schema.safeExtend({
-        busyMs: DurationSchema, activityCount: z.number().int().nonnegative().nullable() }).strict().nullable(),
-}).strict());
+    parallelBusyMs: DurationSchema, maxParallel: z.number().check(z.int(), z.nonnegative()),
+    lanes: z.array(z.strictObject({
+        workId: z.string().check(z.minLength(1)), agentId: z.nullable(z.string()), machineId: z.nullable(z.string()), parentWorkId: z.nullable(z.string()),
+        busy: z.array(SpanSchema), waits: z.array((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SpanSchema, {
+            kind: z.enum(['permission_wait', 'user_wait', 'child_wait']), evidenceId: z.string().check(z.minLength(1)),
+        }))),
+    })),
+    calendarDays: z.array(z.strictObject({ date: z.string(), busyMs: DurationSchema, waitMs: DurationSchema })),
+    weekdayHourBuckets: z.array(z.strictObject({ weekday: z.number().check(z.int(), z.minimum(0), z.maximum(6)), hour: z.number().check(z.int(), z.minimum(0), z.maximum(23)),
+        busyMs: DurationSchema, waitMs: DurationSchema })),
+    night: z.nullable((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(UsageNightHoursV1Schema, {
+        busyMs: DurationSchema, activityCount: z.nullable(z.number().check(z.int(), z.nonnegative())) }))),
+}));
 
 function mergeSegments(values: readonly UsageWorkIntervalSegment[]): UsageWorkIntervalSegment[] {
     const sorted = [...values].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);

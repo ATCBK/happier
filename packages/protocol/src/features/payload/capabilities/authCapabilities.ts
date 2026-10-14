@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 const AuthMethodActionSchema = lazyZodSchema(() => z.object({
   id: z.enum(['login', 'provision', 'connect']),
@@ -17,24 +17,21 @@ const DEFAULT_KEY_CHALLENGE_CAPABILITIES = {
 export const AuthMethodSchema = lazyZodSchema(() => z.object({
   id: z.string(),
   actions: z.array(AuthMethodActionSchema),
-  ui: z
+  ui: z.optional(z
     .object({
-      displayName: z.string().optional(),
-      iconHint: z.string().nullable().optional(),
-    })
-    .optional(),
+      displayName: z.optional(z.string()),
+      iconHint: z.optional(z.nullable(z.string())),
+    })),
 }));
 
 export const AuthCapabilitiesSchema = lazyZodSchema(() => z.object({
-  methods: z.array(AuthMethodSchema).optional(),
-  keyChallenge: KeyChallengeCapabilitiesSchema.optional().default(
-    DEFAULT_KEY_CHALLENGE_CAPABILITIES,
-  ),
+  methods: z.optional(z.array(AuthMethodSchema)),
+  keyChallenge: z._default(z.optional(KeyChallengeCapabilitiesSchema), DEFAULT_KEY_CHALLENGE_CAPABILITIES),
   signup: z.object({
     methods: z.array(z.object({ id: z.string(), enabled: z.boolean() })),
   }),
   login: z.object({
-    methods: z.array(z.object({ id: z.string(), enabled: z.boolean() })).optional().default([]),
+    methods: z._default(z.optional(z.array(z.object({ id: z.string(), enabled: z.boolean() }))), []),
     requiredProviders: z.array(z.string()),
   }),
   recovery: z.object({
@@ -45,7 +42,7 @@ export const AuthCapabilitiesSchema = lazyZodSchema(() => z.object({
   ui: z.object({
     autoRedirect: z.object({
       enabled: z.boolean(),
-      providerId: z.string().nullable(),
+      providerId: z.nullable(z.string()),
     }),
   }),
   providers: z.record(
@@ -53,15 +50,14 @@ export const AuthCapabilitiesSchema = lazyZodSchema(() => z.object({
     z.object({
       enabled: z.boolean(),
       configured: z.boolean(),
-      ui: z
+      ui: z.optional(z
         .object({
           displayName: z.string(),
-          iconHint: z.string().nullable().optional(),
-          connectButtonColor: z.string().nullable().optional(),
-          supportsProfileBadge: z.boolean().optional(),
-          badgeIconName: z.string().nullable().optional(),
-        })
-        .optional(),
+          iconHint: z.optional(z.nullable(z.string())),
+          connectButtonColor: z.optional(z.nullable(z.string())),
+          supportsProfileBadge: z.optional(z.boolean()),
+          badgeIconName: z.optional(z.nullable(z.string())),
+        })),
       restrictions: z.object({
         usersAllowlist: z.boolean(),
         orgsAllowlist: z.boolean(),
@@ -69,9 +65,9 @@ export const AuthCapabilitiesSchema = lazyZodSchema(() => z.object({
       }),
       offboarding: z.object({
         enabled: z.boolean(),
-        intervalSeconds: z.number().int().min(1),
+        intervalSeconds: z.number().check(z.int(), z.minimum(1)),
         mode: z.enum(['per-request-cache']),
-        source: z.string().min(1),
+        source: z.string().check(z.minLength(1)),
       }),
     }),
   ),
@@ -79,32 +75,29 @@ export const AuthCapabilitiesSchema = lazyZodSchema(() => z.object({
     z.object({
       code: z.string(),
       message: z.string(),
-      kind: z.string().optional(),
-      providerId: z.string().optional(),
-      envVars: z.array(z.string()).optional(),
+      kind: z.optional(z.string()),
+      providerId: z.optional(z.string()),
+      envVars: z.optional(z.array(z.string())),
     }),
   ),
-  mtls: z
+  mtls: z._default(z.optional(z
     .object({
       mode: z.enum(['forwarded', 'direct']),
       autoProvision: z.boolean(),
       identitySource: z.enum(['san_email', 'san_upn', 'subject_cn', 'fingerprint']),
-      policy: z
+      policy: z.optional(z
         .object({
           trustForwardedHeaders: z.boolean(),
           issuerAllowlist: z.object({
             enabled: z.boolean(),
-            count: z.number().int().min(0),
+            count: z.number().check(z.int(), z.minimum(0)),
           }),
           emailDomainAllowlist: z.object({
             enabled: z.boolean(),
-            count: z.number().int().min(0),
+            count: z.number().check(z.int(), z.minimum(0)),
           }),
-        })
-        .optional(),
-    })
-    .optional()
-    .default({
+        })),
+    })), {
       mode: 'forwarded',
       autoProvision: false,
       identitySource: 'san_email',

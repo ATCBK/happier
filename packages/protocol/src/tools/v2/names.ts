@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const KNOWN_CANONICAL_TOOL_NAMES_V2 = [
   'Bash',
@@ -52,5 +52,5 @@ export type CanonicalToolNameV2 =
 
 export const CanonicalToolNameV2Schema = z.union([
   KnownCanonicalToolNameV2Schema,
-  z.string().regex(/^mcp__/),
+  z.string().check(z.regex(/^mcp__/)),
 ]);

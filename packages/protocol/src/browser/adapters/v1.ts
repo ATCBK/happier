@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { BrowserAutomationActionCapabilityMapV1Schema } from '../automation/v1.js';
 import { BrowserContextKindV1Schema } from '../context/v1.js';
@@ -16,15 +16,13 @@ export {
   type BrowserSemanticAdapterKindV1,
 } from './kinds.js';
 
-export const BrowserAdapterNavigationCapabilitiesV1Schema = lazyZodSchema(() => z
-  .object({
-    canNavigate: z.boolean().optional().default(false),
-    canGoBack: z.boolean().optional().default(false),
-    canGoForward: z.boolean().optional().default(false),
-    canReload: z.boolean().optional().default(false),
-    canStop: z.boolean().optional().default(false),
-  })
-  .strict());
+export const BrowserAdapterNavigationCapabilitiesV1Schema = lazyZodSchema(() => z.strictObject({
+    canNavigate: z._default(z.optional(z.boolean()), false),
+    canGoBack: z._default(z.optional(z.boolean()), false),
+    canGoForward: z._default(z.optional(z.boolean()), false),
+    canReload: z._default(z.optional(z.boolean()), false),
+    canStop: z._default(z.optional(z.boolean()), false),
+  }));
 export type BrowserAdapterNavigationCapabilitiesV1 = z.infer<
   typeof BrowserAdapterNavigationCapabilitiesV1Schema
 >;
@@ -32,20 +30,18 @@ export type BrowserAdapterNavigationCapabilitiesV1 = z.infer<
 export const BrowserAdapterInputRoutingV1Schema = lazyZodSchema(() => z.enum(['none', 'native', 'pmsControlSideband']));
 export type BrowserAdapterInputRoutingV1 = z.infer<typeof BrowserAdapterInputRoutingV1Schema>;
 
-const DiagnosticsFidelityByFamilySchema = lazyZodSchema(() => z
-  .object({
-    console: BrowserDiagnosticFidelityV1Schema.optional(),
-    pageError: BrowserDiagnosticFidelityV1Schema.optional(),
-    network: BrowserDiagnosticFidelityV1Schema.optional(),
-    elements: BrowserDiagnosticFidelityV1Schema.optional(),
-    resources: BrowserDiagnosticFidelityV1Schema.optional(),
-    storage: BrowserDiagnosticFidelityV1Schema.optional(),
-    pageInfo: BrowserDiagnosticFidelityV1Schema.optional(),
-    performance: BrowserDiagnosticFidelityV1Schema.optional(),
-    screenshot: BrowserDiagnosticFidelityV1Schema.optional(),
-    proxyTunnel: BrowserDiagnosticFidelityV1Schema.optional(),
-  })
-  .strict());
+const DiagnosticsFidelityByFamilySchema = lazyZodSchema(() => z.strictObject({
+    console: z.optional(BrowserDiagnosticFidelityV1Schema),
+    pageError: z.optional(BrowserDiagnosticFidelityV1Schema),
+    network: z.optional(BrowserDiagnosticFidelityV1Schema),
+    elements: z.optional(BrowserDiagnosticFidelityV1Schema),
+    resources: z.optional(BrowserDiagnosticFidelityV1Schema),
+    storage: z.optional(BrowserDiagnosticFidelityV1Schema),
+    pageInfo: z.optional(BrowserDiagnosticFidelityV1Schema),
+    performance: z.optional(BrowserDiagnosticFidelityV1Schema),
+    screenshot: z.optional(BrowserDiagnosticFidelityV1Schema),
+    proxyTunnel: z.optional(BrowserDiagnosticFidelityV1Schema),
+  }));
 
 const DEFAULT_BROWSER_ADAPTER_NAVIGATION_CAPABILITIES: BrowserAdapterNavigationCapabilitiesV1 = {
   canNavigate: false,
@@ -55,26 +51,22 @@ const DEFAULT_BROWSER_ADAPTER_NAVIGATION_CAPABILITIES: BrowserAdapterNavigationC
   canStop: false,
 };
 
-export const BrowserAdapterCapabilitiesV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserAdapterCapabilitiesV1Schema = lazyZodSchema(() => z.strictObject({
     adapterKind: BrowserSemanticAdapterKindV1Schema,
-    supportedTargetKinds: z.array(BrowserViewTargetKindV1Schema).optional().default([]),
-    supportedRenderEngines: z.array(BrowserRenderEngineKindV1Schema).optional().default([]),
-    navigation: BrowserAdapterNavigationCapabilitiesV1Schema.optional().default(
-      DEFAULT_BROWSER_ADAPTER_NAVIGATION_CAPABILITIES,
-    ),
-    diagnosticsFidelityByFamily: DiagnosticsFidelityByFamilySchema.optional().default({}),
-    automationActions: BrowserAutomationActionCapabilityMapV1Schema.optional(),
-    contextKinds: z.array(BrowserContextKindV1Schema).optional().default([]),
-    inputRouting: BrowserAdapterInputRoutingV1Schema.optional().default('none'),
-    supportsDownloads: z.boolean().optional().default(false),
-    supportsUploads: z.boolean().optional().default(false),
-    supportsPopups: z.boolean().optional().default(false),
-    supportsPermissions: z.boolean().optional().default(false),
-    supportsStreamingDisplay: z.boolean().optional().default(false),
-    disabledReasons: z.array(z.string().trim().min(1)).optional().default([]),
-  })
-  .strict());
+    supportedTargetKinds: z._default(z.optional(z.array(BrowserViewTargetKindV1Schema)), []),
+    supportedRenderEngines: z._default(z.optional(z.array(BrowserRenderEngineKindV1Schema)), []),
+    navigation: z._default(z.optional(BrowserAdapterNavigationCapabilitiesV1Schema), DEFAULT_BROWSER_ADAPTER_NAVIGATION_CAPABILITIES),
+    diagnosticsFidelityByFamily: z._default(z.optional(DiagnosticsFidelityByFamilySchema), {}),
+    automationActions: z.optional(BrowserAutomationActionCapabilityMapV1Schema),
+    contextKinds: z._default(z.optional(z.array(BrowserContextKindV1Schema)), []),
+    inputRouting: z._default(z.optional(BrowserAdapterInputRoutingV1Schema), 'none'),
+    supportsDownloads: z._default(z.optional(z.boolean()), false),
+    supportsUploads: z._default(z.optional(z.boolean()), false),
+    supportsPopups: z._default(z.optional(z.boolean()), false),
+    supportsPermissions: z._default(z.optional(z.boolean()), false),
+    supportsStreamingDisplay: z._default(z.optional(z.boolean()), false),
+    disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
+  }));
 // NOTE: external URLs ARE rendered best-effort in the web `webIframe` engine (with the always-present
 // open-in-system-browser escape for non-framable sites), so `externalUrl` legitimately advertises
 // `webIframe`. The earlier guard rejecting that pairing contradicted the shipped iframe feature and

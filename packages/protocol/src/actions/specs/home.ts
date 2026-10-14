@@ -49,7 +49,7 @@ import {
   HomeReachabilityV1Schema,
 } from '../../home/governance/reachability.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { homeDomainActionRow, homeDomainApprovalField as approvalField } from './homeDomainRow.js';
 
@@ -73,7 +73,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
       description: 'Rebuild this Personal Home’s derived search index from its canonical transcript rows.',
       safety: 'danger', sideEffectClass: 'danger', cliPath: ['home', 'search', 'rebuild'],
       path: '/v1/home/search/rebuild', inputSchema: HomeGovernanceGetInputV1Schema,
-      outputSchema: lazyZodSchema(() => z.object({ ok: z.literal(true) }).strict()),
+      outputSchema: lazyZodSchema(() => z.strictObject({ ok: z.literal(true) })),
     }),
     // The existing server search owner requires present-user admission.
     requiredAuthority: 'present_user' as const,

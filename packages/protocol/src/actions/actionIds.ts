@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { MACHINE_ADD_SSH_ACTION_IDS, MACHINE_PAGE_ACTION_IDS } from './specs/machineConnection.js';
 import { USAGE_ACTION_IDS, USAGE_COACH_ACTION_IDS } from '../usage/usageActionIdsV1.js';
 import { MACHINE_ACCESS_ACTION_IDS, MACHINE_WORK_SUMMARY_ACTION_IDS } from './specs/machineAccess.js';
@@ -798,7 +798,7 @@ export const RUNTIME_ACTION_IDS_V1 = [
 ] as const;
 
 export type ActionId = typeof ACTION_IDS[number];
-export const ActionIdSchema: z.ZodEnum<{ [Id in ActionId]: Id }> = lazyZodSchema(() => z.enum(ACTION_IDS));
+export const ActionIdSchema: z.ZodMiniEnum<{ [Id in ActionId]: Id }> = lazyZodSchema(() => z.enum(ACTION_IDS));
 export type ActionIdFamilyV1 = keyof typeof ACTION_ID_FAMILIES_V1;
 export const ActionIdFamilyV1Schema = lazyZodSchema(() => z.enum(
   Object.keys(ACTION_ID_FAMILIES_V1) as [ActionIdFamilyV1, ...ActionIdFamilyV1[]],

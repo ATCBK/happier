@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { decodeBase64, encodeBase64 } from '../crypto/base64.js';
 import { HomeConnectionDescriptorV1Schema, type HomeConnectionDescriptorV1 } from './accountDirectory.js';
@@ -8,8 +8,8 @@ export const TERMINAL_CONNECT_LINK_WIRE_VERSION_V4 = 4 as const;
 const TERMINAL_CONNECT_LINK_V4_PARAMETER = 'v4' as const;
 const TERMINAL_CONNECT_LINK_V4_MAX_PAYLOAD_UTF8_BYTES = 16 * 1024;
 
-function canonicalBase64UrlBytesSchema(expectedBytes: number): z.ZodType<string> {
-  return z.string().min(1).max(Math.ceil(expectedBytes / 3) * 4).refine((value) => {
+function canonicalBase64UrlBytesSchema(expectedBytes: number): z.ZodMiniType<string> {
+  return z.string().check(z.minLength(1), z.maxLength(Math.ceil(expectedBytes / 3) * 4), z.refine((value) => {
     if (!/^[A-Za-z0-9_-]+$/u.test(value)) return false;
     try {
       const decoded = decodeBase64(value, 'base64url');
@@ -17,48 +17,48 @@ function canonicalBase64UrlBytesSchema(expectedBytes: number): z.ZodType<string>
     } catch {
       return false;
     }
-  }, `must be canonical base64url encoding of ${expectedBytes} bytes`);
+  }, `must be canonical base64url encoding of ${expectedBytes} bytes`));
 }
 
-const TimestampMsSchema = lazyZodSchema(() => z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
+const TimestampMsSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
 
 /**
  * The pairing context remains V3: V4 versions only the authority-bearing link
  * envelope. Its Home identity is the credential destination and must match the
  * strict connection descriptor below.
  */
-export const TerminalConnectPairingContextV3Schema = lazyZodSchema(() => z.object({
+export const TerminalConnectPairingContextV3Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(3),
   secretB64Url: canonicalBase64UrlBytesSchema(32),
   createdAtMs: TimestampMsSchema,
   expiresAtMs: TimestampMsSchema,
   homeServerIdentityId: HomeConnectionDescriptorV1Schema.shape.homeServerIdentityId,
   supportsTokenOnly: z.boolean(),
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (value.expiresAtMs <= value.createdAtMs) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['expiresAtMs'],
       message: 'Pairing expiry must be after creation',
     });
   }
-}));
+})));
 export type TerminalConnectPairingContextV3 = z.infer<typeof TerminalConnectPairingContextV3Schema>;
 
-export const TerminalConnectLinkV4EnvelopeSchema = lazyZodSchema(() => z.object({
+export const TerminalConnectLinkV4EnvelopeSchema = lazyZodSchema(() => z.strictObject({
   v: z.literal(TERMINAL_CONNECT_LINK_WIRE_VERSION_V4),
   publicKeyB64Url: canonicalBase64UrlBytesSchema(32),
   pairing: TerminalConnectPairingContextV3Schema,
   homeConnectionDescriptor: HomeConnectionDescriptorV1Schema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (value.pairing.homeServerIdentityId !== value.homeConnectionDescriptor.homeServerIdentityId) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['pairing', 'homeServerIdentityId'],
       message: 'V3 pairing credential destination must match the Home descriptor identity',
     });
   }
-}));
+})));
 export type TerminalConnectLinkV4Envelope = z.infer<typeof TerminalConnectLinkV4EnvelopeSchema>;
 
 export type TerminalConnectLinkV4CredentialDestination = Readonly<{

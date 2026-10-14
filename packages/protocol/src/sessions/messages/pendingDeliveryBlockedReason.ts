@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { PendingProviderAction } from '../pending/pendingProviderAction.js';
 import type { PendingRequestedActionV1 } from '../pending/pendingRequestedActionV1.js';

@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -138,7 +139,7 @@ describe('canonical Voice provider declarations', () => {
       return value as Record<string, unknown>;
     };
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
-      const manifest = PluginManifestV2Schema.toJSONSchema({ io: 'input', target, unrepresentable: 'any' });
+      const manifest = z.toJSONSchema(PluginManifestV2Schema, { io: 'input', target, unrepresentable: 'any' });
       const prefix = target === 'draft-7' ? '#/definitions/' : '#/$defs/';
       const definitions = object(target === 'draft-7' ? manifest.definitions : manifest.$defs);
       const dereference = (value: unknown): Record<string, unknown> => {

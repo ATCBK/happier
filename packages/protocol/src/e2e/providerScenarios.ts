@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const E2eScenarioTierSchema = z.enum(['smoke', 'extended']);
 export const E2eProviderLaneScopeSchema = z.enum(['acp-only', 'declared-scenarios']);
@@ -7,21 +7,21 @@ export const E2eProviderAppServerCoverageSchema = z.enum(['excluded', 'not-appli
 export const E2eProviderAppServerCapabilitySurfaceSchema = z.enum(['modes', 'models', 'speed', 'rollback']);
 
 const TierListsSchema = z.object({
-  smoke: z.array(z.string().min(1)),
-  extended: z.array(z.string().min(1)),
+  smoke: z.array(z.string().check(z.minLength(1))),
+  extended: z.array(z.string().check(z.minLength(1))),
 });
 
 const CoverageExpectationSchema = z.object({
   providerLaneScope: E2eProviderLaneScopeSchema,
   defaultRuntimePath: E2eProviderDefaultRuntimePathSchema,
   appServerCoverage: E2eProviderAppServerCoverageSchema,
-  appServerCapabilitySurfaces: z.array(E2eProviderAppServerCapabilitySurfaceSchema).optional(),
+  appServerCapabilitySurfaces: z.optional(z.array(E2eProviderAppServerCapabilitySurfaceSchema)),
 });
 
 export const E2eCliProviderScenarioRegistryV1Schema = z.object({
   v: z.literal(1),
   tiers: TierListsSchema,
-  coverageExpectation: CoverageExpectationSchema.optional(),
+  coverageExpectation: z.optional(CoverageExpectationSchema),
   /**
    * Optional scenario tier overrides keyed by the provider auth mode.
    *
@@ -30,13 +30,11 @@ export const E2eCliProviderScenarioRegistryV1Schema = z.object({
    * can represent the local (host) run, and the env-mode overrides can add extra
    * scenarios that only make sense under API-key auth.
    */
-  tiersByAuthMode: z
+  tiersByAuthMode: z.optional(z.partial(z
     .object({
       host: TierListsSchema,
       env: TierListsSchema,
-    })
-    .partial()
-    .optional(),
+    }))),
 });
 
 export type E2eCliProviderScenarioRegistryV1 = z.infer<typeof E2eCliProviderScenarioRegistryV1Schema>;

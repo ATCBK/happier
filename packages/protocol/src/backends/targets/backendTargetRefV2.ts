@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   BackendTargetKeySchema,
@@ -50,16 +50,16 @@ export type BackendTargetSourceKindV2 = z.infer<typeof BackendTargetSourceKindV2
 
 export const BackendTargetRefV2Schema = lazyZodSchema(() => z.object({
   kind: z.literal('backend'),
-  backendId: z.string().min(1),
-  configuredBackendId: z.string().min(1).optional(),
-  sourceKind: BackendTargetSourceKindV2Schema.optional(),
-}).superRefine((value, ctx) => {
+  backendId: z.string().check(z.minLength(1)),
+  configuredBackendId: z.optional(z.string().check(z.minLength(1))),
+  sourceKind: z.optional(BackendTargetSourceKindV2Schema),
+}).check(z.superRefine((value, ctx) => {
   if (hasLegacyCustomAcpConcreteBackendId({
     backendId: value.backendId,
     configuredBackendId: value.configuredBackendId,
   })) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['backendId'],
       message: 'backendTarget must identify a concrete backend',
     });
@@ -67,7 +67,7 @@ export const BackendTargetRefV2Schema = lazyZodSchema(() => z.object({
   }
   if (value.sourceKind === 'configured' && !value.configuredBackendId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['configuredBackendId'],
       message: 'configuredBackendId is required when sourceKind is configured',
     });
@@ -75,7 +75,7 @@ export const BackendTargetRefV2Schema = lazyZodSchema(() => z.object({
   if (!value.configuredBackendId) {
     if (value.backendId.includes(':')) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['backendId'],
         message: 'backendId cannot contain target-key delimiters',
       });
@@ -83,13 +83,13 @@ export const BackendTargetRefV2Schema = lazyZodSchema(() => z.object({
     const identity = resolveBundledAgentIdentityV1(value.backendId) ?? parseQualifiedPluginContributionKey(value.backendId);
     if (identity && !AgentExecutionTargetV1Schema.safeParse({ kind: 'agent', identity }).success) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['backendId'],
         message: 'backendTarget must identify an executable Agent',
       });
     }
   }
-}));
+})));
 export type BackendTargetRefV2 = z.infer<typeof BackendTargetRefV2Schema>;
 
 /**
@@ -136,8 +136,7 @@ function isBackendTargetKeyV2(value: string): boolean {
 }
 
 export const BackendTargetKeyV2Schema = lazyZodSchema(() => z
-  .string()
-  .refine(isBackendTargetKeyV2, 'Invalid V2 backend target key'));
+  .string().check(z.refine(isBackendTargetKeyV2, 'Invalid V2 backend target key')));
 export type BackendTargetKeyV2 = z.infer<typeof BackendTargetKeyV2Schema>;
 
 export function buildBackendTargetKeyV2(target: BackendTargetRefV2 | AgentExecutionTargetV1): BackendTargetKeyV2 {
@@ -210,10 +209,7 @@ export function normalizeBackendTargetKeyV2Input(input: unknown): unknown {
   }
 }
 
-export const BackendTargetKeyV2InputSchema = lazyZodSchema(() => z.preprocess(
-  normalizeBackendTargetKeyV2Input,
-  BackendTargetKeyV2Schema,
-));
+export const BackendTargetKeyV2InputSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeBackendTargetKeyV2Input), BackendTargetKeyV2Schema));
 
 export const BackendTargetRefV2InputSchema = lazyZodSchema(() => z.union([
   BackendTargetRefV2Schema,
@@ -379,7 +375,7 @@ export function readBackendTargetKeyV2(input: unknown): BackendTargetKeyV2 | nul
   try {
     return resolveBackendTargetKeyV2(BackendTargetRefV2InputSchema.parse(input));
   } catch (error) {
-    if (!(error instanceof z.ZodError)) throw error;
+    if (!(error instanceof z.core.$ZodError)) throw error;
     return null;
   }
 }

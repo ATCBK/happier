@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema, lazyDefinition } from '../lazyZodSchema.js';
 import { WorkspaceAddressV1Schema } from '../workspaces/workspaceRefV1.js';
 import { ProjectExecutionChoiceV1Schema } from '../workspaces/projectWorkerPreferencesV1.js';
@@ -28,12 +28,12 @@ export function isRequesterProjectExecutionActionV1(actionId: string): actionId 
   return actionId === 'projects.open' || actionId === 'projects.trust.list' || actionId === 'projects.trust.revoke';
 }
 
-const nonempty = lazyZodSchema(() => z.string().min(1));
+const nonempty = lazyZodSchema(() => z.string().check(z.minLength(1)));
 const workspace = WorkspaceAddressV1Schema;
-export const ProjectSetupConsentRequiredV1Schema = lazyZodSchema(() => z.object({
+export const ProjectSetupConsentRequiredV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('pendingApproval'), code: z.enum(['project_setup_consent_required', 'project_setup_effect_changed']), reviewedEffectDigest: nonempty,
-  consentScope: ProjectSetupConsentScopeV1Schema.optional(),
-}).strict());
+  consentScope: z.optional(ProjectSetupConsentScopeV1Schema),
+}));
 export type ProjectSetupConsentRequiredV1 = z.infer<typeof ProjectSetupConsentRequiredV1Schema>;
 export type ProjectSetupConsentFailureV1 = Readonly<{
   ok: false;
@@ -68,9 +68,9 @@ export function readProjectSetupConsentHoldV1(actionId: string, value: unknown):
     ...(failure.details.consentScope ? { consentScope: failure.details.consentScope } : {}) } : null;
 }
 export const ProjectPrepareNoLaunchResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({ kind: z.literal('notRequired'), reviewedEffectDigest: nonempty }).strict(),
-  z.object({ kind: z.literal('skippedForInvocation'), reviewedEffectDigest: nonempty }).strict(),
-  z.object({ kind: z.literal('success'), reviewedEffectDigest: nonempty }).strict(),
+  z.strictObject({ kind: z.literal('notRequired'), reviewedEffectDigest: nonempty }),
+  z.strictObject({ kind: z.literal('skippedForInvocation'), reviewedEffectDigest: nonempty }),
+  z.strictObject({ kind: z.literal('success'), reviewedEffectDigest: nonempty }),
 ]));
 export type ProjectPrepareNoLaunchResultV1 = z.infer<typeof ProjectPrepareNoLaunchResultV1Schema>;
 export const ProjectPrepareResultV1Schema = lazyZodSchema(() => z.union([
@@ -79,41 +79,41 @@ export const ProjectPrepareResultV1Schema = lazyZodSchema(() => z.union([
   ProjectCommandActionOutputV1Schema,
 ]));
 export type ProjectPrepareResultV1 = z.infer<typeof ProjectPrepareResultV1Schema>;
-export const ProjectPrepareInputV1Schema = lazyZodSchema(() => z.object({
-  workspace, phase: z.enum(['setup', 'teardown']), skipForInvocation: z.boolean().optional(), expectedEffectDigest: nonempty.optional(),
-  consentScope: ProjectSetupConsentScopeV1Schema.optional(),
-}).strict().refine(input => input.consentScope === undefined || input.expectedEffectDigest !== undefined, {
+export const ProjectPrepareInputV1Schema = lazyZodSchema(() => z.strictObject({
+  workspace, phase: z.enum(['setup', 'teardown']), skipForInvocation: z.optional(z.boolean()), expectedEffectDigest: z.optional(nonempty),
+  consentScope: z.optional(ProjectSetupConsentScopeV1Schema),
+}).check(z.refine(input => input.consentScope === undefined || input.expectedEffectDigest !== undefined, {
   path: ['expectedEffectDigest'], message: 'Requested setup consent scope requires the reviewed effect digest',
-}));
+})));
 export type ProjectPrepareInputV1 = z.infer<typeof ProjectPrepareInputV1Schema>;
 export const PROJECT_ACTION_INPUT_SCHEMAS_V1 = {
-  'projects.trust.list': lazyZodSchema(() => z.object({ project: z.optional(QualifiedProjectTrustProjectV1Schema) }).strict()),
-  'projects.trust.revoke': lazyZodSchema(() => z.object({ project: QualifiedProjectTrustProjectV1Schema,
-    expectedRevision: z.number().int().nonnegative(), expectedEffectDigest: nonempty }).strict()),
+  'projects.trust.list': lazyZodSchema(() => z.strictObject({ project: z.optional(QualifiedProjectTrustProjectV1Schema) })),
+  'projects.trust.revoke': lazyZodSchema(() => z.strictObject({ project: QualifiedProjectTrustProjectV1Schema,
+    expectedRevision: z.number().check(z.int(), z.nonnegative()), expectedEffectDigest: nonempty })),
   'projects.prepare': ProjectPrepareInputV1Schema,
-  'projects.script.run': lazyZodSchema(() => z.object({
+  'projects.script.run': lazyZodSchema(() => z.strictObject({
     workspace,
     selection: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('named'), name: nonempty }).strict(),
-      z.object({ kind: z.literal('native'), source: ProjectNativeRefV1Schema }).strict(),
+      z.strictObject({ kind: z.literal('named'), name: nonempty }),
+      z.strictObject({ kind: z.literal('native'), source: ProjectNativeRefV1Schema }),
     ]),
-    choice: ProjectExecutionChoiceV1Schema.optional(), expectedEffectDigest: nonempty.optional(),
+    choice: z.optional(ProjectExecutionChoiceV1Schema), expectedEffectDigest: z.optional(nonempty),
     memoryDemand: z.optional(ProjectMemoryDemandV1Schema),
-  }).strict()),
-  'projects.compute.exec': lazyZodSchema(() => z.object({
+  })),
+  'projects.compute.exec': lazyZodSchema(() => z.strictObject({
     workspace, executable: nonempty, argv: z.array(z.string()), cwd: nonempty,
-    environmentBindings: SecretReferenceOverlayV1Schema.optional(), choice: ProjectExecutionChoiceV1Schema.optional(),
+    environmentBindings: z.optional(SecretReferenceOverlayV1Schema), choice: z.optional(ProjectExecutionChoiceV1Schema),
     memoryDemand: z.optional(ProjectMemoryDemandV1Schema),
-  }).strict()),
+  })),
 } as const;
 // Refusal and pre-launch failure use the incumbent ActionExecuteFailure envelope;
 // they cannot masquerade as successful launch evidence for generic completion.
 const finiteResult = lazyZodSchema(() => z.union([ProjectCommandActionOutputV1Schema, ProjectSetupConsentRequiredV1Schema]));
 export const PROJECT_ACTION_OUTPUT_SCHEMAS_V1 = {
-  'projects.trust.list': lazyZodSchema(() => z.object({ trust: z.array(z.object({
-    project: QualifiedProjectTrustProjectV1Schema, revision: z.number().int().nonnegative(), value: ProjectTrustValueV1Schema,
-  }).strict()) }).strict()),
-  'projects.trust.revoke': lazyZodSchema(() => z.object({ project: QualifiedProjectTrustProjectV1Schema, status: z.enum(['removed', 'notFound', 'conflict', 'refused']) }).strict()),
+  'projects.trust.list': lazyZodSchema(() => z.strictObject({ trust: z.array(z.strictObject({
+    project: QualifiedProjectTrustProjectV1Schema, revision: z.number().check(z.int(), z.nonnegative()), value: ProjectTrustValueV1Schema,
+  })) })),
+  'projects.trust.revoke': lazyZodSchema(() => z.strictObject({ project: QualifiedProjectTrustProjectV1Schema, status: z.enum(['removed', 'notFound', 'conflict', 'refused']) })),
   'projects.prepare': ProjectPrepareResultV1Schema,
   'projects.script.run': finiteResult,
   'projects.compute.exec': finiteResult,

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { FeatureDecision } from '../../features/decision.js';
 import { OperationUpdateRequiredV1Schema } from '../../compat/operationUpdateRequiredV1.js';
 import { SessionSystemRecordRevisionSchema } from '../system/records/sessionSystemRecordRevision.js';
@@ -15,23 +15,23 @@ export const SessionBoardErrorCodeSchema = lazyZodSchema(() => z.enum([
 ]));
 export type SessionBoardErrorCode = z.infer<typeof SessionBoardErrorCodeSchema>;
 export const SessionBoardErrorV1Schema = lazyZodSchema(() => z.discriminatedUnion('error', [
-  z.object({ error: z.literal('session_board_invalid') }).strict(),
-  z.object({ error: z.literal('session_board_item_not_found') }).strict(),
-  z.object({ error: z.literal('session_board_forbidden') }).strict(),
-  z.object({ error: z.literal('session_board_storage_mode_mismatch') }).strict(),
-  z.object({ error: z.literal('session_board_source_conflict') }).strict(),
-  z.object({
+  z.strictObject({ error: z.literal('session_board_invalid') }),
+  z.strictObject({ error: z.literal('session_board_item_not_found') }),
+  z.strictObject({ error: z.literal('session_board_forbidden') }),
+  z.strictObject({ error: z.literal('session_board_storage_mode_mismatch') }),
+  z.strictObject({ error: z.literal('session_board_source_conflict') }),
+  z.strictObject({
     error: z.literal('session_board_revision_conflict'),
-    currentItemRevision: SessionSystemRecordRevisionSchema.nullable().optional(),
-    currentLayoutRevision: SessionSystemRecordRevisionSchema.nullable().optional(),
-  }).strict(),
+    currentItemRevision: z.optional(z.nullable(SessionSystemRecordRevisionSchema)),
+    currentLayoutRevision: z.optional(z.nullable(SessionSystemRecordRevisionSchema)),
+  }),
 ]));
 export type SessionBoardErrorV1 = z.infer<typeof SessionBoardErrorV1Schema>;
 
 /** The incumbent server feature-admission response for a hidden Board route. */
-export const SessionBoardFeatureGateErrorV1Schema = lazyZodSchema(() => z.object({
+export const SessionBoardFeatureGateErrorV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.literal('not_found'),
-}).strict());
+}));
 
 export type SessionBoardFeatureDecisionActionFailureV1 =
   | Readonly<{

@@ -1,6 +1,6 @@
 import { SecretStringV1Schema } from '../../../crypto/settingsSecretStringSchemasV1.js';
 import type { VoiceProviderSettingsJsonValueV1 } from '../../realtime/providerSettings.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../../json/storedReadSchema.js';
 
 import { VoiceLocalDirectSchema } from '../localDirect.js';
@@ -191,28 +191,28 @@ const RELEASED_LEGACY_ELEVENLABS_DEFAULT_VOICE_ID = 'EST9Ui6982FZPSi7gCHi';
 /** Exact predecessor parser shape; current settings are admitted by the contribution owner. */
 function createReleasedElevenLabsLegacySchema(defaultVoiceId: string) {
   return z.object({
-    assistantLanguage: z.string().nullable().default(null),
-    billingMode: z.enum(['happier', 'byo']).default('happier'),
-    welcome: z.object({
-      enabled: z.boolean().default(false),
-      mode: z.enum(['immediate', 'on_first_turn']).default('immediate'),
-      templateId: z.string().nullable().default(null),
-    }).default({ enabled: false, mode: 'immediate', templateId: null }),
-    tts: z.object({
-      voiceId: z.string().default(defaultVoiceId),
-      modelId: z.string().nullable().default(null),
-      voiceSettings: z.object({
-        stability: z.number().min(0).max(1).nullable().default(null),
-        similarityBoost: z.number().min(0).max(1).nullable().default(null),
-        style: z.number().min(0).max(1).nullable().default(null),
-        useSpeakerBoost: z.boolean().nullable().default(null),
-        speed: z.number().min(0.5).max(2).nullable().default(null),
-      }).prefault({}),
-    }).prefault({}),
-    byo: z.object({
-      agentId: z.string().nullable().default(null),
-      apiKey: SecretStringV1Schema.nullable().default(null),
-    }).default({ agentId: null, apiKey: null }),
+    assistantLanguage: z._default(z.nullable(z.string()), null),
+    billingMode: z._default(z.enum(['happier', 'byo']), 'happier'),
+    welcome: z._default(z.object({
+      enabled: z._default(z.boolean(), false),
+      mode: z._default(z.enum(['immediate', 'on_first_turn']), 'immediate'),
+      templateId: z._default(z.nullable(z.string()), null),
+    }), { enabled: false, mode: 'immediate', templateId: null }),
+    tts: z.prefault(z.object({
+      voiceId: z._default(z.string(), defaultVoiceId),
+      modelId: z._default(z.nullable(z.string()), null),
+      voiceSettings: z.prefault(z.object({
+        stability: z._default(z.nullable(z.number().check(z.minimum(0), z.maximum(1))), null),
+        similarityBoost: z._default(z.nullable(z.number().check(z.minimum(0), z.maximum(1))), null),
+        style: z._default(z.nullable(z.number().check(z.minimum(0), z.maximum(1))), null),
+        useSpeakerBoost: z._default(z.nullable(z.boolean()), null),
+        speed: z._default(z.nullable(z.number().check(z.minimum(0.5), z.maximum(2))), null),
+      }), {}),
+    }), {}),
+    byo: z._default(z.object({
+      agentId: z._default(z.nullable(z.string()), null),
+      apiKey: z._default(z.nullable(SecretStringV1Schema), null),
+    }), { agentId: null, apiKey: null }),
   });
 }
 
@@ -227,7 +227,7 @@ function createElevenLabsCompatibility(settings: CurrentVoiceSettings): Released
   const defaultVoiceId = defaults.tts.voiceId;
   const legacySchema = createReleasedElevenLabsLegacySchema(defaultVoiceId);
   // Identifier cleanup is translation into current declaration fields, not a current parser.
-  const identifier = z.string().trim().min(1).max(256);
+  const identifier = z.string().check(z.trim(), z.minLength(1), z.maxLength(256));
   return Object.freeze({
     defaultLegacyConfig: legacySchema.parse({
       tts: { voiceId: RELEASED_LEGACY_ELEVENLABS_DEFAULT_VOICE_ID },

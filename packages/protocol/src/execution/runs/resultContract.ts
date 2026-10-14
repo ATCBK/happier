@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   compilePluginJsonSchema,
@@ -14,7 +14,7 @@ import type { ExecutionRunResultContractV1 } from './resultContractV1.js';
 
 const DecisionResultSchema = lazyZodSchema(() => z.union([
   z.string(),
-  z.object({ decision: z.string(), reason: z.string().optional() }).strict(),
+  z.strictObject({ decision: z.string(), reason: z.optional(z.string()) }),
 ]));
 
 export type ExecutionRunProfileResultContract =

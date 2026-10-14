@@ -1,7 +1,7 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const NormalizedCoordinateSchema = z.number().min(0).max(1);
-const PositiveSizeSchema = z.number().positive();
+const NormalizedCoordinateSchema = z.number().check(z.minimum(0), z.maximum(1));
+const PositiveSizeSchema = z.number().check(z.positive());
 
 export const SimulatorOrientationV1Schema = z.enum([
   'portrait',

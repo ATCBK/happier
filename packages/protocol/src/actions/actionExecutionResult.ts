@@ -1,12 +1,12 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /** A policy-deferred Action has not failed or executed; the present user owns the next step. */
-export const ActionApprovalRequestCreatedResultSchema = lazyZodSchema(() => z.object({
+export const ActionApprovalRequestCreatedResultSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('approval_request_created'),
-  artifactId: z.string().trim().min(1),
-  actionId: z.string().trim().min(1),
-}).strict());
+  artifactId: z.string().check(z.trim(), z.minLength(1)),
+  actionId: z.string().check(z.trim(), z.minLength(1)),
+}));
 
 export type ActionApprovalRequestCreatedResult = Readonly<
   z.infer<typeof ActionApprovalRequestCreatedResultSchema>
@@ -18,15 +18,15 @@ export type ActionApprovalRequestCreatedResult = Readonly<
  * It is deliberately separate from the daemon-heavy executor type graph so
  * browser-facing SDK declarations do not pull the aggregate Actions barrel.
  */
-export const ActionExecuteFailureSchema = lazyZodSchema(() => z.object({
+export const ActionExecuteFailureSchema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(false),
-  errorCode: z.string().trim().min(1),
-  error: z.string().trim().min(1),
+  errorCode: z.string().check(z.trim(), z.minLength(1)),
+  error: z.string().check(z.trim(), z.minLength(1)),
   // Failure details remain an existing opaque Action contract. Their owning
   // producers decide their shape; this public envelope only excludes extra
   // top-level transit metadata.
-  details: z.unknown().optional(),
-}).strict());
+  details: z.optional(z.unknown()),
+}));
 
 export type ActionExecuteFailure = Readonly<z.infer<typeof ActionExecuteFailureSchema>>;
 

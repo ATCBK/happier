@@ -1,5 +1,6 @@
+import { lazyZodSchema } from '../lazyZodSchema.js';
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   MachineOperationProtocolCapabilitiesV1Schema,
@@ -24,11 +25,11 @@ const ReleasedForkStrategySchema = z.enum([
   'replay',
 ]);
 
-const ReleasedForkRpcParamsSchema = SessionForkRpcParamsSchema.safeExtend({
-  strategy: ReleasedForkStrategySchema.optional(),
-});
+const ReleasedForkRpcParamsSchema = lazyZodSchema(() => z.safeExtend(SessionForkRpcParamsSchema, {
+  strategy: z.optional(ReleasedForkStrategySchema),
+}));
 
-function unrecognizedKeys(error: z.ZodError | undefined): readonly string[] {
+function unrecognizedKeys(error: z.core.$ZodError | undefined): readonly string[] {
   if (!error) return [];
   return error.issues.flatMap((issue) =>
     issue.code === 'unrecognized_keys' ? issue.keys : [],
@@ -66,7 +67,7 @@ describe('compat — old client + new daemon, fork', () => {
 
     // Before this change the strict params object had no `requestId`, so a
     // predecessor client's coalescing key was rejected outright.
-    const releasedWithoutRequestId = SessionForkRpcParamsSchema.omit({ requestId: true });
+    const releasedWithoutRequestId = lazyZodSchema(() => z.omit(SessionForkRpcParamsSchema, { requestId: true }));
     expect(
       unrecognizedKeys(releasedWithoutRequestId.safeParse(withRequestId).error),
     ).toContain('requestId');
@@ -83,7 +84,7 @@ describe('compat — new client + old daemon, sourceContext spawn', () => {
     // The released strict spawn input has no `sourceContext`, so an older dev
     // daemon rejects the whole operation. That is operation-scoped safe
     // degradation, not wire compatibility by silent ignore.
-    const released = SessionSpawnNewInputV2BaseSchema.omit({ sourceContext: true });
+    const released = lazyZodSchema(() => z.omit(SessionSpawnNewInputV2BaseSchema, { sourceContext: true }));
     expect(unrecognizedKeys(released.safeParse(payloadWithSourceContext).error))
       .toContain('sourceContext');
   });

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_METADATA_KEY =
   'connectedServiceMaterializationIdentityV1' as const;
@@ -25,21 +25,13 @@ function normalizeMaterializationIdentityInput(value: unknown): unknown {
 }
 
 export function createConnectedServiceMaterializationIdentityV1Schema(zod: typeof z) {
-  return zod.preprocess(
-    normalizeMaterializationIdentityInput,
-    zod.object({
+  return zod.pipe(zod.transform(normalizeMaterializationIdentityInput), zod.looseObject({
       v: zod.literal(1),
       id: zod
-        .string()
-        .trim()
-        .min(1)
-        .max(128)
-        .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/),
-      createdAt: zod.number().int().min(0),
-      source: zod.string().trim().min(1).max(64).optional(),
-    })
-      .passthrough(),
-  );
+        .string().check(zod.trim(), zod.minLength(1), zod.maxLength(128), zod.regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/)),
+      createdAt: zod.number().check(zod.int(), zod.minimum(0)),
+      source: zod.optional(zod.string().check(zod.trim(), zod.minLength(1), zod.maxLength(64))),
+    }));
 }
 
 export const ConnectedServiceMaterializationIdentityV1Schema =

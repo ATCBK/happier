@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES } from '../features/payload/capabilities/machineTunnelCapabilities.js';
 
 /** Matches the existing workspace corpus ceiling used by repository-tree/file-search consumers. */
@@ -8,14 +8,14 @@ export const WORKSPACE_FILE_LIST_MAX_RESULTS = 5_000;
 export const WORKSPACE_FILE_LIST_MAX_RESPONSE_UTF8_BYTES = DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES;
 export const WORKSPACE_FILE_LIST_MAX_QUERY_CODE_UNITS = 1_024;
 
-export const DaemonWorkspaceFileListRequestSchema = lazyZodSchema(() => z.object({
-  rootPath: z.string().trim().min(1).max(10_000),
-  query: z.string().max(WORKSPACE_FILE_LIST_MAX_QUERY_CODE_UNITS).optional(),
-  includeHidden: z.boolean().optional(),
-  limit: z.number().int().positive().max(WORKSPACE_FILE_LIST_MAX_RESULTS).optional(),
+export const DaemonWorkspaceFileListRequestSchema = lazyZodSchema(() => z.strictObject({
+  rootPath: z.string().check(z.trim(), z.minLength(1), z.maxLength(10_000)),
+  query: z.optional(z.string().check(z.maxLength(WORKSPACE_FILE_LIST_MAX_QUERY_CODE_UNITS))),
+  includeHidden: z.optional(z.boolean()),
+  limit: z.optional(z.number().check(z.int(), z.positive(), z.maximum(WORKSPACE_FILE_LIST_MAX_RESULTS))),
   /** Remaining caller operation budget at dispatch; expiry returns an incomplete page. */
-  budgetMs: z.number().int().nonnegative().safe().optional(),
-}).strict());
+  budgetMs: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
+}));
 export type DaemonWorkspaceFileListRequest = z.infer<typeof DaemonWorkspaceFileListRequestSchema>;
 
 export const DaemonWorkspaceFileListErrorCodeSchema = lazyZodSchema(() => z.enum([
@@ -27,25 +27,24 @@ export const DaemonWorkspaceFileListErrorCodeSchema = lazyZodSchema(() => z.enum
 ]));
 export type DaemonWorkspaceFileListErrorCode = z.infer<typeof DaemonWorkspaceFileListErrorCodeSchema>;
 
-const DaemonWorkspaceFileListSuccessSchema = lazyZodSchema(() => z.object({
+const DaemonWorkspaceFileListSuccessSchema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(true),
-  paths: z.array(z.string().min(1))
-    .max(WORKSPACE_FILE_LIST_MAX_RESULTS),
+  paths: z.array(z.string().check(z.minLength(1))).check(z.maxLength(WORKSPACE_FILE_LIST_MAX_RESULTS)),
   truncated: z.boolean(),
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (new TextEncoder().encode(JSON.stringify(value)).byteLength > WORKSPACE_FILE_LIST_MAX_RESPONSE_UTF8_BYTES) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: `Workspace file-list response exceeds ${WORKSPACE_FILE_LIST_MAX_RESPONSE_UTF8_BYTES} UTF-8 bytes`,
     });
   }
-}));
+})));
 
-const DaemonWorkspaceFileListFailureSchema = lazyZodSchema(() => z.object({
+const DaemonWorkspaceFileListFailureSchema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(false),
   errorCode: DaemonWorkspaceFileListErrorCodeSchema,
-  exitCode: z.number().int().optional(),
-}).strict());
+  exitCode: z.optional(z.number().check(z.int())),
+}));
 
 export const DaemonWorkspaceFileListResponseSchema = lazyZodSchema(() => z.discriminatedUnion('ok', [
   DaemonWorkspaceFileListSuccessSchema,
@@ -55,47 +54,47 @@ export type DaemonWorkspaceFileListResponse = z.infer<typeof DaemonWorkspaceFile
 
 export const WORKSPACE_FILE_SEARCH_MAX_RESPONSE_UTF8_BYTES = DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES;
 
-export const DaemonWorkspaceFileSearchRequestSchema = lazyZodSchema(() => z.object({
-  rootPath: z.string().trim().min(1).max(10_000),
-  query: z.string().min(1),
-  matchCase: z.boolean().optional(),
-  regex: z.boolean().optional(),
-  includeHidden: z.boolean().optional(),
-  contextLines: z.number().int().min(0).max(2).optional(),
-}).strict());
+export const DaemonWorkspaceFileSearchRequestSchema = lazyZodSchema(() => z.strictObject({
+  rootPath: z.string().check(z.trim(), z.minLength(1), z.maxLength(10_000)),
+  query: z.string().check(z.minLength(1)),
+  matchCase: z.optional(z.boolean()),
+  regex: z.optional(z.boolean()),
+  includeHidden: z.optional(z.boolean()),
+  contextLines: z.optional(z.number().check(z.int(), z.minimum(0), z.maximum(2))),
+}));
 export type DaemonWorkspaceFileSearchRequest = z.infer<typeof DaemonWorkspaceFileSearchRequestSchema>;
 
-export const WorkspaceFileSearchMatchV1Schema = lazyZodSchema(() => z.object({
-  line: z.number().int().positive(),
+export const WorkspaceFileSearchMatchV1Schema = lazyZodSchema(() => z.strictObject({
+  line: z.number().check(z.int(), z.positive()),
   /** One-based UTF-16 column, compatible with editor and file-anchor positions. */
-  column16: z.number().int().positive(),
-  length16: z.number().int().nonnegative(),
+  column16: z.number().check(z.int(), z.positive()),
+  length16: z.number().check(z.int(), z.nonnegative()),
   text: z.string(),
-  before: z.array(z.string()).max(2),
-  after: z.array(z.string()).max(2),
-}).strict());
-export const WorkspaceFileSearchFileV1Schema = lazyZodSchema(() => z.object({
-  path: z.string().min(1),
+  before: z.array(z.string()).check(z.maxLength(2)),
+  after: z.array(z.string()).check(z.maxLength(2)),
+}));
+export const WorkspaceFileSearchFileV1Schema = lazyZodSchema(() => z.strictObject({
+  path: z.string().check(z.minLength(1)),
   matches: z.array(WorkspaceFileSearchMatchV1Schema),
-}).strict());
+}));
 export const DaemonWorkspaceFileSearchErrorCodeSchema = lazyZodSchema(() => z.enum([
   'invalid_pattern', 'root_not_allowed', 'ripgrep_unavailable', 'ripgrep_failed',
 ]));
 export const DaemonWorkspaceFileSearchResponseSchema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     files: z.array(WorkspaceFileSearchFileV1Schema),
     hasMore: z.boolean(),
     coverage: z.enum(['complete', 'partial']),
-  }).strict(),
-  z.object({ ok: z.literal(false), code: DaemonWorkspaceFileSearchErrorCodeSchema, message: z.string().optional() }).strict(),
-]).superRefine((value, context) => {
+  }),
+  z.strictObject({ ok: z.literal(false), code: DaemonWorkspaceFileSearchErrorCodeSchema, message: z.optional(z.string()) }),
+]).check(z.superRefine((value, context) => {
   if (value.ok && new TextEncoder().encode(JSON.stringify(value)).byteLength > WORKSPACE_FILE_SEARCH_MAX_RESPONSE_UTF8_BYTES) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Workspace content-search response exceeds the machine transport ceiling' });
+    context.addIssue({ code: "custom", message: 'Workspace content-search response exceeds the machine transport ceiling' });
   }
   if (value.ok && value.hasMore && value.coverage === 'complete') {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'An early-stopped search has partial coverage' });
+    context.addIssue({ code: "custom", message: 'An early-stopped search has partial coverage' });
   }
-}));
+})));
 export type DaemonWorkspaceFileSearchResponse = z.infer<typeof DaemonWorkspaceFileSearchResponseSchema>;
 export type WorkspaceFileSearchFileV1 = z.infer<typeof WorkspaceFileSearchFileV1Schema>;

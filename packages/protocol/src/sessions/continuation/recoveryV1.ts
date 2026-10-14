@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const SessionContinuationResumePromptModeV1Schema = lazyZodSchema(() => z.enum(['standard', 'off', 'custom']));
 export type SessionContinuationResumePromptModeV1 =
@@ -12,38 +12,35 @@ export const SessionContinuationRecoverySelectionKindV1Schema = lazyZodSchema(()
 export type SessionContinuationRecoverySelectionKindV1 =
   z.infer<typeof SessionContinuationRecoverySelectionKindV1Schema>;
 
-export const SessionContinuationRecoveryIdentityV1Schema = lazyZodSchema(() => z
-  .object({
-    serviceId: z.string().trim().min(1),
+export const SessionContinuationRecoveryIdentityV1Schema = lazyZodSchema(() => z.strictObject({
+    serviceId: z.string().check(z.trim(), z.minLength(1)),
     selectionKind: SessionContinuationRecoverySelectionKindV1Schema,
-    groupId: z.string().trim().min(1).optional(),
-    profileId: z.string().trim().min(1).optional(),
-    failureFingerprint: z.string().trim().min(1).optional(),
-    targetGeneration: z.number().int().nonnegative().optional(),
-  })
-  .strict()
-  .superRefine((identity, ctx) => {
+    groupId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    profileId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    failureFingerprint: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    targetGeneration: z.optional(z.number().check(z.int(), z.nonnegative())),
+  }).check(z.superRefine((identity, ctx) => {
     if (identity.selectionKind === 'group' && !identity.groupId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'group continuation recovery identity requires groupId',
         path: ['groupId'],
       });
     }
     if (identity.selectionKind === 'profile' && !identity.profileId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'profile continuation recovery identity requires profileId',
         path: ['profileId'],
       });
     }
     if (identity.selectionKind === 'profile' && identity.groupId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'profile continuation recovery identity must not include groupId',
         path: ['groupId'],
       });
     }
-  }));
+  })));
 export type SessionContinuationRecoveryIdentityV1 =
   z.infer<typeof SessionContinuationRecoveryIdentityV1Schema>;

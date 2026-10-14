@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * Canonical Iroh endpoint sub-descriptor (V1).
@@ -113,39 +113,32 @@ function isValidIpSocketAddress(value: string): boolean {
 }
 
 /** Absolute HTTP(S) URL without credentials, query material, or a fragment. */
-const IrohDescriptorUrlSchema = lazyZodSchema(() => z.string()
-  .trim()
-  .min(1)
-  .max(IROH_DESCRIPTOR_MAX_URL_UTF8_BYTES)
-  .superRefine((value, context) => {
+const IrohDescriptorUrlSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(IROH_DESCRIPTOR_MAX_URL_UTF8_BYTES), z.superRefine((value, context) => {
     if (!boundedUtf8(value, IROH_DESCRIPTOR_MAX_URL_UTF8_BYTES)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'URL exceeds its UTF-8 byte limit' });
+      context.addIssue({ code: "custom", message: 'URL exceeds its UTF-8 byte limit' });
     }
     try {
       const parsed = new URL(value);
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        context.addIssue({ code: z.ZodIssueCode.custom, message: 'URL must use HTTP or HTTPS' });
+        context.addIssue({ code: "custom", message: 'URL must use HTTP or HTTPS' });
       }
       if (parsed.username || parsed.password || value.includes('?') || parsed.hash) {
-        context.addIssue({ code: z.ZodIssueCode.custom, message: 'URL must not contain credentials, query material, or a fragment' });
+        context.addIssue({ code: "custom", message: 'URL must not contain credentials, query material, or a fragment' });
       }
     } catch {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'URL must be absolute' });
+      context.addIssue({ code: "custom", message: 'URL must be absolute' });
     }
-  }));
+  })));
 
 /** Exact transport identifier; its 52/64-character grammar is already its complete bound. */
-export const IrohEndpointIdV1Schema = lazyZodSchema(() => z.string()
-  .trim()
-  .min(1)
-  .superRefine((value, context) => {
+export const IrohEndpointIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.superRefine((value, context) => {
     if (!isValidIrohEndpointIdEncoding(value)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'EndpointId must be 64 lowercase hex or 52 lowercase RFC4648 base32 characters',
       });
     }
-  }));
+  })));
 
 /**
  * Canonical relay-URL equivalence. Two spellings that parse to the same URL are
@@ -176,36 +169,36 @@ function canonicalRelayUrl(value: string): string {
  * their total encoded-body budgets. There is no unrelated semantic item quota.
  */
 function IrohHintListSchema(
-  item: z.ZodType<string>,
+  item: z.ZodMiniType<string>,
   canonical: (value: string) => string = (value) => value,
 ) {
-  return z.array(item).min(1).superRefine((values, context) => {
+  return z.array(item).check(z.minLength(1), z.superRefine((values, context) => {
     if (new Set(values.map(canonical)).size !== values.length) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'Hint lists must not contain duplicate entries',
       });
     }
-  });
+  }));
 }
 
-export const IrohEndpointDescriptorV1Schema = lazyZodSchema(() => z.object({
+export const IrohEndpointDescriptorV1Schema = lazyZodSchema(() => z.strictObject({
   endpointId: IrohEndpointIdV1Schema,
-  relayUrls: IrohHintListSchema(
+  relayUrls: z.optional(IrohHintListSchema(
     IrohDescriptorUrlSchema,
     canonicalRelayUrl,
-  ).optional(),
-  directAddresses: IrohHintListSchema(
-    z.string().trim().min(1).max(256).superRefine((value, context) => {
+  )),
+  directAddresses: z.optional(IrohHintListSchema(
+    z.string().check(z.trim(), z.minLength(1), z.maxLength(256), z.superRefine((value, context) => {
       if (!isValidIpSocketAddress(value)) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           message: 'Direct address must be a strict IPv4:port or bracketed [IPv6]:port socket address with a canonical port 1..65535',
         });
       }
-    }),
-  ).optional(),
-}).strict());
+    })),
+  )),
+}));
 
 export type IrohEndpointDescriptorV1 = z.infer<typeof IrohEndpointDescriptorV1Schema>;
 

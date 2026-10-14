@@ -1,4 +1,5 @@
-import type { core } from 'zod';
+import * as z from 'zod/mini';
+import type { core } from 'zod/mini';
 
 import { PluginManifestV2Schema } from './v2.js';
 
@@ -25,7 +26,7 @@ function completeStrictObjectTypes(value: unknown): void {
  */
 export function createPluginManifestJsonSchemaV2(): Readonly<core.JSONSchema.JSONSchema> {
   const schema: core.JSONSchema.JSONSchema = {
-    ...PluginManifestV2Schema.toJSONSchema({
+    ...z.toJSONSchema(PluginManifestV2Schema, {
       io: 'input',
       target: 'draft-2020-12',
       unrepresentable: 'any',

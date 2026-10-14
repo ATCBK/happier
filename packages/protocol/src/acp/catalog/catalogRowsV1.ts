@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { AcpCatalogRecordV1Schema, StoredAcpCatalogRecordV1Schema, StoredAcpCatalogContentV1Schema } from "./catalogSchemasV1.js";
 import type { AcpCatalogRecordV1, AcpCatalogContentV1, StoredAcpCatalogContentV1, AcpCatalogDiagnosticV1 } from "./catalogSchemasV1.js";
 export { AcpCatalogRecordV1Schema, StoredAcpCatalogRecordV1Schema, AcpCatalogContentV1Schema, StoredAcpCatalogContentV1Schema, AcpCatalogMigrationContentV1Schema, AcpCatalogRowFailureV1Schema, AcpCatalogRowReadResponseV1Schema, AcpCatalogRowMutationV1Schema, AcpCatalogRowMutationResponseV1Schema, AccountEncryptionMigrateAcpCatalogDirectiveV1Schema, AccountEncryptionMigrateAcpCatalogResultV1Schema } from "./catalogSchemasV1.js";
@@ -111,7 +112,7 @@ function projectStoredAcpCatalogRecordV1(raw: unknown): ReturnType<typeof openAc
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Reflect.get(raw, 'v') !== 1) return { status: 'unavailable', reason: 'invalid-stored-content' };
   const inventory: unknown = Reflect.get(raw, 'definitions');
   if (!Array.isArray(inventory)) return { status: 'unavailable', reason: 'invalid-stored-content' };
-  const definitionSchema = createStoredReadSchema(AcpCatalogRecordV1Schema.shape.definitions.element);
+  const definitionSchema = createStoredReadSchema(AcpCatalogRecordV1Schema.shape.definitions._zod.def.element);
   const candidates = inventory.map((value: unknown, index: number) => ({ index, parsed: definitionSchema.safeParse(value) }));
   const ids = new Map<string, number>();
   const names = new Map<string, number>();

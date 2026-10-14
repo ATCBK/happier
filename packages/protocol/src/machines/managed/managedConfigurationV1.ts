@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import * as mini from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
@@ -19,17 +19,17 @@ import {
 import { resolveMachineRetentionPolicyV1 } from './resolveMachineRetentionPolicyV1.js';
 import { MachineEnvironmentV1Schema, type MachineEnvironmentV1 } from './machineEnvironmentV1.js';
 
-const id = () => z.string().trim().min(1);
-const revision = () => z.number().int().nonnegative();
-export const ManagedPresetSelectionV1Schema = lazyZodSchema(() => z.object({
+const id = () => z.string().check(z.trim(), z.minLength(1));
+const revision = () => z.number().check(z.int(), z.nonnegative());
+export const ManagedPresetSelectionV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('preset'), homeId: id(), id: id(), revision: revision(),
-}).strict());
+}));
 
 export function createManagedOneOffSelectionV1Schema<Choices extends z.core.$ZodType>(choices: Choices) {
-  return z.object({
+  return z.strictObject({
     kind: z.literal('one-off'), homeId: id(), launch: createValidatedLaunchSnapshotV1Schema(choices),
     controller: ManagedControllerV1Schema, retention: RetentionV1Schema, wakeOnAcceptedMessage: z.boolean(),
-  }).strict();
+  });
 }
 export const ManagedOneOffSelectionV1Schema = lazyZodSchema(() => createManagedOneOffSelectionV1Schema(PluginJsonValueV2Schema));
 export function createManagedCreationSelectionV1Schema<Choices extends z.core.$ZodType>(choices: Choices) {
@@ -40,7 +40,7 @@ export type ManagedCreationSelectionV1 = z.infer<typeof ManagedCreationSelection
 
 /** Presentation facts never become an acquisition or credential authority. */
 export function createManagedConfigurationFactsV1Schema<Choices extends z.core.$ZodType>(choices: Choices) {
-  return z.object({
+  return z.strictObject({
     launch: createValidatedLaunchSnapshotV1Schema(choices), controller: ManagedControllerV1Schema,
     optionStatus: z.enum(['current', 'loading', 'unavailable']),
     prices: mini.optional(mini.array(ProviderPriceV1Schema)),
@@ -49,9 +49,9 @@ export function createManagedConfigurationFactsV1Schema<Choices extends z.core.$
     nativeFacts: mini.optional(ProviderNativeOptionFactsV1Schema),
     prerequisites: z.array(ManagedPrerequisiteV1Schema), retentionCapabilities: RetentionCapabilitiesV1Schema,
     retention: RetentionV1Schema, wakeOnAcceptedMessage: z.boolean(),
-    environment: MachineEnvironmentV1Schema.optional(),
-    preset: z.object({ id: id(), revision: revision(), name: id().optional() }).strict().optional(),
-  }).strict();
+    environment: z.optional(MachineEnvironmentV1Schema),
+    preset: z.optional(z.strictObject({ id: id(), revision: revision(), name: z.optional(id()) })),
+  });
 }
 export const ManagedConfigurationFactsV1Schema = lazyZodSchema(() => createManagedConfigurationFactsV1Schema(PluginJsonValueV2Schema));
 export const ManagedConfigurationFactsV1ReadSchema = createStoredReadSchema(ManagedConfigurationFactsV1Schema);

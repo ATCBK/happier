@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   ProviderModelDescriptorV1Schema,
@@ -46,76 +46,76 @@ export {
   type AgentSessionProviderBindingV1,
 } from './agentSessionProviderBindingV1.js';
 
-export const ProviderConnectionDisplaySnapshotV1Schema = lazyZodSchema(() => z.object({
-  providerName: z.string().trim().min(1).max(128),
-  connectionName: z.string().trim().min(1).max(128),
+export const ProviderConnectionDisplaySnapshotV1Schema = lazyZodSchema(() => z.strictObject({
+  providerName: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+  connectionName: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
   connectionRole: z.enum(['default', 'named']),
   connectionDisplayNameMode: z.enum(['automatic', 'custom']),
-}).strict());
+}));
 export type ProviderConnectionDisplaySnapshotV1 = z.infer<typeof ProviderConnectionDisplaySnapshotV1Schema>;
 
 const RuntimeBindingFingerprintV1Schema =
-  lazyZodSchema(() => z.string().trim().min(1).max(512));
+  lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(512)));
 
-const ProviderRuntimeBindingBasisCommonV1Schema = lazyZodSchema(() => z.object({
+const ProviderRuntimeBindingBasisCommonV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   agentTargetKey: ProviderAgentTargetKeySchema,
   connectionId: ProviderConnectionIdSchema,
-  contributionKey: ProviderContributionKeySchema.nullable(),
-  runtimeCredentialTransport: ProviderCredentialTransportV1Schema.nullable(),
-  prepared: z.object({
+  contributionKey: z.nullable(ProviderContributionKeySchema),
+  runtimeCredentialTransport: z.nullable(ProviderCredentialTransportV1Schema),
+  prepared: z.strictObject({
     v: z.literal(1),
     materialization: z.enum(['spawnEnv', 'engineConfig', 'configFile']),
-    adapterBindingKey: ProviderAdapterBindingKeyV1Schema.optional(),
-  }).strict(),
-  adapterVersion: z.number().int().positive(),
+    adapterBindingKey: z.optional(ProviderAdapterBindingKeyV1Schema),
+  }),
+  adapterVersion: z.number().check(z.int(), z.positive()),
   agentSupport: AgentProviderRequirementsV1Schema,
-}).strict());
+}));
 
 const ProviderRuntimeExternalBindingBasisV1Schema =
-  lazyZodSchema(() => ProviderRuntimeBindingBasisCommonV1Schema.extend({
-    deployment: z.object({ kind: z.literal('external') }).strict(),
-    endpoint: z.object({
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ProviderRuntimeBindingBasisCommonV1Schema, {
+    deployment: z.strictObject({ kind: z.literal('external') }),
+    endpoint: z.strictObject({
       endpointTemplateId: ProviderLocalIdSchema,
       normalizedUrl: ProviderEndpointUrlSyntaxSchema,
       protocol: ProviderWireProtocolSchema,
       publicHeaders: ProviderPublicHeadersV1Schema,
-    }).strict(),
-    credentialAuthorization: z.object({
+    }),
+    credentialAuthorization: z.strictObject({
       connectionSecurityFingerprint: RuntimeBindingFingerprintV1Schema,
       grantFingerprint: RuntimeBindingFingerprintV1Schema,
-      selectedSecretBindingId: RuntimeBindingFingerprintV1Schema.nullable(),
+      selectedSecretBindingId: z.nullable(RuntimeBindingFingerprintV1Schema),
       selectedSecretRecordFingerprint:
-        RuntimeBindingFingerprintV1Schema.nullable(),
-    }).strict(),
-  }).strict());
+        z.nullable(RuntimeBindingFingerprintV1Schema),
+    }),
+  })));
 
 const ProviderRuntimeManagedBindingBasisV1Schema =
-  lazyZodSchema(() => ProviderRuntimeBindingBasisCommonV1Schema.extend({
-    deployment: z.object({
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ProviderRuntimeBindingBasisCommonV1Schema, {
+    deployment: z.pipe(z.strictObject({
       kind: z.literal('managedLocal'),
-      gatewayPlacement: ProviderGatewayPlacementV1Schema.optional(),
+      gatewayPlacement: z.optional(ProviderGatewayPlacementV1Schema),
       implementationIdentity: asProtocolZod(PluginContributionIdentityV1Schema),
       managedRuntime: ProviderManagedRuntimeDeclarationV1Schema,
       purposeBindings: QualifiedConnectedAccountPurposeBindingsV1Schema,
-    }).strict().transform((deployment) => ({
+    }), z.transform((deployment) => ({
       ...deployment,
       gatewayPlacement: deployment.gatewayPlacement ?? { kind: 'sessionMachine' as const },
       managedRuntime: resolveProviderManagedRuntimeDeclarationV1({
         implementationIdentity: deployment.implementationIdentity,
         managedRuntime: deployment.managedRuntime,
       }),
-    })),
-    endpoint: z.object({
+    }))),
+    endpoint: z.strictObject({
       endpointTemplateId: ProviderLocalIdSchema,
       protocol: ProviderWireProtocolSchema,
       publicHeaders: ProviderPublicHeadersV1Schema,
-    }).strict(),
-    credentialAuthorization: z.object({
+    }),
+    credentialAuthorization: z.strictObject({
       connectionSecurityFingerprint: RuntimeBindingFingerprintV1Schema,
       grantFingerprint: RuntimeBindingFingerprintV1Schema,
-    }).strict(),
-  }).strict());
+    }),
+  })));
 
 export const ProviderRuntimeBindingBasisV1Schema = lazyZodSchema(() => z.union([
   ProviderRuntimeExternalBindingBasisV1Schema,
@@ -125,30 +125,30 @@ export type ProviderRuntimeBindingBasisV1 = z.infer<
   typeof ProviderRuntimeBindingBasisV1Schema
 >;
 
-export const SessionProviderBindingMetadataV1Schema = lazyZodSchema(() => z.object({
+export const SessionProviderBindingMetadataV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   connectionId: ProviderConnectionIdSchema,
-  contributionKey: ProviderContributionKeySchema.nullable(),
-  connectionRevision: z.number().int().nonnegative(),
-  model: ProviderModelDescriptorV1Schema.optional(),
-  managedPurposeBindings: QualifiedConnectedAccountPurposeBindingsV1Schema.optional(),
+  contributionKey: z.nullable(ProviderContributionKeySchema),
+  connectionRevision: z.number().check(z.int(), z.nonnegative()),
+  model: z.optional(ProviderModelDescriptorV1Schema),
+  managedPurposeBindings: z.optional(QualifiedConnectedAccountPurposeBindingsV1Schema),
   protocol: ProviderWireProtocolSchema,
   materialization: z.enum(['spawnEnv', 'engineConfig', 'configFile']),
-  adapterBindingKey: ProviderAdapterBindingKeyV1Schema.optional(),
-  compatibilityFingerprint: z.string().trim().min(1).max(256),
-  bindingSecurityFingerprint: z.string().trim().min(1).max(256),
-  runtimeBindingBasis: ProviderRuntimeBindingBasisV1Schema.optional(),
+  adapterBindingKey: z.optional(ProviderAdapterBindingKeyV1Schema),
+  compatibilityFingerprint: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+  bindingSecurityFingerprint: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+  runtimeBindingBasis: z.optional(ProviderRuntimeBindingBasisV1Schema),
   displaySnapshot: ProviderConnectionDisplaySnapshotV1Schema,
-}).strict());
+}));
 export type SessionProviderBindingMetadataV1 = z.infer<typeof SessionProviderBindingMetadataV1Schema>;
 
-export const SessionProviderBindingSecurityChangeConfirmationV1Schema = lazyZodSchema(() => z.object({
+export const SessionProviderBindingSecurityChangeConfirmationV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  sessionId: z.string().trim().min(1).max(256),
+  sessionId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
   connectionId: ProviderConnectionIdSchema,
-  previousBindingSecurityFingerprint: z.string().trim().min(1).max(256),
-  nextBindingSecurityFingerprint: z.string().trim().min(1).max(256),
-}).strict());
+  previousBindingSecurityFingerprint: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+  nextBindingSecurityFingerprint: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+}));
 export type SessionProviderBindingSecurityChangeConfirmationV1 = z.infer<
   typeof SessionProviderBindingSecurityChangeConfirmationV1Schema
 >;

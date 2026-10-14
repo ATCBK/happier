@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const BrowserInputTargetV1Schema = z.literal('page');
 export type BrowserInputTargetV1 = z.infer<typeof BrowserInputTargetV1Schema>;
@@ -6,35 +6,29 @@ export type BrowserInputTargetV1 = z.infer<typeof BrowserInputTargetV1Schema>;
 export const BrowserInputModifierV1Schema = z.enum(['alt', 'control', 'meta', 'shift']);
 export type BrowserInputModifierV1 = z.infer<typeof BrowserInputModifierV1Schema>;
 
-export const BrowserKeyInputEventV1Schema = z
-  .object({
+export const BrowserKeyInputEventV1Schema = z.strictObject({
     kind: z.literal('key'),
     target: BrowserInputTargetV1Schema,
-    key: z.string().trim().min(1).max(64),
-    modifiers: z.array(BrowserInputModifierV1Schema).default([]),
-    sequence: z.number().int().nonnegative(),
-  })
-  .strict();
+    key: z.string().check(z.trim(), z.minLength(1), z.maxLength(64)),
+    modifiers: z._default(z.array(BrowserInputModifierV1Schema), []),
+    sequence: z.number().check(z.int(), z.nonnegative()),
+  });
 
-export const BrowserPointerInputEventV1Schema = z
-  .object({
+export const BrowserPointerInputEventV1Schema = z.strictObject({
     kind: z.literal('pointer'),
     target: BrowserInputTargetV1Schema,
     action: z.enum(['down', 'move', 'up', 'cancel']),
-    x: z.number().min(0).max(1),
-    y: z.number().min(0).max(1),
-    sequence: z.number().int().nonnegative(),
-  })
-  .strict();
+    x: z.number().check(z.minimum(0), z.maximum(1)),
+    y: z.number().check(z.minimum(0), z.maximum(1)),
+    sequence: z.number().check(z.int(), z.nonnegative()),
+  });
 
-export const BrowserTextInputEventV1Schema = z
-  .object({
+export const BrowserTextInputEventV1Schema = z.strictObject({
     kind: z.literal('text'),
     target: BrowserInputTargetV1Schema,
-    text: z.string().min(1).max(16 * 1024),
-    sequence: z.number().int().nonnegative(),
-  })
-  .strict();
+    text: z.string().check(z.minLength(1), z.maxLength(16 * 1024)),
+    sequence: z.number().check(z.int(), z.nonnegative()),
+  });
 
 export const BrowserInputEventV1Schema = z.discriminatedUnion('kind', [
   BrowserKeyInputEventV1Schema,

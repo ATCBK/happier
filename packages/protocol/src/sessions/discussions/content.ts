@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { SessionIndexedIdentifierMaxLengthV1 } from '../idsV1.js';
@@ -11,10 +11,7 @@ const NO_OUTER_WHITESPACE_PATTERN = /^(?!\s)[\s\S]*\S$(?![\s\S])/u;
  * because they are stored in the same indexed string columns. This is the
  * existing persistence bound, not a new product limit.
  */
-export const SessionDiscussionIdSchema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(SessionIndexedIdentifierMaxLengthV1)
-  .regex(NO_OUTER_WHITESPACE_PATTERN));
+export const SessionDiscussionIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(SessionIndexedIdentifierMaxLengthV1), z.regex(NO_OUTER_WHITESPACE_PATTERN)));
 export type SessionDiscussionId = z.infer<typeof SessionDiscussionIdSchema>;
 
 export const SessionDiscussionMessageIdSchema = SessionDiscussionIdSchema;
@@ -31,25 +28,19 @@ export type SessionDiscussionLocalId = z.infer<typeof SessionDiscussionLocalIdSc
 export const SessionDiscussionAccountIdSchema = SessionDiscussionIdSchema;
 
 function nfcString() {
-  return z.string().refine(
-    (value) => value === value.normalize('NFC'),
-    'Session discussion text must be NFC-normalized',
-  );
+  return z.string().check(z.refine((value) => value === value.normalize('NFC'), 'Session discussion text must be NFC-normalized'));
 }
 
-export const SessionDiscussionTitleV1Schema = lazyZodSchema(() => z.object({
+export const SessionDiscussionTitleV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  title: nfcString().refine(
-    (value) => value.trim().length > 0,
-    'A discussion title must not be blank',
-  ),
-}).strict());
+  title: nfcString().check(z.refine((value) => value.trim().length > 0, 'A discussion title must not be blank')),
+}));
 export type SessionDiscussionTitleV1 = z.infer<typeof SessionDiscussionTitleV1Schema>;
 export const SessionDiscussionTitleV1StoredSchema = createStoredReadSchema(SessionDiscussionTitleV1Schema);
 
 export const SessionDiscussionMessagePartV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('text'), text: nfcString() }).strict(),
-  z.object({ t: z.literal('mention'), accountId: SessionDiscussionAccountIdSchema }).strict(),
+  z.strictObject({ t: z.literal('text'), text: nfcString() }),
+  z.strictObject({ t: z.literal('mention'), accountId: SessionDiscussionAccountIdSchema }),
 ]));
 export type SessionDiscussionMessagePartV1 = z.infer<typeof SessionDiscussionMessagePartV1Schema>;
 
@@ -59,10 +50,10 @@ export type SessionDiscussionMessagePartV1 = z.infer<typeof SessionDiscussionMes
  * two clients cannot produce different bytes for the same visible message and
  * then disagree about request equality.
  */
-export const SessionDiscussionMessageContentV1Schema = lazyZodSchema(() => z.object({
+export const SessionDiscussionMessageContentV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  parts: z.array(SessionDiscussionMessagePartV1Schema).min(1),
-}).strict().superRefine((value, context) => {
+  parts: z.array(SessionDiscussionMessagePartV1Schema).check(z.minLength(1)),
+}).check(z.superRefine((value, context) => {
   let hasMeaningfulPart = false;
   for (let index = 0; index < value.parts.length; index += 1) {
     const part = value.parts[index]!;
@@ -90,7 +81,7 @@ export const SessionDiscussionMessageContentV1Schema = lazyZodSchema(() => z.obj
       message: 'Discussion content must contain at least one mention or non-blank text run',
     });
   }
-}));
+})));
 export type SessionDiscussionMessageContentV1 = z.infer<typeof SessionDiscussionMessageContentV1Schema>;
 export const SessionDiscussionMessageContentV1StoredSchema = createStoredReadSchema(SessionDiscussionMessageContentV1Schema);
 
@@ -99,16 +90,13 @@ export const SessionDiscussionMessageContentV1StoredSchema = createStoredReadSch
  * interactive-run launch and Send selected to Session. It carries no plaintext,
  * no access authority, and no instruction to fetch discussion context.
  */
-export const SessionDiscussionSelectionSourceV1Schema = lazyZodSchema(() => z.object({
+export const SessionDiscussionSelectionSourceV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('session_discussion'),
   sessionId: SessionDiscussionIdSchema,
   discussionId: SessionDiscussionIdSchema,
-  messageIds: z.array(SessionDiscussionMessageIdSchema).min(1).refine(
-    (value) => new Set(value).size === value.length,
-    'Selected discussion message ids must be deduplicated',
-  ),
-  draftCorrelationId: SessionDiscussionIdSchema.optional(),
-}).strict());
+  messageIds: z.array(SessionDiscussionMessageIdSchema).check(z.minLength(1), z.refine((value) => new Set(value).size === value.length, 'Selected discussion message ids must be deduplicated')),
+  draftCorrelationId: z.optional(SessionDiscussionIdSchema),
+}));
 export type SessionDiscussionSelectionSourceV1 = z.infer<typeof SessionDiscussionSelectionSourceV1Schema>;
 
 /**
@@ -116,11 +104,11 @@ export type SessionDiscussionSelectionSourceV1 = z.infer<typeof SessionDiscussio
  * on behalf of its authenticated execution Account. It is descriptive display
  * metadata: the authenticated principal, never this field, is authority.
  */
-export const SessionDiscussionProducerV1Schema = lazyZodSchema(() => z.object({
+export const SessionDiscussionProducerV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: z.literal('agent'),
   sessionId: SessionDiscussionIdSchema,
-  runId: SessionDiscussionIdSchema.optional(),
-  toolCallId: SessionDiscussionIdSchema.optional(),
-}).strict());
+  runId: z.optional(SessionDiscussionIdSchema),
+  toolCallId: z.optional(SessionDiscussionIdSchema),
+}));
 export type SessionDiscussionProducerV1 = z.infer<typeof SessionDiscussionProducerV1Schema>;

@@ -1,19 +1,19 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const SESSION_ATTACHMENT_UPLOAD_STRUCTURED_INPUT_PROVENANCE_KIND = 'sessionAttachmentUpload';
 
 export const StructuredImageInputKindV1Schema = lazyZodSchema(() => z.enum(['localImage', 'image']));
 export type StructuredImageInputKindV1 = z.infer<typeof StructuredImageInputKindV1Schema>;
 
-export const StructuredImageInputV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().trim().min(1),
+export const StructuredImageInputV1Schema = lazyZodSchema(() => z.looseObject({
+  id: z.string().check(z.trim(), z.minLength(1)),
   kind: StructuredImageInputKindV1Schema,
-  path: z.string().trim().min(1).optional(),
-  url: z.string().trim().min(1).optional(),
-  mimeType: z.string().trim().min(1).optional(),
-  label: z.string().trim().min(1).optional(),
-}).passthrough().superRefine((value, ctx) => {
+  path: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  url: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  mimeType: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  label: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}).check(z.superRefine((value, ctx) => {
   if (value.kind === 'localImage' && !value.path) {
     ctx.addIssue({
       code: 'custom',
@@ -28,6 +28,6 @@ export const StructuredImageInputV1Schema = lazyZodSchema(() => z.object({
       message: 'image inputs require a URL',
     });
   }
-}));
+})));
 
 export type StructuredImageInputV1 = z.infer<typeof StructuredImageInputV1Schema>;

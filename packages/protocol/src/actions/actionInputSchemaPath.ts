@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { ActionSpec } from './actionSpecs.js';
 
@@ -14,23 +14,23 @@ export function unwrapActionInputSchema(
   let nullable = false;
 
   for (;;) {
-    if (current instanceof z.ZodOptional) {
+    if (current instanceof z.ZodMiniOptional) {
       optional = true;
-      current = current.unwrap() as z.ZodTypeAny;
+      current = current.unwrap() as z.ZodMiniType;
       continue;
     }
-    if (current instanceof z.ZodDefault) {
+    if (current instanceof z.ZodMiniDefault) {
       optional = true;
-      current = current.unwrap() as z.ZodTypeAny;
+      current = current.unwrap() as z.ZodMiniType;
       continue;
     }
-    if (current instanceof z.ZodNullable) {
+    if (current instanceof z.ZodMiniNullable) {
       nullable = true;
-      current = current.unwrap() as z.ZodTypeAny;
+      current = current.unwrap() as z.ZodMiniType;
       continue;
     }
-    if (current instanceof z.ZodPipe) {
-      current = current.in as z.ZodTypeAny;
+    if (current instanceof z.ZodMiniPipe) {
+      current = current.in as z.ZodMiniType;
       continue;
     }
     break;
@@ -53,15 +53,15 @@ export function actionInputFieldAcceptsNull(
   const acceptsNull = (schema: z.core.$ZodType, index: number): boolean => {
     if (index === segments.length) return z.safeParse(schema, null).success;
     const inner = unwrapActionInputSchema(schema).schema;
-    if (inner instanceof z.ZodUnion) return inner.options.some((option) => acceptsNull(option, index));
+    if (inner instanceof z.ZodMiniUnion) return inner.options.some((option) => acceptsNull(option, index));
     const segment = segments[index];
     if (segment === '[]') {
-      if (!(inner instanceof z.ZodArray)) return false;
-      return acceptsNull(inner.element as z.ZodTypeAny, index + 1);
+      if (!(inner instanceof z.ZodMiniArray)) return false;
+      return acceptsNull(inner.element as z.ZodMiniType, index + 1);
     }
-    if (!(inner instanceof z.ZodObject)) return false;
-    const field = (inner.shape as Record<string, z.ZodTypeAny | undefined>)[segment!];
+    if (!(inner instanceof z.ZodMiniObject)) return false;
+    const field = (inner.shape as Record<string, z.ZodMiniType | undefined>)[segment!];
     return field !== undefined && acceptsNull(field, index + 1);
   };
-  return spec.inputSchema !== undefined && acceptsNull(spec.inputSchema as z.ZodTypeAny, 0);
+  return spec.inputSchema !== undefined && acceptsNull(spec.inputSchema as z.ZodMiniType, 0);
 }

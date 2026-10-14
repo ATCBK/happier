@@ -1,11 +1,11 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const PeerTcpTunnelSubstreamCapsV2Schema = z.object({
-  maxConcurrentSubstreams: z.number().int().positive(),
-  maxTotalSubstreams: z.number().int().positive().optional(),
-  maxBytesPerSubstream: z.number().int().positive().optional(),
-  maxAggregateBytes: z.number().int().positive().optional(),
-  maxSubstreamIdleMs: z.number().int().positive().optional(),
-  maxSessionIdleMs: z.number().int().positive().optional(),
+  maxConcurrentSubstreams: z.number().check(z.int(), z.positive()),
+  maxTotalSubstreams: z.optional(z.number().check(z.int(), z.positive())),
+  maxBytesPerSubstream: z.optional(z.number().check(z.int(), z.positive())),
+  maxAggregateBytes: z.optional(z.number().check(z.int(), z.positive())),
+  maxSubstreamIdleMs: z.optional(z.number().check(z.int(), z.positive())),
+  maxSessionIdleMs: z.optional(z.number().check(z.int(), z.positive())),
 });
 export type PeerTcpTunnelSubstreamCapsV2 = z.infer<typeof PeerTcpTunnelSubstreamCapsV2Schema>;

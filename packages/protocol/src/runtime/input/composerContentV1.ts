@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   PluginContributionIdentityV1Schema,
@@ -37,23 +37,16 @@ export type ComposerContentMediaKindV1 = z.infer<typeof ComposerContentMediaKind
 export const ComposerContentMimeTypeV1Schema = lazyZodSchema(() => z.enum(SESSION_MEDIA_MIME_TYPES_V1));
 export type ComposerContentMimeTypeV1 = z.infer<typeof ComposerContentMimeTypeV1Schema>;
 
-const ComposerContentOpaqueIdV1Schema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(256)
-  .regex(/^[A-Za-z0-9_-]+$/u, 'Composer content identities must be opaque URL-safe identifiers.'));
+const ComposerContentOpaqueIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(256), z.regex(/^[A-Za-z0-9_-]+$/u, 'Composer content identities must be opaque URL-safe identifiers.')));
 
-export const ComposerContentDisplayNameV1Schema = lazyZodSchema(() => z.string()
-  .trim()
-  .min(1)
-  .max(255)
-  .superRefine((value, context) => {
+export const ComposerContentDisplayNameV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(255), z.superRefine((value, context) => {
     if (value === '.' || value === '..' || /[\\/]/u.test(value) || /^(?:data|file|https?|blob):/iu.test(value)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'Composer content display names must not contain a path or URI.',
       });
     }
-  }));
+  })));
 export type ComposerContentDisplayNameV1 = z.infer<typeof ComposerContentDisplayNameV1Schema>;
 
 /**
@@ -61,7 +54,7 @@ export type ComposerContentDisplayNameV1 = z.infer<typeof ComposerContentDisplay
  * media. It intentionally contains metadata only: source paths, bytes, and
  * transfer-session state remain with their incumbent owners.
  */
-export const ComposerContentHandleV1Schema = lazyZodSchema(() => z.object({
+export const ComposerContentHandleV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   id: ComposerContentOpaqueIdV1Schema,
   executionTarget: SessionExecutionTargetV1Schema,
@@ -69,78 +62,77 @@ export const ComposerContentHandleV1Schema = lazyZodSchema(() => z.object({
   mediaKind: ComposerContentMediaKindV1Schema,
   mimeType: ComposerContentMimeTypeV1Schema,
   name: ComposerContentDisplayNameV1Schema,
-  sizeBytes: z.number().int().positive(),
-  sha256: z.string().regex(/^[a-f0-9]{64}$/iu, 'Composer content digests must be SHA-256 hex.'),
-}).strict().superRefine((value, context) => {
+  sizeBytes: z.number().check(z.int(), z.positive()),
+  sha256: z.string().check(z.regex(/^[a-f0-9]{64}$/iu, 'Composer content digests must be SHA-256 hex.')),
+}).check(z.superRefine((value, context) => {
   if (value.mediaKind === 'image' && !(SESSION_MEDIA_IMAGE_MIME_TYPES_V1 as readonly string[]).includes(value.mimeType)) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['mimeType'],
       message: 'Composer image content MIME type is unsupported.',
     });
   }
   if (value.mediaKind === 'video' && !(SESSION_MEDIA_VIDEO_MIME_TYPES_V1 as readonly string[]).includes(value.mimeType)) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['mimeType'],
       message: 'Composer video content MIME type is unsupported.',
     });
   }
-}));
+})));
 export type ComposerContentHandleV1 = DeepReadonly<z.infer<typeof ComposerContentHandleV1Schema>>;
 
 /** Draft-only content: the target daemon still owns the staged media. */
-export const ComposerStagedMediaContentV1Schema = lazyZodSchema(() => z.object({
+export const ComposerStagedMediaContentV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('stagedMedia'),
   handle: ComposerContentHandleV1Schema,
-}).strict());
+}));
 export type ComposerStagedMediaContentV1 = DeepReadonly<z.infer<typeof ComposerStagedMediaContentV1Schema>>;
 
 /** Admitted-only content: SessionMedia owns the durable media bytes and metadata. */
-export const ComposerSessionMediaContentV1Schema = lazyZodSchema(() => z.object({
+export const ComposerSessionMediaContentV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('sessionMedia'),
   mediaId: ComposerContentOpaqueIdV1Schema,
-}).strict());
+}));
 export type ComposerSessionMediaContentV1 = DeepReadonly<z.infer<typeof ComposerSessionMediaContentV1Schema>>;
 
 /** A mounted Composer contributor may choose only its own declared attachment id and supported media kinds. */
-export const ComposerContentPickMediaRequestV1Schema = lazyZodSchema(() => z.object({
-  attachmentLocalId: z.string().trim().min(1).max(256),
-  kinds: z.array(ComposerContentMediaKindV1Schema).min(1).max(COMPOSER_CONTENT_MEDIA_KINDS_V1.length)
-    .superRefine((kinds, context) => {
+export const ComposerContentPickMediaRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  attachmentLocalId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+  kinds: z.array(ComposerContentMediaKindV1Schema).check(z.minLength(1), z.maxLength(COMPOSER_CONTENT_MEDIA_KINDS_V1.length), z.superRefine((kinds, context) => {
       if (new Set(kinds).size !== kinds.length) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           message: 'Composer media kinds must not repeat.',
         });
       }
-    }),
-}).strict());
+    })),
+}));
 export type ComposerContentPickMediaRequestV1 = DeepReadonly<z.infer<typeof ComposerContentPickMediaRequestV1Schema>>;
 
 /** A one-shot bounded inspection; it is not a public transfer-session or chunk protocol. */
-export const ComposerContentInspectRequestV1Schema = lazyZodSchema(() => z.object({
-  offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  maxBytes: z.number().int().positive().max(MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1),
-}).strict());
+export const ComposerContentInspectRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  offset: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+  maxBytes: z.number().check(z.int(), z.positive(), z.maximum(MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1)),
+}));
 export type ComposerContentInspectRequestV1 = DeepReadonly<z.infer<typeof ComposerContentInspectRequestV1Schema>>;
 
 const MAX_COMPOSER_CONTENT_INSPECT_BASE64_CHARS_V1 = Math.ceil(MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1 / 3) * 4;
 
 /** JSON-safe wire result. The SDK decodes it to bytes without exposing a transfer identity. */
-export const ComposerContentInspectWireResultV1Schema = lazyZodSchema(() => z.object({
+export const ComposerContentInspectWireResultV1Schema = lazyZodSchema(() => z.strictObject({
   offset: ComposerContentInspectRequestV1Schema.shape.offset,
-  bytesBase64: z.string().max(MAX_COMPOSER_CONTENT_INSPECT_BASE64_CHARS_V1).superRefine((value, context) => {
+  bytesBase64: z.string().check(z.maxLength(MAX_COMPOSER_CONTENT_INSPECT_BASE64_CHARS_V1), z.superRefine((value, context) => {
     const decodedLength = readCanonicalPaddedBase64DecodedLength(value);
     if (decodedLength === null || decodedLength > MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'Composer content inspection bytes must be canonical base64 within the inspection limit.',
       });
     }
-  }),
+  })),
   eof: z.boolean(),
-}).strict());
+}));
 export type ComposerContentInspectWireResultV1 = DeepReadonly<
   z.infer<typeof ComposerContentInspectWireResultV1Schema>
 >;

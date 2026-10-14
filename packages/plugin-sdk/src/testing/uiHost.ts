@@ -1,5 +1,5 @@
 /** @moduleRealm daemon */
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginUiWidgetAreaRequestV1Schema, PluginUiWidgetAreaResultV1Schema, PluginUiWatchEntityDragDropRequestV1Schema, PluginUiEntityDragDropStateV1Schema, PluginUiReadEntityDragItemRequestV1Schema, PluginUiReadEntityDragItemResultV1Schema, PluginUiUpdateEntityDragDropRequestV1Schema, PluginUiUpdateEntityDragDropResultV1Schema, PluginUiWatchLiveStreamRequestV1Schema, PLUGIN_UI_HOST_API_VERSION_V1, isPluginUiHostApiVersionCompatibleV1, PLUGIN_UI_HOST_API_WIRE_VERSION_V1, PLUGIN_UI_HOST_METHODS_V1, PluginUiAcquireComposerInputLockRequestV1Schema, PluginUiActiveComposerResultV1Schema, PluginUiApplyComposerRequestV1Schema, PluginUiApplyComposerResultV1Schema, PluginUiInspectComposerContentRequestV1Schema, PluginUiInspectComposerContentResultV1Schema, PluginUiExecuteActionRequestV1Schema, PluginUiMountedActionReferenceV1Schema, PluginUiEphemeralInputSettlementV1Schema, PluginUiFocusComposerRequestV1Schema, PluginUiFocusComposerResultV1Schema, PluginUiHostApiDiagnosticV1Schema, PluginUiHostApiOpenExternalLinkRequestV1Schema, PluginUiHostApiWriteClipboardRequestV1Schema, PluginUiHostApiWireEnvelopeV1Schema, PluginUiHostApiWireIdentityV1Schema, PluginUiJsonValueV1Schema, PluginUiOpenNewSessionRequestV1Schema, PluginUiOpenConnectedAccountsRequestV1Schema, PluginUiOpenSurfaceRequestV1Schema, PluginUiReplacePageLocationRequestV1Schema, PluginUiPickComposerMediaRequestV1Schema, PluginUiPickComposerMediaResultV1Schema, PluginUiPublishCurrentUiContextRequestV1Schema, PluginUiReadComposerRequestV1Schema, PluginUiReadComposerResultV1Schema, PluginUiReleaseComposerContentRequestV1Schema, PluginUiSelectActionInputRequestV1Schema, PluginUiSelectActionInputResultV1Schema, PluginUiSetComposerDecorationsRequestV1Schema, PluginUiSetComposerDecorationsResultV1Schema, PluginUiInstanceKeyV1Schema, PluginUiLaunchInputV1Schema, PluginUiResourceSubscriptionTargetV1Schema, PluginUiSelectedActionInputCarrierV1Schema, pluginUiSelectedActionInputsEqual, pluginUiTargetedContributionOperationKey, PluginUiSubPathV1Schema, PluginUiWatchComposerRequestV1Schema, PluginUiReadSessionRequestV1Schema, PluginUiReadSessionResultV1Schema, PluginUiReadStoredImageRequestV1Schema, PluginUiReadStoredImageResultV1Schema, PluginUiRespondToSessionPermissionRequestV1Schema, PluginUiRespondToSessionPermissionResultV1Schema, PluginUiWatchSessionRequestV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { PluginUiArtifactDigestV1Schema } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
@@ -115,27 +115,27 @@ export type PluginUiSemanticState = Readonly<{
     checked?: boolean | 'mixed';
     expanded?: boolean;
 }>;
-const pluginUiSemanticStateSchema = z.object({
-    disabled: z.boolean().optional(),
-    busy: z.boolean().optional(),
-    selected: z.boolean().optional(),
-    checked: z.union([z.boolean(), z.literal('mixed')]).optional(),
-    expanded: z.boolean().optional(),
-}).strict();
+const pluginUiSemanticStateSchema = z.strictObject({
+    disabled: z.optional(z.boolean()),
+    busy: z.optional(z.boolean()),
+    selected: z.optional(z.boolean()),
+    checked: z.optional(z.union([z.boolean(), z.literal('mixed')])),
+    expanded: z.optional(z.boolean()),
+});
 export const PluginUiSemanticStateSchema: PluginUiSchema<PluginUiSemanticState> = pluginUiSemanticStateSchema;
 
 /** A framework-neutral semantic target returned by a fixture query. */
-const pluginUiSemanticTargetSchema = z.object({
+const pluginUiSemanticTargetSchema = z.strictObject({
     role: pluginUiSemanticRoleSchema,
-    name: z.string().trim().min(1).optional(),
-    state: pluginUiSemanticStateSchema.optional(),
+    name: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    state: z.optional(pluginUiSemanticStateSchema),
     /** The accessible label of a real implicit text field. */
-    label: z.string().trim().min(1).optional(),
+    label: z.optional(z.string().check(z.trim(), z.minLength(1))),
     /** The placeholder exposed by a real implicit text field. */
-    placeholder: z.string().trim().min(1).optional(),
+    placeholder: z.optional(z.string().check(z.trim(), z.minLength(1))),
     /** The exact current value exposed by a real implicit text field. */
-    value: z.string().optional(),
-}).strict();
+    value: z.optional(z.string()),
+});
 export type PluginUiSemanticTarget = Readonly<{
     role: PluginUiSemanticRole;
     name?: string;
@@ -156,9 +156,9 @@ export type PluginUiSemanticQueryOptions = Readonly<{
 }>;
 
 /** A framework-neutral textual fact returned by `getByText` / `queryByText`. */
-const pluginUiSemanticTextTargetSchema = z.object({
-    content: z.string().trim().min(1),
-}).strict();
+const pluginUiSemanticTextTargetSchema = z.strictObject({
+    content: z.string().check(z.trim(), z.minLength(1)),
+});
 export type PluginUiSemanticTextTarget = Readonly<{ content: string }>;
 export const PluginUiSemanticTextTargetSchema: PluginUiSchema<PluginUiSemanticTextTarget> =
     pluginUiSemanticTextTargetSchema;
@@ -188,27 +188,27 @@ export type PluginUiSemanticAdapterSnapshot = Readonly<{
     texts?: readonly PluginUiSemanticAdapterText[];
 }>;
 
-const PluginUiSemanticAdapterNodeSchema = z.object({
-    handle: z.string().trim().min(1),
+const PluginUiSemanticAdapterNodeSchema = z.strictObject({
+    handle: z.string().check(z.trim(), z.minLength(1)),
     role: pluginUiSemanticRoleSchema,
-    name: z.string().trim().min(1).optional(),
-    state: pluginUiSemanticStateSchema.optional(),
-    label: z.string().trim().min(1).optional(),
-    placeholder: z.string().trim().min(1).optional(),
-    value: z.string().optional(),
-    actions: z.array(z.literal('press')).optional(),
-}).strict();
+    name: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    state: z.optional(pluginUiSemanticStateSchema),
+    label: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    placeholder: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    value: z.optional(z.string()),
+    actions: z.optional(z.array(z.literal('press'))),
+});
 
-const PluginUiSemanticAdapterTextSchema = z.object({
-    content: z.string().trim().min(1),
-}).strict();
+const PluginUiSemanticAdapterTextSchema = z.strictObject({
+    content: z.string().check(z.trim(), z.minLength(1)),
+});
 
 /** Strict framework-adapter ingress schema; never returned by the fixture. */
-const pluginUiSemanticAdapterSnapshotSchema = z.object({
-    revision: z.number().int().nonnegative(),
+const pluginUiSemanticAdapterSnapshotSchema = z.strictObject({
+    revision: z.number().check(z.int(), z.nonnegative()),
     nodes: z.array(PluginUiSemanticAdapterNodeSchema),
-    texts: z.array(PluginUiSemanticAdapterTextSchema).optional(),
-}).strict();
+    texts: z.optional(z.array(PluginUiSemanticAdapterTextSchema)),
+});
 export const PluginUiSemanticAdapterSnapshotSchema: PluginUiSchema<PluginUiSemanticAdapterSnapshot> =
     pluginUiSemanticAdapterSnapshotSchema;
 

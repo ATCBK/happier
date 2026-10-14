@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const ABSOLUTE_WORKSPACE_PATH_MAX_LENGTH = 10_000;
 
@@ -13,16 +13,10 @@ function isAbsoluteWorkspacePath(value: string): boolean {
 }
 
 export const AbsoluteWorkspacePathSchema = lazyZodSchema(() => z
-  .string()
-  .min(1)
-  .max(ABSOLUTE_WORKSPACE_PATH_MAX_LENGTH)
-  .refine((value) => !value.includes('\0'), 'workspace path must not contain NUL')
-  .refine(isAbsoluteWorkspacePath, 'workspace path must be absolute'));
+  .string().check(z.minLength(1), z.maxLength(ABSOLUTE_WORKSPACE_PATH_MAX_LENGTH), z.refine((value) => !value.includes('\0'), 'workspace path must not contain NUL'), z.refine(isAbsoluteWorkspacePath, 'workspace path must be absolute')));
 
-export const WorkspaceLocationScmSchema = lazyZodSchema(() => z
-  .object({
+export const WorkspaceLocationScmSchema = lazyZodSchema(() => z.strictObject({
     provider: z.literal('git'),
     rootPath: AbsoluteWorkspacePathSchema,
-  })
-  .strict());
+  }));
 export type WorkspaceLocationScm = z.infer<typeof WorkspaceLocationScmSchema>;

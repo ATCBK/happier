@@ -1,19 +1,19 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { areSessionMcpSelectionsEquivalent, SessionMcpSelectionAuthoringV1Schema, SessionMcpSelectionV1Schema } from '../mcp/servers/sessionSelectionV1.js';
 import type { ReachDecisionV1 } from './resolveReachV1.js';
 
-export const SessionSkillSelectionAuthoringV1Schema = lazyZodSchema(() => z.object({
-  v: z.literal(1).default(1), forceIncludeSkillIds: z.array(z.string().min(1)).default([]),
-  forceExcludeSkillIds: z.array(z.string().min(1)).default([]), excludeNativeSkillNames: z.array(z.string().min(1)).default([]),
-}).strict().transform(value => ({ ...value, forceIncludeSkillIds: [...new Set(value.forceIncludeSkillIds)],
-  forceExcludeSkillIds: [...new Set(value.forceExcludeSkillIds)], excludeNativeSkillNames: [...new Set(value.excludeNativeSkillNames)] })));
+export const SessionSkillSelectionAuthoringV1Schema = lazyZodSchema(() => z.pipe(z.strictObject({
+  v: z._default(z.literal(1), 1), forceIncludeSkillIds: z._default(z.array(z.string().check(z.minLength(1))), []),
+  forceExcludeSkillIds: z._default(z.array(z.string().check(z.minLength(1))), []), excludeNativeSkillNames: z._default(z.array(z.string().check(z.minLength(1))), []),
+}), z.transform(value => ({ ...value, forceIncludeSkillIds: [...new Set(value.forceIncludeSkillIds)],
+  forceExcludeSkillIds: [...new Set(value.forceExcludeSkillIds)], excludeNativeSkillNames: [...new Set(value.excludeNativeSkillNames)] }))));
 export const SessionSkillSelectionV1Schema = createStoredReadSchema(SessionSkillSelectionAuthoringV1Schema);
 export type SessionSkillSelectionV1 = z.infer<typeof SessionSkillSelectionV1Schema>;
-export const SessionCapabilitySelectionAuthoringV1Schema = lazyZodSchema(() => z.object({
-  mcp: SessionMcpSelectionAuthoringV1Schema.optional(), skills: SessionSkillSelectionAuthoringV1Schema.optional(),
-}).strict());
+export const SessionCapabilitySelectionAuthoringV1Schema = lazyZodSchema(() => z.strictObject({
+  mcp: z.optional(SessionMcpSelectionAuthoringV1Schema), skills: z.optional(SessionSkillSelectionAuthoringV1Schema),
+}));
 export const SessionCapabilitySelectionV1Schema = createStoredReadSchema(SessionCapabilitySelectionAuthoringV1Schema);
 export type SessionCapabilitySelectionV1 = z.infer<typeof SessionCapabilitySelectionV1Schema>;
 export type SessionCapabilityKindV1 = 'skill' | 'mcp_server' | 'native_skill';

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 
 import { canonicalBoundedRecordKeySchema } from '../common/canonicalRecordKey.js';
@@ -26,33 +26,30 @@ export type PluginConnectedAccountMaterializationKind = z.infer<
   typeof PluginConnectedAccountMaterializationKindSchema
 >;
 
-const ConnectedAccountMaterializationDestinationsSchema = lazyZodSchema(() => z.array(
+const ConnectedAccountMaterializationDestinationsSchema = lazyZodSchema(() => z.readonly(z.array(
   canonicalBoundedRecordKeySchema(128),
-).min(1).max(32).superRefine((destinations, context) => {
+).check(z.minLength(1), z.maxLength(32), z.superRefine((destinations, context) => {
   if (new Set(destinations).size !== destinations.length) {
     context.addIssue({
       code: 'custom',
       message: 'Connected Account materialization destinations must be unique.',
     });
   }
-}).readonly());
+}))));
 
-const ConnectedAccountHttpHeaderNameSchema = lazyZodSchema(() => z.string().trim().min(1).max(128)
-  .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u)
-  .transform((value) => value.toLowerCase()));
-const ConnectedAccountHttpHeaderNamesSchema = lazyZodSchema(() => z.array(
+const ConnectedAccountHttpHeaderNameSchema = lazyZodSchema(() => z.pipe(z.string().check(z.trim(), z.minLength(1), z.maxLength(128), z.regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u)), z.transform((value) => value.toLowerCase())));
+const ConnectedAccountHttpHeaderNamesSchema = lazyZodSchema(() => z.readonly(z.array(
   ConnectedAccountHttpHeaderNameSchema,
-).min(1).max(32).superRefine((headerNames, context) => {
+).check(z.minLength(1), z.maxLength(32), z.superRefine((headerNames, context) => {
   if (new Set(headerNames).size !== headerNames.length) {
     context.addIssue({
       code: 'custom',
       message: 'Connected Account materialization header names must be unique.',
     });
   }
-}).readonly());
+}))));
 
-const ConnectedAccountHttpsOriginSchema = lazyZodSchema(() => z.string().trim().max(2_048)
-  .superRefine((value, context) => {
+const ConnectedAccountHttpsOriginSchema = lazyZodSchema(() => z.string().check(z.trim(), z.maxLength(2_048), z.superRefine((value, context) => {
     try {
       const url = new URL(value);
       if (
@@ -75,27 +72,27 @@ const ConnectedAccountHttpsOriginSchema = lazyZodSchema(() => z.string().trim().
         message: 'Connected Account materialization origins must be canonical HTTPS origins.',
       });
     }
-  }));
+  })));
 
-export const ConnectedAccountHttpHeadersRequestSchema = lazyZodSchema(() => z.object({
+export const ConnectedAccountHttpHeadersRequestSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('httpHeaders'),
   origin: ConnectedAccountHttpsOriginSchema,
   headerNames: ConnectedAccountHttpHeaderNamesSchema,
-}).strict());
+}));
 export type ConnectedAccountHttpHeadersRequest = z.infer<
   typeof ConnectedAccountHttpHeadersRequestSchema
 >;
 
 export const ConnectedAccountMaterializationRequestSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   ConnectedAccountHttpHeadersRequestSchema,
-  z.object({
+  z.strictObject({
     kind: z.literal('environment'),
     keys: ConnectedAccountMaterializationDestinationsSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('files'),
     fileIds: ConnectedAccountMaterializationDestinationsSchema,
-  }).strict(),
+  }),
 ]));
 export type ConnectedAccountMaterializationRequest = z.infer<
   typeof ConnectedAccountMaterializationRequestSchema
@@ -103,9 +100,7 @@ export type ConnectedAccountMaterializationRequest = z.infer<
 
 export const PluginConnectedAccountMaterializationKindsSchema = lazyZodSchema(() => z.array(
   PluginConnectedAccountMaterializationKindSchema,
-).min(1).max(PluginConnectedAccountMaterializationKindSchema.options.length)
-  .meta({ uniqueItems: true })
-  .superRefine((kinds, context) => {
+).check(z.minLength(1), z.maxLength(PluginConnectedAccountMaterializationKindSchema.options.length), z.meta({ uniqueItems: true }), z.superRefine((kinds, context) => {
     const seen = new Set<PluginConnectedAccountMaterializationKind>();
     for (const [index, kind] of kinds.entries()) {
       if (seen.has(kind)) {
@@ -117,37 +112,32 @@ export const PluginConnectedAccountMaterializationKindsSchema = lazyZodSchema(()
       }
       seen.add(kind);
     }
-  }));
+  })));
 
-export const ConnectedAccountPurposeDeclarationV1Schema = lazyZodSchema(() => z.object({
+export const ConnectedAccountPurposeDeclarationV1Schema = lazyZodSchema(() => z.strictObject({
   purpose: ConnectedAccountPurposeIdSchema,
   service: asProtocolZod(PluginContributionReferenceV2Schema),
   /** Optional human-facing presentation; purpose remains the machine identifier. */
-  title: PluginLocalizedStringV2Schema.optional(),
-  required: z.boolean().optional(),
-  materializationKinds: PluginConnectedAccountMaterializationKindsSchema.optional(),
+  title: z.optional(PluginLocalizedStringV2Schema),
+  required: z.optional(z.boolean()),
+  materializationKinds: z.optional(PluginConnectedAccountMaterializationKindsSchema),
   /** Credential/profile kinds this consumer can use for this service. */
-  credentialKinds: z.array(ConnectedServiceCredentialKindSchema)
-    .min(1)
-    .max(ConnectedServiceCredentialKindSchema.options.length)
-    .meta({ uniqueItems: true })
-    .superRefine((kinds, context) => {
+  credentialKinds: z.optional(z.array(ConnectedServiceCredentialKindSchema).check(z.minLength(1), z.maxLength(ConnectedServiceCredentialKindSchema.options.length), z.meta({ uniqueItems: true }), z.superRefine((kinds, context) => {
       if (new Set(kinds).size !== kinds.length) {
         context.addIssue({
           code: 'custom',
           message: 'Connected Account credential kinds must be unique.',
         });
       }
-    })
-    .optional(),
-}).strict());
+    }))),
+}));
 export type ConnectedAccountPurposeDeclarationV1 = z.infer<
   typeof ConnectedAccountPurposeDeclarationV1Schema
 >;
 
 export const ConnectedAccountPurposeDeclarationsV1Schema = lazyZodSchema(() => z.array(
   ConnectedAccountPurposeDeclarationV1Schema,
-).max(32).superRefine((declarations, context) => {
+).check(z.maxLength(32), z.superRefine((declarations, context) => {
   const seenPurposes = new Set<string>();
   for (const [index, declaration] of declarations.entries()) {
     if (seenPurposes.has(declaration.purpose)) {
@@ -159,7 +149,7 @@ export const ConnectedAccountPurposeDeclarationsV1Schema = lazyZodSchema(() => z
     }
     seenPurposes.add(declaration.purpose);
   }
-}));
+})));
 export type ConnectedAccountPurposeDeclarationsV1 = z.infer<
   typeof ConnectedAccountPurposeDeclarationsV1Schema
 >;

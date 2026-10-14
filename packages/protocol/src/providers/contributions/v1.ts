@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   PROVIDER_WIRE_PROTOCOL_LIMITS_V1,
@@ -47,28 +47,28 @@ import { compareProviderCanonicalStringsV1 } from '../canonicalOrderV1.js';
 import type { ProviderConnectionV1 } from '../connections/v1.js';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
 
-const LegacyProfileEnvironmentNameSchema = lazyZodSchema(() => z.string().regex(/^[A-Z_][A-Z0-9_]*$/u).max(128));
+const LegacyProfileEnvironmentNameSchema = lazyZodSchema(() => z.string().check(z.regex(/^[A-Z_][A-Z0-9_]*$/u), z.maxLength(128)));
 
-export const ProviderLegacyProfileMigrationDescriptorV1Schema = lazyZodSchema(() => z.object({
-  sourceProfileId: z.string().trim().min(1).max(256),
-  descriptorRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).default(1),
-  implicitModelAliasReplacements: z.array(z.object({
+export const ProviderLegacyProfileMigrationDescriptorV1Schema = lazyZodSchema(() => z.strictObject({
+  sourceProfileId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+  descriptorRevision: z._default(z.number().check(z.int(), z.minimum(1), z.maximum(Number.MAX_SAFE_INTEGER)), 1),
+  implicitModelAliasReplacements: z._default(z.array(z.strictObject({
     legacyModelId: ProviderModelIdSchema,
     replacementModelId: ProviderModelIdSchema,
-  }).strict()).max(16).default([]),
-  credentialBinding: z.object({
+  })).check(z.maxLength(16)), []),
+  credentialBinding: z.optional(z.strictObject({
     legacyEnvVarName: LegacyProfileEnvironmentNameSchema,
     credentialSlotId: ProviderLocalIdSchema,
-  }).strict().optional(),
-  primaryModel: z.object({
+  })),
+  primaryModel: z.optional(z.strictObject({
     agentTargetKey: ProviderAgentTargetKeySchema,
     legacyEnvVarName: LegacyProfileEnvironmentNameSchema,
     defaultModelId: ProviderModelIdSchema,
-    legacyProcessEnvAlias: LegacyProfileEnvironmentNameSchema.optional(),
-  }).strict().optional(),
-  migratedEnvironmentVariables: z.array(EnvironmentVariableSchema).max(64).default([]),
-  retainedEnvironmentVariables: z.array(EnvironmentVariableSchema).max(64).default([]),
-}).strict().superRefine((value, ctx) => {
+    legacyProcessEnvAlias: z.optional(LegacyProfileEnvironmentNameSchema),
+  })),
+  migratedEnvironmentVariables: z._default(z.array(EnvironmentVariableSchema).check(z.maxLength(64)), []),
+  retainedEnvironmentVariables: z._default(z.array(EnvironmentVariableSchema).check(z.maxLength(64)), []),
+}).check(z.superRefine((value, ctx) => {
   const names = [...value.migratedEnvironmentVariables, ...value.retainedEnvironmentVariables].map((entry) => entry.name);
   if (new Set(names).size !== names.length) {
     ctx.addIssue({ code: 'custom', path: ['retainedEnvironmentVariables'], message: 'Legacy environment dispositions must be unique' });
@@ -85,62 +85,61 @@ export const ProviderLegacyProfileMigrationDescriptorV1Schema = lazyZodSchema(()
       ctx.addIssue({ code: 'custom', path: ['implicitModelAliasReplacements', index], message: 'Implicit model alias replacement must change the model id' });
     }
   });
-}));
+})));
 export type ProviderLegacyProfileMigrationDescriptorV1 = z.infer<typeof ProviderLegacyProfileMigrationDescriptorV1Schema>;
 
-export const ProviderEndpointTemplateV1Schema = lazyZodSchema(() => z.object({
+export const ProviderEndpointTemplateV1Schema = lazyZodSchema(() => z.strictObject({
   id: ProviderLocalIdSchema,
   protocol: ProviderWireProtocolSchema,
-  baseUrl: ProviderEndpointUrlSyntaxSchema.optional(),
-  localUrlCandidates: z.array(ProviderEndpointUrlSyntaxSchema).min(1).max(16).optional(),
-  publicHeaders: ProviderPublicHeadersV1Schema.optional(),
+  baseUrl: z.optional(ProviderEndpointUrlSyntaxSchema),
+  localUrlCandidates: z.optional(z.array(ProviderEndpointUrlSyntaxSchema).check(z.minLength(1), z.maxLength(16))),
+  publicHeaders: z.optional(ProviderPublicHeadersV1Schema),
   capabilities: ProviderCompatibilityCapabilitiesV1Schema,
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   if (Boolean(value.baseUrl) === Boolean(value.localUrlCandidates)) {
     ctx.addIssue({ code: 'custom', message: 'Exactly one of baseUrl or localUrlCandidates is required' });
   }
-}));
+})));
 export type ProviderEndpointTemplateV1 = z.infer<typeof ProviderEndpointTemplateV1Schema>;
 
-export const ProviderModelLoadDescriptorV1Schema = lazyZodSchema(() => z.object({
+export const ProviderModelLoadDescriptorV1Schema = lazyZodSchema(() => z.strictObject({
   endpointTemplateId: ProviderLocalIdSchema,
   path: ProviderOriginRelativePathSchema,
   request: z.literal('json-model-id-v1'),
   confirmation: z.literal('refresh-catalog-load-state'),
   preflightPolicy: z.enum(['advisory', 'required']),
-}).strict());
+}));
 export type ProviderModelLoadDescriptorV1 = z.infer<typeof ProviderModelLoadDescriptorV1Schema>;
 
-export const ProviderManagedConnectedAccountPurposeBindingPolicyV1Schema = lazyZodSchema(() => z.object({
+export const ProviderManagedConnectedAccountPurposeBindingPolicyV1Schema = lazyZodSchema(() => z.strictObject({
   // V1 intentionally supports only the current author need: at least one
   // declared purpose must be bound. A literal avoids inventing arbitrary
   // cardinality policy while optional Providers remain valid with zero.
   minimumBound: z.literal(1),
-}).strict());
+}));
 export type ProviderManagedConnectedAccountPurposeBindingPolicyV1 = z.infer<
   typeof ProviderManagedConnectedAccountPurposeBindingPolicyV1Schema
 >;
 
-export const ProviderManagedRuntimeDeclarationV1Schema = lazyZodSchema(() => z.object({
+export const ProviderManagedRuntimeDeclarationV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('managed'),
   /** Opts connected-account request-auth consumers into daemon connection custody. */
-  sharing: z.literal('connectionMachine').optional(),
-  dependencies: z.array(asProtocolZod(PluginContributionLocalIdSchema)).max(16).optional(),
-  connectedAccounts: z.array(ConnectedAccountPurposeDeclarationV1Schema.extend({
+  sharing: z.optional(z.literal('connectionMachine')),
+  dependencies: z.optional(z.array(asProtocolZod(PluginContributionLocalIdSchema)).check(z.maxLength(16))),
+  connectedAccounts: z.optional(z.array(z.extend(ConnectedAccountPurposeDeclarationV1Schema, {
     /** Exact managed endpoints supported by this upstream purpose; absent means no broker route. */
-    endpointTemplateIds: z.array(ProviderLocalIdSchema).min(1).optional(),
-  })).superRefine((declarations, context) => {
+    endpointTemplateIds: z.optional(z.array(ProviderLocalIdSchema).check(z.minLength(1))),
+  })).check(z.superRefine((declarations, context) => {
     const checked = ConnectedAccountPurposeDeclarationsV1Schema.safeParse(
       declarations.map(({ endpointTemplateIds: _endpoints, ...declaration }) => declaration),
     );
     if (!checked.success) checked.error.issues.forEach((issue) => context.addIssue({ ...issue }));
-  }).optional(),
+  }))),
   connectedAccountPurposeBindingPolicy:
-    ProviderManagedConnectedAccountPurposeBindingPolicyV1Schema.optional(),
-  requestAuthUses: ConnectedAccountRequestAuthUsesV1Schema.optional(),
-  endpointTemplateIds: z.array(ProviderLocalIdSchema).min(1)
-    .max(PROVIDER_WIRE_PROTOCOL_LIMITS_V1.maxProtocolsPerDeclaration),
-}).strict().superRefine((value, context) => {
+    z.optional(ProviderManagedConnectedAccountPurposeBindingPolicyV1Schema),
+  requestAuthUses: z.optional(ConnectedAccountRequestAuthUsesV1Schema),
+  endpointTemplateIds: z.array(ProviderLocalIdSchema).check(z.minLength(1), z.maxLength(PROVIDER_WIRE_PROTOCOL_LIMITS_V1.maxProtocolsPerDeclaration)),
+}).check(z.superRefine((value, context) => {
   const dependencies = value.dependencies ?? [];
   if (new Set(dependencies).size !== dependencies.length) {
     context.addIssue({ code: 'custom', path: ['dependencies'], message: 'Managed Provider dependencies must be unique' });
@@ -191,7 +190,7 @@ export const ProviderManagedRuntimeDeclarationV1Schema = lazyZodSchema(() => z.o
       });
     }
   }
-}));
+})));
 export type ProviderManagedRuntimeDeclarationV1 = z.infer<
   typeof ProviderManagedRuntimeDeclarationV1Schema
 >;
@@ -426,25 +425,24 @@ export function createProviderManagedRuntimeBindingFingerprintV1(
     createProviderManagedRuntimeBindingEqualityKeyV1(input));
 }
 
-export const ProviderContributionV1Schema = lazyZodSchema(() => z.object({
+export const ProviderContributionV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   id: ProviderLocalIdSchema,
-  name: z.string().trim().min(1).max(128),
-  icon: z.string().trim().min(1).max(512).optional(),
-  websiteUrl: ProviderHttpsUrlSchema.optional(),
+  name: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+  icon: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(512))),
+  websiteUrl: z.optional(ProviderHttpsUrlSchema),
   kind: z.enum(['frontier', 'aggregator', 'cloud', 'local']),
   // One endpoint per protocol, so this bound follows the protocol-declaration
   // bound rather than the bundled protocol count.
-  endpointTemplates: z.array(ProviderEndpointTemplateV1Schema).min(1)
-    .max(PROVIDER_WIRE_PROTOCOL_LIMITS_V1.maxProtocolsPerDeclaration),
-  credential: ProviderApiKeyCredentialRequirementV1Schema.optional(),
+  endpointTemplates: z.array(ProviderEndpointTemplateV1Schema).check(z.minLength(1), z.maxLength(PROVIDER_WIRE_PROTOCOL_LIMITS_V1.maxProtocolsPerDeclaration)),
+  credential: z.optional(ProviderApiKeyCredentialRequirementV1Schema),
   catalog: ProviderCatalogDeclarationV1Schema,
-  modelLoad: ProviderModelLoadDescriptorV1Schema.optional(),
-  discovery: ProviderDetectionDescriptorV1Schema.optional(),
-  managedRuntime: ProviderManagedRuntimeDeclarationV1Schema.optional(),
-  compatibilityOverrides: ProviderCompatibilityOverridesV1Schema.optional(),
-  legacyProfileMigrations: z.array(ProviderLegacyProfileMigrationDescriptorV1Schema).max(8).optional(),
-}).strict().superRefine((value, ctx) => {
+  modelLoad: z.optional(ProviderModelLoadDescriptorV1Schema),
+  discovery: z.optional(ProviderDetectionDescriptorV1Schema),
+  managedRuntime: z.optional(ProviderManagedRuntimeDeclarationV1Schema),
+  compatibilityOverrides: z.optional(ProviderCompatibilityOverridesV1Schema),
+  legacyProfileMigrations: z.optional(z.array(ProviderLegacyProfileMigrationDescriptorV1Schema).check(z.maxLength(8))),
+}).check(z.superRefine((value, ctx) => {
   const endpointIds = new Set<string>();
   const protocols = new Set<string>();
   value.endpointTemplates.forEach((endpoint, index) => {
@@ -552,5 +550,5 @@ export const ProviderContributionV1Schema = lazyZodSchema(() => z.object({
       }
     });
   });
-}));
+})));
 export type ProviderContributionV1 = z.infer<typeof ProviderContributionV1Schema>;

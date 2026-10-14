@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * An identifier minted outside Happier — an Agent's resume/session id, a
@@ -16,10 +16,7 @@ import { z } from 'zod';
  * canonicalization rules (`preservedBoundedNfcString`, the trimmed id schemas).
  * Do not route those through this owner.
  */
-export const NonBlankOpaqueIdentifierSchema = lazyZodSchema(() => z.string().refine(
-  (value) => value.trim().length > 0,
-  'Opaque identifiers must contain a non-whitespace character',
-));
+export const NonBlankOpaqueIdentifierSchema = lazyZodSchema(() => z.string().check(z.refine((value) => value.trim().length > 0, 'Opaque identifiers must contain a non-whitespace character')));
 
 /** Read an opaque identifier for presence without changing its bytes. */
 export function readNonBlankOpaqueIdentifier(value: unknown): string | null {

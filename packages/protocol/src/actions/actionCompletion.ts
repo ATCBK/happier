@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 import { sameStrictJsonValue, projectNativeJsonValueForTransport, StrictJsonValueSchema, type JsonValue } from '../json/strictJsonValue.js';
@@ -97,7 +97,7 @@ type ExecutionRunCompletionDeclaration = Readonly<{
     runs: readonly ActionCompletionRun[];
     failed: readonly ActionCompletionLaunchFailure[];
   }>;
-  terminalOutputSchema: z.ZodType;
+  terminalOutputSchema: z.ZodMiniType;
   terminal: (output: unknown, runs: readonly Readonly<
     ActionCompletionRun & { outcome: ExecutionRunTerminalObservation }
   >[], purpose?: 'input' | 'stored') => unknown;
@@ -106,44 +106,44 @@ type ExecutionRunCompletionDeclaration = Readonly<{
 type OperationCompletionDeclaration = Readonly<{
   awaits: 'action_operations';
   /** Explicit producer evidence that no finite launch is required. Never readiness. */
-  immediateResultSchema?: z.ZodType;
+  immediateResultSchema?: z.ZodMiniType;
   launched: (output: unknown, context?: ActionCompletionContextV1) => Readonly<{
     operations: readonly ActionCompletionOperation[];
   }>;
-  terminalOutputSchema: z.ZodType;
+  terminalOutputSchema: z.ZodMiniType;
   terminal: (output: unknown, operations: readonly Readonly<
     ActionCompletionOperation & { operation: ActionOperationSnapshotV1 }
   >[]) => unknown;
 }>;
 export type ActionCompletionDeclaration = ExecutionRunCompletionDeclaration | OperationCompletionDeclaration;
 
-export const ActionCompletionContractV1Schema = lazyZodSchema(() => z.object({
+export const ActionCompletionContractV1Schema = lazyZodSchema(() => z.strictObject({
   awaits: z.enum(['execution_runs', 'action_operations']),
   terminalOutputSchema: PluginJsonSchemaV2Schema,
-}).strict());
+}));
 export type ActionCompletionContractV1 = z.infer<typeof ActionCompletionContractV1Schema>;
 
-const ActionCompletionRunSchema = lazyZodSchema(() => z.object({ key: z.string().min(1), runId: z.string().min(1),
-  observation: ExecutionRunOutputObservationSchema.optional(),
-}).strict());
-const ActionCompletionLaunchesSchema = lazyZodSchema(() => z.object({
-  runs: z.array(ActionCompletionRunSchema),
-  failed: z.array(z.object({ key: z.string().min(1), errorCode: z.string().min(1), runCreation: ExecutionRunStartRunCreationSchema }).strict()),
-}).strict());
-const ActionCompletionOperationSchema = lazyZodSchema(() => z.object({
-  key: z.string().min(1), serverId: z.string().trim().min(1),
-  machineId: z.string().trim().min(1), operationId: z.string().trim().min(1),
-}).strict());
-const ActionCompletionOperationLaunchesSchema = lazyZodSchema(() => z.object({
-  operations: z.array(ActionCompletionOperationSchema).min(1),
-}).strict());
-export const ActionCompletionStateV1Schema = lazyZodSchema(() => z.object({
-  output: StrictJsonValueSchema,
-  awaitedRuns: z.array(ActionCompletionRunSchema).min(1).optional(),
-  awaitedOperations: z.array(ActionCompletionOperationSchema).min(1).optional(),
-}).strict().refine(state => (state.awaitedRuns !== undefined) !== (state.awaitedOperations !== undefined), {
-  message: 'Completion retains exactly one observation owner.',
+const ActionCompletionRunSchema = lazyZodSchema(() => z.strictObject({ key: z.string().check(z.minLength(1)), runId: z.string().check(z.minLength(1)),
+  observation: z.optional(ExecutionRunOutputObservationSchema),
 }));
+const ActionCompletionLaunchesSchema = lazyZodSchema(() => z.strictObject({
+  runs: z.array(ActionCompletionRunSchema),
+  failed: z.array(z.strictObject({ key: z.string().check(z.minLength(1)), errorCode: z.string().check(z.minLength(1)), runCreation: ExecutionRunStartRunCreationSchema })),
+}));
+const ActionCompletionOperationSchema = lazyZodSchema(() => z.strictObject({
+  key: z.string().check(z.minLength(1)), serverId: z.string().check(z.trim(), z.minLength(1)),
+  machineId: z.string().check(z.trim(), z.minLength(1)), operationId: z.string().check(z.trim(), z.minLength(1)),
+}));
+const ActionCompletionOperationLaunchesSchema = lazyZodSchema(() => z.strictObject({
+  operations: z.array(ActionCompletionOperationSchema).check(z.minLength(1)),
+}));
+export const ActionCompletionStateV1Schema = lazyZodSchema(() => z.strictObject({
+  output: StrictJsonValueSchema,
+  awaitedRuns: z.optional(z.array(ActionCompletionRunSchema).check(z.minLength(1))),
+  awaitedOperations: z.optional(z.array(ActionCompletionOperationSchema).check(z.minLength(1))),
+}).check(z.refine(state => (state.awaitedRuns !== undefined) !== (state.awaitedOperations !== undefined), {
+  message: 'Completion retains exactly one observation owner.',
+})));
 export type ActionCompletionStateV1 = z.infer<typeof ActionCompletionStateV1Schema>;
 
 export type ActionCompletionResult =
@@ -280,10 +280,10 @@ export async function resumeActionCompletionV1(params: Readonly<{
   return hasUnknownLaunch ? uncertain : { kind: 'completed', value: validated.value };
 }
 
-export const ProjectCommandActionOutputV1Schema = lazyZodSchema(() => z.object({ operation: ActionOperationSnapshotV1Schema }).strict());
+export const ProjectCommandActionOutputV1Schema = lazyZodSchema(() => z.strictObject({ operation: ActionOperationSnapshotV1Schema }));
 
 /** One finite completion owner; preparation can also produce strict no-launch final facts. */
-export function createProjectCommandActionCompletionV1(options: Readonly<{ immediateResultSchema?: z.ZodType }> = {}): OperationCompletionDeclaration {
+export function createProjectCommandActionCompletionV1(options: Readonly<{ immediateResultSchema?: z.ZodMiniType }> = {}): OperationCompletionDeclaration {
   const immediateResultSchema = options.immediateResultSchema;
   return {
     awaits: 'action_operations',

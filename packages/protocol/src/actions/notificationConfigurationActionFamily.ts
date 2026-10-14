@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { PreNormalizedActionSpec } from './actionSpecs.js';
 import { redactObservationInputPaths } from './specs/observationRedaction.js';
 import { WebhookNotificationChannelV1Schema } from '../account/settings/notificationChannels.js';
@@ -7,69 +7,67 @@ import { NOTIFICATION_CONFIGURATION_ACTION_IDS } from './notificationConfigurati
 export { NOTIFICATION_CONFIGURATION_ACTION_IDS, isNotificationConfigurationActionId,
   type NotificationConfigurationActionId } from './notificationConfigurationActionIds.js';
 
-const ChannelIdSchema = lazyZodSchema(() => z.string().trim().min(1));
-const WebhookUrlSchema = lazyZodSchema(() => z.string().trim().pipe(WebhookNotificationChannelV1Schema.shape.url));
-const TopicsPatchSchema = lazyZodSchema(() => z.object({
-  ready: z.boolean().optional(), permissionRequest: z.boolean().optional(), userActionRequest: z.boolean().optional(),
-  connectedServiceAccountSwitch: z.boolean().optional(), connectedServiceQuotaBlocked: z.boolean().optional(),
-  connectedServiceQuotaRecovered: z.boolean().optional(),
-}).strict().refine(value => Object.values(value).some(field => field !== undefined)));
-const ChannelPatchSchema = lazyZodSchema(() => z.object({
-  enabled: z.boolean().optional(), topics: TopicsPatchSchema.optional(),
-  readyIncludeMessageText: z.boolean().optional(), requestIncludeMessageText: z.boolean().optional(),
-}).strict());
+const ChannelIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const WebhookUrlSchema = lazyZodSchema(() => z.pipe(z.string().check(z.trim()), WebhookNotificationChannelV1Schema.shape.url));
+const TopicsPatchSchema = lazyZodSchema(() => z.strictObject({
+  ready: z.optional(z.boolean()), permissionRequest: z.optional(z.boolean()), userActionRequest: z.optional(z.boolean()),
+  connectedServiceAccountSwitch: z.optional(z.boolean()), connectedServiceQuotaBlocked: z.optional(z.boolean()),
+  connectedServiceQuotaRecovered: z.optional(z.boolean()),
+}).check(z.refine(value => Object.values(value).some(field => field !== undefined))));
+const ChannelPatchSchema = lazyZodSchema(() => z.strictObject({
+  enabled: z.optional(z.boolean()), topics: z.optional(TopicsPatchSchema),
+  readyIncludeMessageText: z.optional(z.boolean()), requestIncludeMessageText: z.optional(z.boolean()),
+}));
 export type NotificationChannelConfigurationPatch = z.infer<typeof ChannelPatchSchema>;
-const PatchSchema = lazyZodSchema(() => ChannelPatchSchema.extend({ url: WebhookUrlSchema.optional() })
-  .strict().refine(value => Object.values(value).some(field => field !== undefined)));
-const ExpoPushPatchSchema = lazyZodSchema(() => ChannelPatchSchema
-  .refine(value => Object.values(value).some(field => field !== undefined)));
-const ChannelTargetSchema = lazyZodSchema(() => z.object({ channelId: ChannelIdSchema }).strict());
+const PatchSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ChannelPatchSchema, { url: z.optional(WebhookUrlSchema) })).check(z.refine(value => Object.values(value).some(field => field !== undefined))));
+const ExpoPushPatchSchema = lazyZodSchema(() => ChannelPatchSchema.check(z.refine(value => Object.values(value).some(field => field !== undefined))));
+const ChannelTargetSchema = lazyZodSchema(() => z.strictObject({ channelId: ChannelIdSchema }));
 export const NotificationConfigurationActionInputSchemas = {
-  'notifications.webhooks.list': z.object({}).strict(),
-  'notifications.webhooks.add': z.object({ url: WebhookUrlSchema }).strict(),
-  'notifications.webhooks.update': ChannelTargetSchema.extend({ patch: PatchSchema }).strict(),
+  'notifications.webhooks.list': z.strictObject({}),
+  'notifications.webhooks.add': z.strictObject({ url: WebhookUrlSchema }),
+  'notifications.webhooks.update': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ChannelTargetSchema, { patch: PatchSchema }))),
   'notifications.webhooks.remove': ChannelTargetSchema,
-  'notifications.webhooks.signingSecret.set': ChannelTargetSchema.extend({ secret: z.string().min(1) }).strict(),
+  'notifications.webhooks.signingSecret.set': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ChannelTargetSchema, { secret: z.string().check(z.minLength(1)) }))),
   'notifications.webhooks.signingSecret.clear': ChannelTargetSchema,
-  'notifications.expoPush.update': z.object({ patch: ExpoPushPatchSchema }).strict(),
-  'notifications.desktop.permission.read': z.object({}).strict(),
-  'notifications.desktop.permission.request': z.object({}).strict(),
-  'notifications.push.tokens.list': z.object({}).strict(),
-  'notifications.push.tokens.remove': z.object({ tokenId: ChannelIdSchema }).strict(),
-  'notifications.push.permission.read': z.object({}).strict(),
-  'notifications.push.permission.request': z.object({}).strict(),
-  'notifications.push.register': z.object({}).strict(),
+  'notifications.expoPush.update': z.strictObject({ patch: ExpoPushPatchSchema }),
+  'notifications.desktop.permission.read': z.strictObject({}),
+  'notifications.desktop.permission.request': z.strictObject({}),
+  'notifications.push.tokens.list': z.strictObject({}),
+  'notifications.push.tokens.remove': z.strictObject({ tokenId: ChannelIdSchema }),
+  'notifications.push.permission.read': z.strictObject({}),
+  'notifications.push.permission.request': z.strictObject({}),
+  'notifications.push.register': z.strictObject({}),
 } as const;
-const MutationOutputSchema = lazyZodSchema(() => z.object({ channelId: ChannelIdSchema }).strict());
-const PushTokenRegistrationDiagnosticsSchema = lazyZodSchema(() => z.object({ tokenId: ChannelIdSchema,
-  fingerprint: z.string(), isCurrentDevice: z.boolean(), clientServerUrl: z.string().nullable(),
-  createdAt: z.number(), updatedAt: z.number() }).strict());
+const MutationOutputSchema = lazyZodSchema(() => z.strictObject({ channelId: ChannelIdSchema }));
+const PushTokenRegistrationDiagnosticsSchema = lazyZodSchema(() => z.strictObject({ tokenId: ChannelIdSchema,
+  fingerprint: z.string(), isCurrentDevice: z.boolean(), clientServerUrl: z.nullable(z.string()),
+  createdAt: z.number(), updatedAt: z.number() }));
 export type PushTokenRegistrationDiagnostics = z.infer<typeof PushTokenRegistrationDiagnosticsSchema>;
 export const NotificationConfigurationActionOutputSchemas = {
-  'notifications.webhooks.list': z.object({ items: z.array(z.object({
+  'notifications.webhooks.list': z.strictObject({ items: z.array(z.strictObject({
     channelId: ChannelIdSchema, url: WebhookUrlSchema, enabled: z.boolean(), signingSecretConfigured: z.boolean(),
-    topics: z.object({ ready: z.boolean(), permissionRequest: z.boolean(), userActionRequest: z.boolean() }).strict(),
+    topics: z.strictObject({ ready: z.boolean(), permissionRequest: z.boolean(), userActionRequest: z.boolean() }),
     readyIncludeMessageText: z.boolean(), requestIncludeMessageText: z.boolean(),
-  }).strict()) }).strict(),
+  })) }),
   'notifications.webhooks.add': MutationOutputSchema,
   'notifications.webhooks.update': MutationOutputSchema,
   'notifications.webhooks.remove': MutationOutputSchema,
   'notifications.webhooks.signingSecret.set': MutationOutputSchema,
   'notifications.webhooks.signingSecret.clear': MutationOutputSchema,
   'notifications.expoPush.update': MutationOutputSchema,
-  'notifications.desktop.permission.read': z.object({ status: z.enum(['granted', 'notGranted']) }).strict(),
-  'notifications.desktop.permission.request': z.object({ status: z.enum(['granted', 'notGranted']) }).strict(),
-  'notifications.push.tokens.list': z.object({ tokens: z.array(PushTokenRegistrationDiagnosticsSchema) }).strict(),
-  'notifications.push.tokens.remove': z.object({ tokenId: ChannelIdSchema, removed: z.literal(true) }).strict(),
+  'notifications.desktop.permission.read': z.strictObject({ status: z.enum(['granted', 'notGranted']) }),
+  'notifications.desktop.permission.request': z.strictObject({ status: z.enum(['granted', 'notGranted']) }),
+  'notifications.push.tokens.list': z.strictObject({ tokens: z.array(PushTokenRegistrationDiagnosticsSchema) }),
+  'notifications.push.tokens.remove': z.strictObject({ tokenId: ChannelIdSchema, removed: z.literal(true) }),
   'notifications.push.permission.read': z.discriminatedUnion('status', [
-    z.object({ status: z.literal('ready'), permission: z.object({ status: z.enum(['unsupported', 'granted', 'denied', 'undetermined']),
-      granted: z.boolean(), canAskAgain: z.boolean() }).strict() }).strict(),
-    z.object({ status: z.literal('unavailable'), reason: z.enum(['runtime_unavailable', 'runtime_timeout']) }).strict(),
+    z.strictObject({ status: z.literal('ready'), permission: z.strictObject({ status: z.enum(['unsupported', 'granted', 'denied', 'undetermined']),
+      granted: z.boolean(), canAskAgain: z.boolean() }) }),
+    z.strictObject({ status: z.literal('unavailable'), reason: z.enum(['runtime_unavailable', 'runtime_timeout']) }),
   ]),
-  'notifications.push.permission.request': z.object({ decision: z.enum(['prime', 'open_system_settings', 'skip_push_disabled',
+  'notifications.push.permission.request': z.strictObject({ decision: z.enum(['prime', 'open_system_settings', 'skip_push_disabled',
     'skip_unsupported', 'skip_already_granted', 'skip_already_declined', 'skip_cannot_ask_again', 'skip_runtime_unavailable']),
-    granted: z.boolean() }).strict(),
-  'notifications.push.register': z.object({ status: z.literal('reconciled') }).strict(),
+    granted: z.boolean() }),
+  'notifications.push.register': z.strictObject({ status: z.literal('reconciled') }),
 } as const;
 
 export const NOTIFICATION_CONFIGURATION_ACTION_SPECS = NOTIFICATION_CONFIGURATION_ACTION_IDS.map((id): PreNormalizedActionSpec => ({

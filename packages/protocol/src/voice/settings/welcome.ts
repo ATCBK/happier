@@ -1,11 +1,11 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 
 
 export const VoiceWelcomeSchema = z.object({
-  enabled: z.boolean().default(false),
-  mode: z.enum(['immediate', 'on_first_turn']).default('immediate'),
-  templateId: z.string().nullable().default(null),
+  enabled: z._default(z.boolean(), false),
+  mode: z._default(z.enum(['immediate', 'on_first_turn']), 'immediate'),
+  templateId: z._default(z.nullable(z.string()), null),
 });
 
 export type VoiceWelcomeSettings = z.infer<typeof VoiceWelcomeSchema>;

@@ -2,7 +2,7 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { sha256 } from '@noble/hashes/sha256';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionIdSchema, SidechainIdSchema } from '../idsV1.js';
 import {
@@ -52,23 +52,21 @@ export {
   type ExternalSessionTakeoverStartInputV1,
 } from './operationActionSchemasV1.js';
 
-const OperationReferenceIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(512));
-const OperationIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(256));
-const TranscriptItemIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(2_000));
-const OperationRevisionSchema = lazyZodSchema(() => z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
-const OperationSequenceSchema = lazyZodSchema(() => z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
-const OperationTimestampSchema = lazyZodSchema(() => z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
-const OperationCountSchema = lazyZodSchema(() => z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
-const PositiveBoundSchema = lazyZodSchema(() => z.number().int().positive().max(Number.MAX_SAFE_INTEGER));
+const OperationReferenceIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(512)));
+const OperationIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
+const TranscriptItemIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000)));
+const OperationRevisionSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
+const OperationSequenceSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
+const OperationTimestampSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
+const OperationCountSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
+const PositiveBoundSchema = lazyZodSchema(() => z.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER)));
 export const EXTERNAL_SESSION_OPERATION_SOCKET_MAX_BATCH_ITEMS_V1 = 200;
 const EXTERNAL_SESSION_HISTORICAL_IMPORT_BATCH_ID_PREFIX_V1 =
   'historical-import-batch:v1:';
 const EXTERNAL_SESSION_HISTORICAL_IMPORT_BATCH_ID_DOMAIN_V1 =
   'happier.external-session-historical-import.batch-id.v1:';
 
-export const ExternalSessionHistoricalImportBatchIdV1Schema = lazyZodSchema(() => z.string().regex(
-  /^historical-import-batch:v1:[0-9a-f]{64}$/,
-));
+export const ExternalSessionHistoricalImportBatchIdV1Schema = lazyZodSchema(() => z.string().check(z.regex(/^historical-import-batch:v1:[0-9a-f]{64}$/)));
 export type ExternalSessionHistoricalImportBatchIdV1 = z.infer<
   typeof ExternalSessionHistoricalImportBatchIdV1Schema
 >;
@@ -76,9 +74,7 @@ export type ExternalSessionHistoricalImportBatchIdV1 = z.infer<
 export function makeExternalSessionHistoricalImportBatchIdV1(
   orderedLocalIds: readonly string[],
 ): ExternalSessionHistoricalImportBatchIdV1 {
-  const parsedLocalIds = z.array(TranscriptItemIdSchema)
-    .min(1)
-    .max(EXTERNAL_SESSION_OPERATION_SOCKET_MAX_BATCH_ITEMS_V1)
+  const parsedLocalIds = z.array(TranscriptItemIdSchema).check(z.minLength(1), z.maxLength(EXTERNAL_SESSION_OPERATION_SOCKET_MAX_BATCH_ITEMS_V1))
     .parse(orderedLocalIds);
   const digest = bytesToHex(sha256(utf8ToBytes(
     `${EXTERNAL_SESSION_HISTORICAL_IMPORT_BATCH_ID_DOMAIN_V1}${JSON.stringify(parsedLocalIds)}`,
@@ -95,11 +91,11 @@ export function makeExternalSessionHistoricalImportBatchIdV1(
  * Machine identity is authenticated by the transport and checked against the
  * durable claim binding by the socket handler.
  */
-export const ExternalSessionOperationClaimV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionOperationClaimV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: asProtocolZod(SessionIdSchema),
   operationId: OperationIdSchema,
   operationClaimId: OperationReferenceIdSchema,
-}).strict());
+}));
 export type ExternalSessionOperationClaimV1 = z.infer<
   typeof ExternalSessionOperationClaimV1Schema
 >;
@@ -113,14 +109,14 @@ const ExternalSessionOperationSocketCommandBaseV1Schema = lazyZodSchema(() => z.
   expectedRevision: OperationRevisionSchema,
 }));
 
-export const ExternalSessionOperationSocketBatchItemV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionOperationSocketBatchItemV1Schema = lazyZodSchema(() => z.strictObject({
   localId: TranscriptItemIdSchema,
-  sidechainId: SidechainIdSchema.nullable(),
-  messageRole: SessionMessageRoleSchema.nullable(),
+  sidechainId: z.nullable(SidechainIdSchema),
+  messageRole: z.nullable(SessionMessageRoleSchema),
   content: StrictSessionStoredMessageContentEnvelopeSchema,
-  sourceCreatedAtMs: SessionTranscriptSourceTimestampMsSchema.optional(),
-  sourceUpdatedAtMs: SessionTranscriptSourceTimestampMsSchema.optional(),
-}).strict().superRefine((item, context) => {
+  sourceCreatedAtMs: z.optional(SessionTranscriptSourceTimestampMsSchema),
+  sourceUpdatedAtMs: z.optional(SessionTranscriptSourceTimestampMsSchema),
+}).check(z.superRefine((item, context) => {
   if (
     item.sourceCreatedAtMs !== undefined
     && item.sourceUpdatedAtMs !== undefined
@@ -132,14 +128,14 @@ export const ExternalSessionOperationSocketBatchItemV1Schema = lazyZodSchema(() 
       message: 'Source update time cannot precede source creation time.',
     });
   }
-}));
+})));
 export type ExternalSessionOperationSocketBatchItemV1 = z.infer<
   typeof ExternalSessionOperationSocketBatchItemV1Schema
 >;
 
 const ExternalSessionTakeoverAdmissionCommandV1Schema =
   lazyZodSchema(() => z.discriminatedUnion('mode', [
-    ExternalSessionOperationSocketCommandBaseV1Schema.extend({
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalSessionOperationSocketCommandBaseV1Schema, {
       kind: z.literal('admit_persisted_takeover'),
       mode: z.literal('persisted'),
       attemptId: OperationReferenceIdSchema,
@@ -147,13 +143,13 @@ const ExternalSessionTakeoverAdmissionCommandV1Schema =
       expectedSessionMetadataVersion: OperationRevisionSchema,
       metadataPatch: SessionMetadataOwnerPatchV1Schema,
       expectedSessionSeq: OperationSequenceSchema,
-      expectedPublication: z.object({
+      expectedPublication: z.strictObject({
         materializationPublicationId: OperationReferenceIdSchema,
         materializedThroughSourceAt: OperationTimestampSchema,
         publishedThroughServerSeq: OperationSequenceSchema,
-      }).strict(),
-    }).strict(),
-    ExternalSessionOperationSocketCommandBaseV1Schema.extend({
+      }),
+    })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalSessionOperationSocketCommandBaseV1Schema, {
       kind: z.literal('admit_persisted_takeover'),
       mode: z.literal('external_linked'),
       attemptId: OperationReferenceIdSchema,
@@ -161,46 +157,43 @@ const ExternalSessionTakeoverAdmissionCommandV1Schema =
       expectedSessionMetadataVersion: OperationRevisionSchema,
       expectedSessionSeq: OperationSequenceSchema,
       expectedPriorStableStorage: ExternalSessionPriorStableStorageV1Schema,
-    }).strict(),
+    })),
   ]));
 
 export const ExternalSessionOperationSocketCommandV1Schema =
   lazyZodSchema(() => z.union([
-    ExternalSessionOperationSocketCommandBaseV1Schema.extend({
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalSessionOperationSocketCommandBaseV1Schema, {
       kind: z.literal('inspect'),
-    }).strict(),
-    ExternalSessionOperationSocketCommandBaseV1Schema.extend({
+    })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalSessionOperationSocketCommandBaseV1Schema, {
       kind: z.literal('begin'),
       expectedPriorStableStorage: ExternalSessionPriorStableStorageV1Schema,
-    }).strict(),
-    ExternalSessionOperationSocketCommandBaseV1Schema.extend({
+    })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalSessionOperationSocketCommandBaseV1Schema, {
       kind: z.literal('resume'),
-    }).strict(),
-    ExternalSessionOperationSocketCommandBaseV1Schema.extend({
+    })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalSessionOperationSocketCommandBaseV1Schema, {
       kind: z.literal('batch'),
       batchId: ExternalSessionHistoricalImportBatchIdV1Schema,
-      items: z.array(ExternalSessionOperationSocketBatchItemV1Schema)
-        .min(1)
-        .max(EXTERNAL_SESSION_OPERATION_SOCKET_MAX_BATCH_ITEMS_V1)
-        .readonly(),
-    }).strict(),
-    ExternalSessionOperationSocketCommandBaseV1Schema.extend({
+      items: z.readonly(z.array(ExternalSessionOperationSocketBatchItemV1Schema).check(z.minLength(1), z.maxLength(EXTERNAL_SESSION_OPERATION_SOCKET_MAX_BATCH_ITEMS_V1))),
+    })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalSessionOperationSocketCommandBaseV1Schema, {
       kind: z.literal('finalize'),
       expectedAcceptedThroughServerSeq: OperationSequenceSchema,
-    }).strict(),
+    })),
     ExternalSessionTakeoverAdmissionCommandV1Schema,
-    ExternalSessionOperationSocketCommandBaseV1Schema.extend({
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalSessionOperationSocketCommandBaseV1Schema, {
       kind: z.literal('discard'),
-    }).strict(),
+    })),
   ]));
 export type ExternalSessionOperationSocketCommandV1 = z.infer<
   typeof ExternalSessionOperationSocketCommandV1Schema
 >;
 
-export const ExternalSessionOperationSocketBatchLimitsV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionOperationSocketBatchLimitsV1Schema = lazyZodSchema(() => z.strictObject({
   maxItems: PositiveBoundSchema,
   maxSerializedBytes: PositiveBoundSchema,
-}).strict());
+}));
 export type ExternalSessionOperationSocketBatchLimitsV1 = z.infer<
   typeof ExternalSessionOperationSocketBatchLimitsV1Schema
 >;
@@ -236,41 +229,41 @@ const ExternalSessionOperationSocketResponseBaseV1Schema = lazyZodSchema(() => z
  */
 export const ExternalSessionOperationSocketResponseV1Schema =
   lazyZodSchema(() => z.discriminatedUnion('kind', [
-    ExternalSessionOperationSocketResponseBaseV1Schema.extend({
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalSessionOperationSocketResponseBaseV1Schema, {
       kind: z.literal('authority'),
       priorStableStorage: ExternalSessionPriorStableStorageV1Schema,
-    }).strict(),
-    ExternalSessionOperationSocketResponseBaseV1Schema.extend({
+    })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalSessionOperationSocketResponseBaseV1Schema, {
       kind: z.literal('ready'),
       historicalImportJobId: OperationReferenceIdSchema,
       limits: ExternalSessionOperationSocketBatchLimitsV1Schema,
-      acceptedThroughServerSeq: OperationSequenceSchema.optional(),
+      acceptedThroughServerSeq: z.optional(OperationSequenceSchema),
       priorStableStorage: ExternalSessionPriorStableStorageV1Schema,
-    }).strict(),
-    ExternalSessionOperationSocketResponseBaseV1Schema.extend({
+    })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalSessionOperationSocketResponseBaseV1Schema, {
       kind: z.literal('batch_accepted'),
       batchId: ExternalSessionHistoricalImportBatchIdV1Schema,
       acceptedThroughServerSeq: OperationSequenceSchema,
-    }).strict(),
-    ExternalSessionOperationSocketResponseBaseV1Schema.extend({
+    })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalSessionOperationSocketResponseBaseV1Schema, {
       kind: z.literal('finalized'),
       acceptedThroughServerSeq: OperationSequenceSchema,
       publication: ExternalSessionMaterializationPublicationV1Schema,
-    }).strict(),
-    ExternalSessionOperationSocketResponseBaseV1Schema.extend({
+    })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalSessionOperationSocketResponseBaseV1Schema, {
       kind: z.literal('takeover_admitted'),
       mode: z.enum(['persisted', 'external_linked']),
       attemptId: OperationReferenceIdSchema,
-    }).strict(),
-    ExternalSessionOperationSocketResponseBaseV1Schema.extend({
+    })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ExternalSessionOperationSocketResponseBaseV1Schema, {
       kind: z.literal('discarded'),
-    }).strict(),
-    z.object({
+    })),
+    z.strictObject({
       v: z.literal(1),
       kind: z.literal('error'),
       errorCode: ExternalSessionOperationSocketResponseErrorCodeV1Schema,
-      message: z.string().trim().min(1).max(2_000),
-    }).strict(),
+      message: z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000)),
+    }),
   ]));
 export type ExternalSessionOperationSocketResponseV1 = z.infer<
   typeof ExternalSessionOperationSocketResponseV1Schema
@@ -344,12 +337,12 @@ export function resolveExternalSessionOperationSocketBatchLimitsV1(
     configuredMaxItems: number;
   }>,
 ): ExternalSessionOperationSocketBatchLimitResolutionV1 {
-  const params = z.object({
+  const params = z.strictObject({
     socketMaxSerializedBytes: PositiveBoundSchema,
     envelopeOverheadBytes: PositiveBoundSchema,
     configuredMaxSerializedBytes: PositiveBoundSchema,
     configuredMaxItems: PositiveBoundSchema,
-  }).strict().parse(paramsInput);
+  }).parse(paramsInput);
 
   const socketPayloadCapacity =
     params.socketMaxSerializedBytes - params.envelopeOverheadBytes;

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   TEAM_CREDENTIAL_EXTERNAL_PROVIDER_API_BASE_PATH_V1,
@@ -19,48 +19,46 @@ export type TeamCredentialExternalApiUnavailableReasonV1 = z.infer<
   typeof TeamCredentialExternalApiUnavailableReasonV1Schema
 >;
 
-const ExternalProviderApiBaseUrlV1Schema = lazyZodSchema(() => z.string().trim().min(1).superRefine((value, context) => {
+const ExternalProviderApiBaseUrlV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.superRefine((value, context) => {
   let parsed: URL;
   try {
     parsed = new URL(value);
   } catch {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'External Provider API base URL must be valid.' });
+    context.addIssue({ code: "custom", message: 'External Provider API base URL must be valid.' });
     return;
   }
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'External Provider API base URL must be public HTTPS.' });
+    context.addIssue({ code: "custom", message: 'External Provider API base URL must be public HTTPS.' });
   }
   if (!parsed.pathname.endsWith(TEAM_CREDENTIAL_EXTERNAL_PROVIDER_API_BASE_PATH_V1)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'External Provider API base URL has the wrong route.' });
+    context.addIssue({ code: "custom", message: 'External Provider API base URL has the wrong route.' });
   }
-}));
+})));
 
 export const TeamCredentialExternalApiAvailabilityV1Schema = lazyZodSchema(() => z.discriminatedUnion('available', [
-  z.object({
+  z.strictObject({
     available: z.literal(true),
     baseUrl: ExternalProviderApiBaseUrlV1Schema,
-    protocols: z.array(TeamCredentialRequestProtocolKindV1Schema)
-      .length(TEAM_CREDENTIAL_EXTERNAL_PROVIDER_PROTOCOLS_V1.length)
-      .superRefine((protocols, context) => {
+    protocols: z.array(TeamCredentialRequestProtocolKindV1Schema).check(z.length(TEAM_CREDENTIAL_EXTERNAL_PROVIDER_PROTOCOLS_V1.length), z.superRefine((protocols, context) => {
         if (protocols.some((protocol, index) => protocol !== TEAM_CREDENTIAL_EXTERNAL_PROVIDER_PROTOCOLS_V1[index])) {
-          context.addIssue({ code: z.ZodIssueCode.custom, message: 'External Provider API protocols are not canonical.' });
+          context.addIssue({ code: "custom", message: 'External Provider API protocols are not canonical.' });
         }
-      }),
-  }).strict(),
-  z.object({
+      })),
+  }),
+  z.strictObject({
     available: z.literal(false),
     reason: TeamCredentialExternalApiUnavailableReasonV1Schema,
-  }).strict(),
+  }),
 ]));
 export type TeamCredentialExternalApiAvailabilityV1 = z.infer<
   typeof TeamCredentialExternalApiAvailabilityV1Schema
 >;
 
-export const TeamCredentialCapabilitiesSchema = lazyZodSchema(() => z.object({
-  credentialResources: z.object({
+export const TeamCredentialCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+  credentialResources: z.strictObject({
     externalApi: TeamCredentialExternalApiAvailabilityV1Schema,
-  }).strict(),
-}).strict());
+  }),
+}));
 export type TeamCredentialCapabilities = z.infer<typeof TeamCredentialCapabilitiesSchema>;
 
 const UNAVAILABLE_DEPLOYMENT_READINESS = Object.freeze({

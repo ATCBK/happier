@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const PET_CANONICAL_SPRITESHEET_ASSET_FORMATS_V1 = [
   { extension: 'webp', mediaType: 'image/webp', spritesheetPath: 'spritesheet.webp' },
@@ -55,19 +55,16 @@ export function isCanonicalPetSpritesheetMediaTypePairV1(value: {
 export const PetCanonicalSpritesheetMediaTypeV1Schema = lazyZodSchema(() => z.enum(PET_CANONICAL_SPRITESHEET_MEDIA_TYPES_V1));
 export const PetCanonicalSpritesheetPathV1Schema = lazyZodSchema(() => z.enum(PET_CANONICAL_SPRITESHEET_PATHS_V1));
 
-export const PetCanonicalSpritesheetAssetV1Schema = lazyZodSchema(() => z
-  .object({
+export const PetCanonicalSpritesheetAssetV1Schema = lazyZodSchema(() => z.strictObject({
     spritesheetPath: PetCanonicalSpritesheetPathV1Schema,
     mediaType: PetCanonicalSpritesheetMediaTypeV1Schema,
-  })
-  .strict()
-  .superRefine((value, ctx) => {
+  }).check(z.superRefine((value, ctx) => {
     appendCanonicalPetSpritesheetMediaTypeIssueV1({
       ctx,
       spritesheetPath: value.spritesheetPath,
       mediaType: value.mediaType,
     });
-  }));
+  })));
 
 export function appendCanonicalPetSpritesheetMediaTypeIssueV1({
   ctx,
@@ -75,7 +72,7 @@ export function appendCanonicalPetSpritesheetMediaTypeIssueV1({
   mediaType,
   mediaTypePath = ['mediaType'],
 }: {
-  ctx: z.RefinementCtx;
+  ctx: z.core.$RefinementCtx;
   spritesheetPath: unknown;
   mediaType: unknown;
   mediaTypePath?: ReadonlyArray<string | number>;
@@ -86,7 +83,7 @@ export function appendCanonicalPetSpritesheetMediaTypeIssueV1({
   }
 
   ctx.addIssue({
-    code: z.ZodIssueCode.custom,
+    code: "custom",
     path: [...mediaTypePath],
     message: `mediaType must match canonical spritesheet format for ${String(spritesheetPath)}`,
   });

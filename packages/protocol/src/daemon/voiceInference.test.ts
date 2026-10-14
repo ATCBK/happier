@@ -1,5 +1,6 @@
+import { lazyZodSchema } from '../lazyZodSchema.js';
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 
@@ -51,21 +52,21 @@ import {
 
 describe('daemonVoiceInference schemas', () => {
     it('preserves classic JSON Schema projection, defaults and fluent request composition', () => {
-        const audio = z.object({ codec: z.literal('wav'), mimeType: z.literal('audio/wav') }).strict();
-        const cancel = z.object({
-            streamId: z.string().min(1).max(256),
-            generation: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-            reason: z.enum(['client_abort', 'barge_in', 'stale_generation', 'client_dispose']).default('client_abort'),
-        }).strict();
+        const audio = z.strictObject({ codec: z.literal('wav'), mimeType: z.literal('audio/wav') });
+        const cancel = z.strictObject({
+            streamId: z.string().check(z.minLength(1), z.maxLength(256)),
+            generation: z.number().check(z.int(), z.minimum(0), z.maximum(Number.MAX_SAFE_INTEGER)),
+            reason: z._default(z.enum(['client_abort', 'barge_in', 'stale_generation', 'client_dispose']), 'client_abort'),
+        });
         for (const target of ['draft-2020-12', 'draft-7'] as const) {
-            expect(zodSchemaToJsonSchemaObject(z.object({
+            expect(zodSchemaToJsonSchemaObject(z.strictObject({
                 output: DaemonVoiceInferenceAudioOutputSchema,
-                cancel: DaemonVoiceInferenceTtsStreamCancelRequestSchema.optional(),
-            }).strict(), { target })).toEqual(zodSchemaToJsonSchemaObject(z.object({
-                output: audio, cancel: cancel.optional(),
-            }).strict(), { target }));
+                cancel: z.optional(DaemonVoiceInferenceTtsStreamCancelRequestSchema),
+            }), { target })).toEqual(zodSchemaToJsonSchemaObject(z.strictObject({
+                output: audio, cancel: z.optional(cancel),
+            }), { target }));
         }
-        expect(DaemonVoiceInferenceTtsStreamCancelRequestSchema.extend({ confirmed: z.boolean().default(true) })
+        expect(lazyZodSchema(() => z.extend(DaemonVoiceInferenceTtsStreamCancelRequestSchema, { confirmed: z._default(z.boolean(), true) }))
             .parse({ streamId: 'stream-1', generation: 0 }))
             .toEqual({ streamId: 'stream-1', generation: 0, reason: 'client_abort', confirmed: true });
         expect(DaemonVoiceInferenceAudioOutputSchema.shape.codec.parse('wav')).toBe('wav');
@@ -77,21 +78,21 @@ describe('daemonVoiceInference schemas', () => {
         });
         expect(structural.success).toBe(false);
         if (!structural.success) {
-            expect(structural.error).toBeInstanceOf(z.ZodError);
+            expect(structural.error).toBeInstanceOf(z.core.$ZodError);
             expect(structural.error.issues).toMatchObject([
                 { code: 'too_small', path: ['generation'] },
                 { code: 'unrecognized_keys', path: [], keys: ['extra'] },
             ]);
         }
         expect(() => DaemonVoiceInferenceTtsStreamCancelRequestSchema.parse({ streamId: 'stream-1', generation: -1 }))
-            .toThrow(z.ZodError);
+            .toThrow(z.core.$ZodError);
         const refined = DaemonVoiceInferenceModelStatusSchema.safeParse({
             packId: 'kokoro-tts-en-v1', kind: 'tts_sherpa', model: 'kokoro', executionSupport: ['daemon'],
             installState: 'installed', updatedAtMs: 1, defaultVoiceId: 'unknown',
         });
         expect(refined.success).toBe(false);
         if (!refined.success) {
-            expect(refined.error).toBeInstanceOf(z.ZodError);
+            expect(refined.error).toBeInstanceOf(z.core.$ZodError);
             expect(refined.error.issues).toMatchObject([{ code: 'custom', path: ['defaultVoiceId'] }]);
         }
     });

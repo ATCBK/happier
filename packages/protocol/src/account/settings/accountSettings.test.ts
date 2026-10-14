@@ -1,6 +1,6 @@
 import { LegacyRecentMachinePathsSchema } from './legacyAuthoringMemorySettingsV1.js';
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import {
@@ -59,7 +59,7 @@ describe('accountSettings', () => {
   });
 
   it('applies stored value budgets to the projected known fields while mutations measure the raw input', () => {
-    const definition = accountCatalogDefinition(z.object({ enabled: z.boolean() }).strict(), { enabled: false }, {
+    const definition = accountCatalogDefinition(z.strictObject({ enabled: z.boolean() }), { enabled: false }, {
       semanticDomain: 'stored projection bounds', classification: 'preference', maximumSerializedValueBytes: 32,
     });
     const retained = { enabled: true, retired: 'x'.repeat(65_537) };
@@ -518,7 +518,7 @@ describe('accountSettings', () => {
 
   it('returns a parsed catalog default without reparsing transformed output', () => {
     const definition = accountCatalogDefinition(
-      z.number().transform((value) => value + 1),
+      z.pipe(z.number(), z.transform((value) => value + 1)),
       1,
       {
         semanticDomain: 'test default semantics',
@@ -533,7 +533,7 @@ describe('accountSettings', () => {
   });
 
   it('projects stored additive fields without letting recovery defaults admit malformed retained values', () => {
-    const definition = accountCatalogDefinition(z.object({ enabled: z.boolean() }).strict().catch({ enabled: false }),
+    const definition = accountCatalogDefinition(z.catch(z.strictObject({ enabled: z.boolean() }), { enabled: false }),
       { enabled: false }, { semanticDomain: 'test retained validation', classification: 'preference',
         maximumSerializedValueBytes: 1024 });
     expect(definition.parseStoredValue({ enabled: true, future: true }))
@@ -1902,12 +1902,12 @@ describe('isExpoPushNotificationChannelEnabled', () => {
 });
 
 it('keeps Classic validation errors at generated definition and handoff boundaries', () => {
- const definition=accountCatalogDefinition(z.string().trim().min(1),' default ',{semanticDomain:'test preference',classification:'preference',maximumSerializedValueBytes:1024,recoverMalformed:false});
+ const definition=accountCatalogDefinition(z.string().check(z.trim(), z.minLength(1)),' default ',{semanticDomain:'test preference',classification:'preference',maximumSerializedValueBytes:1024,recoverMalformed:false});
  expect(definition.default).toBe('default');
  expect(definition.schema.parse(undefined)).toBe('default');
  for(const result of [definition.schema.safeParse(42),SessionHandoffDefaultsV1Schema.safeParse({ignoredIncludeGlobs:['../escape']})]) {
   expect(result.success).toBe(false);
-  if(!result.success)expect(result.error).toBeInstanceOf(z.ZodError);
+  if(!result.success)expect(result.error).toBeInstanceOf(z.core.$ZodError);
  }
 });
 it('keeps preference bounds distinct from size-tolerant legacy reads', () => {

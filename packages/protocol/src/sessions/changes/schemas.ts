@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ScmCommitOidSchema } from '../../scm/commitPublication.js';
 
 import {
@@ -35,10 +35,10 @@ export const SessionAttributionReasonSchema = lazyZodSchema(() => z.enum([
   'unavailable',
 ]));
 
-export const SessionChangeAttributionSchema = lazyZodSchema(() => z.object({
+export const SessionChangeAttributionSchema = lazyZodSchema(() => z.strictObject({
   confidence: SessionAttributionConfidenceSchema,
   reason: SessionAttributionReasonSchema,
-}).strict());
+}));
 
 export const CheckpointOverlapObservationSchema = lazyZodSchema(() => z.enum(['observed', 'not_observed', 'unknown']));
 
@@ -51,29 +51,29 @@ export const FileChangeKindSchema = lazyZodSchema(() => z.enum([
   'unknown',
 ]));
 
-const CanonicalFileChangeEvidenceSchema = lazyZodSchema(() => z.object({
-  filePath: z.string().min(1),
-  previousFilePath: z.string().min(1).nullable().optional(),
+const CanonicalFileChangeEvidenceSchema = lazyZodSchema(() => z.strictObject({
+  filePath: z.string().check(z.minLength(1)),
+  previousFilePath: z.optional(z.nullable(z.string().check(z.minLength(1)))),
   changeKind: FileChangeKindSchema,
-  unifiedDiff: z.string().min(1).nullable().optional(),
-  oldText: z.string().nullable().optional(),
-  newText: z.string().nullable().optional(),
-  binary: z.boolean().optional(),
+  unifiedDiff: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+  oldText: z.optional(z.nullable(z.string())),
+  newText: z.optional(z.nullable(z.string())),
+  binary: z.optional(z.boolean()),
   source: ChangeEvidenceSourceSchema,
   confidence: ChangeConfidenceSchema,
-  provider: z.string().min(1),
-  agentTurnId: z.string().min(1).nullable().optional(),
-  providerMessageId: z.string().min(1).nullable().optional(),
-  description: z.string().nullable().optional(),
-  truncated: z.literal(true).optional(),
-  stats: z.object({
-    oldTextBytes: z.number().int().nonnegative().optional(),
-    newTextBytes: z.number().int().nonnegative().optional(),
-    unifiedDiffBytes: z.number().int().nonnegative().optional(),
-    addedLines: z.number().int().nonnegative().optional(),
-    removedLines: z.number().int().nonnegative().optional(),
-  }).strict().optional(),
-}).strict());
+  provider: z.string().check(z.minLength(1)),
+  agentTurnId: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+  providerMessageId: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+  description: z.optional(z.nullable(z.string())),
+  truncated: z.optional(z.literal(true)),
+  stats: z.optional(z.strictObject({
+    oldTextBytes: z.optional(z.number().check(z.int(), z.nonnegative())),
+    newTextBytes: z.optional(z.number().check(z.int(), z.nonnegative())),
+    unifiedDiffBytes: z.optional(z.number().check(z.int(), z.nonnegative())),
+    addedLines: z.optional(z.number().check(z.int(), z.nonnegative())),
+    removedLines: z.optional(z.number().check(z.int(), z.nonnegative())),
+  })),
+}));
 
 /**
  * Prospective 0.2 input (b23f95ed, sessionChanges/schemas.ts) names this correlation
@@ -93,7 +93,7 @@ function normalizePredecessorCorrelation(value: unknown): unknown {
   return { ...canonical, agentTurnId: providerTurnId };
 }
 
-export const FileChangeEvidenceSchema = lazyZodSchema(() => z.preprocess(normalizePredecessorCorrelation, CanonicalFileChangeEvidenceSchema));
+export const FileChangeEvidenceSchema = lazyZodSchema(() => z.pipe(z.transform(normalizePredecessorCorrelation), CanonicalFileChangeEvidenceSchema));
 
 export const RepositoryCheckpointReceiptIdSchema = lazyZodSchema(() => z.enum([
   'checkpoint.captured',
@@ -103,64 +103,64 @@ export const RepositoryCheckpointReceiptIdSchema = lazyZodSchema(() => z.enum([
   'checkpoint.cleanup_pruned',
 ]));
 
-export const RepositoryCheckpointReceiptSchema = lazyZodSchema(() => z.object({
+export const RepositoryCheckpointReceiptSchema = lazyZodSchema(() => z.strictObject({
   id: RepositoryCheckpointReceiptIdSchema,
-  ref: z.string().min(1).optional(),
-  commitSha: z.string().min(1).optional(),
-  treeSha: z.string().min(1).optional(),
-  phase: z.enum(['message-start', 'turn-start', 'turn-final']).optional(),
-  prunedCount: z.number().int().nonnegative().optional(),
-  refs: z.array(z.string().min(1)).optional(),
-}).strict());
+  ref: z.optional(z.string().check(z.minLength(1))),
+  commitSha: z.optional(z.string().check(z.minLength(1))),
+  treeSha: z.optional(z.string().check(z.minLength(1))),
+  phase: z.optional(z.enum(['message-start', 'turn-start', 'turn-final'])),
+  prunedCount: z.optional(z.number().check(z.int(), z.nonnegative())),
+  refs: z.optional(z.array(z.string().check(z.minLength(1)))),
+}));
 
-export const RepositoryCheckpointTurnMetadataSchema = lazyZodSchema(() => z.object({
+export const RepositoryCheckpointTurnMetadataSchema = lazyZodSchema(() => z.strictObject({
   version: z.literal(1),
-  scopeId: z.string().min(1),
-  startRef: z.string().min(1).optional(),
-  finalRef: z.string().min(1).optional(),
+  scopeId: z.string().check(z.minLength(1)),
+  startRef: z.optional(z.string().check(z.minLength(1))),
+  finalRef: z.optional(z.string().check(z.minLength(1))),
   baseRefSource: z.enum(['turn_start', 'message_start', 'previous_final', 'unavailable']),
   contentConfidence: z.enum(['exact', 'unavailable']),
   attributionScope: z.enum(['no_happier_checkpoint_overlap_observed', 'shared_worktree', 'unknown']),
   receipts: z.array(RepositoryCheckpointReceiptSchema),
-  unavailableReason: z.string().min(1).optional(),
-}).strict());
+  unavailableReason: z.optional(z.string().check(z.minLength(1))),
+}));
 
-export const TurnChangeSetSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
-  turnId: z.string().min(1),
+export const TurnChangeSetSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.minLength(1)),
+  turnId: z.string().check(z.minLength(1)),
   seqRange: z.object({
-    startSeqInclusive: z.number().int().nonnegative(),
-    endSeqInclusive: z.number().int().nonnegative(),
-  }).refine((value) => value.endSeqInclusive >= value.startSeqInclusive, {
+    startSeqInclusive: z.number().check(z.int(), z.nonnegative()),
+    endSeqInclusive: z.number().check(z.int(), z.nonnegative()),
+  }).check(z.refine((value) => value.endSeqInclusive >= value.startSeqInclusive, {
     path: ['endSeqInclusive'],
     message: 'endSeqInclusive must be greater than or equal to startSeqInclusive',
-  }),
+  })),
   status: z.enum(['completed', 'aborted', 'interrupted', 'unknown']),
   files: z.array(FileChangeEvidenceSchema),
-  provider: z.string().min(1),
-  derivedAt: z.number().finite(),
-  repositoryCheckpoint: RepositoryCheckpointTurnMetadataSchema.optional(),
-}).strict());
+  provider: z.string().check(z.minLength(1)),
+  derivedAt: z.number(),
+  repositoryCheckpoint: z.optional(RepositoryCheckpointTurnMetadataSchema),
+}));
 
 /** Read-only content correspondence; it does not grant authorship or Session access. */
-export const RepositoryCheckpointCommitEvidenceSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
-  turnId: z.string().min(1),
-  repositoryKey: z.string().min(1),
-  checkpointRef: z.string().min(1),
+export const RepositoryCheckpointCommitEvidenceSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.minLength(1)),
+  turnId: z.string().check(z.minLength(1)),
+  repositoryKey: z.string().check(z.minLength(1)),
+  checkpointRef: z.string().check(z.minLength(1)),
   checkpointCommitSha: ScmCommitOidSchema,
   commitSha: ScmCommitOidSchema,
-  committedAtMs: z.number().int().nonnegative().optional(),
-  checkpointCommittedAtMs: z.number().int().nonnegative().optional(),
-  retainedChange: z.object({
+  committedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+  checkpointCommittedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+  retainedChange: z.optional(z.strictObject({
     targetSha: ScmCommitOidSchema,
     method: z.literal('changed_file_tree_comparison'),
     status: z.enum(['retained', 'partial']),
-    addedLines: z.number().int().nonnegative(),
-    removedLines: z.number().int().nonnegative(),
-  }).strict().optional(),
+    addedLines: z.number().check(z.int(), z.nonnegative()),
+    removedLines: z.number().check(z.int(), z.nonnegative()),
+  })),
   attributionScope: RepositoryCheckpointTurnMetadataSchema.shape.attributionScope,
-}).strict());
+}));
 
 function normalizeLegacySessionChangeSetFile(value: unknown): unknown {
   const correlated = normalizePredecessorCorrelation(value);
@@ -179,26 +179,26 @@ function normalizeLegacySessionChangeSetFile(value: unknown): unknown {
   };
 }
 
-export const SessionChangeSetFileSchema = lazyZodSchema(() => z.preprocess(normalizeLegacySessionChangeSetFile, CanonicalFileChangeEvidenceSchema.extend({
-  turns: z.array(z.string().min(1)),
+export const SessionChangeSetFileSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacySessionChangeSetFile), (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(CanonicalFileChangeEvidenceSchema, {
+  turns: z.array(z.string().check(z.minLength(1))),
   attribution: SessionChangeAttributionSchema,
   checkpointOverlap: CheckpointOverlapObservationSchema,
-}).strict()));
+}))));
 
-export const ChangeSetConfidenceSummarySchema = lazyZodSchema(() => z.object({
+export const ChangeSetConfidenceSummarySchema = lazyZodSchema(() => z.strictObject({
   source: z.union([ChangeEvidenceSourceSchema, z.literal('unavailable')]),
   confidence: z.union([ChangeConfidenceSchema, z.literal('unavailable')]),
   attribution: SessionChangeAttributionSchema,
   checkpointOverlap: CheckpointOverlapObservationSchema,
-}).strict());
+}));
 
-const CanonicalSessionChangeSetSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
+const CanonicalSessionChangeSetSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.minLength(1)),
   turns: z.array(TurnChangeSetSchema),
   files: z.array(SessionChangeSetFileSchema),
-  rolledBackTurnIds: z.array(z.string().min(1)),
+  rolledBackTurnIds: z.array(z.string().check(z.minLength(1))),
   confidenceSummary: ChangeSetConfidenceSummarySchema,
-}).strict());
+}));
 
 function normalizeLegacySessionChangeSet(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
@@ -248,30 +248,30 @@ function normalizeLegacySessionChangeSet(value: unknown): unknown {
   };
 }
 
-export const SessionChangeSetSchema = lazyZodSchema(() => z.preprocess(normalizeLegacySessionChangeSet, CanonicalSessionChangeSetSchema));
+export const SessionChangeSetSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacySessionChangeSet), CanonicalSessionChangeSetSchema));
 
-export const SessionWorkingTreeMatchedFileSchema = lazyZodSchema(() => z.object({
-  filePath: z.string().min(1),
-  repositoryPath: z.string().min(1),
+export const SessionWorkingTreeMatchedFileSchema = lazyZodSchema(() => z.strictObject({
+  filePath: z.string().check(z.minLength(1)),
+  repositoryPath: z.string().check(z.minLength(1)),
   sessionChange: SessionChangeSetFileSchema,
-  repositoryEntry: z.object({
-    path: z.string().min(1),
-    previousPath: z.string().nullable(),
-    kind: z.string().min(1),
-  }).strict(),
-}).strict());
+  repositoryEntry: z.strictObject({
+    path: z.string().check(z.minLength(1)),
+    previousPath: z.nullable(z.string()),
+    kind: z.string().check(z.minLength(1)),
+  }),
+}));
 
-export const SessionWorkingTreeProjectionSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
+export const SessionWorkingTreeProjectionSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.minLength(1)),
   matchedFiles: z.array(SessionWorkingTreeMatchedFileSchema),
   unmatchedSessionFiles: z.array(SessionChangeSetFileSchema),
-  repositoryOnlyFiles: z.array(z.object({
-    path: z.string().min(1),
-    previousPath: z.string().nullable(),
-    kind: z.string().min(1),
-  }).strict()),
+  repositoryOnlyFiles: z.array(z.strictObject({
+    path: z.string().check(z.minLength(1)),
+    previousPath: z.nullable(z.string()),
+    kind: z.string().check(z.minLength(1)),
+  })),
   projectionReliability: ChangeConfidenceSchema,
-}).strict());
+}));
 
 export type ChangeEvidenceSource = z.infer<typeof ChangeEvidenceSourceSchema>;
 export type ChangeConfidence = z.infer<typeof ChangeConfidenceSchema>;

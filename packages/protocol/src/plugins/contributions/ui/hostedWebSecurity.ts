@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 const HTTP_ORIGIN_PROTOCOLS = new Set(['http:', 'https:']);
 
@@ -22,10 +22,7 @@ function isExactHttpOrigin(value: string): boolean {
   }
 }
 
-export const PluginHostedWebOriginV1Schema = lazyZodSchema(() => z.string().trim().min(1).refine(
-  isExactHttpOrigin,
-  'Expected an exact http(s) origin without path, query, hash, or wildcard',
-));
+export const PluginHostedWebOriginV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.refine(isExactHttpOrigin, 'Expected an exact http(s) origin without path, query, hash, or wildcard')));
 export type PluginHostedWebOriginV1 = z.infer<typeof PluginHostedWebOriginV1Schema>;
 
 function createDefaultPluginHostedWebCspPolicyV1() {
@@ -38,23 +35,23 @@ function createDefaultPluginHostedWebCspPolicyV1() {
   };
 }
 
-export const PluginHostedWebCspPolicyV1Schema = lazyZodSchema(() => z.object({
-  connectSrc: z.enum(['none', 'selfOnly', 'declaredOrigins']).default('selfOnly'),
-  allowDataUrls: z.boolean().default(false),
-  allowBlobUrls: z.boolean().default(false),
-  allowInlineStyles: z.boolean().default(false),
-  allowEval: z.literal(false).default(false),
-}).strict().default(createDefaultPluginHostedWebCspPolicyV1));
+export const PluginHostedWebCspPolicyV1Schema = lazyZodSchema(() => z._default(z.strictObject({
+  connectSrc: z._default(z.enum(['none', 'selfOnly', 'declaredOrigins']), 'selfOnly'),
+  allowDataUrls: z._default(z.boolean(), false),
+  allowBlobUrls: z._default(z.boolean(), false),
+  allowInlineStyles: z._default(z.boolean(), false),
+  allowEval: z._default(z.literal(false), false),
+}), createDefaultPluginHostedWebCspPolicyV1));
 export type PluginHostedWebCspPolicyV1 = z.infer<typeof PluginHostedWebCspPolicyV1Schema>;
 
-export const PluginHostedWebSecurityPolicyV1Schema = lazyZodSchema(() => z.object({
-  allowedNavigationOrigins: z.array(PluginHostedWebOriginV1Schema).default([]),
-  allowedCallbackOrigins: z.array(PluginHostedWebOriginV1Schema).default([]),
-  allowedConnectOrigins: z.array(PluginHostedWebOriginV1Schema).default([]),
+export const PluginHostedWebSecurityPolicyV1Schema = lazyZodSchema(() => z.strictObject({
+  allowedNavigationOrigins: z._default(z.array(PluginHostedWebOriginV1Schema), []),
+  allowedCallbackOrigins: z._default(z.array(PluginHostedWebOriginV1Schema), []),
+  allowedConnectOrigins: z._default(z.array(PluginHostedWebOriginV1Schema), []),
   csp: PluginHostedWebCspPolicyV1Schema,
-  sourceMaps: z.enum(['disabled', 'devOrInternalOnly', 'declaredDigestOnly']).default('disabled'),
-  mixedContent: z.enum(['deny', 'devLoopbackOnly']).default('deny'),
-}).strict());
+  sourceMaps: z._default(z.enum(['disabled', 'devOrInternalOnly', 'declaredDigestOnly']), 'disabled'),
+  mixedContent: z._default(z.enum(['deny', 'devLoopbackOnly']), 'deny'),
+}));
 export type PluginHostedWebSecurityPolicyV1 = z.infer<typeof PluginHostedWebSecurityPolicyV1Schema>;
 
 function directiveValues(values: readonly string[]): string {

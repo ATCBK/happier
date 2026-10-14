@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ProviderLocalIdSchema } from '../ids.js';
 import { PROVIDER_WIRE_PROTOCOL_LIMITS_V1, ProviderWireProtocolSchema } from '../capabilities/v1.js';
@@ -9,62 +9,62 @@ import { ProviderHttpsUrlSchema } from '../httpsUrlSchema.js';
 export const ProviderCredentialFormatV1Schema = lazyZodSchema(() => z.union([
   z.literal('raw'),
   z.literal('bearer'),
-  z.object({ template: z.string().min(1).max(256) }).strict().superRefine((value, ctx) => {
+  z.strictObject({ template: z.string().check(z.minLength(1), z.maxLength(256)) }).check(z.superRefine((value, ctx) => {
     if ((value.template.match(/\{secret\}/gu) ?? []).length !== 1 || /[\u0000-\u001f\u007f]/u.test(value.template)) {
       ctx.addIssue({ code: 'custom', path: ['template'], message: 'Credential template must contain exactly one {secret} placeholder and no controls' });
     }
-  }),
+  })),
 ]));
 export type ProviderCredentialFormatV1 = z.infer<typeof ProviderCredentialFormatV1Schema>;
 export const ProviderCredentialFormatKindV1Schema = lazyZodSchema(() => z.enum(['raw', 'bearer', 'template']));
 export type ProviderCredentialFormatKindV1 = z.infer<typeof ProviderCredentialFormatKindV1Schema>;
 
-const CredentialHeaderNameSchema = lazyZodSchema(() => z.string().transform((value, ctx) => {
+const CredentialHeaderNameSchema = lazyZodSchema(() => z.pipe(z.string(), z.transform((value, ctx) => {
   try { return normalizeProviderCredentialHeaderName(value); } catch (error) {
-    ctx.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'Invalid credential header name' });
+    ctx.issues.push({ code: 'custom', message: error instanceof Error ? error.message : 'Invalid credential header name', input: ctx.value });
     return z.NEVER;
   }
-}));
-const CredentialQueryNameSchema = lazyZodSchema(() => z.string().transform((value, ctx) => {
+})));
+const CredentialQueryNameSchema = lazyZodSchema(() => z.pipe(z.string(), z.transform((value, ctx) => {
   try { return normalizeProviderQueryParameterName(value); } catch (error) {
-    ctx.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'Invalid credential query name' });
+    ctx.issues.push({ code: 'custom', message: error instanceof Error ? error.message : 'Invalid credential query name', input: ctx.value });
     return z.NEVER;
   }
-}));
+})));
 
 export const ProviderCredentialDestinationV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('httpHeader'),
     name: CredentialHeaderNameSchema,
     format: ProviderCredentialFormatV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('queryParam'),
     name: CredentialQueryNameSchema,
     format: ProviderCredentialFormatV1Schema,
-  }).strict(),
+  }),
 ]));
 export type ProviderCredentialDestinationV1 = z.infer<typeof ProviderCredentialDestinationV1Schema>;
 
-export const ProviderCredentialTransportV1Schema = lazyZodSchema(() => z.object({
+export const ProviderCredentialTransportV1Schema = lazyZodSchema(() => z.strictObject({
   id: ProviderLocalIdSchema,
-  protocols: z.array(ProviderWireProtocolSchema).min(1).max(PROVIDER_WIRE_PROTOCOL_LIMITS_V1.maxProtocolsPerDeclaration),
-  uses: z.array(z.enum(['probe', 'runtime', 'management'])).min(1).max(3),
+  protocols: z.array(ProviderWireProtocolSchema).check(z.minLength(1), z.maxLength(PROVIDER_WIRE_PROTOCOL_LIMITS_V1.maxProtocolsPerDeclaration)),
+  uses: z.array(z.enum(['probe', 'runtime', 'management'])).check(z.minLength(1), z.maxLength(3)),
   destination: ProviderCredentialDestinationV1Schema,
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   if (new Set(value.protocols).size !== value.protocols.length) {
     ctx.addIssue({ code: 'custom', path: ['protocols'], message: 'Credential transport protocols must be unique' });
   }
   if (new Set(value.uses).size !== value.uses.length) {
     ctx.addIssue({ code: 'custom', path: ['uses'], message: 'Credential transport uses must be unique' });
   }
-}));
+})));
 export type ProviderCredentialTransport = z.infer<typeof ProviderCredentialTransportV1Schema>;
 export type ProviderCredentialTransportV1 = ProviderCredentialTransport;
 
 export function addProviderCredentialTransportIssues(
   transports: readonly ProviderCredentialTransportV1[],
-  ctx: z.RefinementCtx,
+  ctx: z.core.$RefinementCtx,
   pathPrefix: readonly (string | number)[] = ['transports'],
 ): void {
   const ids = new Set<string>();
@@ -86,15 +86,15 @@ export function addProviderCredentialTransportIssues(
   });
 }
 
-export const ProviderApiKeyCredentialRequirementV1Schema = lazyZodSchema(() => z.object({
+export const ProviderApiKeyCredentialRequirementV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('apiKey'),
-  slotId: z.literal('apiKey').default('apiKey'),
-  required: z.boolean().default(true),
-  keyUrl: ProviderHttpsUrlSchema.optional(),
-  transports: z.array(ProviderCredentialTransportV1Schema).min(1).max(16),
-}).strict().superRefine((value, ctx) => {
+  slotId: z._default(z.literal('apiKey'), 'apiKey'),
+  required: z._default(z.boolean(), true),
+  keyUrl: z.optional(ProviderHttpsUrlSchema),
+  transports: z.array(ProviderCredentialTransportV1Schema).check(z.minLength(1), z.maxLength(16)),
+}).check(z.superRefine((value, ctx) => {
   addProviderCredentialTransportIssues(value.transports, ctx);
-}));
+})));
 export type ProviderApiKeyCredentialRequirementV1 = z.infer<typeof ProviderApiKeyCredentialRequirementV1Schema>;
 
 export function providerCredentialFormatKind(format: ProviderCredentialFormatV1): ProviderCredentialFormatKindV1 {

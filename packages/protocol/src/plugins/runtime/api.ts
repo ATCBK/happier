@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const PluginRuntimeCapabilityFamilyV1Schema = lazyZodSchema(() => z.enum([
   'agents',

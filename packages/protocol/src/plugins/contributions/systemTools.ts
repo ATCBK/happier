@@ -1,14 +1,13 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginContributionLocalIdSchema } from '../contributionIdentity.js';
 import { PluginJsonValueV2Schema, PluginLocalizedStringV2Schema } from './publicTypes.js';
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 
-const ProcessArgSchema = lazyZodSchema(() => z.string().trim().min(1).max(256)
-  .refine((value) => !value.includes('\0'), 'Process values cannot contain null bytes'));
+const ProcessArgSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256), z.refine((value) => !value.includes('\0'), 'Process values cannot contain null bytes')));
 
-const CapabilityNameSchema = lazyZodSchema(() => z.string().trim().min(1).max(128));
+const CapabilityNameSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(128)));
 
 function uniqueStrings(values: readonly string[]): boolean {
   return new Set(values).size === values.length;
@@ -19,13 +18,13 @@ function uniqueStrings(values: readonly string[]): boolean {
  * Every field is matched against already-observed probe output; version strings
  * are never read, so a superseded release with a higher semver cannot win.
  */
-export const PluginSystemToolAcpFingerprintV1Schema = lazyZodSchema(() => z.object({
+export const PluginSystemToolAcpFingerprintV1Schema = lazyZodSchema(() => z.strictObject({
   loadSession: z.boolean(),
-  sessionCapabilities: z.array(CapabilityNameSchema).min(1).refine(uniqueStrings, 'Entries must be unique.'),
-  absentSessionCapabilities: z.array(CapabilityNameSchema).max(32).refine(uniqueStrings, 'Entries must be unique.'),
+  sessionCapabilities: z.array(CapabilityNameSchema).check(z.minLength(1), z.refine(uniqueStrings, 'Entries must be unique.')),
+  absentSessionCapabilities: z.array(CapabilityNameSchema).check(z.maxLength(32), z.refine(uniqueStrings, 'Entries must be unique.')),
   mcpHttp: z.boolean(),
   mcpSse: z.boolean(),
-}).strict());
+}));
 export type PluginSystemToolAcpFingerprintV1 = z.infer<typeof PluginSystemToolAcpFingerprintV1Schema>;
 
 /**
@@ -37,26 +36,25 @@ export type PluginSystemToolAcpFingerprintV1 = z.infer<typeof PluginSystemToolAc
  * never launched: they only inform the legacy diagnostic. There is deliberately
  * no version field anywhere in this shape.
  */
-export const PluginSystemToolReadinessV1Schema = lazyZodSchema(() => z.object({
-  acpProbeArgs: z.array(ProcessArgSchema).min(1).max(8),
+export const PluginSystemToolReadinessV1Schema = lazyZodSchema(() => z.strictObject({
+  acpProbeArgs: z.array(ProcessArgSchema).check(z.minLength(1), z.maxLength(8)),
   currentFingerprint: PluginSystemToolAcpFingerprintV1Schema,
   legacyFingerprint: PluginSystemToolAcpFingerprintV1Schema,
-  commandSurfaceArgs: z.array(ProcessArgSchema).min(1).max(8),
-  legacyExecutableNames: z.array(z.string().trim().min(1).max(128)).min(1).max(8)
-    .refine(uniqueStrings, 'Entries must be unique.'),
-  legacyGuidance: z.string().trim().min(1).max(2000),
-  unidentifiedGuidance: z.string().trim().min(1).max(2000),
-}).strict());
+  commandSurfaceArgs: z.array(ProcessArgSchema).check(z.minLength(1), z.maxLength(8)),
+  legacyExecutableNames: z.array(z.string().check(z.trim(), z.minLength(1), z.maxLength(128))).check(z.minLength(1), z.maxLength(8), z.refine(uniqueStrings, 'Entries must be unique.')),
+  legacyGuidance: z.string().check(z.trim(), z.minLength(1), z.maxLength(2000)),
+  unidentifiedGuidance: z.string().check(z.trim(), z.minLength(1), z.maxLength(2000)),
+}));
 export type PluginSystemToolReadinessV1 = z.infer<typeof PluginSystemToolReadinessV1Schema>;
 
-export const PluginSystemToolContributionV1Schema = lazyZodSchema(() => z.object({
+export const PluginSystemToolContributionV1Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   title: PluginLocalizedStringV2Schema,
-  description: PluginLocalizedStringV2Schema.optional(),
-  executableNames: z.array(z.string().trim().min(1)).min(1),
-  allowedArguments: z.array(z.string()).optional(),
-  platforms: z.array(z.enum(['macos', 'linux', 'windows'])).optional(),
-  readiness: PluginSystemToolReadinessV1Schema.optional(),
-  metadata: z.record(z.string(), PluginJsonValueV2Schema).optional(),
-}).strict());
+  description: z.optional(PluginLocalizedStringV2Schema),
+  executableNames: z.array(z.string().check(z.trim(), z.minLength(1))).check(z.minLength(1)),
+  allowedArguments: z.optional(z.array(z.string())),
+  platforms: z.optional(z.array(z.enum(['macos', 'linux', 'windows']))),
+  readiness: z.optional(PluginSystemToolReadinessV1Schema),
+  metadata: z.optional(z.record(z.string(), PluginJsonValueV2Schema)),
+}));
 export type PluginSystemToolContributionV1 = z.infer<typeof PluginSystemToolContributionV1Schema>;

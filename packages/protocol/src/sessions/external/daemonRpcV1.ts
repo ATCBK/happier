@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { RuntimeDescriptorV1Schema } from '../metadata/runtimeDescriptorV1.js';
 import { NonBlankOpaqueIdentifierSchema } from '../../strings/opaqueIdentifier.js';
@@ -41,11 +41,11 @@ export const ExternalSessionsContentCoverageSchema = lazyZodSchema(() => z.enum(
 export type ExternalSessionsContentCoverage = z.infer<typeof ExternalSessionsContentCoverageSchema>;
 
 /** A decoded visible-text hit; the ordinal never substitutes for a Happier seq. */
-export const ExternalSessionCandidateMatchV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionCandidateMatchV1Schema = lazyZodSchema(() => z.strictObject({
   snippet: z.string(),
   sourceItemId: ExternalSessionTranscriptItemIdV1Schema,
-  messageIndex: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-}).strict());
+  messageIndex: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+}));
 export type ExternalSessionCandidateMatchV1 = z.infer<typeof ExternalSessionCandidateMatchV1Schema>;
 
 function asRequestRecord(value: unknown): Record<string, unknown> | null {
@@ -143,50 +143,40 @@ function normalizeReleasedExternalSessionRequest(
   return normalized;
 }
 
-const ExternalSessionsCandidatesListCanonicalRequestSchema = lazyZodSchema(() => z.object({
-  machineId: z.string().min(1),
+const ExternalSessionsCandidatesListCanonicalRequestSchema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.minLength(1)),
   agentId: ExternalSessionsAgentIdSchema,
   source: ExternalSessionsSourceSchema,
-  cursor: z.string().min(1).optional(),
-  limit: z.number().int().min(1).max(500).optional(),
-  searchTerm: z.string().min(1).max(2000).optional(),
-  searchMode: ExternalSessionsSearchModeSchema.optional(),
-  searchTarget: ExternalSessionsSearchTargetSchema.optional(),
+  cursor: z.optional(z.string().check(z.minLength(1))),
+  limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(500))),
+  searchTerm: z.optional(z.string().check(z.minLength(1), z.maxLength(2000))),
+  searchMode: z.optional(ExternalSessionsSearchModeSchema),
+  searchTarget: z.optional(ExternalSessionsSearchTargetSchema),
   /** Remaining caller scan budget at dispatch; expiry returns a partial content page. */
-  budgetMs: z.number().int().nonnegative().safe().optional(),
+  budgetMs: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
   /**
    * Include the Agent's internal threads (approval reviewers, spawned sub-agents). Absent: only
    * top-level sessions, which is also what a daemon that predates the field lists.
    */
-  includeThreads: z.boolean().optional(),
-}).strict());
+  includeThreads: z.optional(z.boolean()),
+}));
 
-export const ExternalSessionsCandidatesListRequestSchema = lazyZodSchema(() => z.preprocess<
-  unknown,
-  typeof ExternalSessionsCandidatesListCanonicalRequestSchema,
-  z.input<typeof ExternalSessionsCandidatesListCanonicalRequestSchema>
->(
-  (value) => normalizeReleasedExternalSessionRequest(value),
-  ExternalSessionsCandidatesListCanonicalRequestSchema,
-));
+export const ExternalSessionsCandidatesListRequestSchema = lazyZodSchema(() => z.pipe(z.transform((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionsCandidatesListCanonicalRequestSchema));
 export type ExternalSessionsCandidatesListRequest = z.infer<typeof ExternalSessionsCandidatesListRequestSchema>;
 
-export const ExternalSessionsCandidatePreparationSchema = lazyZodSchema(() => z
-  .object({
+export const ExternalSessionsCandidatePreparationSchema = lazyZodSchema(() => z.strictObject({
     kind: z.literal('building_candidate_index'),
-    scanned: z.number().int().min(0),
-    total: z.number().int().min(0).optional(),
-  })
-  .strict()
-  .refine((value) => value.total === undefined || value.total >= value.scanned, {
+    scanned: z.number().check(z.int(), z.minimum(0)),
+    total: z.optional(z.number().check(z.int(), z.minimum(0))),
+  }).check(z.refine((value) => value.total === undefined || value.total >= value.scanned, {
     message: 'Candidate-index preparation total must be at least scanned',
-  }));
+  })));
 export type ExternalSessionsCandidatePreparation = z.infer<typeof ExternalSessionsCandidatePreparationSchema>;
 
-export const ExternalSessionsAutoLinkPolicyScopeV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionsAutoLinkPolicyScopeV1Schema = lazyZodSchema(() => z.strictObject({
   qualifiedIdentity: LinkedExternalSessionQualifiedIdentityV1Schema,
   sourcePolicyId: ExternalSessionsAutoLinkSourcePolicyIdV1Schema,
-}).strict());
+}));
 export type ExternalSessionsAutoLinkPolicyScopeV1 = z.infer<
   typeof ExternalSessionsAutoLinkPolicyScopeV1Schema
 >;
@@ -197,29 +187,28 @@ export type ExternalSessionsAutoLinkPolicyScopeV1 = z.infer<
  * that listing, never a durable Agent property: the daemon re-checks it at the
  * real boundary before it acts.
  */
-export const ExternalSessionsCandidateCapabilitiesV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionsCandidateCapabilitiesV1Schema = lazyZodSchema(() => z.strictObject({
   deleteCandidate: z.boolean(),
-}).strict());
+}));
 export type ExternalSessionsCandidateCapabilitiesV1 = z.infer<
   typeof ExternalSessionsCandidateCapabilitiesV1Schema
 >;
 
 export const ExternalSessionsCandidatesListResponseSchema = lazyZodSchema(() => z.union([
-  z
-    .object({
+  z.looseObject({
       ok: z.literal(true),
       candidates: z.array(z.lazy(() => ExternalSessionCandidateV1Schema)),
-      nextCursor: z.string().min(1).nullish(),
-      searchIncomplete: z.boolean().optional(),
-      contentCoverage: ExternalSessionsContentCoverageSchema.optional(),
-      contentCoverageReason: z.literal('standard_search_disabled').optional(),
+      nextCursor: z.nullish(z.string().check(z.minLength(1))),
+      searchIncomplete: z.optional(z.boolean()),
+      contentCoverage: z.optional(ExternalSessionsContentCoverageSchema),
+      contentCoverageReason: z.optional(z.literal('standard_search_disabled')),
       /**
        * Positive `linkedSessionId` / `imported` projections are present when
        * known. When this is true, omitted projections are not a negative fact:
        * the bounded canonical Session scan or candidate preparation did not
        * cover every matching owner record.
        */
-      annotationsIncomplete: z.boolean().optional(),
+      annotationsIncomplete: z.optional(z.boolean()),
       /**
        * The continuation cursor the request carried can no longer address a
        * page: its generation was rebuilt, retired with the Agent runtime that
@@ -229,27 +218,23 @@ export const ExternalSessionsCandidatesListResponseSchema = lazyZodSchema(() => 
        * same cursor can never succeed. Rows already on screen stay visible but
        * stop being authoritative until the rebuild publishes.
        */
-      cursorReset: z.boolean().optional(),
-      preparation: ExternalSessionsCandidatePreparationSchema.optional(),
-      autoLinkPolicyScopeV1: ExternalSessionsAutoLinkPolicyScopeV1Schema.optional(),
+      cursorReset: z.optional(z.boolean()),
+      preparation: z.optional(ExternalSessionsCandidatePreparationSchema),
+      autoLinkPolicyScopeV1: z.optional(ExternalSessionsAutoLinkPolicyScopeV1Schema),
       /**
        * Absence is not a negative fact a caller may invert into an offer: only
        * an explicit capability advertises a destructive candidate affordance.
        */
-      capabilities: ExternalSessionsCandidateCapabilitiesV1Schema.optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      capabilities: z.optional(ExternalSessionsCandidateCapabilitiesV1Schema),
+    }),
+  z.looseObject({
       ok: z.literal(false),
       errorCode: ExternalSessionsRpcErrorCodeSchema,
-      error: z.string().min(1),
-    })
-    .passthrough()
-    .refine((value) => !Object.hasOwn(value, 'autoLinkPolicyScopeV1'), {
+      error: z.string().check(z.minLength(1)),
+    }).check(z.refine((value) => !Object.hasOwn(value, 'autoLinkPolicyScopeV1'), {
       message: 'Auto-link policy scope is available only on successful candidate-list responses.',
       path: ['autoLinkPolicyScopeV1'],
-    }),
+    })),
 ]));
 export type ExternalSessionsCandidatesListResponse = z.infer<typeof ExternalSessionsCandidatesListResponseSchema>;
 
@@ -258,12 +243,12 @@ export type ExternalSessionsCandidatesListResponse = z.infer<typeof ExternalSess
  * Session store is untouched: this is the Agent's own record, addressed by the
  * opaque identifier the listing handed out, so the id crosses the wire verbatim.
  */
-const ExternalSessionCandidateDeleteCanonicalRequestSchema = lazyZodSchema(() => z.object({
-  machineId: z.string().min(1),
+const ExternalSessionCandidateDeleteCanonicalRequestSchema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.minLength(1)),
   agentId: ExternalSessionsAgentIdSchema,
   source: ExternalSessionsSourceSchema,
-  remoteSessionId: NonBlankOpaqueIdentifierSchema.max(2000),
-}).strict());
+  remoteSessionId: NonBlankOpaqueIdentifierSchema.check(z.maxLength(2000)),
+}));
 
 /**
  * Released `daemon.directSessions.candidate.delete` callers name the Agent
@@ -271,14 +256,7 @@ const ExternalSessionCandidateDeleteCanonicalRequestSchema = lazyZodSchema(() =>
  * released-identity normalization its siblings use. Normalization touches
  * request identity only — `remoteSessionId` stays byte-exact.
  */
-export const ExternalSessionCandidateDeleteRequestSchema = lazyZodSchema(() => z.preprocess<
-  unknown,
-  typeof ExternalSessionCandidateDeleteCanonicalRequestSchema,
-  z.input<typeof ExternalSessionCandidateDeleteCanonicalRequestSchema>
->(
-  (value) => normalizeReleasedExternalSessionRequest(value),
-  ExternalSessionCandidateDeleteCanonicalRequestSchema,
-));
+export const ExternalSessionCandidateDeleteRequestSchema = lazyZodSchema(() => z.pipe(z.transform((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionCandidateDeleteCanonicalRequestSchema));
 export type ExternalSessionCandidateDeleteRequest = z.infer<
   typeof ExternalSessionCandidateDeleteRequestSchema
 >;
@@ -286,57 +264,46 @@ export type ExternalSessionCandidateDeleteRequest = z.infer<
 export const ExternalSessionCandidateDeleteResponseSchema = lazyZodSchema(() => z.union([
   // `deleted` is a literal: an outcome the Agent did not commit must never
   // reach a caller as a successful deletion it can act on.
-  z.object({ ok: z.literal(true), deleted: z.literal(true) }).passthrough(),
-  z.object({
+  z.looseObject({ ok: z.literal(true), deleted: z.literal(true) }),
+  z.looseObject({
     ok: z.literal(false),
     errorCode: ExternalSessionsRpcErrorCodeSchema,
-    error: z.string().min(1),
-  }).passthrough(),
+    error: z.string().check(z.minLength(1)),
+  }),
 ]));
 export type ExternalSessionCandidateDeleteResponse = z.infer<
   typeof ExternalSessionCandidateDeleteResponseSchema
 >;
 
-const ExternalSessionLinkEnsureCanonicalRequestSchema = lazyZodSchema(() => z.object({
-  machineId: z.string().min(1),
+const ExternalSessionLinkEnsureCanonicalRequestSchema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.minLength(1)),
   agentId: ExternalSessionsAgentIdSchema,
-  remoteSessionId: NonBlankOpaqueIdentifierSchema.max(2000),
-  titleHint: z.string().min(1).max(10_000).optional(),
-  directoryHint: z.string().min(1).max(10_000).optional(),
-  runtimeDescriptorV1: RuntimeDescriptorV1Schema.optional(),
-  linkData: PluginAgentExternalSessionLinkDataSchema.optional(),
+  remoteSessionId: NonBlankOpaqueIdentifierSchema.check(z.maxLength(2000)),
+  titleHint: z.optional(z.string().check(z.minLength(1), z.maxLength(10_000))),
+  directoryHint: z.optional(z.string().check(z.minLength(1), z.maxLength(10_000))),
+  runtimeDescriptorV1: z.optional(RuntimeDescriptorV1Schema),
+  linkData: z.optional(PluginAgentExternalSessionLinkDataSchema),
   source: ExternalSessionsSourceSchema,
-}).strict());
+}));
 
-export const ExternalSessionLinkEnsureRequestSchema = lazyZodSchema(() => z.preprocess<
-  unknown,
-  typeof ExternalSessionLinkEnsureCanonicalRequestSchema,
-  z.input<typeof ExternalSessionLinkEnsureCanonicalRequestSchema>
->(
-  (value) => normalizeReleasedExternalSessionRequest(value, {
+export const ExternalSessionLinkEnsureRequestSchema = lazyZodSchema(() => z.pipe(z.transform((value) => normalizeReleasedExternalSessionRequest(value, {
     runtimeDescriptor: true,
     codexBackendMode: true,
-  }),
-  ExternalSessionLinkEnsureCanonicalRequestSchema,
-));
+  })), ExternalSessionLinkEnsureCanonicalRequestSchema));
 export type ExternalSessionLinkEnsureRequest = z.infer<typeof ExternalSessionLinkEnsureRequestSchema>;
 
 
 export const ExternalSessionLinkEnsureResponseSchema = lazyZodSchema(() => z.union([
-  z
-    .object({
+  z.looseObject({
       ok: z.literal(true),
-      sessionId: z.string().min(1),
+      sessionId: z.string().check(z.minLength(1)),
       created: z.boolean(),
-    })
-    .passthrough(),
-  z
-    .object({
+    }),
+  z.looseObject({
       ok: z.literal(false),
       errorCode: ExternalSessionsRpcErrorCodeSchema,
-      error: z.string().min(1),
-    })
-    .passthrough(),
+      error: z.string().check(z.minLength(1)),
+    }),
 ]));
 export type ExternalSessionLinkEnsureResponse = z.infer<typeof ExternalSessionLinkEnsureResponseSchema>;
 
@@ -348,167 +315,129 @@ export type ExternalSessionActivityV1 = z.infer<typeof ExternalSessionActivityV1
  * another thread's action, or a sub-agent a session spawned. Classified by the Agent's own
  * projection from its native markers; absent means a top-level session.
  */
-export const ExternalSessionCandidateThreadV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionCandidateThreadV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.enum(['reviewer', 'subagent']),
   /** The thread that spawned or is reviewed by this one, when the Agent records it. */
-  parentRemoteSessionId: NonBlankOpaqueIdentifierSchema.max(2000).nullable(),
+  parentRemoteSessionId: z.nullable(NonBlankOpaqueIdentifierSchema.check(z.maxLength(2000))),
   /** The parent's title, when the Agent's index knows it without an extra read. */
-  parentTitle: z.string().min(1).max(10_000).optional(),
-}).strict());
+  parentTitle: z.optional(z.string().check(z.minLength(1), z.maxLength(10_000))),
+}));
 export type ExternalSessionCandidateThreadV1 = z.infer<typeof ExternalSessionCandidateThreadV1Schema>;
 
-export const ExternalSessionCandidateV1Schema = lazyZodSchema(() => z
-  .object({
-    remoteSessionId: NonBlankOpaqueIdentifierSchema.max(2000),
-    candidateKey: z.string().min(1).max(128).optional(),
-    title: z.string().min(1).max(10_000).optional(),
-    updatedAtMs: z.number().int().min(0),
-    createdAtMs: z.number().int().min(0).optional(),
-    activity: ExternalSessionActivityV1Schema.optional(),
-    archived: z.boolean().optional(),
-    details: z.object({}).passthrough().optional(),
-    linkData: PluginAgentExternalSessionLinkDataSchema.optional(),
-    linkedSessionId: z.string().min(1).max(2000).optional(),
-    imported: z.boolean().optional(),
-    materializedThrough: z.number().int().min(0).optional(),
-    thread: ExternalSessionCandidateThreadV1Schema.optional(),
-    match: ExternalSessionCandidateMatchV1Schema.optional(),
-  })
-  .passthrough());
+export const ExternalSessionCandidateV1Schema = lazyZodSchema(() => z.looseObject({
+    remoteSessionId: NonBlankOpaqueIdentifierSchema.check(z.maxLength(2000)),
+    candidateKey: z.optional(z.string().check(z.minLength(1), z.maxLength(128))),
+    title: z.optional(z.string().check(z.minLength(1), z.maxLength(10_000))),
+    updatedAtMs: z.number().check(z.int(), z.minimum(0)),
+    createdAtMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+    activity: z.optional(ExternalSessionActivityV1Schema),
+    archived: z.optional(z.boolean()),
+    details: z.optional(z.looseObject({})),
+    linkData: z.optional(PluginAgentExternalSessionLinkDataSchema),
+    linkedSessionId: z.optional(z.string().check(z.minLength(1), z.maxLength(2000))),
+    imported: z.optional(z.boolean()),
+    materializedThrough: z.optional(z.number().check(z.int(), z.minimum(0))),
+    thread: z.optional(ExternalSessionCandidateThreadV1Schema),
+    match: z.optional(ExternalSessionCandidateMatchV1Schema),
+  }));
 export type ExternalSessionCandidateV1 = z.infer<typeof ExternalSessionCandidateV1Schema>;
 
-const ExternalSessionStatusGetCanonicalRequestSchema = lazyZodSchema(() => z.object({
-  machineId: z.string().min(1),
-  sessionId: z.string().min(1),
+const ExternalSessionStatusGetCanonicalRequestSchema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.minLength(1)),
+  sessionId: z.string().check(z.minLength(1)),
   agentId: ExternalSessionsAgentIdSchema,
-  remoteSessionId: NonBlankOpaqueIdentifierSchema.max(2000),
+  remoteSessionId: NonBlankOpaqueIdentifierSchema.check(z.maxLength(2000)),
   source: ExternalSessionsSourceSchema,
-}).strict());
+}));
 
-export const ExternalSessionStatusGetRequestSchema = lazyZodSchema(() => z.preprocess<
-  unknown,
-  typeof ExternalSessionStatusGetCanonicalRequestSchema,
-  z.input<typeof ExternalSessionStatusGetCanonicalRequestSchema>
->(
-  (value) => normalizeReleasedExternalSessionRequest(value),
-  ExternalSessionStatusGetCanonicalRequestSchema,
-));
+export const ExternalSessionStatusGetRequestSchema = lazyZodSchema(() => z.pipe(z.transform((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionStatusGetCanonicalRequestSchema));
 export type ExternalSessionStatusGetRequest = z.infer<typeof ExternalSessionStatusGetRequestSchema>;
 
-const ExternalSessionAttachCanonicalRequestSchema = lazyZodSchema(() => z.object({
-  machineId: z.string().min(1),
-  sessionId: z.string().min(1),
+const ExternalSessionAttachCanonicalRequestSchema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.minLength(1)),
+  sessionId: z.string().check(z.minLength(1)),
   agentId: ExternalSessionsAgentIdSchema,
-  remoteSessionId: NonBlankOpaqueIdentifierSchema.max(2000),
+  remoteSessionId: NonBlankOpaqueIdentifierSchema.check(z.maxLength(2000)),
   source: ExternalSessionsSourceSchema,
-  leaseId: z.string().min(1).max(2000).optional(),
-  ttlMs: z.number().int().min(1_000).max(15 * 60_000).optional(),
-  acceptedTailCursor: ExternalSessionRefreshCursorV1Schema.optional(),
-}).strict());
+  leaseId: z.optional(z.string().check(z.minLength(1), z.maxLength(2000))),
+  ttlMs: z.optional(z.number().check(z.int(), z.minimum(1_000), z.maximum(15 * 60_000))),
+  acceptedTailCursor: z.optional(ExternalSessionRefreshCursorV1Schema),
+}));
 
-export const ExternalSessionAttachRequestSchema = lazyZodSchema(() => z.preprocess<
-  unknown,
-  typeof ExternalSessionAttachCanonicalRequestSchema,
-  z.input<typeof ExternalSessionAttachCanonicalRequestSchema>
->(
-  (value) => normalizeReleasedExternalSessionRequest(value),
-  ExternalSessionAttachCanonicalRequestSchema,
-));
+export const ExternalSessionAttachRequestSchema = lazyZodSchema(() => z.pipe(z.transform((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionAttachCanonicalRequestSchema));
 export type ExternalSessionAttachRequest = z.infer<typeof ExternalSessionAttachRequestSchema>;
 
 export const ExternalSessionAttachResponseSchema = lazyZodSchema(() => z.union([
-  z
-    .object({
+  z.looseObject({
       ok: z.literal(true),
-      leaseId: z.string().min(1),
-      expiresAtMs: z.number().int().min(0),
-      renewed: z.boolean().optional(),
-      acceptedTailCursor: ExternalSessionRefreshCursorV1Schema.optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      leaseId: z.string().check(z.minLength(1)),
+      expiresAtMs: z.number().check(z.int(), z.minimum(0)),
+      renewed: z.optional(z.boolean()),
+      acceptedTailCursor: z.optional(ExternalSessionRefreshCursorV1Schema),
+    }),
+  z.looseObject({
       ok: z.literal(false),
       errorCode: ExternalSessionsRpcErrorCodeSchema,
-      error: z.string().min(1),
+      error: z.string().check(z.minLength(1)),
       /**
        * Whether re-attaching can plausibly succeed. The daemon classifies the
        * corridor failure once; a viewer must not poll a failure it already
        * knows is terminal. Released producers omit it — absent stays retryable.
        */
-      retryable: z.boolean().optional(),
-    })
-    .passthrough(),
+      retryable: z.optional(z.boolean()),
+    }),
 ]));
 export type ExternalSessionAttachResponse = z.infer<typeof ExternalSessionAttachResponseSchema>;
 
-export const ExternalSessionDetachRequestSchema = lazyZodSchema(() => z
-  .object({
-    machineId: z.string().min(1),
-    sessionId: z.string().min(1),
-    leaseId: z.string().min(1).max(2000),
-  })
-  .strict());
+export const ExternalSessionDetachRequestSchema = lazyZodSchema(() => z.strictObject({
+    machineId: z.string().check(z.minLength(1)),
+    sessionId: z.string().check(z.minLength(1)),
+    leaseId: z.string().check(z.minLength(1), z.maxLength(2000)),
+  }));
 export type ExternalSessionDetachRequest = z.infer<typeof ExternalSessionDetachRequestSchema>;
 
 export const ExternalSessionDetachResponseSchema = lazyZodSchema(() => z.union([
-  z
-    .object({
+  z.looseObject({
       ok: z.literal(true),
       detached: z.boolean(),
-    })
-    .passthrough(),
-  z
-    .object({
+    }),
+  z.looseObject({
       ok: z.literal(false),
       errorCode: ExternalSessionsRpcErrorCodeSchema,
-      error: z.string().min(1),
-    })
-    .passthrough(),
+      error: z.string().check(z.minLength(1)),
+    }),
 ]));
 export type ExternalSessionDetachResponse = z.infer<typeof ExternalSessionDetachResponseSchema>;
 
-const ExternalSessionFollowPolicySetCanonicalRequestSchema = lazyZodSchema(() => z.object({
-  machineId: z.string().min(1),
-  sessionId: z.string().min(1),
+const ExternalSessionFollowPolicySetCanonicalRequestSchema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.minLength(1)),
+  sessionId: z.string().check(z.minLength(1)),
   agentId: ExternalSessionsAgentIdSchema,
-  remoteSessionId: NonBlankOpaqueIdentifierSchema.max(2000),
+  remoteSessionId: NonBlankOpaqueIdentifierSchema.check(z.maxLength(2000)),
   source: ExternalSessionsSourceSchema,
   enabled: z.boolean(),
-}).strict());
+}));
 
-export const ExternalSessionFollowPolicySetRequestSchema = lazyZodSchema(() => z.preprocess<
-  unknown,
-  typeof ExternalSessionFollowPolicySetCanonicalRequestSchema,
-  z.input<typeof ExternalSessionFollowPolicySetCanonicalRequestSchema>
->(
-  (value) => normalizeReleasedExternalSessionRequest(value),
-  ExternalSessionFollowPolicySetCanonicalRequestSchema,
-));
+export const ExternalSessionFollowPolicySetRequestSchema = lazyZodSchema(() => z.pipe(z.transform((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionFollowPolicySetCanonicalRequestSchema));
 export type ExternalSessionFollowPolicySetRequest = z.infer<typeof ExternalSessionFollowPolicySetRequestSchema>;
 
 export const ExternalSessionFollowPolicySetResponseSchema = lazyZodSchema(() => z.union([
-  z
-    .object({
+  z.looseObject({
       ok: z.literal(true),
       enabled: z.boolean(),
       leaseActive: z.boolean(),
-      updatedAtMs: z.number().int().min(0),
-    })
-    .passthrough(),
-  z
-    .object({
+      updatedAtMs: z.number().check(z.int(), z.minimum(0)),
+    }),
+  z.looseObject({
       ok: z.literal(false),
       errorCode: ExternalSessionsRpcErrorCodeSchema,
-      error: z.string().min(1),
-    })
-    .passthrough(),
+      error: z.string().check(z.minLength(1)),
+    }),
 ]));
 export type ExternalSessionFollowPolicySetResponse = z.infer<typeof ExternalSessionFollowPolicySetResponseSchema>;
 
 export const ExternalSessionStatusGetResponseSchema = lazyZodSchema(() => z.union([
-  z
-    .object({
+  z.looseObject({
       ok: z.literal(true),
       machineOnline: z.boolean(),
       runnerActive: z.boolean(),
@@ -516,58 +445,49 @@ export const ExternalSessionStatusGetResponseSchema = lazyZodSchema(() => z.unio
       canTakeOverDirect: z.boolean(),
       canTakeOverPersist: z.boolean(),
       canForceStop: z.boolean(),
-      trustedPid: z.number().int().min(1).nullish(),
-      lastKnownActivityAtMs: z.number().int().min(0).optional(),
-      externalAgent: ExternalAgentObservationSnapshotV1Schema.nullable().optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      trustedPid: z.nullish(z.number().check(z.int(), z.minimum(1))),
+      lastKnownActivityAtMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+      externalAgent: z.optional(z.nullable(ExternalAgentObservationSnapshotV1Schema)),
+    }),
+  z.looseObject({
       ok: z.literal(false),
       errorCode: ExternalSessionsRpcErrorCodeSchema,
-      error: z.string().min(1),
-    })
-    .passthrough(),
+      error: z.string().check(z.minLength(1)),
+    }),
 ]));
 export type ExternalSessionStatusGetResponse = z.infer<typeof ExternalSessionStatusGetResponseSchema>;
 
-const ExternalSessionActionSessionIdSchema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(191)
-  .refine((value) => value === value.trim(), 'Session id must already be trimmed.'));
-const ExternalSessionActionLeaseIdSchema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(2_000)
-  .refine((value) => value === value.trim(), 'Lease id must already be trimmed.'));
-export const ExternalSessionStatusActionInputV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionActionSessionIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(191), z.refine((value) => value === value.trim(), 'Session id must already be trimmed.')));
+const ExternalSessionActionLeaseIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(2_000), z.refine((value) => value === value.trim(), 'Lease id must already be trimmed.')));
+export const ExternalSessionStatusActionInputV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: ExternalSessionActionSessionIdSchema,
-}).strict());
+}));
 
-export const ExternalSessionViewerFollowActionInputV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionViewerFollowActionInputV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: ExternalSessionActionSessionIdSchema,
-  leaseId: ExternalSessionActionLeaseIdSchema.optional(),
-  ttlMs: z.number().int().min(1_000).max(15 * 60_000).optional(),
-  acceptedTailCursor: ExternalSessionRefreshCursorV1Schema.optional(),
-}).strict());
+  leaseId: z.optional(ExternalSessionActionLeaseIdSchema),
+  ttlMs: z.optional(z.number().check(z.int(), z.minimum(1_000), z.maximum(15 * 60_000))),
+  acceptedTailCursor: z.optional(ExternalSessionRefreshCursorV1Schema),
+}));
 
-export const ExternalSessionViewerUnfollowActionInputV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionViewerUnfollowActionInputV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: ExternalSessionActionSessionIdSchema,
   leaseId: ExternalSessionActionLeaseIdSchema,
-}).strict());
+}));
 
-export const ExternalSessionBackgroundFollowActionInputV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionBackgroundFollowActionInputV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: ExternalSessionActionSessionIdSchema,
   enabled: z.boolean(),
-}).strict());
+}));
 
-const ExternalSessionActionFailureV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionActionFailureV1Schema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(false),
   errorCode: ExternalSessionsRpcErrorCodeSchema,
-  error: z.string().min(1).max(2_000),
-}).strict());
+  error: z.string().check(z.minLength(1), z.maxLength(2_000)),
+}));
 
 export const ExternalSessionStatusActionResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     machineOnline: z.boolean(),
     runnerActive: z.boolean(),
@@ -575,8 +495,8 @@ export const ExternalSessionStatusActionResultV1Schema = lazyZodSchema(() => z.d
     canTakeOverDirect: z.boolean(),
     canTakeOverPersist: z.boolean(),
     canForceStop: z.boolean(),
-    lastKnownActivityAtMs: z.number().int().min(0).optional(),
-  }).strict(),
+    lastKnownActivityAtMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+  }),
   ExternalSessionActionFailureV1Schema,
 ]));
 
@@ -586,141 +506,118 @@ export const ExternalSessionStatusActionResultV1Schema = lazyZodSchema(() => z.d
  * too — otherwise a plugin polls a failure the daemon already answered forever.
  * Released daemons omit it; absent stays retryable.
  */
-const ExternalSessionViewerFollowActionFailureV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionViewerFollowActionFailureV1Schema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(false),
   errorCode: ExternalSessionsRpcErrorCodeSchema,
-  error: z.string().min(1).max(2_000),
-  retryable: z.boolean().optional(),
-}).strict());
+  error: z.string().check(z.minLength(1), z.maxLength(2_000)),
+  retryable: z.optional(z.boolean()),
+}));
 
 export const ExternalSessionViewerFollowActionResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     leaseId: ExternalSessionActionLeaseIdSchema,
-    expiresAtMs: z.number().int().min(0),
+    expiresAtMs: z.number().check(z.int(), z.minimum(0)),
     renewed: z.boolean(),
-    acceptedTailCursor: ExternalSessionRefreshCursorV1Schema.optional(),
-  }).strict(),
+    acceptedTailCursor: z.optional(ExternalSessionRefreshCursorV1Schema),
+  }),
   ExternalSessionViewerFollowActionFailureV1Schema,
 ]));
 
 export const ExternalSessionViewerUnfollowActionResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     detached: z.boolean(),
-  }).strict(),
+  }),
   ExternalSessionActionFailureV1Schema,
 ]));
 
 export const ExternalSessionBackgroundFollowActionResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     enabled: z.boolean(),
     leaseActive: z.boolean(),
-    updatedAtMs: z.number().int().min(0),
-  }).strict(),
+    updatedAtMs: z.number().check(z.int(), z.minimum(0)),
+  }),
   ExternalSessionActionFailureV1Schema,
 ]));
 
 export const ExternalSessionTranscriptRawMessageV1Schema =
-  lazyZodSchema(() => createExternalSessionTranscriptSourceItemV1Schema({
-    identifier: z.string().min(1),
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(createExternalSessionTranscriptSourceItemV1Schema({
+    identifier: z.string().check(z.minLength(1)),
     /**
      * Historical-import and recipient-read wire carrier. Current Agent
      * contributions use AgentExternalSessionTranscriptRawRecord instead; this
      * retained compatibility reader never authorizes a user row as terminal
      * input by itself.
      */
-    raw: z.object({}).passthrough(),
-  })
-  .passthrough());
+    raw: z.looseObject({}),
+  })));
 export type ExternalSessionTranscriptRawMessageV1 = z.infer<typeof ExternalSessionTranscriptRawMessageV1Schema>;
 
-const ExternalSessionTranscriptPageCanonicalRequestSchema = lazyZodSchema(() => z.object({
-  machineId: z.string().min(1),
+const ExternalSessionTranscriptPageCanonicalRequestSchema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.minLength(1)),
   agentId: ExternalSessionsAgentIdSchema,
-  remoteSessionId: NonBlankOpaqueIdentifierSchema.max(2000),
+  remoteSessionId: NonBlankOpaqueIdentifierSchema.check(z.maxLength(2000)),
   source: ExternalSessionsSourceSchema,
   direction: z.enum(['older', 'newer']),
-  cursor: z.string().min(1).optional(),
-  maxBytes: z.number().int().min(1).max(10 * 1024 * 1024).optional(),
-  maxItems: z.number().int().min(1).max(5000).optional(),
-}).strict());
+  cursor: z.optional(z.string().check(z.minLength(1))),
+  maxBytes: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(10 * 1024 * 1024))),
+  maxItems: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(5000))),
+}));
 
-export const ExternalSessionTranscriptPageRequestSchema = lazyZodSchema(() => z.preprocess<
-  unknown,
-  typeof ExternalSessionTranscriptPageCanonicalRequestSchema,
-  z.input<typeof ExternalSessionTranscriptPageCanonicalRequestSchema>
->(
-  (value) => normalizeReleasedExternalSessionRequest(value),
-  ExternalSessionTranscriptPageCanonicalRequestSchema,
-));
+export const ExternalSessionTranscriptPageRequestSchema = lazyZodSchema(() => z.pipe(z.transform((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionTranscriptPageCanonicalRequestSchema));
 export type ExternalSessionTranscriptPageRequest = z.infer<typeof ExternalSessionTranscriptPageRequestSchema>;
 
 export const ExternalSessionTranscriptPageResponseSchema = lazyZodSchema(() => z.union([
-  z
-    .object({
+  z.looseObject({
       ok: z.literal(true),
       items: z.array(ExternalSessionTranscriptRawMessageV1Schema),
-      nextCursor: z.string().min(1).nullish(),
-      tailCursor: z.string().min(1).nullish(),
+      nextCursor: z.nullish(z.string().check(z.minLength(1))),
+      tailCursor: z.nullish(z.string().check(z.minLength(1))),
       hasMore: z.boolean(),
-      truncated: z.boolean().optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      truncated: z.optional(z.boolean()),
+    }),
+  z.looseObject({
       ok: z.literal(false),
       errorCode: ExternalSessionsRpcErrorCodeSchema,
-      error: z.string().min(1),
-    })
-    .passthrough(),
+      error: z.string().check(z.minLength(1)),
+    }),
 ]));
 export type ExternalSessionTranscriptPageResponse = z.infer<typeof ExternalSessionTranscriptPageResponseSchema>;
 
-const ExternalSessionTranscriptReadAfterCanonicalRequestSchema = lazyZodSchema(() => z.object({
-  machineId: z.string().min(1),
+const ExternalSessionTranscriptReadAfterCanonicalRequestSchema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.minLength(1)),
   agentId: ExternalSessionsAgentIdSchema,
-  remoteSessionId: NonBlankOpaqueIdentifierSchema.max(2000),
+  remoteSessionId: NonBlankOpaqueIdentifierSchema.check(z.maxLength(2000)),
   source: ExternalSessionsSourceSchema,
-  cursor: z.string().min(1),
-  maxBytes: z.number().int().min(1).max(10 * 1024 * 1024).optional(),
-  maxItems: z.number().int().min(1).max(5000).optional(),
-}).strict());
+  cursor: z.string().check(z.minLength(1)),
+  maxBytes: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(10 * 1024 * 1024))),
+  maxItems: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(5000))),
+}));
 
-export const ExternalSessionTranscriptReadAfterRequestSchema = lazyZodSchema(() => z.preprocess<
-  unknown,
-  typeof ExternalSessionTranscriptReadAfterCanonicalRequestSchema,
-  z.input<typeof ExternalSessionTranscriptReadAfterCanonicalRequestSchema>
->(
-  (value) => normalizeReleasedExternalSessionRequest(value),
-  ExternalSessionTranscriptReadAfterCanonicalRequestSchema,
-));
+export const ExternalSessionTranscriptReadAfterRequestSchema = lazyZodSchema(() => z.pipe(z.transform((value) => normalizeReleasedExternalSessionRequest(value)), ExternalSessionTranscriptReadAfterCanonicalRequestSchema));
 export type ExternalSessionTranscriptReadAfterRequest = z.infer<typeof ExternalSessionTranscriptReadAfterRequestSchema>;
 
 export const ExternalSessionTranscriptReadAfterResponseSchema = lazyZodSchema(() => z.union([
-  z
-    .object({
+  z.looseObject({
       ok: z.literal(true),
       items: z.array(ExternalSessionTranscriptRawMessageV1Schema),
-      nextCursor: z.string().min(1).nullish(),
+      nextCursor: z.nullish(z.string().check(z.minLength(1))),
       truncated: z.boolean(),
       // Additive rich read-after continuation facts (open/drop for released
       // readers). Released daemons never emit them; the current UI applies
       // the shared Protocol read-after decision when present and degrades to
       // the released lossy semantics when absent.
-      hasMore: z.boolean().optional(),
-      diagnostics: z.array(
+      hasMore: z.optional(z.boolean()),
+      diagnostics: z.optional(z.array(
         ExternalSessionRefreshReadDiagnosticV1Schema,
-      ).max(32).optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      ).check(z.maxLength(32))),
+    }),
+  z.looseObject({
       ok: z.literal(false),
       errorCode: ExternalSessionsRpcErrorCodeSchema,
-      error: z.string().min(1),
-    })
-    .passthrough(),
+      error: z.string().check(z.minLength(1)),
+    }),
 ]));
 export type ExternalSessionTranscriptReadAfterResponse = z.infer<typeof ExternalSessionTranscriptReadAfterResponseSchema>;

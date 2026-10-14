@@ -1,21 +1,21 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { TeamCredentialDirectMaterialIdentityV1Schema } from './directMaterialCensusV1.js';
 
-export const TeamCredentialDirectMaterialReconcileInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamCredentialDirectMaterialReconcileInputV1Schema = lazyZodSchema(() => z.strictObject({
   teamId: TeamCredentialDirectMaterialIdentityV1Schema,
   resourceId: TeamCredentialDirectMaterialIdentityV1Schema,
-}).strict());
+}));
 export type TeamCredentialDirectMaterialReconcileInputV1 = z.infer<
   typeof TeamCredentialDirectMaterialReconcileInputV1Schema
 >;
 
-export const TeamCredentialDirectMaterialReconcileOutputV1Schema = lazyZodSchema(() => z.object({
-  prepared: z.number().int().nonnegative(),
-  remaining: z.number().int().nonnegative(),
-  failures: z.array(z.object({
-    sourceMemberKey: z.string().min(1).max(256).optional(),
+export const TeamCredentialDirectMaterialReconcileOutputV1Schema = lazyZodSchema(() => z.strictObject({
+  prepared: z.number().check(z.int(), z.nonnegative()),
+  remaining: z.number().check(z.int(), z.nonnegative()),
+  failures: z.array(z.strictObject({
+    sourceMemberKey: z.optional(z.string().check(z.minLength(1), z.maxLength(256))),
     reason: z.enum([
       'source_changed',
       'source_unavailable',
@@ -24,8 +24,8 @@ export const TeamCredentialDirectMaterialReconcileOutputV1Schema = lazyZodSchema
       'cancelled',
       'unsupported_direct_source',
     ]),
-  }).strict()),
-}).strict());
+  })),
+}));
 export type TeamCredentialDirectMaterialReconcileOutputV1 = z.infer<
   typeof TeamCredentialDirectMaterialReconcileOutputV1Schema
 >;

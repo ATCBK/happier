@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { SessionSpawnNewInputV2Schema } from './sessionSpawnNewInputV2.js';
 import { ed25519 } from '@noble/curves/ed25519';
@@ -15,23 +15,23 @@ import { SessionRequesterInstallationSealedBootstrapV1Schema } from './sessionRe
 export { SessionRequesterInstallationSealedBootstrapV1Schema } from './sessionRequesterBootstrapSchemasV1.js';
 
 /** Same serialized fields as the credential custodian's access.key owner, on a private carrier only. */
-export const SessionRequesterBootstrapCredentialsV1Schema = lazyZodSchema(() => z.object({
-    token: z.string().min(1),
-    secret: z.string().base64().nullish(),
-    encryption: z.object({
-      publicKey: z.string().base64(),
-      machineKey: z.string().base64(),
-    }).strict().nullish(),
-  }).strict().refine(value => !(value.secret && value.encryption), {
+export const SessionRequesterBootstrapCredentialsV1Schema = lazyZodSchema(() => z.strictObject({
+    token: z.string().check(z.minLength(1)),
+    secret: z.nullish(z.string().check(z.base64())),
+    encryption: z.nullish(z.strictObject({
+      publicKey: z.string().check(z.base64()),
+      machineKey: z.string().check(z.base64()),
+    })),
+  }).check(z.refine(value => !(value.secret && value.encryption), {
     message: 'Requester credentials cannot select both encryption representations.',
-  }));
+  })));
 
 /** Private Machine transport only. Never an Action input, output, or persisted metadata. */
-export const SessionRequesterCreationContextV1Schema = lazyZodSchema(() => z.object({
+export const SessionRequesterCreationContextV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   disposition: z.literal('ordinary_requester'),
   credentials: SessionRequesterBootstrapCredentialsV1Schema,
-}).strict());
+}));
 export type SessionRequesterCreationContextV1 = Readonly<z.infer<typeof SessionRequesterCreationContextV1Schema>>;
 
 /** Safe projection of the selected D3 disposition, never credential material or a second decision. */
@@ -48,10 +48,10 @@ export function projectRequesterSessionCredentialDisclosure(input: Readonly<{
 
 export const SessionRequesterBootstrapV1Schema = lazyZodSchema(() => z.union([
   SessionRequesterCreationContextV1Schema,
-  SessionRequesterCreationContextV1Schema.extend({
-    sessionId: z.string().trim().min(1),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionRequesterCreationContextV1Schema, {
+    sessionId: z.string().check(z.trim(), z.minLength(1)),
     sessionCreationDisposition: z.enum(['created', 'rejoined']),
-  }).strict(),
+  })),
 ]));
 export type SessionRequesterBootstrapV1 = Readonly<z.infer<typeof SessionRequesterBootstrapV1Schema>>;
 
@@ -61,19 +61,18 @@ export type ExternalActionRequesterAccountContextPurposeV1 = Readonly<
   | { kind: 'managed_finite_wake'; target: ManagedWakeTargetV1 }
 >;
 const RequesterAccountContextPurposeV1Schema = lazyZodSchema(() => z.union([
-  z.object({ kind: z.literal('external_action') }).strict(),
-  z.object({ kind: z.literal('machine_rpc'), method: z.string().trim().min(1),
+  z.strictObject({ kind: z.literal('external_action') }),
+  z.strictObject({ kind: z.literal('machine_rpc'), method: z.string().check(z.trim(), z.minLength(1)),
     paramsPresent: z.boolean(),
-    requestDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u) }).strict(),
-  z.object({ kind: z.literal('managed_finite_wake'), target: ManagedWakeTargetV1Schema }).strict()
-    .refine(value => value.target.origin.kind === 'finite-command'),
+    requestDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)) }),
+  z.strictObject({ kind: z.literal('managed_finite_wake'), target: ManagedWakeTargetV1Schema }).check(z.refine(value => value.target.origin.kind === 'finite-command')),
 ]));
-const RequesterAccountContextPlaintextV1Schema = lazyZodSchema(() => z.object({
-  v: z.literal(1), authorization: ExternalActionExecutionAuthorizationV1Schema.transform(value => ({
+const RequesterAccountContextPlaintextV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1), authorization: z.pipe(ExternalActionExecutionAuthorizationV1Schema, z.transform(value => ({
     v: value.v, token: value.token, binding: value.binding,
-  })),
+  }))),
   purpose: RequesterAccountContextPurposeV1Schema, credentials: SessionRequesterBootstrapCredentialsV1Schema,
-}).strict());
+}));
 
 function projectRequesterAccountContextPurpose(input: ExternalActionRequesterAccountContextPurposeV1, machineId: string) {
   // Socket routing scopes methods with the Machine id already bound by the
@@ -156,43 +155,43 @@ export function openExternalActionRequesterAccountContextV1(input: Readonly<{
     return plaintext.data.credentials;
   } catch { return null; }
 }
-export const SessionRequesterBootstrapRpcRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionRequesterBootstrapRpcRequestV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('requester_session_bootstrap_v1'),
   input: SessionSpawnNewInputV2Schema,
   requesterBootstrap: z.union([SessionRequesterBootstrapV1Schema, SessionRequesterInstallationSealedBootstrapV1Schema]),
-}).strict());
+}));
 export type SessionRequesterBootstrapRpcRequestV1 = Readonly<z.infer<typeof SessionRequesterBootstrapRpcRequestV1Schema>>;
 
-const SessionRequesterBootstrapOpenedRequestV1Schema = lazyZodSchema(() => SessionRequesterBootstrapRpcRequestV1Schema.extend({
+const SessionRequesterBootstrapOpenedRequestV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionRequesterBootstrapRpcRequestV1Schema, {
   requesterBootstrap: SessionRequesterBootstrapV1Schema,
-}).strict());
+})));
 type OpenedRequest = Readonly<z.infer<typeof SessionRequesterBootstrapOpenedRequestV1Schema>>;
-export const SessionRequesterHandoffBootstrapRpcRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionRequesterHandoffBootstrapRpcRequestV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('requester_session_handoff_bootstrap_v1'),
   input: SessionHandoffPrepareTargetPrivateRequestV1Schema,
   requesterBootstrap: z.union([SessionRequesterCreationContextV1Schema, SessionRequesterInstallationSealedBootstrapV1Schema]),
-}).strict());
+}));
 export type SessionRequesterHandoffBootstrapRpcRequestV1 = Readonly<z.infer<typeof SessionRequesterHandoffBootstrapRpcRequestV1Schema>>;
-const SessionRequesterHandoffBootstrapOpenedRequestV1Schema = lazyZodSchema(() => SessionRequesterHandoffBootstrapRpcRequestV1Schema.extend({
+const SessionRequesterHandoffBootstrapOpenedRequestV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionRequesterHandoffBootstrapRpcRequestV1Schema, {
   requesterBootstrap: SessionRequesterCreationContextV1Schema,
-}).strict());
+})));
 type OpenedHandoffRequest = Readonly<z.infer<typeof SessionRequesterHandoffBootstrapOpenedRequestV1Schema>>;
 /** Read-only existing-state inspection shares the same private installed-key carrier. */
-export const SessionRequesterHandoffPreflightBootstrapRpcRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionRequesterHandoffPreflightBootstrapRpcRequestV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('requester_session_handoff_preflight_bootstrap_v1'),
   input: SessionHandoffExistingStateCheckRequestV3Schema,
   requesterBootstrap: z.union([SessionRequesterCreationContextV1Schema, SessionRequesterInstallationSealedBootstrapV1Schema]),
-}).strict());
-const SessionRequesterHandoffPreflightBootstrapOpenedRequestV1Schema = lazyZodSchema(() => SessionRequesterHandoffPreflightBootstrapRpcRequestV1Schema.extend({
+}));
+const SessionRequesterHandoffPreflightBootstrapOpenedRequestV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionRequesterHandoffPreflightBootstrapRpcRequestV1Schema, {
   requesterBootstrap: SessionRequesterCreationContextV1Schema,
-}).strict());
+})));
 type OpenedHandoffPreflightRequest = Readonly<z.infer<typeof SessionRequesterHandoffPreflightBootstrapOpenedRequestV1Schema>>;
 type InstalledRequest = OpenedRequest | OpenedHandoffRequest | OpenedHandoffPreflightRequest;
-const InstallationPlaintextV1Schema = lazyZodSchema(() => z.object({
-  v: z.literal(1), machineId: z.string().min(1), installationId: z.string().min(1),
+const InstallationPlaintextV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1), machineId: z.string().check(z.minLength(1)), installationId: z.string().check(z.minLength(1)),
   request: z.union([SessionRequesterBootstrapOpenedRequestV1Schema, SessionRequesterHandoffBootstrapOpenedRequestV1Schema,
     SessionRequesterHandoffPreflightBootstrapOpenedRequestV1Schema]),
-}).strict());
+}));
 
 function readInstalledRequestMachineId(request: InstalledRequest): string {
   return request.kind === 'requester_session_bootstrap_v1' ? request.input.executionTarget.machineId : request.input.targetMachineId;

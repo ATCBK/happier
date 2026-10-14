@@ -1,20 +1,20 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const SESSION_WORKSPACE_LOCATION_METADATA_KEY = 'sessionWorkspaceLocationV1' as const;
 
 function createNonBlankPathSchema(zod: typeof z) {
-  return zod.string().refine((value) => value.trim().length > 0, {
+  return zod.string().check(zod.refine((value) => value.trim().length > 0, {
     message: 'Workspace path must not be blank',
-  });
+  }));
 }
 
 export function createSessionWorkspaceLocationV1Schema(zod: typeof z) {
-  return zod.object({
+  return zod.looseObject({
     v: zod.literal(1),
-    machineId: zod.string().trim().min(1),
+    machineId: zod.string().check(zod.trim(), zod.minLength(1)),
     agentPath: createNonBlankPathSchema(zod),
     machinePath: createNonBlankPathSchema(zod),
-  }).passthrough();
+  });
 }
 
 export const SessionWorkspaceLocationV1Schema = createSessionWorkspaceLocationV1Schema(z);

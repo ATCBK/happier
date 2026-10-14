@@ -1,10 +1,11 @@
+import * as zMini from 'zod/mini';
 import { DEFAULT_AGENT_ID } from '../../agents/defaultAgent.js';
 import { AGENT_PERMISSION_INTENTS_V1 as PERMISSION_INTENTS, parseAgentPermissionIntentV1Alias as parsePermissionIntentAlias } from '../../runtime/permissionIntentV1.js';
 import { BackendTargetKeyV2Schema } from '../../backends/targets/backendTargetRefV2.js';
 import { PluginContributionIdentityV1Schema } from '../../plugins/contributionIdentity.js';
 import { ProviderBoundModelRefSchema } from '../../providers/selection/v1.js';
 import { ProviderConnectionIdSchema } from '../../providers/ids.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 
@@ -19,60 +20,51 @@ import { MAX_VOICE_TIMER_DELAY_MS } from './timing.js';
  * malformed fact must not void the whole Voice profile — and the selection
  * then keeps resolving through its legacy raw `agentId`.
  */
-const VoiceAgentSelectionTargetKeySchema = z.preprocess(
-  (value) => (typeof value === 'string' && BackendTargetKeyV2Schema.safeParse(value).success ? value : null),
-  z.string().nullable(),
-).default(null);
-const VoiceAgentSelectionIdentityValueSchema = asProtocolZod(PluginContributionIdentityV1Schema).nullable();
-const VoiceAgentSelectionIdentitySchema = z.preprocess(
-  (value) => {
+const VoiceAgentSelectionTargetKeySchema = z._default(z.pipe(z.transform((value) => (typeof value === 'string' && BackendTargetKeyV2Schema.safeParse(value).success ? value : null)), z.nullable(z.string())), null);
+const VoiceAgentSelectionIdentityValueSchema = zMini.nullable(asProtocolZod(PluginContributionIdentityV1Schema));
+const VoiceAgentSelectionIdentitySchema = z._default(z.pipe(z.transform((value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     return PluginContributionIdentityV1Schema.safeParse(value).success ? value : null;
-  },
-  VoiceAgentSelectionIdentityValueSchema,
-).default(null);
-defineStoredReadProjection(VoiceAgentSelectionIdentitySchema, () => z.preprocess((value) => {
+  }), VoiceAgentSelectionIdentityValueSchema), null);
+defineStoredReadProjection(VoiceAgentSelectionIdentitySchema, () => z._default(z.pipe(z.transform((value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const parsed = createStoredReadSchema(asProtocolZod(PluginContributionIdentityV1Schema)).safeParse(value);
   return parsed.success ? parsed.data : null;
-}, VoiceAgentSelectionIdentityValueSchema).default(null));
-const VoiceAgentSelectionProjectionGenerationSchema = z.preprocess(
-  (value) => {
+}), VoiceAgentSelectionIdentityValueSchema), null));
+const VoiceAgentSelectionProjectionGenerationSchema = z._default(z.pipe(z.transform((value) => {
     if (value === null || value === undefined) return null;
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;
-  },
-  z.number().int().nonnegative().nullable(),
-).default(null);
+  }), z.nullable(z.number().check(z.int(), z.nonnegative()))), null);
 
 export const VoiceLocalConversationProviderChatSchema = z.discriminatedUnion('status', [
-  z.object({
+  z.strictObject({
     status: z.literal('configured'),
     chat: ProviderBoundModelRefSchema,
     commit: ProviderBoundModelRefSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('needs_selection'),
     providerConnectionId: ProviderConnectionIdSchema,
-    chatModelId: z.string().trim().min(1).max(512),
-    commitModelId: z.string().trim().min(1).max(512),
-  }).strict(),
-  z.object({
+    chatModelId: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+    commitModelId: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+  }),
+  z.strictObject({
     status: z.literal('migration_required'),
     reason: z.enum(['invalid_legacy_configuration', 'provider_catalog_import_required']),
-  }).strict(),
+  }),
 ]);
 
 export const VoiceLocalConversationSchema = z.object({
-  conversationMode: z.enum(['direct_session', 'agent']).default('direct_session'),
-  stt: VoiceLocalSttSchema.prefault({}),
-  tts: VoiceLocalTtsSchema.prefault({}),
-  networkTimeoutMs: z.number().int().positive().max(MAX_VOICE_TIMER_DELAY_MS).default(15000),
-  handsFree: VoiceHandsFreeSchema.prefault({}),
-  agent: z
+  conversationMode: z._default(z.enum(['direct_session', 'agent']), 'direct_session'),
+  stt: zMini.prefault(VoiceLocalSttSchema, {}),
+  tts: zMini.prefault(VoiceLocalTtsSchema, {}),
+  networkTimeoutMs: z._default(z.number().check(z.int(), z.positive(), z.maximum(MAX_VOICE_TIMER_DELAY_MS)), 15000),
+  handsFree: zMini.prefault(VoiceHandsFreeSchema, {}),
+  agent: z.prefault(z
     .object({
-      agentSource: z.enum(['session', 'agent']).default('session'),
-      agentId: z.string().default(DEFAULT_AGENT_ID),
+      agentSource: z._default(z.enum(['session', 'agent']), 'session'),
+      agentId: z._default(z.string(), DEFAULT_AGENT_ID),
       /**
        * Exact backend target key of the configured Agent, captured at
        * selection time from the one canonical Agent catalog. `null` on
@@ -88,61 +80,55 @@ export const VoiceLocalConversationSchema = z.object({
       /** Selection-time catalog projection generation, carried as evidence. */
       agentProjectionGeneration: VoiceAgentSelectionProjectionGenerationSchema,
       // Read-only legacy migration inputs. Canonical machine selection is root-owned.
-      machineTargetMode: z.enum(['auto', 'fixed']).default('auto'),
-      machineTargetId: z.string().nullable().default(null),
-      autoTargetMachineId: z.string().nullable().default(null),
-      stayInVoiceHome: z.boolean().default(false),
-      teleportEnabled: z.boolean().default(true),
-      rootSessionPolicy: z.enum(['single', 'keep_warm']).default('single'),
-      maxWarmRoots: z.number().int().positive().default(3),
-      voiceHomeSubdirName: z.string().default('voice-agent'),
-      permissionIntent: z.enum(PERMISSION_INTENTS).default('read-only'),
-      idleTtlSeconds: z.number().int().positive().default(1800),
-      bootstrapTimeoutMs: z.number().int().positive().default(60000),
-      prewarmOnConnect: z.boolean().default(true),
-      resumabilityMode: z.enum(['replay', 'provider_resume']).default('replay'),
-      providerResume: z
-        .object({ fallbackToReplay: z.boolean().default(true) })
-        .default({ fallbackToReplay: true }),
-      replay: z
+      machineTargetMode: z._default(z.enum(['auto', 'fixed']), 'auto'),
+      machineTargetId: z._default(z.nullable(z.string()), null),
+      autoTargetMachineId: z._default(z.nullable(z.string()), null),
+      stayInVoiceHome: z._default(z.boolean(), false),
+      teleportEnabled: z._default(z.boolean(), true),
+      rootSessionPolicy: z._default(z.enum(['single', 'keep_warm']), 'single'),
+      maxWarmRoots: z._default(z.number().check(z.int(), z.positive()), 3),
+      voiceHomeSubdirName: z._default(z.string(), 'voice-agent'),
+      permissionIntent: z._default(z.enum(PERMISSION_INTENTS), 'read-only'),
+      idleTtlSeconds: z._default(z.number().check(z.int(), z.positive()), 1800),
+      bootstrapTimeoutMs: z._default(z.number().check(z.int(), z.positive()), 60000),
+      prewarmOnConnect: z._default(z.boolean(), true),
+      resumabilityMode: z._default(z.enum(['replay', 'provider_resume']), 'replay'),
+      providerResume: z._default(z
+        .object({ fallbackToReplay: z._default(z.boolean(), true) }), { fallbackToReplay: true }),
+      replay: z._default(z
         .object({
-          strategy: z.enum(['recent_messages', 'summary_plus_recent']).default('recent_messages'),
-          recentMessagesCount: z.number().int().positive().default(16),
-        })
-        .default({ strategy: 'recent_messages', recentMessagesCount: 16 }),
+          strategy: z._default(z.enum(['recent_messages', 'summary_plus_recent']), 'recent_messages'),
+          recentMessagesCount: z._default(z.number().check(z.int(), z.positive()), 16),
+        }), { strategy: 'recent_messages', recentMessagesCount: 16 }),
       // Read-only legacy migration input. Canonical welcome is root-owned.
-      welcome: z
+      welcome: z._default(z
         .object({
-          enabled: z.boolean().default(false),
-          mode: z.enum(['immediate', 'on_first_turn']).default('immediate'),
-          templateId: z.string().nullable().default(null),
-        })
-        .default({ enabled: false, mode: 'immediate', templateId: null }),
-      commitIsolation: z.boolean().default(false),
-      transcript: z
+          enabled: z._default(z.boolean(), false),
+          mode: z._default(z.enum(['immediate', 'on_first_turn']), 'immediate'),
+          templateId: z._default(z.nullable(z.string()), null),
+        }), { enabled: false, mode: 'immediate', templateId: null }),
+      commitIsolation: z._default(z.boolean(), false),
+      transcript: z.prefault(z
         .object({
-          persistenceMode: z.enum(['ephemeral', 'persistent']).default('ephemeral'),
-          epoch: z.number().int().min(0).default(0),
-        })
-        .prefault({}),
-      chatModelSource: z.enum(['session', 'custom']).default('custom'),
-      chatModelId: z.string().default('default'),
-      commitModelSource: z.enum(['chat', 'session', 'custom']).default('chat'),
-      commitModelId: z.string().default('default'),
-      providerChat: VoiceLocalConversationProviderChatSchema.nullable().default(null),
-      verbosity: z.enum(['short', 'balanced']).default('short'),
-    })
-    .prefault({}),
-  streaming: z
+          persistenceMode: z._default(z.enum(['ephemeral', 'persistent']), 'ephemeral'),
+          epoch: z._default(z.number().check(z.int(), z.minimum(0)), 0),
+        }), {}),
+      chatModelSource: z._default(z.enum(['session', 'custom']), 'custom'),
+      chatModelId: z._default(z.string(), 'default'),
+      commitModelSource: z._default(z.enum(['chat', 'session', 'custom']), 'chat'),
+      commitModelId: z._default(z.string(), 'default'),
+      providerChat: z._default(z.nullable(VoiceLocalConversationProviderChatSchema), null),
+      verbosity: z._default(z.enum(['short', 'balanced']), 'short'),
+    }), {}),
+  streaming: z._default(z
     .object({
-      enabled: z.boolean().default(true),
-      ttsEnabled: z.boolean().default(true),
-      ttsChunkChars: z.number().int().positive().default(200),
-      turnReadPollIntervalMs: z.number().int().positive().max(MAX_VOICE_TIMER_DELAY_MS).default(25),
-      turnReadMaxEvents: z.number().int().positive().default(64),
-      turnStreamTimeoutMs: z.number().int().positive().nullable().default(1800000),
-    })
-    .default({
+      enabled: z._default(z.boolean(), true),
+      ttsEnabled: z._default(z.boolean(), true),
+      ttsChunkChars: z._default(z.number().check(z.int(), z.positive()), 200),
+      turnReadPollIntervalMs: z._default(z.number().check(z.int(), z.positive(), z.maximum(MAX_VOICE_TIMER_DELAY_MS)), 25),
+      turnReadMaxEvents: z._default(z.number().check(z.int(), z.positive()), 64),
+      turnStreamTimeoutMs: z._default(z.nullable(z.number().check(z.int(), z.positive())), 1800000),
+    }), {
       enabled: true,
       ttsEnabled: true,
       ttsChunkChars: 200,

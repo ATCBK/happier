@@ -1,18 +1,18 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { UsageCoachDetectorIdSchema } from '../../usage/coach/coachDetectorIds.js';
 
-const evidenceKey = lazyZodSchema(() => z.string().trim().min(1));
+const evidenceKey = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 export const UsageCoachSuppressionV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('dismissed'), evidenceKey }).strict(),
-    z.object({ kind: z.literal('snoozed'), evidenceKey, untilMs: z.number().int().nonnegative().safe() }).strict(),
+    z.strictObject({ kind: z.literal('dismissed'), evidenceKey }),
+    z.strictObject({ kind: z.literal('snoozed'), evidenceKey, untilMs: z.number().check(z.int(), z.nonnegative(), z.int()) }),
 ]));
-export const UsageCoachPreferencesV1Schema = lazyZodSchema(() => z.object({
-    v: z.literal(1).default(1),
-    suppressions: z.array(UsageCoachSuppressionV1Schema).default([]),
-    disabledChecks: z.array(UsageCoachDetectorIdSchema).default([]),
-    modelSuggestion: z.enum(['off', 'suggest_with_estimates', 'complete_only']).default('suggest_with_estimates'),
-}).strict().superRefine((preferences, context) => {
+export const UsageCoachPreferencesV1Schema = lazyZodSchema(() => z.strictObject({
+    v: z._default(z.literal(1), 1),
+    suppressions: z._default(z.array(UsageCoachSuppressionV1Schema), []),
+    disabledChecks: z._default(z.array(UsageCoachDetectorIdSchema), []),
+    modelSuggestion: z._default(z.enum(['off', 'suggest_with_estimates', 'complete_only']), 'suggest_with_estimates'),
+}).check(z.superRefine((preferences, context) => {
     if (new Set(preferences.disabledChecks).size !== preferences.disabledChecks.length) {
         context.addIssue({ code: 'custom', path: ['disabledChecks'], message: 'Each check has one enabled state' });
     }
@@ -22,6 +22,6 @@ export const UsageCoachPreferencesV1Schema = lazyZodSchema(() => z.object({
             message: 'Each finding evidence has one suppression state' });
         seen.add(suppression.evidenceKey);
     });
-}));
+})));
 export type UsageCoachPreferencesV1 = z.infer<typeof UsageCoachPreferencesV1Schema>;
 export const DEFAULT_USAGE_COACH_PREFERENCES_V1 = UsageCoachPreferencesV1Schema.parse({});

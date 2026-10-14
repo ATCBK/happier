@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const VcsFreshnessSourceSchema = lazyZodSchema(() => z.enum([
   'live-local',
@@ -9,17 +9,14 @@ export const VcsFreshnessSourceSchema = lazyZodSchema(() => z.enum([
 ]));
 export type VcsFreshnessSource = z.infer<typeof VcsFreshnessSourceSchema>;
 
-export const VcsFreshnessSchema = lazyZodSchema(() => z
-  .object({
+export const VcsFreshnessSchema = lazyZodSchema(() => z.strictObject({
     source: VcsFreshnessSourceSchema,
-    observedAt: z.number().int().nonnegative(),
-    expiresAt: z.number().int().nonnegative().optional(),
-  })
-  .strict()
-  .refine((value) => value.expiresAt === undefined || value.expiresAt >= value.observedAt, {
+    observedAt: z.number().check(z.int(), z.nonnegative()),
+    expiresAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+  }).check(z.refine((value) => value.expiresAt === undefined || value.expiresAt >= value.observedAt, {
     message: 'expiresAt must be greater than or equal to observedAt',
     path: ['expiresAt'],
-  }));
+  })));
 export type VcsFreshness = z.infer<typeof VcsFreshnessSchema>;
 
 export const ProviderRefreshPolicySchema = lazyZodSchema(() => z.enum([
@@ -30,18 +27,12 @@ export const ProviderRefreshPolicySchema = lazyZodSchema(() => z.enum([
 ]));
 export type ProviderRefreshPolicy = z.infer<typeof ProviderRefreshPolicySchema>;
 
-export const VcsLocalStateFreshnessSchema = lazyZodSchema(() => VcsFreshnessSchema.refine(
-  (value) => value.source === 'live-local' || value.source === 'cached-local',
-  {
+export const VcsLocalStateFreshnessSchema = lazyZodSchema(() => VcsFreshnessSchema.check(z.refine((value) => value.source === 'live-local' || value.source === 'cached-local', {
     message: 'local SCM state freshness must use a local source',
     path: ['source'],
-  },
-));
+  })));
 
-export const VcsRemoteStateFreshnessSchema = lazyZodSchema(() => VcsFreshnessSchema.refine(
-  (value) => value.source === 'cached-remote' || value.source === 'explicit-remote',
-  {
+export const VcsRemoteStateFreshnessSchema = lazyZodSchema(() => VcsFreshnessSchema.check(z.refine((value) => value.source === 'cached-remote' || value.source === 'explicit-remote', {
     message: 'remote SCM state freshness must use a remote source',
     path: ['source'],
-  },
-));
+  })));

@@ -2,7 +2,7 @@ import type { ProviderAccountUsageSnapshotV1 } from '../../connect/providerAccou
 import { readProviderAccountUsageWindowComparabilityReason, resolveProviderAccountUsagePaceWindow } from '../../connect/deriveProviderAccountUsagePace.js';
 import { isConnectedServiceQuotaObservationFresh } from '../../connect/quotaObservationTime.js';
 import type { PendingResetStartBindingV1 } from './pendingRequestedActionV1.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 
 export const PendingResetStartWaitingReasonV1Schema = lazyZodSchema(() => z.enum([
@@ -11,9 +11,9 @@ export const PendingResetStartWaitingReasonV1Schema = lazyZodSchema(() => z.enum
   'window_expired', 'entitlement_changed', 'denominator_changed',
 ]));
 export const PendingResetStartReadinessV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('ready') }).strict(),
-  z.object({ status: z.literal('waiting'), reason: PendingResetStartWaitingReasonV1Schema,
-    nextCheckAtMs: z.number().int().nonnegative().optional() }).strict(),
+  z.strictObject({ status: z.literal('ready') }),
+  z.strictObject({ status: z.literal('waiting'), reason: PendingResetStartWaitingReasonV1Schema,
+    nextCheckAtMs: z.optional(z.number().check(z.int(), z.nonnegative())) }),
 ]));
 export type PendingResetStartWaitingReasonV1 = z.infer<typeof PendingResetStartWaitingReasonV1Schema>;
 export type PendingResetStartReadinessV1 = z.infer<typeof PendingResetStartReadinessV1Schema>;

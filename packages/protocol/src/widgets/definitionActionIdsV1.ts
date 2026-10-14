@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 export const WIDGET_DEFINITION_ACTION_IDS_V1 = [
     'widgets.definition.list', 'widgets.definition.get', 'widgets.definition.create',
     'widgets.definition.update', 'widgets.definition.duplicate', 'widgets.definition.delete',

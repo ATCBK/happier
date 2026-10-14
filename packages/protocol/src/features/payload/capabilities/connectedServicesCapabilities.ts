@@ -1,36 +1,32 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const DEFAULT_CONNECTED_SERVICES_CREDENTIAL_DELETE_CAPABILITIES = Object.freeze({
   revisionGuard: false,
 });
 
-export const ConnectedServicesCredentialDeleteCapabilitiesSchema = lazyZodSchema(() => z
+export const ConnectedServicesCredentialDeleteCapabilitiesSchema = lazyZodSchema(() => z._default(z
   .object({
-    revisionGuard: z.boolean().optional().default(DEFAULT_CONNECTED_SERVICES_CREDENTIAL_DELETE_CAPABILITIES.revisionGuard),
-  })
-  .default(DEFAULT_CONNECTED_SERVICES_CREDENTIAL_DELETE_CAPABILITIES));
+    revisionGuard: z._default(z.optional(z.boolean()), DEFAULT_CONNECTED_SERVICES_CREDENTIAL_DELETE_CAPABILITIES.revisionGuard),
+  }), DEFAULT_CONNECTED_SERVICES_CREDENTIAL_DELETE_CAPABILITIES));
 
 export const DEFAULT_CONNECTED_SERVICES_CAPABILITIES = Object.freeze({
   credentialDelete: DEFAULT_CONNECTED_SERVICES_CREDENTIAL_DELETE_CAPABILITIES,
 });
 
-export const ConnectedServicesQualifiedAccountsCapabilitiesSchema = lazyZodSchema(() => z.object({
+export const ConnectedServicesQualifiedAccountsCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
   protocolVersion: z.literal(4),
-}).strict());
+}));
 
-export const ConnectedServicesCredentialRemovalReviewCapabilitiesSchema = lazyZodSchema(() => z.object({
+export const ConnectedServicesCredentialRemovalReviewCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
   protocolVersion: z.literal(1),
-}).strict());
+}));
 
-export const ConnectedServicesCapabilitiesSchema = lazyZodSchema(() => z
+export const ConnectedServicesCapabilitiesSchema = lazyZodSchema(() => z._default(z
   .object({
-    credentialDelete: ConnectedServicesCredentialDeleteCapabilitiesSchema.optional().default(
-      DEFAULT_CONNECTED_SERVICES_CREDENTIAL_DELETE_CAPABILITIES,
-    ),
-    qualifiedAccounts: ConnectedServicesQualifiedAccountsCapabilitiesSchema.optional(),
-    credentialRemovalReview: ConnectedServicesCredentialRemovalReviewCapabilitiesSchema.optional(),
-  })
-  .default(DEFAULT_CONNECTED_SERVICES_CAPABILITIES));
+    credentialDelete: z._default(z.optional(ConnectedServicesCredentialDeleteCapabilitiesSchema), DEFAULT_CONNECTED_SERVICES_CREDENTIAL_DELETE_CAPABILITIES),
+    qualifiedAccounts: z.optional(ConnectedServicesQualifiedAccountsCapabilitiesSchema),
+    credentialRemovalReview: z.optional(ConnectedServicesCredentialRemovalReviewCapabilitiesSchema),
+  }), DEFAULT_CONNECTED_SERVICES_CAPABILITIES));
 
 export type ConnectedServicesCapabilities = z.infer<typeof ConnectedServicesCapabilitiesSchema>;

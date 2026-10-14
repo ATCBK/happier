@@ -1,39 +1,39 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { ActionExecuteFailureSchema } from '../actions/actionExecutionResult.js';
 import { ProjectAccountOrganizationV1Schema } from './projectAccountRowsV1.js';
 import { WorkspaceRefV1WriteSchema } from '../workspaces/workspaceRefV1.js';
 
-const IdSchema = lazyZodSchema(() => z.string().min(1).refine(value => value === value.trim()));
-const WorkspaceAcknowledgementV1Schema = lazyZodSchema(() => z.object({
+const IdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.refine(value => value === value.trim())));
+const WorkspaceAcknowledgementV1Schema = lazyZodSchema(() => z.strictObject({
   ...WorkspaceRefV1WriteSchema.shape,
-  label: z.string().min(1).nullable().optional(),
-  lastOpenedAtMs: z.number().finite().nonnegative().nullable().optional(),
-}).strict());
+  label: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+  lastOpenedAtMs: z.optional(z.nullable(z.number().check(z.nonnegative()))),
+}));
 
 /** Metadata edits only: accepted checkout identity and its root are never Action input. */
-export const ProjectWorkspaceUpdateInputV1Schema = lazyZodSchema(() => z.object({
+export const ProjectWorkspaceUpdateInputV1Schema = lazyZodSchema(() => z.strictObject({
   serverId: IdSchema,
   workspaceId: IdSchema,
-  label: z.string().trim().min(1).nullable().optional(),
-  pinned: z.boolean().optional(),
-}).strict());
+  label: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+  pinned: z.optional(z.boolean()),
+}));
 export type ProjectWorkspaceUpdateInputV1 = z.infer<typeof ProjectWorkspaceUpdateInputV1Schema>;
 export const ProjectWorkspaceUpdateOutputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true), workspaceRef: WorkspaceAcknowledgementV1Schema,
-    organization: z.optional(ProjectAccountOrganizationV1Schema) }).strict(),
+  z.strictObject({ ok: z.literal(true), workspaceRef: WorkspaceAcknowledgementV1Schema,
+    organization: z.optional(ProjectAccountOrganizationV1Schema) }),
   ActionExecuteFailureSchema,
 ]));
 export type ProjectWorkspaceUpdateOutputV1 = z.infer<typeof ProjectWorkspaceUpdateOutputV1Schema>;
 
 /** Forget retires an accepted private ref, not its files, Sessions or Source. */
-export const ProjectWorkspaceForgetInputV1Schema = lazyZodSchema(() => z.object({
+export const ProjectWorkspaceForgetInputV1Schema = lazyZodSchema(() => z.strictObject({
   serverId: IdSchema,
   workspaceId: IdSchema,
-}).strict());
+}));
 export type ProjectWorkspaceForgetInputV1 = z.infer<typeof ProjectWorkspaceForgetInputV1Schema>;
 export const ProjectWorkspaceForgetOutputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true), workspaceId: IdSchema }).strict(),
+  z.strictObject({ ok: z.literal(true), workspaceId: IdSchema }),
   ActionExecuteFailureSchema,
 ]));
 export type ProjectWorkspaceForgetOutputV1 = z.infer<typeof ProjectWorkspaceForgetOutputV1Schema>;

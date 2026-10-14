@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PUSH_NOTIFICATION_BUNDLED_SOUND_FILES } from '../../push/pushNotificationActions.js';
 
@@ -43,105 +43,95 @@ function countJsonBytes(value: unknown): number {
 
 function addPayloadSizeIssue(
   value: unknown,
-  ctx: z.RefinementCtx,
+  ctx: z.core.$RefinementCtx,
 ): void {
   if (countJsonBytes(value) <= LIVE_ACTIVITY_CONTENT_STATE_MAX_BYTES) return;
 
   ctx.addIssue({
-    code: z.ZodIssueCode.custom,
+    code: "custom",
     message: 'Live Activity content state exceeds the ActivityKit payload budget',
   });
 }
 
-const TimestampMsSchema = lazyZodSchema(() => z.number().int().nonnegative());
+const TimestampMsSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
 
-export const HappierFocusLiveActivityContentStateV1Schema = lazyZodSchema(() => z
-  .object({
+export const HappierFocusLiveActivityContentStateV1Schema = lazyZodSchema(() => z.strictObject({
     version: z.literal(1),
     generatedAt: TimestampMsSchema,
     staleAt: TimestampMsSchema,
-    sessionId: z.string().trim().min(1),
+    sessionId: z.string().check(z.trim(), z.minLength(1)),
     title: z.string(),
-    subtitle: z.string().nullable(),
-    previewText: z.string().nullable(),
-    statusText: z.string().nullable(),
+    subtitle: z.nullable(z.string()),
+    previewText: z.nullable(z.string()),
+    statusText: z.nullable(z.string()),
     attentionState: HappierFocusLiveActivityAttentionStateSchema,
-    defaultTarget: z.string().trim().min(1),
-    sessionTarget: z.string().trim().min(1),
-    overflowCount: z.number().int().nonnegative(),
-    totalAttentionCount: z.number().int().nonnegative(),
+    defaultTarget: z.string().check(z.trim(), z.minLength(1)),
+    sessionTarget: z.string().check(z.trim(), z.minLength(1)),
+    overflowCount: z.number().check(z.int(), z.nonnegative()),
+    totalAttentionCount: z.number().check(z.int(), z.nonnegative()),
     allowActionButtons: z.boolean(),
-    labels: z.object({
+    labels: z.strictObject({
       title: z.string(),
       openLabel: z.string(),
       inboxLabel: z.string(),
       attentionLabel: z.string(),
-    }).strict(),
-  })
-  .strict()
-  .superRefine(addPayloadSizeIssue));
+    }),
+  }).check(z.superRefine(addPayloadSizeIssue)));
 export type HappierFocusLiveActivityContentStateV1 =
   z.infer<typeof HappierFocusLiveActivityContentStateV1Schema>;
 
-export const LiveActivityRemoteUpdateActivityKeySchema = lazyZodSchema(() => z
-  .object({
-    serverId: z.string().trim().min(1),
-    sessionId: z.string().trim().min(1),
+export const LiveActivityRemoteUpdateActivityKeySchema = lazyZodSchema(() => z.strictObject({
+    serverId: z.string().check(z.trim(), z.minLength(1)),
+    sessionId: z.string().check(z.trim(), z.minLength(1)),
     activityName: z.literal(HAPPIER_FOCUS_LIVE_ACTIVITY_NAME),
-  })
-  .strict());
+  }));
 export type LiveActivityRemoteUpdateActivityKey =
   z.infer<typeof LiveActivityRemoteUpdateActivityKeySchema>;
 
-const LiveActivityRemoteUpdateRequestBaseV1Schema = lazyZodSchema(() => z
-  .object({
+const LiveActivityRemoteUpdateRequestBaseV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    requestId: z.string().trim().min(1).max(128),
+    requestId: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
     createdAt: TimestampMsSchema,
     transportMode: LiveActivityRemoteTransportModeSchema,
     activityKey: LiveActivityRemoteUpdateActivityKeySchema,
-    snapshotFingerprint: z.string().trim().min(1).max(512),
-  })
-  .strict());
+    snapshotFingerprint: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+  }));
 
-const LiveActivityInterruptiveAlertV1Schema = lazyZodSchema(() => z
-  .object({
-    title: z.string().trim().min(1).max(LIVE_ACTIVITY_ALERT_TITLE_MAX_LENGTH),
-    body: z.string().trim().min(1).max(LIVE_ACTIVITY_ALERT_BODY_MAX_LENGTH),
-    sound: z.enum([
+const LiveActivityInterruptiveAlertV1Schema = lazyZodSchema(() => z.strictObject({
+    title: z.string().check(z.trim(), z.minLength(1), z.maxLength(LIVE_ACTIVITY_ALERT_TITLE_MAX_LENGTH)),
+    body: z.string().check(z.trim(), z.minLength(1), z.maxLength(LIVE_ACTIVITY_ALERT_BODY_MAX_LENGTH)),
+    sound: z.optional(z.enum([
       'default',
       PUSH_NOTIFICATION_BUNDLED_SOUND_FILES.soft.expoSoundName,
       PUSH_NOTIFICATION_BUNDLED_SOUND_FILES.urgent.expoSoundName,
-    ]).optional(),
-  })
-  .strict());
+    ])),
+  }));
 export type LiveActivityInterruptiveAlertV1 =
   z.infer<typeof LiveActivityInterruptiveAlertV1Schema>;
 
 const LiveActivityRemoteUpdateRequestUpdateV1Schema =
-  lazyZodSchema(() => LiveActivityRemoteUpdateRequestBaseV1Schema.extend({
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(LiveActivityRemoteUpdateRequestBaseV1Schema, {
     event: z.literal('update'),
     contentState: HappierFocusLiveActivityContentStateV1Schema,
-    interruptiveAlert: LiveActivityInterruptiveAlertV1Schema.optional(),
-  }).strict());
+    interruptiveAlert: z.optional(LiveActivityInterruptiveAlertV1Schema),
+  })));
 
 const LiveActivityRemoteUpdateRequestEndV1Schema =
-  lazyZodSchema(() => LiveActivityRemoteUpdateRequestBaseV1Schema.extend({
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(LiveActivityRemoteUpdateRequestBaseV1Schema, {
     event: z.literal('end'),
-    contentState: HappierFocusLiveActivityContentStateV1Schema.optional(),
-    dismissalAt: TimestampMsSchema.optional(),
-  }).strict());
+    contentState: z.optional(HappierFocusLiveActivityContentStateV1Schema),
+    dismissalAt: z.optional(TimestampMsSchema),
+  })));
 
 export const LiveActivityRemoteUpdateRequestV1Schema = lazyZodSchema(() => z
   .discriminatedUnion('event', [
     LiveActivityRemoteUpdateRequestUpdateV1Schema,
     LiveActivityRemoteUpdateRequestEndV1Schema,
-  ])
-  .superRefine((request, ctx) => {
+  ]).check(z.superRefine((request, ctx) => {
     if (!request.contentState) return;
     if (request.contentState.sessionId !== request.activityKey.sessionId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['contentState', 'sessionId'],
         message: 'Live Activity content state session must match the activity key',
       });
@@ -149,11 +139,11 @@ export const LiveActivityRemoteUpdateRequestV1Schema = lazyZodSchema(() => z
 
     if (request.contentState.staleAt <= request.createdAt) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['contentState', 'staleAt'],
         message: 'Live Activity content state must remain fresh after request creation',
       });
     }
-  }));
+  })));
 export type LiveActivityRemoteUpdateRequestV1 =
   z.infer<typeof LiveActivityRemoteUpdateRequestV1Schema>;

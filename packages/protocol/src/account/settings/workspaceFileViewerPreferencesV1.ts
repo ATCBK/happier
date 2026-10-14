@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
 
 import {
@@ -18,17 +18,17 @@ const MAX_SERIALIZED_SELECTOR_LENGTH = 512;
 const textEncoder = new TextEncoder();
 
 export const WorkspaceFileViewerIdentityV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('builtin') }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('builtin') }),
+  z.strictObject({
     kind: z.literal('plugin'),
     pluginId: asProtocolZod(PluginIdSchema),
     contributionLocalId: asProtocolZod(PluginContributionLocalIdSchema),
-  }).strict(),
+  }),
 ]));
 export type WorkspaceFileViewerIdentityV1 = z.infer<typeof WorkspaceFileViewerIdentityV1Schema>;
 
 const WorkspaceFileViewerSelectionsV1Schema = lazyZodSchema(() => z.record(
-  z.string().min(1).max(MAX_SERIALIZED_SELECTOR_LENGTH),
+  z.string().check(z.minLength(1), z.maxLength(MAX_SERIALIZED_SELECTOR_LENGTH)),
   WorkspaceFileViewerIdentityV1Schema,
 ));
 
@@ -37,14 +37,14 @@ const WorkspaceFileViewerSelectionsV1Schema = lazyZodSchema(() => z.record(
  * qualified viewer identity. SDK owns selector semantics; Settings owns only
  * its bounded persistence shape and preserves unavailable identities verbatim.
  */
-export const WorkspaceFileViewerPreferencesV1Schema = lazyZodSchema(() => z.object({
+export const WorkspaceFileViewerPreferencesV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   selections: WorkspaceFileViewerSelectionsV1Schema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   const entries = Object.entries(value.selections);
   if (entries.length > WORKSPACE_FILE_VIEWER_PREFERENCES_V1_MAX_ENTRIES) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['selections'],
       message: `At most ${WORKSPACE_FILE_VIEWER_PREFERENCES_V1_MAX_ENTRIES} viewer selections are allowed.`,
     });
@@ -57,14 +57,14 @@ export const WorkspaceFileViewerPreferencesV1Schema = lazyZodSchema(() => z.obje
       const canonicalSelector = serializeOpenableContentPreferenceSelectorV1(selector);
       if (serializedSelector !== canonicalSelector) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['selections', serializedSelector],
           message: 'Viewer preference selectors must use the canonical SDK serialization.',
         });
       }
       if (canonicalKeys.has(canonicalSelector)) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['selections', serializedSelector],
           message: 'Viewer preference selectors must not duplicate after SDK normalization.',
         });
@@ -72,7 +72,7 @@ export const WorkspaceFileViewerPreferencesV1Schema = lazyZodSchema(() => z.obje
       canonicalKeys.add(canonicalSelector);
     } catch (error) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['selections', serializedSelector],
         message: error instanceof Error
           ? error.message
@@ -83,11 +83,11 @@ export const WorkspaceFileViewerPreferencesV1Schema = lazyZodSchema(() => z.obje
 
   if (textEncoder.encode(JSON.stringify(value)).byteLength > WORKSPACE_FILE_VIEWER_PREFERENCES_V1_MAX_ENCODED_BYTES) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: `Viewer preferences exceed ${WORKSPACE_FILE_VIEWER_PREFERENCES_V1_MAX_ENCODED_BYTES} encoded bytes.`,
     });
   }
-}));
+})));
 export type WorkspaceFileViewerPreferencesV1 = z.infer<typeof WorkspaceFileViewerPreferencesV1Schema>;
 
 export const DEFAULT_WORKSPACE_FILE_VIEWER_PREFERENCES_V1: WorkspaceFileViewerPreferencesV1 = Object.freeze({

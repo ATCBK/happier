@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { AgentIdV1Schema } from '../../../agents/agentIdV1.js';
 import { ReachRulesChangeV1Schema } from '../../../reach/reachRulesChangeV1.js';
@@ -7,99 +7,100 @@ import { SkillCostV1Schema } from './skillCostV1.js';
 import { SkillTrustV1Schema } from './skillTrustV1.js';
 import { SkillListItemV1Schema, SkillUnavailableItemV1Schema, SkillProvenanceV1Schema, SkillRevisionV1Schema } from './skillLibraryItemV1.js';
 
-export const SkillFileInputV1Schema = lazyZodSchema(() => z.object({ path: z.string().min(1), contentBase64: z.string(),
-  contentKind: z.enum(['utf8', 'binary']), unixMode: z.number().int().min(0).max(0o7777).nullable().optional() }).strict());
+export const SkillFileInputV1Schema = lazyZodSchema(() => z.strictObject({ path: z.string().check(z.minLength(1)), contentBase64: z.string(),
+  contentKind: z.enum(['utf8', 'binary']), unixMode: z.optional(z.nullable(z.number().check(z.int(), z.minimum(0), z.maximum(0o7777)))) }));
 export type SkillFileInputV1 = z.infer<typeof SkillFileInputV1Schema>;
-export const SkillActionFailureResultV1Schema = lazyZodSchema(() => z.object({ ok: z.literal(false), code: z.string().min(1), current: SkillListItemV1Schema.optional() }).strict());
+export const SkillActionFailureResultV1Schema = lazyZodSchema(() => z.strictObject({ ok: z.literal(false), code: z.string().check(z.minLength(1)), current: z.optional(SkillListItemV1Schema) }));
 export type SkillActionFailureResultV1 = z.infer<typeof SkillActionFailureResultV1Schema>;
 export const SkillFileChangeV1Schema = lazyZodSchema(() => z.union([
-  z.object({ kind: z.literal('upsert'), file: SkillFileInputV1Schema }).strict(),
-  z.object({ kind: z.literal('remove'), path: z.string().min(1) }).strict(),
+  z.strictObject({ kind: z.literal('upsert'), file: SkillFileInputV1Schema }),
+  z.strictObject({ kind: z.literal('remove'), path: z.string().check(z.minLength(1)) }),
 ]));
-const skillId = lazyZodSchema(() => z.string().min(1));
-const identity = lazyZodSchema(() => z.object({ skillId }).strict());
-const createResult = lazyZodSchema(() => z.object({ ok: z.literal(true), skillId, revision: SkillRevisionV1Schema,
-  includedInSessionId: z.string().nullable(), incomplete: z.enum(['rules', 'session_include']).optional() }).strict());
-const batchCreateResult = lazyZodSchema(() => z.object({ skillIds: z.array(skillId), includedInSessionId: z.string().nullable(),
-  incomplete: z.array(z.object({ skillId, step: z.enum(['rules', 'session_include']) }).strict()).optional() }).strict());
-export const SkillInstallPreviewV1Schema = lazyZodSchema(() => z.object({ path: z.string(), name: z.string(), description: z.string().nullable(),
-  files: z.array(SkillFileInputV1Schema), trust: SkillTrustV1Schema, cost: SkillCostV1Schema, provenance: SkillProvenanceV1Schema }).strict());
+const skillId = lazyZodSchema(() => z.string().check(z.minLength(1)));
+const identity = lazyZodSchema(() => z.strictObject({ skillId }));
+const createResult = lazyZodSchema(() => z.strictObject({ ok: z.literal(true), skillId, revision: SkillRevisionV1Schema,
+  includedInSessionId: z.nullable(z.string()), incomplete: z.optional(z.enum(['rules', 'session_include'])) }));
+const batchCreateResult = lazyZodSchema(() => z.strictObject({ skillIds: z.array(skillId), includedInSessionId: z.nullable(z.string()),
+  incomplete: z.optional(z.array(z.strictObject({ skillId, step: z.enum(['rules', 'session_include']) }))) }));
+export const SkillInstallPreviewV1Schema = lazyZodSchema(() => z.strictObject({ path: z.string(), name: z.string(), description: z.nullable(z.string()),
+  files: z.array(SkillFileInputV1Schema), trust: SkillTrustV1Schema, cost: SkillCostV1Schema, provenance: SkillProvenanceV1Schema }));
+export type SkillInstallPreviewV1 = z.infer<typeof SkillInstallPreviewV1Schema>;
 export const SkillInstallSourceV1Schema = lazyZodSchema(() => z.union([
-  RegistryItemPointerV1Schema.extend({ kind: z.literal('registry') }).strict(),
-  z.object({ kind: z.literal('link'), url: z.string().url() }).strict(),
-  z.object({ kind: z.literal('upload'), files: z.array(SkillFileInputV1Schema) }).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(RegistryItemPointerV1Schema, { kind: z.literal('registry') })),
+  z.strictObject({ kind: z.literal('link'), url: z.string().check(z.url()) }),
+  z.strictObject({ kind: z.literal('upload'), files: z.array(SkillFileInputV1Schema) }),
 ]));
-const changeResult = lazyZodSchema(() => z.object({ revision: SkillRevisionV1Schema }).strict());
-export const SkillUpdateFileV1Schema = lazyZodSchema(() => z.object({ path: z.string(), mine: SkillFileInputV1Schema.nullable(),
-  theirs: SkillFileInputV1Schema.nullable(), changed: z.boolean() }).strict());
+const changeResult = lazyZodSchema(() => z.strictObject({ revision: SkillRevisionV1Schema }));
+export const SkillUpdateFileV1Schema = lazyZodSchema(() => z.strictObject({ path: z.string(), mine: z.nullable(SkillFileInputV1Schema),
+  theirs: z.nullable(SkillFileInputV1Schema), changed: z.boolean() }));
 export type SkillUpdateFileV1 = z.infer<typeof SkillUpdateFileV1Schema>;
 export const SKILL_ACTION_INPUT_SCHEMAS_V1 = {
-  'skills.list': lazyZodSchema(() => z.object({ query: z.string().optional(), state: z.enum(['in_use', 'off', 'updates', 'needs_attention']).optional() }).strict()),
-  'skills.create': lazyZodSchema(() => z.object({ name: z.string().min(1), description: z.string().optional(), files: z.array(SkillFileInputV1Schema), where: ReachRulesChangeV1Schema.optional() }).strict()),
-  'skills.update': lazyZodSchema(() => z.object({ skillId, expectedRevision: SkillRevisionV1Schema, name: z.string().optional(), description: z.string().optional(), files: z.array(SkillFileChangeV1Schema).optional(), updatePolicy: z.enum(['manual', 'auto', 'pinned']).optional() }).strict()),
+  'skills.list': lazyZodSchema(() => z.strictObject({ query: z.optional(z.string()), state: z.optional(z.enum(['in_use', 'off', 'updates', 'needs_attention'])) })),
+  'skills.create': lazyZodSchema(() => z.strictObject({ name: z.string().check(z.minLength(1)), description: z.optional(z.string()), files: z.array(SkillFileInputV1Schema), where: z.optional(ReachRulesChangeV1Schema) })),
+  'skills.update': lazyZodSchema(() => z.strictObject({ skillId, expectedRevision: SkillRevisionV1Schema, name: z.optional(z.string()), description: z.optional(z.string()), files: z.optional(z.array(SkillFileChangeV1Schema)), updatePolicy: z.optional(z.enum(['manual', 'auto', 'pinned'])) })),
   'skills.duplicate': identity,
-  'skills.delete': lazyZodSchema(() => z.object({ skillId, expectedRevision: SkillRevisionV1Schema }).strict()),
-  'skills.install': lazyZodSchema(() => z.object({ source: SkillInstallSourceV1Schema, selectPaths: z.array(z.string()).optional(), where: ReachRulesChangeV1Schema.optional(), dryRun: z.boolean().optional() }).strict()),
-  'skills.found.adopt': lazyZodSchema(() => z.object({ machineId: z.string().min(1),
-    items: z.array(z.object({ name: z.string().min(1), path: z.string().min(1) }).strict()).min(1), where: ReachRulesChangeV1Schema.optional() }).strict()),
-  'skills.found.read': lazyZodSchema(() => z.object({ machineId: z.string().min(1), path: z.string().min(1) }).strict()),
-  'skills.export': lazyZodSchema(() => z.object({ skillIds: z.array(skillId).min(1) }).strict()),
+  'skills.delete': lazyZodSchema(() => z.strictObject({ skillId, expectedRevision: SkillRevisionV1Schema })),
+  'skills.install': lazyZodSchema(() => z.strictObject({ source: SkillInstallSourceV1Schema, selectPaths: z.optional(z.array(z.string())), where: z.optional(ReachRulesChangeV1Schema), dryRun: z.optional(z.boolean()) })),
+  'skills.found.adopt': lazyZodSchema(() => z.strictObject({ machineId: z.string().check(z.minLength(1)),
+    items: z.array(z.strictObject({ name: z.string().check(z.minLength(1)), path: z.string().check(z.minLength(1)) })).check(z.minLength(1)), where: z.optional(ReachRulesChangeV1Schema) })),
+  'skills.found.read': lazyZodSchema(() => z.strictObject({ machineId: z.string().check(z.minLength(1)), path: z.string().check(z.minLength(1)) })),
+  'skills.export': lazyZodSchema(() => z.strictObject({ skillIds: z.array(skillId).check(z.minLength(1)) })),
   'skills.updates.diff': identity,
-  'skills.updates.apply': lazyZodSchema(() => z.object({ skillId, expectedRevision: SkillRevisionV1Schema, choices: z.record(z.string(), z.enum(['mine', 'theirs'])).optional() }).strict()),
+  'skills.updates.apply': lazyZodSchema(() => z.strictObject({ skillId, expectedRevision: SkillRevisionV1Schema, choices: z.optional(z.record(z.string(), z.enum(['mine', 'theirs']))) })),
 } as const;
 export const SKILL_ACTION_OUTPUT_SCHEMAS_V1 = {
-  'skills.list': lazyZodSchema(() => z.object({ items: z.array(SkillListItemV1Schema), revision: z.string(),
-    unavailableItems: z.array(SkillUnavailableItemV1Schema).optional(),
-    usageObservedSince: z.number().int().nonnegative().safe().nullable().optional() }).strict()),
+  'skills.list': lazyZodSchema(() => z.strictObject({ items: z.array(SkillListItemV1Schema), revision: z.string(),
+    unavailableItems: z.optional(z.array(SkillUnavailableItemV1Schema)),
+    usageObservedSince: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative(), z.int()))) })),
   'skills.create': createResult, 'skills.update': changeResult, 'skills.duplicate': createResult,
-  'skills.delete': lazyZodSchema(() => z.object({ deleted: z.literal(true), rulesLeft: z.literal(true).optional() }).strict()),
+  'skills.delete': lazyZodSchema(() => z.strictObject({ deleted: z.literal(true), rulesLeft: z.optional(z.literal(true)) })),
   'skills.install': lazyZodSchema(() => z.union([
-    z.object({ items: z.array(SkillInstallPreviewV1Schema) }).strict(),
+    z.strictObject({ items: z.array(SkillInstallPreviewV1Schema) }),
     batchCreateResult,
   ])),
   'skills.found.adopt': batchCreateResult,
-  'skills.found.read': lazyZodSchema(() => z.object({ name: z.string().min(1), files: z.array(SkillFileInputV1Schema) }).strict()),
-  'skills.export': lazyZodSchema(() => z.object({ fileName: z.string(), bytes: z.string() }).strict()),
-  'skills.updates.diff': lazyZodSchema(() => z.object({ files: z.array(SkillUpdateFileV1Schema), costDelta: z.object({ mine: SkillCostV1Schema, theirs: SkillCostV1Schema }).strict() }).strict()),
-  'skills.updates.apply': lazyZodSchema(() => z.object({ revision: SkillRevisionV1Schema, provenance: SkillProvenanceV1Schema }).strict()),
+  'skills.found.read': lazyZodSchema(() => z.strictObject({ name: z.string().check(z.minLength(1)), files: z.array(SkillFileInputV1Schema) })),
+  'skills.export': lazyZodSchema(() => z.strictObject({ fileName: z.string(), bytes: z.string() })),
+  'skills.updates.diff': lazyZodSchema(() => z.strictObject({ files: z.array(SkillUpdateFileV1Schema), costDelta: z.strictObject({ mine: SkillCostV1Schema, theirs: SkillCostV1Schema }) })),
+  'skills.updates.apply': lazyZodSchema(() => z.strictObject({ revision: SkillRevisionV1Schema, provenance: SkillProvenanceV1Schema })),
 } as const;
 export type SkillLibraryActionIdV1 = keyof typeof SKILL_ACTION_INPUT_SCHEMAS_V1;
 export type SkillLibraryActionInputByIdV1 = { readonly [K in SkillLibraryActionIdV1]: z.infer<(typeof SKILL_ACTION_INPUT_SCHEMAS_V1)[K]> };
 export type SkillLibraryActionResultByIdV1 = { readonly [K in SkillLibraryActionIdV1]: z.infer<(typeof SKILL_ACTION_OUTPUT_SCHEMAS_V1)[K]> };
 
-export const SkillFoundListInputV1Schema = lazyZodSchema(() => z.object({
-  machineId: z.string().min(1), directory: z.string().min(1).optional(),
-}).strict());
-export const SkillFoundListResultV1Schema = lazyZodSchema(() => z.object({
-  scannedAt: z.number().int().min(0),
-  roots: z.array(z.object({
-    path: z.string().min(1), scope: z.enum(['user', 'project', 'plugin']),
+export const SkillFoundListInputV1Schema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.minLength(1)), directory: z.optional(z.string().check(z.minLength(1))),
+}));
+export const SkillFoundListResultV1Schema = lazyZodSchema(() => z.strictObject({
+  scannedAt: z.number().check(z.int(), z.minimum(0)),
+  roots: z.array(z.strictObject({
+    path: z.string().check(z.minLength(1)), scope: z.enum(['user', 'project', 'plugin']),
     agents: z.array(AgentIdV1Schema), status: z.enum(['ok', 'failed']),
-  }).strict()),
-  items: z.array(z.object({
-    name: z.string().min(1), description: z.string().nullable(),
+  })),
+  items: z.array(z.strictObject({
+    name: z.string().check(z.minLength(1)), description: z.nullable(z.string()),
     // Found and download both identify the skill directory, never its SKILL.md.
-    path: z.string().min(1), digest: z.string().min(1), agents: z.array(AgentIdV1Schema),
-    scope: z.enum(['user', 'project', 'plugin']), inLibrary: skillId.nullable(),
+    path: z.string().check(z.minLength(1)), digest: z.string().check(z.minLength(1)), agents: z.array(AgentIdV1Schema),
+    scope: z.enum(['user', 'project', 'plugin']), inLibrary: z.nullable(skillId),
     masksLibrary: z.boolean(), happierInstalled: z.boolean(),
-    pluginOwned: z.object({ pluginName: z.string().min(1) }).strict().nullable(),
-  }).strict()),
-}).strict());
+    pluginOwned: z.nullable(z.strictObject({ pluginName: z.string().check(z.minLength(1)) })),
+  })),
+}));
 export type SkillFoundListInputV1 = z.infer<typeof SkillFoundListInputV1Schema>;
 export type SkillFoundListResultV1 = z.infer<typeof SkillFoundListResultV1Schema>;
 
-export const SkillMachineInstallInputV1Schema = lazyZodSchema(() => z.object({
-  skillId, machineId: z.string().min(1), agents: z.array(AgentIdV1Schema).optional(),
-}).strict());
-export const SkillMachineInstallResultV1Schema = lazyZodSchema(() => z.object({
-  receipts: z.array(z.object({ root: z.string().min(1), path: z.string().min(1), digest: z.string().min(1) }).strict()),
-}).strict());
+export const SkillMachineInstallInputV1Schema = lazyZodSchema(() => z.strictObject({
+  skillId, machineId: z.string().check(z.minLength(1)), agents: z.optional(z.array(AgentIdV1Schema)),
+}));
+export const SkillMachineInstallResultV1Schema = lazyZodSchema(() => z.strictObject({
+  receipts: z.array(z.strictObject({ root: z.string().check(z.minLength(1)), path: z.string().check(z.minLength(1)), digest: z.string().check(z.minLength(1)) })),
+}));
 export type SkillMachineInstallInputV1 = z.infer<typeof SkillMachineInstallInputV1Schema>;
 export type SkillMachineInstallResultV1 = z.infer<typeof SkillMachineInstallResultV1Schema>;
-export const SkillMachineUninstallInputV1Schema = lazyZodSchema(() => z.object({
-  skillId, machineId: z.string().min(1), force: z.boolean().optional(),
-}).strict());
-export const SkillMachineUninstallResultV1Schema = lazyZodSchema(() => z.object({ removed: z.array(z.string().min(1)) }).strict());
+export const SkillMachineUninstallInputV1Schema = lazyZodSchema(() => z.strictObject({
+  skillId, machineId: z.string().check(z.minLength(1)), force: z.optional(z.boolean()),
+}));
+export const SkillMachineUninstallResultV1Schema = lazyZodSchema(() => z.strictObject({ removed: z.array(z.string().check(z.minLength(1))) }));
 export type SkillMachineUninstallInputV1 = z.infer<typeof SkillMachineUninstallInputV1Schema>;
 export type SkillMachineUninstallResultV1 = z.infer<typeof SkillMachineUninstallResultV1Schema>;
 
@@ -119,8 +120,8 @@ export type SkillMachineActionInputByIdV1 = { readonly [K in SkillMachineActionI
 export type SkillMachineActionResultByIdV1 = { readonly [K in SkillMachineActionIdV1]: z.infer<(typeof SKILL_MACHINE_ACTION_OUTPUT_SCHEMAS_V1)[K]> };
 
 /** Actual content acknowledgements carried by the existing outer Action failure envelope. */
-export const SkillInstallAcknowledgedEffectsV1Schema = lazyZodSchema(() => z.object({
+export const SkillInstallAcknowledgedEffectsV1Schema = lazyZodSchema(() => z.strictObject({
   skillIds: z.array(skillId),
-  incomplete: z.array(z.object({ skillId, step: z.enum(['rules', 'session_include']) }).strict()),
-}).strict());
+  incomplete: z.array(z.strictObject({ skillId, step: z.enum(['rules', 'session_include']) })),
+}));
 export type SkillInstallAcknowledgedEffectsV1 = z.infer<typeof SkillInstallAcknowledgedEffectsV1Schema>;

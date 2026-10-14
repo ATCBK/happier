@@ -1,20 +1,20 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ActionSurfaceSchema } from './metadata.js';
 
 /** Host-only confirmation ownership; result custody remains in ActionApproval. */
-export const ActionApprovalPolicySchema = lazyZodSchema(() => z.object({
-  uiConfirmation: z.literal('policy').optional(),
-  uiConfirmationForInput: z.custom<(input: unknown) => boolean>((value) => typeof value === 'function').optional(),
-  agentDefault: z.enum(['egress', 'authority']).optional(),
-  requiredSurfaces: z.array(ActionSurfaceSchema.keyof()).readonly().optional(),
-  scopeAdmissionOwnsConfirmation: z.literal(true).optional(),
-  pluginCaptureWaiver: z.literal(true).optional(),
-  computerConsent: z.literal(true).optional(),
-  control: z.literal(true).optional(),
-  rpcConfirmation: z.literal(true).optional(),
-  retainUiFieldIntent: z.literal(true).optional(),
-}).strict());
+export const ActionApprovalPolicySchema = lazyZodSchema(() => z.strictObject({
+  uiConfirmation: z.optional(z.literal('policy')),
+  uiConfirmationForInput: z.optional(z.custom<(input: unknown) => boolean>((value) => typeof value === 'function')),
+  agentDefault: z.optional(z.enum(['egress', 'authority'])),
+  requiredSurfaces: z.optional(z.readonly(z.array(z.keyof(ActionSurfaceSchema)))),
+  scopeAdmissionOwnsConfirmation: z.optional(z.literal(true)),
+  pluginCaptureWaiver: z.optional(z.literal(true)),
+  computerConsent: z.optional(z.literal(true)),
+  control: z.optional(z.literal(true)),
+  rpcConfirmation: z.optional(z.literal(true)),
+  retainUiFieldIntent: z.optional(z.literal(true)),
+}));
 
 export const ActionApprovalFlowSchema = lazyZodSchema(() => z.enum(['blocking', 'deferred']));
 export type ActionApprovalFlow = z.infer<typeof ActionApprovalFlowSchema>;
@@ -22,21 +22,18 @@ export type ActionApprovalFlow = z.infer<typeof ActionApprovalFlowSchema>;
 export const ActionApprovalResultSchema = lazyZodSchema(() => z.enum(['required', 'optional', 'none']));
 export type ActionApprovalResult = z.infer<typeof ActionApprovalResultSchema>;
 
-export const ActionApprovalSchema = lazyZodSchema(() => z
-  .object({
-    flow: ActionApprovalFlowSchema.optional(),
+export const ActionApprovalSchema = lazyZodSchema(() => z.strictObject({
+    flow: z.optional(ActionApprovalFlowSchema),
     result: ActionApprovalResultSchema,
-  })
-  .strict()
-  .superRefine((value, ctx) => {
+  }).check(z.superRefine((value, ctx) => {
     if (value.result === 'optional' && value.flow == null) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['flow'],
         message: 'optional approval results require an explicit flow',
       });
     }
-  }));
+  })));
 export type ActionApproval = z.infer<typeof ActionApprovalSchema>;
 
 export function resolveActionApprovalFlow(approval: ActionApproval): ActionApprovalFlow {

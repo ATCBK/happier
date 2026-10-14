@@ -1,16 +1,16 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionRunnerRestartDisabledReasonSchema } from './sessionRunnerRestartV1.js';
 
 export const SESSION_RUNNER_RUNTIME_STATE_FIELD_ID = 'runtime.sessionRunner' as const;
 export const SESSION_RUNNER_RUNTIME_METADATA_KEY = 'sessionRunnerRuntimeV1' as const;
 
-const SessionRunnerSessionIdV1Schema = lazyZodSchema(() => z.string().trim().min(1));
-const SessionRunnerIdentityV1Schema = lazyZodSchema(() => z.string().trim().min(1));
-const SessionRunnerPidV1Schema = lazyZodSchema(() => z.number().int().positive());
-const SessionRunnerTimestampMsV1Schema = lazyZodSchema(() => z.number().int().nonnegative());
-const NullableIdentityFieldV1Schema = lazyZodSchema(() => SessionRunnerIdentityV1Schema.nullable().optional());
+const SessionRunnerSessionIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const SessionRunnerIdentityV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const SessionRunnerPidV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.positive()));
+const SessionRunnerTimestampMsV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
+const NullableIdentityFieldV1Schema = lazyZodSchema(() => z.optional(z.nullable(SessionRunnerIdentityV1Schema)));
 
 export const SessionRunnerEntrypointSourceV1Schema = lazyZodSchema(() => z.enum([
   'structured_state',
@@ -48,9 +48,8 @@ export const SessionRunnerRuntimeStatusSourceV1Schema = lazyZodSchema(() => z.en
 export type SessionRunnerRuntimeStatusSourceV1 =
   z.infer<typeof SessionRunnerRuntimeStatusSourceV1Schema>;
 
-const SessionRunnerRuntimeRunnerV1Schema = lazyZodSchema(() => z
-  .object({
-    pid: SessionRunnerPidV1Schema.nullable().optional(),
+const SessionRunnerRuntimeRunnerV1Schema = lazyZodSchema(() => z.strictObject({
+    pid: z.optional(z.nullable(SessionRunnerPidV1Schema)),
     runtimeId: NullableIdentityFieldV1Schema,
     cliVersion: NullableIdentityFieldV1Schema,
     entrypointVersion: NullableIdentityFieldV1Schema,
@@ -58,37 +57,30 @@ const SessionRunnerRuntimeRunnerV1Schema = lazyZodSchema(() => z
     entrypointSource: SessionRunnerEntrypointSourceV1Schema,
     startedBy: SessionRunnerStartedByV1Schema,
     startingMode: SessionRunnerStartingModeV1Schema,
-  })
-  .strict());
+  }));
 
-const SessionRunnerRuntimeDaemonV1Schema = lazyZodSchema(() => z
-  .object({
+const SessionRunnerRuntimeDaemonV1Schema = lazyZodSchema(() => z.strictObject({
     cliVersion: NullableIdentityFieldV1Schema,
     startedWithCliVersion: NullableIdentityFieldV1Schema,
     currentEntrypointVersion: NullableIdentityFieldV1Schema,
     currentEntrypointSource: SessionRunnerDaemonEntrypointSourceV1Schema,
-  })
-  .strict());
+  }));
 
-const SessionRunnerPlannedRestartStateV1Schema = lazyZodSchema(() => z
-  .object({
+const SessionRunnerPlannedRestartStateV1Schema = lazyZodSchema(() => z.strictObject({
     supported: z.boolean(),
     eligible: z.boolean(),
-    disabledReason: SessionRunnerRestartDisabledReasonSchema.nullable().optional(),
-  })
-  .strict()
-  .superRefine((value, ctx) => {
+    disabledReason: z.optional(z.nullable(SessionRunnerRestartDisabledReasonSchema)),
+  }).check(z.superRefine((value, ctx) => {
     if (value.eligible && !value.supported) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['eligible'],
         message: 'eligible planned restart requires supported planned restart',
       });
     }
-  }));
+  })));
 
-export const SessionRunnerRuntimeStateV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionRunnerRuntimeStateV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     sessionId: SessionRunnerSessionIdV1Schema,
     machineId: NullableIdentityFieldV1Schema,
@@ -99,14 +91,11 @@ export const SessionRunnerRuntimeStateV1Schema = lazyZodSchema(() => z
     versionState: SessionRunnerVersionStateV1Schema,
     statusSource: SessionRunnerRuntimeStatusSourceV1Schema,
     plannedRestart: SessionRunnerPlannedRestartStateV1Schema,
-  })
-  .strict());
+  }));
 export type SessionRunnerRuntimeStateV1 = z.infer<typeof SessionRunnerRuntimeStateV1Schema>;
 
-export const SessionRunnerStatusGetRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionRunnerStatusGetRequestV1Schema = lazyZodSchema(() => z.strictObject({
     sessionId: SessionRunnerSessionIdV1Schema,
-  })
-  .strict());
+  }));
 export type SessionRunnerStatusGetRequestV1 =
   z.infer<typeof SessionRunnerStatusGetRequestV1Schema>;

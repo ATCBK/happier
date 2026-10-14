@@ -1,19 +1,19 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const AgentTeamCreateSubagentLaunchV1Schema = lazyZodSchema(() => z.object({
+const AgentTeamCreateSubagentLaunchV1Schema = lazyZodSchema(() => z.looseObject({
   kind: z.literal('agent_team_create'),
-  teamId: z.string().min(1),
-  description: z.string().min(1).max(2000).optional(),
-}).passthrough());
+  teamId: z.string().check(z.minLength(1)),
+  description: z.optional(z.string().check(z.minLength(1), z.maxLength(2000))),
+}));
 
-const AgentTeamMemberCreateSubagentLaunchV1Schema = lazyZodSchema(() => z.object({
+const AgentTeamMemberCreateSubagentLaunchV1Schema = lazyZodSchema(() => z.looseObject({
   kind: z.literal('agent_team_member_create'),
-  teamId: z.string().min(1),
-  memberLabel: z.string().min(1).max(200),
-  instructions: z.string().min(1).max(20_000),
-  runInBackground: z.boolean().optional(),
-}).passthrough());
+  teamId: z.string().check(z.minLength(1)),
+  memberLabel: z.string().check(z.minLength(1), z.maxLength(200)),
+  instructions: z.string().check(z.minLength(1), z.maxLength(20_000)),
+  runInBackground: z.optional(z.boolean()),
+}));
 
 export const SubagentLaunchV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   AgentTeamCreateSubagentLaunchV1Schema,

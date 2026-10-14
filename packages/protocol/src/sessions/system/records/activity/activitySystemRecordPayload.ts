@@ -1,30 +1,26 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionBackgroundTaskRecordV1Schema } from '../../../work/backgroundTask/backgroundTaskRecordV1.js';
 import { SessionWorkflowRunSnapshotV1Schema } from '../../../work/workflow/sessionWorkflowRunSnapshotV1.js';
 import { ActivitySessionSystemRecordKindSchema } from './activitySystemRecordKinds.js';
 import { SessionStopRecordV1Schema } from '../../../../machines/guard/sessionGuardStateV1.js';
 
-export const ActivityWorkflowRunSystemRecordPayloadSchema = z
-  .object({
+export const ActivityWorkflowRunSystemRecordPayloadSchema = z.looseObject({
     kind: z.literal('workflow_run.v1'),
     payload: SessionWorkflowRunSnapshotV1Schema,
-  })
-  .passthrough();
+  });
 export type ActivityWorkflowRunSystemRecordPayload = z.infer<typeof ActivityWorkflowRunSystemRecordPayloadSchema>;
 
-export const ActivityBackgroundTaskSystemRecordPayloadSchema = z
-  .object({
+export const ActivityBackgroundTaskSystemRecordPayloadSchema = z.looseObject({
     kind: z.literal('background_task.v1'),
     payload: SessionBackgroundTaskRecordV1Schema,
-  })
-  .passthrough();
+  });
 export type ActivityBackgroundTaskSystemRecordPayload = z.infer<typeof ActivityBackgroundTaskSystemRecordPayloadSchema>;
 
 export const ActivitySessionSystemRecordPayloadSchema = z.discriminatedUnion('kind', [
   ActivityWorkflowRunSystemRecordPayloadSchema,
   ActivityBackgroundTaskSystemRecordPayloadSchema,
-  z.object({ kind: z.literal('session_stop.v1'), payload: SessionStopRecordV1Schema }).strict(),
+  z.strictObject({ kind: z.literal('session_stop.v1'), payload: SessionStopRecordV1Schema }),
 ]);
 export type ActivitySessionSystemRecordPayload = z.infer<typeof ActivitySessionSystemRecordPayloadSchema>;
 

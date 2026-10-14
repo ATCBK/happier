@@ -1,23 +1,23 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ReviewAssumptionSchema } from '../../reviews/ReviewAssumption.js';
 import { ReviewFindingSchema } from '../../reviews/ReviewFinding.js';
 import { ReviewQuestionSchema } from '../../reviews/ReviewQuestion.js';
 import { ExecutionRunStructuredRunRefSchema } from './executionRunStructuredRunRef.js';
 
-export const ReviewFollowUpV1Schema = lazyZodSchema(() => z.object({
+export const ReviewFollowUpV1Schema = lazyZodSchema(() => z.looseObject({
   parentRunRef: ExecutionRunStructuredRunRefSchema,
-  threadId: z.string().min(1),
-  findingIds: z.array(z.string().min(1)).optional(),
-  replyToQuestionId: z.string().min(1).optional(),
-  requestMarkdown: z.string().min(1),
-  answerMarkdown: z.string().min(1),
-  updatedFindings: z.array(ReviewFindingSchema).optional(),
-  questions: z.array(ReviewQuestionSchema).optional(),
-  assumptions: z.array(ReviewAssumptionSchema).optional(),
-  generatedAtMs: z.number().int().nonnegative(),
-}).passthrough());
+  threadId: z.string().check(z.minLength(1)),
+  findingIds: z.optional(z.array(z.string().check(z.minLength(1)))),
+  replyToQuestionId: z.optional(z.string().check(z.minLength(1))),
+  requestMarkdown: z.string().check(z.minLength(1)),
+  answerMarkdown: z.string().check(z.minLength(1)),
+  updatedFindings: z.optional(z.array(ReviewFindingSchema)),
+  questions: z.optional(z.array(ReviewQuestionSchema)),
+  assumptions: z.optional(z.array(ReviewAssumptionSchema)),
+  generatedAtMs: z.number().check(z.int(), z.nonnegative()),
+}));
 
 export type ReviewFollowUpV1 = z.infer<typeof ReviewFollowUpV1Schema>;
 

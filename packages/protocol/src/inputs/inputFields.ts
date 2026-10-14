@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { InputTypeReferenceV1Schema, type InputTypeReferenceV1 } from './inputTypes.js';
 import { StrictJsonValueSchema, type JsonValue } from '../json/strictJsonValue.js';
 import { pluginJsonValuesEqual } from '../plugins/contributions/jsonSchemaValues.js';
@@ -40,14 +40,14 @@ export type InputWidget = z.infer<typeof InputWidgetSchema>;
  */
 export type InputOptionValue = JsonValue;
 
-export const InputOptionValueSchema: z.ZodType<InputOptionValue> = lazyZodSchema(() => StrictJsonValueSchema.superRefine((value, context) => {
+export const InputOptionValueSchema: z.ZodMiniType<InputOptionValue> = lazyZodSchema(() => StrictJsonValueSchema.check(z.superRefine((value, context) => {
   // The incumbent credential ref remains a closed shape, not a generic JSON fallback.
   if (value && typeof value === 'object' && !Array.isArray(value)
     && ('service' in value || 'accountId' in value)
     && !QualifiedConnectedAccountRefSchema.safeParse(value).success) {
     context.addIssue({ code: 'custom', message: 'Invalid qualified Connected Account ref' });
   }
-}));
+})));
 
 /** Reads an untrusted draft/control value without admitting a second ref parser. */
 export function readInputOptionValue(value: unknown): InputOptionValue | undefined {
@@ -74,37 +74,37 @@ export function inputOptionValueSearchText(value: InputOptionValue): string {
   return typeof value === 'string' ? value : '';
 }
 
-const InputHintCoreFieldSchema = lazyZodSchema(() => z.object({
+const InputHintCoreFieldSchema = lazyZodSchema(() => z.strictObject({
   path: InputPathSchema,
   widget: InputWidgetSchema,
   /** Host semantic refs describe values and never confer read authority. */
-  inputType: InputTypeReferenceV1Schema.optional(),
+  inputType: z.optional(InputTypeReferenceV1Schema),
   /** Missing preserves following compatible surface/group context. */
-  contextMode: z.enum(['follow', 'own']).optional(),
-  required: z.boolean().optional(),
-  requireExplicitSelection: z.boolean().optional(),
-  listSeparator: z.enum(['comma', 'newline']).optional(),
-  maxSelections: z.number().int().positive().optional(),
-  visibleWhen: InputPredicateSchema.optional(),
+  contextMode: z.optional(z.enum(['follow', 'own'])),
+  required: z.optional(z.boolean()),
+  requireExplicitSelection: z.optional(z.boolean()),
+  listSeparator: z.optional(z.enum(['comma', 'newline'])),
+  maxSelections: z.optional(z.number().check(z.int(), z.positive())),
+  visibleWhen: z.optional(InputPredicateSchema),
   /** Surface-aware editors show this field only when the host declares the named context slot. */
-  visibleWhenContextSlot: InputPathSchema.optional(),
-  requiredWhen: InputPredicateSchema.optional(),
-  disabledWhen: InputPredicateSchema.optional(),
-}).strict());
+  visibleWhenContextSlot: z.optional(InputPathSchema),
+  requiredWhen: z.optional(InputPredicateSchema),
+  disabledWhen: z.optional(InputPredicateSchema),
+}));
 
 const InputHintCanonicalSourceShape = {
-  optionsSourceId: z.string().trim().min(1).optional(),
-  connectedAccountOptions: z.literal(true).optional(),
+  optionsSourceId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  connectedAccountOptions: z.optional(z.literal(true)),
   /**
    * Host-derived only: one authorized Connected Account request succeeded but
    * returned no options. Public plugin Action descriptors use the narrower
    * schema below and cannot manufacture this static-empty arm.
    */
-  resolvedEmptyConnectedAccountOptions: z.literal(true).optional(),
+  resolvedEmptyConnectedAccountOptions: z.optional(z.literal(true)),
 };
 
 const InputHintPluginActionSourceShape = {
-  connectedAccountOptions: z.literal(true).optional(),
+  connectedAccountOptions: z.optional(z.literal(true)),
 };
 
 const InputHintStaticSourceShape = {};
@@ -170,7 +170,7 @@ const StaticInputHintFieldValidationOptions: InputHintFieldValidationOptions = {
 
 function validateInputHintField(
   value: Readonly<Record<string, unknown>>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
   validationOptions: InputHintFieldValidationOptions = CanonicalInputHintFieldValidationOptions,
 ): void {
   const widget = value.widget;
@@ -185,7 +185,7 @@ function validateInputHintField(
   const hasAllowedConnectedAccountOptions = validationOptions.allowConnectedAccountOptions && hasConnectedAccountOptions;
   if ((widget === 'select' || widget === 'multiselect') && !hasOptions && !hasOptionsSource && !hasAllowedConnectedAccountOptions && !hasResolvedEmptyConnectedAccountOptions) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['options'],
       message: validationOptions.allowOptionsSourceId
         ? `${widget} requires options or optionsSourceId.`
@@ -196,28 +196,28 @@ function validateInputHintField(
   }
   if (widget !== 'select' && widget !== 'multiselect' && hasDeclaredOptions) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['options'],
       message: 'Static options are only valid for select or multiselect fields.',
     });
   }
   if (widget === 'secret' && hasOptionsSource) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['optionsSourceId'],
       message: 'secret fields cannot declare an options source.',
     });
   }
   if (hasConnectedAccountOptions && widget !== 'select') {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['connectedAccountOptions'],
       message: 'connectedAccountOptions is only valid for select fields.',
     });
   }
   if (hasConnectedAccountOptions && (hasDeclaredOptions || hasOptionsSource)) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['connectedAccountOptions'],
       message: validationOptions.allowOptionsSourceId
         ? 'connectedAccountOptions cannot be combined with static options or optionsSourceId.'
@@ -232,28 +232,28 @@ function validateInputHintField(
     || hasConnectedAccountOptions
   )) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['resolvedEmptyConnectedAccountOptions'],
       message: 'resolvedEmptyConnectedAccountOptions requires a static empty select field.',
     });
   }
   if (widget === 'text_list' && value.listSeparator === undefined) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['listSeparator'],
       message: 'text_list requires listSeparator.',
     });
   }
   if (widget !== 'text_list' && value.listSeparator !== undefined) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['listSeparator'],
       message: 'listSeparator is only valid for text_list fields.',
     });
   }
   if (value.maxSelections !== undefined && widget !== 'multiselect') {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['maxSelections'],
       message: 'maxSelections is only valid for multiselect fields.',
     });
@@ -291,7 +291,7 @@ function readInputHintCrossField(value: unknown): InputHintCrossField | null {
 
 function validateInputHintsCrossField(
   rawFields: readonly unknown[],
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   const fields = rawFields.flatMap((rawField, index) => {
     const field = readInputHintCrossField(rawField);
@@ -305,7 +305,7 @@ function validateInputHintsCrossField(
     const priorIndex = seenPaths.get(field.path);
     if (priorIndex !== undefined) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['fields', index, 'path'],
         message: `Action input field path duplicates fields.${priorIndex}.path.`,
       });
@@ -318,7 +318,7 @@ function validateInputHintsCrossField(
 
   for (const index of connectedAccountOptionFieldIndexes.slice(1)) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['fields', index, 'connectedAccountOptions'],
       message: 'Action input hints may declare at most one Connected Account options field.',
     });
@@ -329,7 +329,7 @@ function validateInputHintsCrossField(
       if (otherIndex === index) continue;
       if (isSameOrDescendantPath(field.path, otherPath)) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['fields', index, 'path'],
           message: `Action input field paths cannot be ancestors or descendants of fields.${otherIndex}.path.`,
         });
@@ -344,7 +344,7 @@ function validateInputHintsCrossField(
     ];
     if (predicatePaths.some((path) => [...secretPaths].some((secretPath) => isSameOrDescendantPath(path, secretPath)))) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['fields', index],
         message: 'Action input predicates cannot read a secret field value.',
       });
@@ -353,8 +353,8 @@ function validateInputHintsCrossField(
 }
 
 function createInputHintsSchemasForSharedField<
-  TText extends z.ZodTypeAny,
-  TOptionValue extends z.ZodTypeAny,
+  TText extends z.ZodMiniType,
+  TOptionValue extends z.ZodMiniType,
   TSourceShape extends z.core.$ZodShape,
 >(
   textSchema: TText,
@@ -362,36 +362,36 @@ function createInputHintsSchemasForSharedField<
   sourceShape: TSourceShape,
   validationOptions: InputHintFieldValidationOptions,
 ) {
-  const optionSchema = z.object({
+  const optionSchema = z.strictObject({
     value: optionValueSchema,
     label: textSchema,
-    description: textSchema.optional(),
-    disabled: z.boolean().optional(),
-  }).strict();
-  const fieldSchema = InputHintCoreFieldSchema.extend({
+    description: z.optional(textSchema),
+    disabled: z.optional(z.boolean()),
+  });
+  const fieldSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(InputHintCoreFieldSchema, {
     ...sourceShape,
     title: textSchema,
-    prompt: textSchema.optional(),
-    description: textSchema.optional(),
-    placeholder: textSchema.optional(),
-    options: z.array(optionSchema).readonly().optional(),
-  }).strict().superRefine((value, context) => {
+    prompt: z.optional(textSchema),
+    description: z.optional(textSchema),
+    placeholder: z.optional(textSchema),
+    options: z.optional(z.readonly(z.array(optionSchema))),
+  })).check(z.superRefine((value, context) => {
     validateInputHintField(value, context, validationOptions);
-  });
-  const hintsSchema = z.object({
-    title: textSchema.optional(),
-    description: textSchema.optional(),
-    submitLabel: textSchema.optional(),
-    fields: z.array(fieldSchema).readonly().default([]),
-  }).strict().superRefine((value, context) => {
+  })));
+  const hintsSchema = z.strictObject({
+    title: z.optional(textSchema),
+    description: z.optional(textSchema),
+    submitLabel: z.optional(textSchema),
+    fields: z._default(z.readonly(z.array(fieldSchema)), []),
+  }).check(z.superRefine((value, context) => {
     validateInputHintsCrossField(value.fields, context);
-  });
+  }));
   return Object.freeze({ optionSchema, fieldSchema, hintsSchema });
 }
 
 export function createInputHintsSchemas<
-  TText extends z.ZodTypeAny,
-  TOptionValue extends z.ZodTypeAny,
+  TText extends z.ZodMiniType,
+  TOptionValue extends z.ZodMiniType,
 >(
   textSchema: TText,
   optionValueSchema: TOptionValue,
@@ -410,8 +410,8 @@ export function createInputHintsSchemas<
  * host-produced Connected Account option result after authorization.
  */
 export function createInputHintsSchemasWithoutOptionsSource<
-  TText extends z.ZodTypeAny,
-  TOptionValue extends z.ZodTypeAny,
+  TText extends z.ZodMiniType,
+  TOptionValue extends z.ZodMiniType,
 >(
   textSchema: TText,
   optionValueSchema: TOptionValue,
@@ -426,8 +426,8 @@ export function createInputHintsSchemasWithoutOptionsSource<
 
 /** Static-only form grammar for public surfaces that cannot request host options. */
 export function createInputHintsSchemasWithStaticOptionsOnly<
-  TText extends z.ZodTypeAny,
-  TOptionValue extends z.ZodTypeAny,
+  TText extends z.ZodMiniType,
+  TOptionValue extends z.ZodMiniType,
 >(
   textSchema: TText,
   optionValueSchema: TOptionValue,
@@ -441,7 +441,7 @@ export function createInputHintsSchemasWithStaticOptionsOnly<
 }
 
 const CanonicalInputHintsSchemas = createInputHintsSchemas(
-  z.string().trim().min(1),
+  z.string().check(z.trim(), z.minLength(1)),
   InputOptionValueSchema,
 );
 

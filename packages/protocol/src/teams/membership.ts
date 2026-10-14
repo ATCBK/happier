@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { AccountDisplayProfileV1Schema } from '../account/accountDisplayProfileV1.js';
 import {
@@ -50,14 +50,14 @@ export type TeamRole = TeamRoleV1;
 export const TeamMembershipStatusSchema = lazyZodSchema(() => z.enum(['active', 'suspended']));
 export type TeamMembershipStatus = z.infer<typeof TeamMembershipStatusSchema>;
 
-export const TeamIdSchema = lazyZodSchema(() => z.string().min(1));
-export const TeamGroupIdSchema = lazyZodSchema(() => z.string().min(1));
+export const TeamIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1)));
+export const TeamGroupIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1)));
 
 /**
  * One immutable membership lifetime. Removal ends it; rejoining mints a new one,
  * so downstream member-lifetime grants cannot be resurrected by re-adding a person.
  */
-export const TeamMembershipIdSchema = lazyZodSchema(() => z.string().min(1));
+export const TeamMembershipIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1)));
 
 /**
  * The public address of a person's Group membership.
@@ -67,11 +67,11 @@ export const TeamMembershipIdSchema = lazyZodSchema(() => z.string().min(1));
  * transaction. This keeps Group rows attached across provider Account replacement
  * and leaves exactly one resolution owner.
  */
-export const TeamGroupMemberAddressV1Schema = lazyZodSchema(() => z.object({
+export const TeamGroupMemberAddressV1Schema = lazyZodSchema(() => z.strictObject({
   teamId: TeamIdSchema,
   groupId: TeamGroupIdSchema,
-  accountId: z.string().min(1),
-}).strict());
+  accountId: z.string().check(z.minLength(1)),
+}));
 export type TeamGroupMemberAddressV1 = z.infer<typeof TeamGroupMemberAddressV1Schema>;
 
 /**
@@ -105,13 +105,13 @@ export type TeamAdmissibleRoleV1 = z.infer<typeof TeamAdmissibleRoleV1Schema>;
  * an outcome discriminator the surface would have to translate. A re-add never
  * resets an existing role, status, or history horizon.
  */
-export const TeamMemberAddInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamMemberAddInputV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   teamId: TeamIdSchema,
-  accountId: z.string().min(1),
+  accountId: z.string().check(z.minLength(1)),
   role: TeamAdmissibleRoleV1Schema,
   historyAccess: SessionHistoryAccessSchema,
-}).strict());
+}));
 export type TeamMemberAddInputV1 = z.infer<typeof TeamMemberAddInputV1Schema>;
 
 /**
@@ -130,17 +130,17 @@ export type TeamMemberAddInputV1 = z.infer<typeof TeamMemberAddInputV1Schema>;
  * capability before it shows anything.
  */
 export const TeamMembershipManagementV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('native') }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('native') }),
+  z.strictObject({
     kind: z.literal('directory_source'),
-    directorySourceId: z.string().min(1),
+    directorySourceId: z.string().check(z.minLength(1)),
     label: z.string(),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('identity_connection'),
-    identityConnectionId: z.string().min(1),
+    identityConnectionId: z.string().check(z.minLength(1)),
     label: z.string(),
-  }).strict(),
+  }),
 ]));
 export type TeamMembershipManagementV1 = z.infer<typeof TeamMembershipManagementV1Schema>;
 
@@ -156,14 +156,14 @@ export type TeamMembershipManagementV1 = z.infer<typeof TeamMembershipManagement
  * Like every projection this renders and prechecks; the mutation's own
  * transaction remains decisive.
  */
-export const TeamMembershipCapabilitiesV1Schema = lazyZodSchema(() => z.object({
+export const TeamMembershipCapabilitiesV1Schema = lazyZodSchema(() => z.strictObject({
   setRole: z.boolean(),
   assignableRoles: z.array(TeamRoleV1Schema),
   suspend: z.boolean(),
   reactivate: z.boolean(),
   remove: z.boolean(),
   setManagement: z.boolean(),
-}).strict());
+}));
 export type TeamMembershipCapabilitiesV1 = z.infer<typeof TeamMembershipCapabilitiesV1Schema>;
 
 export const NO_TEAM_MEMBERSHIP_CAPABILITIES_V1: TeamMembershipCapabilitiesV1 = Object.freeze({
@@ -184,19 +184,19 @@ export const NO_TEAM_MEMBERSHIP_CAPABILITIES_V1: TeamMembershipCapabilitiesV1 = 
  * decision. The row also carries no email, external identifier, identity claim,
  * or cryptographic material.
  */
-export const TeamMembershipV1Schema = lazyZodSchema(() => z.object({
+export const TeamMembershipV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   id: TeamMembershipIdSchema,
   teamId: TeamIdSchema,
-  accountId: z.string().min(1),
+  accountId: z.string().check(z.minLength(1)),
   account: AccountDisplayProfileV1Schema,
   role: TeamRoleSchema,
   status: TeamMembershipStatusSchema,
   historyAccess: SessionHistoryAccessSchema,
   management: TeamMembershipManagementV1Schema,
   capabilities: TeamMembershipCapabilitiesV1Schema,
-  joinedAt: z.number().int().min(0),
-}).strict());
+  joinedAt: z.number().check(z.int(), z.minimum(0)),
+}));
 export type TeamMembershipV1 = z.infer<typeof TeamMembershipV1Schema>;
 
 /**
@@ -217,34 +217,34 @@ export type TeamMembersListFilterV1 = z.infer<typeof TeamMembersListFilterV1Sche
 export const TEAM_MEMBERS_PAGE_LIMIT_MAX_V1 = 100;
 export const TEAM_MEMBERS_PAGE_LIMIT_DEFAULT_V1 = 50;
 
-export const TeamMembersListInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamMembersListInputV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   teamId: TeamIdSchema,
   filter: TeamMembersListFilterV1Schema,
-  limit: z.number().int().min(1).max(TEAM_MEMBERS_PAGE_LIMIT_MAX_V1).optional(),
-  cursor: z.string().min(1).nullable().optional(),
+  limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(TEAM_MEMBERS_PAGE_LIMIT_MAX_V1))),
+  cursor: z.optional(z.nullable(z.string().check(z.minLength(1)))),
   /**
    * One bounded lookup over the whole roster, in the same shape the Team
    * directory contract already ships. Narrowing only the pages a reader holds
    * reports a member on a later page as absent, so the Home answers the
    * question instead. Paging is unchanged: a query names its own sequence.
    */
-  query: z.string().max(256).optional(),
-}).strict());
+  query: z.optional(z.string().check(z.maxLength(256))),
+}));
 export type TeamMembersListInputV1 = z.infer<typeof TeamMembersListInputV1Schema>;
 
-export const TeamMembersPageV1Schema = lazyZodSchema(() => z.object({
+export const TeamMembersPageV1Schema = lazyZodSchema(() => z.strictObject({
   items: z.array(TeamMembershipV1Schema),
-  nextCursor: z.string().nullable(),
-}).strict());
+  nextCursor: z.nullable(z.string()),
+}));
 export type TeamMembersPageV1 = z.infer<typeof TeamMembersPageV1Schema>;
 
 /** `teams.members.get`, `suspend`, `reactivate`, `remove`. */
-export const TeamMemberRefInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamMemberRefInputV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   teamId: TeamIdSchema,
   membershipId: TeamMembershipIdSchema,
-}).strict());
+}));
 export type TeamMemberRefInputV1 = z.infer<typeof TeamMemberRefInputV1Schema>;
 
 /**
@@ -252,12 +252,12 @@ export type TeamMemberRefInputV1 = z.infer<typeof TeamMemberRefInputV1Schema>;
  * additionally requires `manageOwners` whenever the current or resulting role is
  * owner, and refuses to strand the final active owner.
  */
-export const TeamMemberRoleSetInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamMemberRoleSetInputV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   teamId: TeamIdSchema,
   membershipId: TeamMembershipIdSchema,
   role: TeamRoleSchema,
-}).strict());
+}));
 export type TeamMemberRoleSetInputV1 = z.infer<typeof TeamMemberRoleSetInputV1Schema>;
 
 /**
@@ -273,17 +273,17 @@ export type TeamMemberRoleSetInputV1 = z.infer<typeof TeamMemberRoleSetInputV1Sc
  * refuses, or a second binding invented outside its owner.
  */
 export const TeamMemberManagementTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('native') }).strict(),
-  z.object({ kind: z.literal('directory_source'), directorySourceId: z.string().min(1) }).strict(),
+  z.strictObject({ kind: z.literal('native') }),
+  z.strictObject({ kind: z.literal('directory_source'), directorySourceId: z.string().check(z.minLength(1)) }),
 ]));
 export type TeamMemberManagementTargetV1 = z.infer<typeof TeamMemberManagementTargetV1Schema>;
 
-export const TeamMemberManagementSetInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamMemberManagementSetInputV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   teamId: TeamIdSchema,
   membershipId: TeamMembershipIdSchema,
   management: TeamMemberManagementTargetV1Schema,
-}).strict());
+}));
 export type TeamMemberManagementSetInputV1 = z.infer<typeof TeamMemberManagementSetInputV1Schema>;
 
 /**
@@ -292,8 +292,8 @@ export type TeamMemberManagementSetInputV1 = z.infer<typeof TeamMemberManagement
  * The server still rechecks authorization before answering `unchanged`.
  */
 export const TeamMemberRemoveResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('removed'), membershipId: TeamMembershipIdSchema }).strict(),
-  z.object({ status: z.literal('unchanged') }).strict(),
+  z.strictObject({ status: z.literal('removed'), membershipId: TeamMembershipIdSchema }),
+  z.strictObject({ status: z.literal('unchanged') }),
 ]));
 export type TeamMemberRemoveResultV1 = z.infer<typeof TeamMemberRemoveResultV1Schema>;
 

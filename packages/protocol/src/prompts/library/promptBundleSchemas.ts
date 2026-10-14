@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { decodeBase64 } from '../../crypto/base64.js';
 import { ArtifactRevisionV1Schema } from '../../artifacts/artifactRevisionV1.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
@@ -12,54 +12,50 @@ const PromptBundleSchemaIdV1Schema = lazyZodSchema(() => z.enum(['skills.skill_m
 export type PromptBundleSchemaIdV1 = z.infer<typeof PromptBundleSchemaIdV1Schema>;
 export { PromptBundleSchemaIdV1Schema };
 
-export const PromptBundleArtifactHeaderV1Schema = lazyZodSchema(() => z.object({
-  v: z.literal(1), kind: z.literal('prompt_bundle.v2'), title: z.string().min(1),
+export const PromptBundleArtifactHeaderV1Schema = lazyZodSchema(() => z.looseObject({
+  v: z.literal(1), kind: z.literal('prompt_bundle.v2'), title: z.string().check(z.minLength(1)),
   bundleSchemaId: PromptBundleSchemaIdV1Schema,
-}).passthrough());
+}));
 
-export const PromptBundleEntryV1Schema = lazyZodSchema(() => z
-  .object({
-    path: z.string().min(1),
+export const PromptBundleEntryV1Schema = lazyZodSchema(() => z.looseObject({
+    path: z.string().check(z.minLength(1)),
     contentBase64: z.string(),
     contentKind: z.enum(['utf8', 'binary']),
-    unixMode: z.number().int().min(0).max(0o7777).nullable().optional(),
-  })
-  .passthrough());
+    unixMode: z.optional(z.nullable(z.number().check(z.int(), z.minimum(0), z.maximum(0o7777)))),
+  }));
 
 export type PromptBundleEntryV1 = z.infer<typeof PromptBundleEntryV1Schema>;
 
 // Mutation operands are closed even though stored bundle readers retain extensions.
-const PromptBundleActionEntryV1Schema = lazyZodSchema(() => PromptBundleEntryV1Schema.strict());
+const PromptBundleActionEntryV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(PromptBundleEntryV1Schema));
 const PromptBundleActionEntriesProjectionV1Schema = lazyZodSchema(() => z.array(createStoredReadSchema(PromptBundleActionEntryV1Schema)));
 
 /** Retained annotations are read data, not operands of a current closed mutation. */
 export function projectPromptBundleActionEntriesV1(entries: readonly PromptBundleEntryV1[]): PromptBundleCreateActionInputV1['entries'] {
   return PromptBundleActionEntriesProjectionV1Schema.parse(entries);
 }
-export const PromptBundleCreateActionInputV1Schema = lazyZodSchema(() => z.object({
-title: z.string().min(1), bundleSchemaId: z.literal('skills.skill_md_v1'),
+export const PromptBundleCreateActionInputV1Schema = lazyZodSchema(() => z.strictObject({
+title: z.string().check(z.minLength(1)), bundleSchemaId: z.literal('skills.skill_md_v1'),
   entries: z.array(PromptBundleActionEntryV1Schema), ...PromptLibrarySaveOrganizationFieldsV1,
-}).strict().refine(isPromptLibrarySaveFolderAssignmentV1, { message: 'Folder assignment must match the reviewed folder creation' }));
+}).check(z.refine(isPromptLibrarySaveFolderAssignmentV1, { message: 'Folder assignment must match the reviewed folder creation' })));
 export type PromptBundleCreateActionInputV1 = z.infer<typeof PromptBundleCreateActionInputV1Schema>;
 
 const bundleUpdateFields = {
-  artifactId: lazyZodSchema(() => z.string().min(1)), title: lazyZodSchema(() => z.string().min(1)),
+  artifactId: lazyZodSchema(() => z.string().check(z.minLength(1))), title: lazyZodSchema(() => z.string().check(z.minLength(1))),
   ...PromptLibrarySaveOrganizationFieldsV1,
 } as const;
 export const PromptBundleUpdateActionInputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ ...bundleUpdateFields, skillMarkdown: z.string(), expectedRevision: ArtifactRevisionV1Schema.optional() }).strict(),
-  z.object({ ...bundleUpdateFields, entries: z.array(PromptBundleActionEntryV1Schema), expectedRevision: ArtifactRevisionV1Schema }).strict(),
-]).refine(isPromptLibrarySaveFolderAssignmentV1, { message: 'Folder assignment must match the reviewed folder creation' }));
+  z.strictObject({ ...bundleUpdateFields, skillMarkdown: z.string(), expectedRevision: z.optional(ArtifactRevisionV1Schema) }),
+  z.strictObject({ ...bundleUpdateFields, entries: z.array(PromptBundleActionEntryV1Schema), expectedRevision: ArtifactRevisionV1Schema }),
+]).check(z.refine(isPromptLibrarySaveFolderAssignmentV1, { message: 'Folder assignment must match the reviewed folder creation' })));
 export type PromptBundleUpdateActionInputV1 = z.infer<typeof PromptBundleUpdateActionInputV1Schema>;
 
-export const PromptBundleBodyV1Schema = lazyZodSchema(() => z
-  .object({
+export const PromptBundleBodyV1Schema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
     entries: z.array(PromptBundleEntryV1Schema),
-    createdAtMs: z.number().int().min(0),
-    updatedAtMs: z.number().int().min(0),
-  })
-  .passthrough());
+    createdAtMs: z.number().check(z.int(), z.minimum(0)),
+    updatedAtMs: z.number().check(z.int(), z.minimum(0)),
+  }));
 
 export type PromptBundleBodyV1 = z.infer<typeof PromptBundleBodyV1Schema>;
 

@@ -1,14 +1,14 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginUiArtifactDigestV1Schema } from './artifactIntegrity.js';
 import { PluginUiJsonValueV1Schema } from '../contributions/ui/json.js';
 
 /** Closed host-read identity. Action admission still owns caller policy and input validation. */
-export const PluginUiHostReadReferenceV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiHostReadReferenceV1Schema = lazyZodSchema(() => z.strictObject({
   hostRead: z.enum(['usage.query', 'connectedServices.quota.get', 'connectedServices.pools.selection.get']),
   input: PluginUiJsonValueV1Schema,
-}).strict());
+}));
 export type PluginUiHostReadReferenceV1 = z.infer<typeof PluginUiHostReadReferenceV1Schema>;
 
 /**
@@ -23,20 +23,20 @@ export type PluginUiHostReadReferenceV1 = z.infer<typeof PluginUiHostReadReferen
  * name their subject two different ways for the same host method.
  */
 export const PluginUiResourceSubscriptionTargetV1Schema = lazyZodSchema(() => z.union([
-  z.string().trim().min(1),
-  z.object({
-    pluginId: z.string().trim().min(1),
-    localId: z.string().trim().min(1),
-  }).strict(),
+  z.string().check(z.trim(), z.minLength(1)),
+  z.strictObject({
+    pluginId: z.string().check(z.trim(), z.minLength(1)),
+    localId: z.string().check(z.trim(), z.minLength(1)),
+  }),
   PluginUiHostReadReferenceV1Schema,
 ]));
 export type PluginUiResourceSubscriptionTargetV1 =
   z.infer<typeof PluginUiResourceSubscriptionTargetV1Schema>;
 
-export const PluginUiResourceSubscriptionRequestV1Schema = lazyZodSchema(() => z.object({
-  subscriptionId: z.string().trim().min(1),
+export const PluginUiResourceSubscriptionRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  subscriptionId: z.string().check(z.trim(), z.minLength(1)),
   resource: PluginUiResourceSubscriptionTargetV1Schema,
-}).strict());
+}));
 export type PluginUiResourceSubscriptionRequestV1 =
   z.infer<typeof PluginUiResourceSubscriptionRequestV1Schema>;
 
@@ -45,9 +45,9 @@ export type PluginUiResourceSubscriptionRequestV1 =
  * may be a context subscription, Resource watch, Composer observation, or
  * Composer input-lock lease; its id is host-issued only.
  */
-export const PluginUiDisposeHostResourceRequestV1Schema = lazyZodSchema(() => z.object({
-  subscriptionId: z.string().trim().min(1),
-}).strict());
+export const PluginUiDisposeHostResourceRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  subscriptionId: z.string().check(z.trim(), z.minLength(1)),
+}));
 export type PluginUiDisposeHostResourceRequestV1 =
   z.infer<typeof PluginUiDisposeHostResourceRequestV1Schema>;
 
@@ -65,25 +65,25 @@ export type PluginUiDisposeHostResourceRequestV1 =
  * arms and are unchanged.
  */
 export const PluginUiResourceSubscriptionEventV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     version: z.literal(1),
-    subscriptionId: z.string().trim().min(1),
+    subscriptionId: z.string().check(z.trim(), z.minLength(1)),
     kind: z.literal('invalidated'),
     digest: PluginUiArtifactDigestV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     version: z.literal(1),
-    subscriptionId: z.string().trim().min(1),
+    subscriptionId: z.string().check(z.trim(), z.minLength(1)),
     kind: z.literal('complete'),
-    diagnostics: z.array(z.string().trim().min(1)).default([]),
-  }).strict(),
-  z.object({
+    diagnostics: z._default(z.array(z.string().check(z.trim(), z.minLength(1))), []),
+  }),
+  z.strictObject({
     version: z.literal(1),
-    subscriptionId: z.string().trim().min(1),
+    subscriptionId: z.string().check(z.trim(), z.minLength(1)),
     kind: z.literal('error'),
     code: z.enum(['unavailable', 'denied', 'stale_surface', 'expired_resource']),
-    diagnostics: z.array(z.string().trim().min(1)).default([]),
-  }).strict(),
+    diagnostics: z._default(z.array(z.string().check(z.trim(), z.minLength(1))), []),
+  }),
 ]));
 export type PluginUiResourceSubscriptionEventV1 =
   z.infer<typeof PluginUiResourceSubscriptionEventV1Schema>;

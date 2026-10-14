@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { ScmCredentialFreeRepositorySelectorV1Schema, ScmRepositoryContainedSubdirV1Schema } from '../../scm/repositoryClone.js';
@@ -11,62 +11,62 @@ export const PROJECT_SOURCES_ACCOUNT_CHANGE_ENTITY_ID_V1 = 'projects:sources' as
 
 export const ProjectSourceRepositorySelectorV1Schema = ScmCredentialFreeRepositorySelectorV1Schema;
 export type ProjectSourceRepositorySelectorV1 = z.infer<typeof ProjectSourceRepositorySelectorV1Schema>;
-export const ProjectSourceGrantV1Schema = lazyZodSchema(() => z.object({ principal: PrincipalRefV1Schema, level: z.literal('view') }).strict());
+export const ProjectSourceGrantV1Schema = lazyZodSchema(() => z.strictObject({ principal: PrincipalRefV1Schema, level: z.literal('view') }));
 export type ProjectSourceGrantV1 = z.infer<typeof ProjectSourceGrantV1Schema>;
 export const SourceAttachmentV1Schema = lazyZodSchema(() => z.discriminatedUnion('purpose', [
-  z.object({ purpose: z.literal('context'), entry: PromptStackEntryV1Schema.extend({ ref: PromptArtifactRefV1Schema.strict() }).strict() }).strict(),
-  z.object({ purpose: z.literal('dashboard'), ref: PromptArtifactRefV1Schema.strict() }).strict(),
+  z.strictObject({ purpose: z.literal('context'), entry: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PromptStackEntryV1Schema, { ref: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(PromptArtifactRefV1Schema) })) }),
+  z.strictObject({ purpose: z.literal('dashboard'), ref: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(PromptArtifactRefV1Schema) }),
 ]));
 export type SourceAttachmentV1 = z.infer<typeof SourceAttachmentV1Schema>;
 const SourceAttachmentAuthoringV1Schema = lazyZodSchema(() => z.discriminatedUnion('purpose', [
-  SourceAttachmentV1Schema.options[0].extend({ entry: PromptStackEntryAuthoringV1Schema.extend({ ref: PromptArtifactRefV1Schema.strict() }).strict() }).strict(),
-  SourceAttachmentV1Schema.options[1],
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SourceAttachmentV1Schema._zod.def.options[0], { entry: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PromptStackEntryAuthoringV1Schema, { ref: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(PromptArtifactRefV1Schema) })) })),
+  SourceAttachmentV1Schema._zod.def.options[1],
 ]));
 // Source folders use clone's containment admission, with one canonical root representation.
-const ProjectSourceSubdirV1Schema = lazyZodSchema(() => z.union([
-  z.string().trim().length(0), ScmRepositoryContainedSubdirV1Schema,
-]).transform(value => value.replaceAll('\\', '/').split('/').filter(part => part && part !== '.').join('/') || undefined));
+const ProjectSourceSubdirV1Schema = lazyZodSchema(() => z.pipe(z.union([
+  z.string().check(z.trim(), z.length(0)), ScmRepositoryContainedSubdirV1Schema,
+]), z.transform(value => value.replaceAll('\\', '/').split('/').filter(part => part && part !== '.').join('/') || undefined)));
 export function normalizeProjectSourceSubdirV1(value: string | null | undefined): string | undefined {
   return value == null ? undefined : ProjectSourceSubdirV1Schema.parse(value);
 }
-export const ProjectSourceV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().min(1), revision: z.number().int().positive(), name: z.string().trim().min(1),
+export const ProjectSourceV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.minLength(1)), revision: z.number().check(z.int(), z.positive()), name: z.string().check(z.trim(), z.minLength(1)),
   repository: ProjectSourceRepositorySelectorV1Schema,
-  defaultRef: z.string().trim().min(1).optional(), subdir: ProjectSourceSubdirV1Schema.optional(),
-  audience: z.array(ProjectSourceGrantV1Schema), createdByAccountId: z.string().min(1),
-  attachments: z.array(SourceAttachmentV1Schema).optional(),
-}).strict());
+  defaultRef: z.optional(z.string().check(z.trim(), z.minLength(1))), subdir: z.optional(ProjectSourceSubdirV1Schema),
+  audience: z.array(ProjectSourceGrantV1Schema), createdByAccountId: z.string().check(z.minLength(1)),
+  attachments: z.optional(z.array(SourceAttachmentV1Schema)),
+}));
 export type ProjectSourceV1 = z.infer<typeof ProjectSourceV1Schema>;
 export const ProjectSourceV1StoredSchema = createStoredReadSchema(ProjectSourceV1Schema);
-const id = z.string().min(1);
-const revision = z.number().int().positive();
-export const ProjectSourcesListInputV1Schema = lazyZodSchema(() => z.object({ serverId: id, query: z.string().optional(), audience: PrincipalRefV1Schema.optional(), cursor: id.optional(), limit: z.number().int().positive().optional() }).strict());
-export const ProjectSourcesReadInputV1Schema = lazyZodSchema(() => z.object({ serverId: id, sourceId: id }).strict());
-export const ProjectSourcesCreateInputV1Schema = lazyZodSchema(() => ProjectSourceV1Schema.pick({ name: true, repository: true, defaultRef: true, subdir: true }).extend({ serverId: id, requestKey: id, audience: z.array(ProjectSourceGrantV1Schema).optional() }).strict());
+const id = z.string().check(z.minLength(1));
+const revision = z.number().check(z.int(), z.positive());
+export const ProjectSourcesListInputV1Schema = lazyZodSchema(() => z.strictObject({ serverId: id, query: z.optional(z.string()), audience: z.optional(PrincipalRefV1Schema), cursor: z.optional(id), limit: z.optional(z.number().check(z.int(), z.positive())) }));
+export const ProjectSourcesReadInputV1Schema = lazyZodSchema(() => z.strictObject({ serverId: id, sourceId: id }));
+export const ProjectSourcesCreateInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.pick(ProjectSourceV1Schema, { name: true, repository: true, defaultRef: true, subdir: true }), { serverId: id, requestKey: id, audience: z.optional(z.array(ProjectSourceGrantV1Schema)) })));
 export const ProjectSourceAttachmentIntentV1Schema = lazyZodSchema(() => z.union([
-  z.object({ kind: z.literal('attach'), attachment: SourceAttachmentAuthoringV1Schema }).strict(),
-  z.object({ kind: z.literal('detach'), purpose: z.literal('context'), attachmentId: id }).strict(),
-  z.object({ kind: z.literal('detach'), purpose: z.literal('dashboard'), ref: PromptArtifactRefV1Schema.strict() }).strict(),
-  z.object({ kind: z.literal('reorder'), attachmentId: id, beforeId: id.nullable() }).strict(),
-  z.object({ kind: z.literal('budget'), attachmentId: id, maxChars: z.number().int().positive().nullable() }).strict(),
-  PromptStackSetEnabledIntentV1Schema.omit({ entryId: true }).extend({ attachmentId: id }).strict(),
+  z.strictObject({ kind: z.literal('attach'), attachment: SourceAttachmentAuthoringV1Schema }),
+  z.strictObject({ kind: z.literal('detach'), purpose: z.literal('context'), attachmentId: id }),
+  z.strictObject({ kind: z.literal('detach'), purpose: z.literal('dashboard'), ref: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(PromptArtifactRefV1Schema) }),
+  z.strictObject({ kind: z.literal('reorder'), attachmentId: id, beforeId: z.nullable(id) }),
+  z.strictObject({ kind: z.literal('budget'), attachmentId: id, maxChars: z.nullable(z.number().check(z.int(), z.positive())) }),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.omit(PromptStackSetEnabledIntentV1Schema, { entryId: true }), { attachmentId: id })),
 ]));
 export type ProjectSourceAttachmentIntentV1 = z.infer<typeof ProjectSourceAttachmentIntentV1Schema>;
-export const ProjectSourcePatchV1Schema = lazyZodSchema(() => z.object({
-  name: ProjectSourceV1Schema.shape.name.optional(), repository: ProjectSourceRepositorySelectorV1Schema.optional(),
-  defaultRef: ProjectSourceV1Schema.shape.defaultRef.unwrap().nullable().optional(),
-  subdir: ProjectSourceV1Schema.shape.subdir.unwrap().nullable().transform(value => value ?? null).optional(),
-  audience: z.array(ProjectSourceGrantV1Schema).optional(), attachment: ProjectSourceAttachmentIntentV1Schema.optional(),
-}).strict());
-export const ProjectSourcesUpdateInputV1Schema = lazyZodSchema(() => z.object({ serverId: id, sourceId: id, expectedRevision: revision, patch: ProjectSourcePatchV1Schema }).strict());
-export const ProjectSourcesDeleteInputV1Schema = lazyZodSchema(() => z.object({ serverId: id, sourceId: id, expectedRevision: revision }).strict());
-export const ProjectSourcesFailureV1Schema = lazyZodSchema(() => z.object({ ok: z.literal(false), error: z.enum(['source_unavailable', 'source_access_denied', 'source_invalid', 'source_conflict', 'artifact_unavailable', 'artifact_wrong_kind', 'source_backend_unavailable']), current: ProjectSourceV1Schema.optional() }).strict());
+export const ProjectSourcePatchV1Schema = lazyZodSchema(() => z.strictObject({
+  name: z.optional(ProjectSourceV1Schema.shape.name), repository: z.optional(ProjectSourceRepositorySelectorV1Schema),
+  defaultRef: z.optional(z.nullable(ProjectSourceV1Schema.shape.defaultRef._zod.def.innerType)),
+  subdir: z.optional(z.pipe(z.nullable(ProjectSourceV1Schema.shape.subdir._zod.def.innerType), z.transform(value => value ?? null))),
+  audience: z.optional(z.array(ProjectSourceGrantV1Schema)), attachment: z.optional(ProjectSourceAttachmentIntentV1Schema),
+}));
+export const ProjectSourcesUpdateInputV1Schema = lazyZodSchema(() => z.strictObject({ serverId: id, sourceId: id, expectedRevision: revision, patch: ProjectSourcePatchV1Schema }));
+export const ProjectSourcesDeleteInputV1Schema = lazyZodSchema(() => z.strictObject({ serverId: id, sourceId: id, expectedRevision: revision }));
+export const ProjectSourcesFailureV1Schema = lazyZodSchema(() => z.strictObject({ ok: z.literal(false), error: z.enum(['source_unavailable', 'source_access_denied', 'source_invalid', 'source_conflict', 'artifact_unavailable', 'artifact_wrong_kind', 'source_backend_unavailable']), current: z.optional(ProjectSourceV1Schema) }));
 export type ProjectSourcesFailureV1 = z.infer<typeof ProjectSourcesFailureV1Schema>;
-export const ProjectSourcesReadOutputV1Schema = lazyZodSchema(() => z.union([z.object({ ok: z.literal(true), source: ProjectSourceV1Schema, canManage: z.boolean() }).strict(), ProjectSourcesFailureV1Schema]));
+export const ProjectSourcesReadOutputV1Schema = lazyZodSchema(() => z.union([z.strictObject({ ok: z.literal(true), source: ProjectSourceV1Schema, canManage: z.boolean() }), ProjectSourcesFailureV1Schema]));
 export const ProjectSourcesCreateOutputV1Schema = ProjectSourcesReadOutputV1Schema;
 export const ProjectSourcesUpdateOutputV1Schema = ProjectSourcesReadOutputV1Schema;
-export const ProjectSourcesDeleteOutputV1Schema = lazyZodSchema(() => z.union([z.object({ ok: z.literal(true), sourceId: id, revision }).strict(), ProjectSourcesFailureV1Schema]));
-export const ProjectSourcesListOutputV1Schema = lazyZodSchema(() => z.union([z.object({ ok: z.literal(true), sources: z.array(ProjectSourceV1Schema), coverage: z.object({ complete: z.boolean(), nextCursor: id.nullable() }).strict() }).strict(), ProjectSourcesFailureV1Schema]));
+export const ProjectSourcesDeleteOutputV1Schema = lazyZodSchema(() => z.union([z.strictObject({ ok: z.literal(true), sourceId: id, revision }), ProjectSourcesFailureV1Schema]));
+export const ProjectSourcesListOutputV1Schema = lazyZodSchema(() => z.union([z.strictObject({ ok: z.literal(true), sources: z.array(ProjectSourceV1Schema), coverage: z.strictObject({ complete: z.boolean(), nextCursor: z.nullable(id) }) }), ProjectSourcesFailureV1Schema]));
 export type ProjectSourcesListInputV1 = z.infer<typeof ProjectSourcesListInputV1Schema>;
 export type ProjectSourcesReadInputV1 = z.infer<typeof ProjectSourcesReadInputV1Schema>;
 export type ProjectSourcesCreateInputV1 = z.infer<typeof ProjectSourcesCreateInputV1Schema>;

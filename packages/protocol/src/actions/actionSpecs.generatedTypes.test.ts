@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type {
   CanonicalActionSpecDefinition,

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionEnvOverlayEntryV1Schema } from '../../spawn/envOverlay.js';
 
@@ -29,14 +29,14 @@ function isPlainDataObject(value: unknown): value is Readonly<Record<string, unk
     && hasOnlyDataProperties(value);
 }
 
-const PlainDataObjectV1Schema = lazyZodSchema(() => z.unknown().superRefine((value, ctx) => {
+const PlainDataObjectV1Schema = lazyZodSchema(() => z.unknown().check(z.superRefine((value, ctx) => {
   if (!isPlainDataObject(value)) {
     ctx.addIssue({ code: 'custom', message: 'Provider materialization values must be plain data objects' });
   }
-}));
+})));
 
 function boundedArrayPreflight(maxItems: number, label: string) {
-  return z.unknown().superRefine((value, ctx) => {
+  return z.unknown().check(z.superRefine((value, ctx) => {
     if (!Array.isArray(value)) {
       ctx.addIssue({ code: 'custom', message: `${label} must be an array` });
       return;
@@ -57,21 +57,19 @@ function boundedArrayPreflight(maxItems: number, label: string) {
     if (hasUnsafeDescriptor) {
       ctx.addIssue({ code: 'custom', message: `${label} must be a dense array of plain data values` });
     }
-  });
+  }));
 }
 
-const ProviderEnvEntryV1Schema = lazyZodSchema(() => z.unknown().superRefine((value, ctx) => {
+const ProviderEnvEntryV1Schema = lazyZodSchema(() => z.pipe(z.unknown().check(z.superRefine((value, ctx) => {
   if (!isPlainDataObject(value)) {
     ctx.addIssue({ code: 'custom', message: 'Provider environment entries must be plain data objects' });
   }
-}).pipe(SessionEnvOverlayEntryV1Schema.extend({ source: z.literal('provider') }).strict()));
+})), (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionEnvOverlayEntryV1Schema, { source: z.literal('provider') }))));
 
-export const ProviderBindingEnvOverlayV1Schema = boundedArrayPreflight(
+export const ProviderBindingEnvOverlayV1Schema = z.pipe(boundedArrayPreflight(
   PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1.env.maxRows,
   'Provider environment',
-).pipe(z.array(ProviderEnvEntryV1Schema)
-  .max(PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1.env.maxRows)
-  .superRefine((entries, ctx) => {
+), z.array(ProviderEnvEntryV1Schema).check(z.maxLength(PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1.env.maxRows), z.superRefine((entries, ctx) => {
     const seen = new Set<string>();
     let aggregate = 0;
     entries.forEach((entry, index) => {
@@ -93,15 +91,13 @@ export const ProviderBindingEnvOverlayV1Schema = boundedArrayPreflight(
     if (aggregate > PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1.env.maxAggregateBytes) {
       ctx.addIssue({ code: 'custom', message: 'Provider environment exceeds the aggregate byte limit' });
     }
-  }));
+  })));
 export type ProviderBindingEnvOverlayV1 = z.infer<typeof ProviderBindingEnvOverlayV1Schema>;
 
-const SupplementalRedactionValuesV1Schema = boundedArrayPreflight(
+const SupplementalRedactionValuesV1Schema = z.pipe(boundedArrayPreflight(
   PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1.redaction.maxValues,
   'Redaction values',
-).pipe(z.array(z.string())
-  .max(PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1.redaction.maxValues)
-  .superRefine((values, ctx) => {
+), z.array(z.string()).check(z.maxLength(PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1.redaction.maxValues), z.superRefine((values, ctx) => {
     let aggregate = 0;
     values.forEach((value, index) => {
       const bytes = utf8Bytes(value);
@@ -113,7 +109,7 @@ const SupplementalRedactionValuesV1Schema = boundedArrayPreflight(
     if (aggregate > PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1.redaction.maxAggregateBytes) {
       ctx.addIssue({ code: 'custom', message: 'Redaction values exceed the aggregate byte limit' });
     }
-  }));
+  })));
 
 type CanonicalJsonPrimitive = null | boolean | number | string;
 export type ProviderBindingCanonicalJsonValue =
@@ -130,7 +126,7 @@ export type ProviderBindingCanonicalJsonObject = Exclude<
 
 function validateCanonicalJsonObject(
   value: unknown,
-  ctx: z.RefinementCtx,
+  ctx: z.core.$RefinementCtx,
 ): value is ProviderBindingCanonicalJsonObject {
   const seen = new Set<object>();
   let nodes = 0;
@@ -217,11 +213,11 @@ function validateCanonicalJsonObject(
   return valid;
 }
 
-export const ProviderBindingCanonicalJsonObjectV1Schema = lazyZodSchema(() => z.unknown().superRefine((value, ctx) => {
+export const ProviderBindingCanonicalJsonObjectV1Schema = lazyZodSchema(() => z.pipe(z.unknown().check(z.superRefine((value, ctx) => {
   validateCanonicalJsonObject(value, ctx);
-}).transform((value) => value as ProviderBindingCanonicalJsonObject));
+})), z.transform((value) => value as ProviderBindingCanonicalJsonObject)));
 
-const ProviderBindingRelativePathV1Schema = lazyZodSchema(() => z.string().min(1).superRefine((value, ctx) => {
+const ProviderBindingRelativePathV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.superRefine((value, ctx) => {
   if (utf8Bytes(value) > PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1.files.maxPathBytes
     || /[\u0000-\u001f\u007f]/u.test(value)
     || /^[\\/]/u.test(value)
@@ -233,20 +229,17 @@ const ProviderBindingRelativePathV1Schema = lazyZodSchema(() => z.string().min(1
   if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
     ctx.addIssue({ code: 'custom', message: 'Provider file path contains an unsafe segment' });
   }
-}));
+})));
 
-const ProviderBindingFileV1Schema = lazyZodSchema(() => PlainDataObjectV1Schema.pipe(z.object({
+const ProviderBindingFileV1Schema = lazyZodSchema(() => z.pipe(PlainDataObjectV1Schema, z.strictObject({
   relativePath: ProviderBindingRelativePathV1Schema,
   utf8: z.string(),
-}).strict()));
+})));
 
-const ProviderBindingFilesV1Schema = boundedArrayPreflight(
+const ProviderBindingFilesV1Schema = z.pipe(boundedArrayPreflight(
   PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1.files.maxFiles,
   'Provider files',
-).pipe(z.array(ProviderBindingFileV1Schema)
-  .min(1)
-  .max(PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1.files.maxFiles)
-  .superRefine((files, ctx) => {
+), z.array(ProviderBindingFileV1Schema).check(z.minLength(1), z.maxLength(PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1.files.maxFiles), z.superRefine((files, ctx) => {
     const seen = new Set<string>();
     let aggregate = 0;
     files.forEach((file, index) => {
@@ -264,29 +257,28 @@ const ProviderBindingFilesV1Schema = boundedArrayPreflight(
     if (aggregate > PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1.files.maxAggregateBytes) {
       ctx.addIssue({ code: 'custom', message: 'Provider files exceed the aggregate byte limit' });
     }
-  }));
+  })));
 
 const commonMaterializationShape = {
   v: z.literal(1),
   env: ProviderBindingEnvOverlayV1Schema,
-  additionalRedactionValues: SupplementalRedactionValuesV1Schema.optional(),
+  additionalRedactionValues: z.optional(SupplementalRedactionValuesV1Schema),
 };
 
 const AgentProviderBindingMaterializationDataV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ ...commonMaterializationShape, kind: z.literal('spawnEnv') }).strict(),
-  z.object({
+  z.strictObject({ ...commonMaterializationShape, kind: z.literal('spawnEnv') }),
+  z.strictObject({
     ...commonMaterializationShape,
     kind: z.literal('engineConfig'),
     engineConfig: ProviderBindingCanonicalJsonObjectV1Schema,
-  }).strict(),
-  z.object({ ...commonMaterializationShape, kind: z.literal('configFile'), files: ProviderBindingFilesV1Schema }).strict(),
+  }),
+  z.strictObject({ ...commonMaterializationShape, kind: z.literal('configFile'), files: ProviderBindingFilesV1Schema }),
 ]));
-export const AgentProviderBindingMaterializationV1Schema = lazyZodSchema(() => PlainDataObjectV1Schema
-  .pipe(AgentProviderBindingMaterializationDataV1Schema));
+export const AgentProviderBindingMaterializationV1Schema = lazyZodSchema(() => z.pipe(PlainDataObjectV1Schema, AgentProviderBindingMaterializationDataV1Schema));
 export type AgentProviderBindingMaterialization = z.infer<typeof AgentProviderBindingMaterializationV1Schema>;
 export type AgentProviderBindingMaterializationV1 = AgentProviderBindingMaterialization;
 
-const HostMaterializedRootPathV1Schema = lazyZodSchema(() => z.string().min(1).superRefine((value, ctx) => {
+const HostMaterializedRootPathV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.superRefine((value, ctx) => {
   const isAbsolute = value.startsWith('/')
     || /^[A-Za-z]:[\\/]/u.test(value)
     || /^[/\\]{2}[^/\\]+[/\\][^/\\]+/u.test(value);
@@ -297,15 +289,12 @@ const HostMaterializedRootPathV1Schema = lazyZodSchema(() => z.string().min(1).s
     || segments.some((segment) => segment === '.' || segment === '..')) {
     ctx.addIssue({ code: 'custom', message: 'Materialized provider root path is unsafe or too large' });
   }
-}));
+})));
 
-const ProviderBindingLaunchRelativePathsV1Schema = boundedArrayPreflight(
+const ProviderBindingLaunchRelativePathsV1Schema = z.pipe(boundedArrayPreflight(
   PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1.files.maxFiles,
   'Provider launch file paths',
-).pipe(z.array(ProviderBindingRelativePathV1Schema)
-  .min(1)
-  .max(PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1.files.maxFiles)
-  .superRefine((paths, ctx) => {
+), z.array(ProviderBindingRelativePathV1Schema).check(z.minLength(1), z.maxLength(PROVIDER_BINDING_MATERIALIZATION_LIMITS_V1.files.maxFiles), z.superRefine((paths, ctx) => {
     const seen = new Set<string>();
     paths.forEach((path, index) => {
       const normalized = path.toLocaleLowerCase('en-US');
@@ -314,21 +303,21 @@ const ProviderBindingLaunchRelativePathsV1Schema = boundedArrayPreflight(
       }
       seen.add(normalized);
     });
-  }));
+  })));
 
 const AgentProviderBindingLaunchMaterializationDataV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ v: z.literal(1), kind: z.literal('spawnEnv') }).strict(),
-  z.object({
+  z.strictObject({ v: z.literal(1), kind: z.literal('spawnEnv') }),
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal('engineConfig'),
     engineConfig: ProviderBindingCanonicalJsonObjectV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal('configFile'),
     rootPath: HostMaterializedRootPathV1Schema,
     relativePaths: ProviderBindingLaunchRelativePathsV1Schema,
-  }).strict(),
+  }),
 ]));
 export type AgentProviderBindingLaunchMaterialization =
   | Readonly<{ v: 1; kind: 'spawnEnv' }>
@@ -346,8 +335,7 @@ export type AgentProviderBindingLaunchMaterialization =
 export type AgentProviderBindingLaunchMaterializationV1 =
   AgentProviderBindingLaunchMaterialization;
 export const AgentProviderBindingLaunchMaterializationV1Schema =
-  PlainDataObjectV1Schema
-    .pipe(AgentProviderBindingLaunchMaterializationDataV1Schema) as z.ZodType<
+  z.pipe(PlainDataObjectV1Schema, AgentProviderBindingLaunchMaterializationDataV1Schema) as z.ZodMiniType<
       AgentProviderBindingLaunchMaterializationV1,
       AgentProviderBindingLaunchMaterializationV1
     >;

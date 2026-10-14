@@ -1,28 +1,50 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
+import * as mini from 'zod/mini';
 import { lazyZodSchema } from './lazyZodSchema.js';
 
 describe('lazyZodSchema', () => {
+  it('keeps a Mini definition cold through native default composition and independent defaults', () => {
+    let constructed = 0;
+    let defaults = 0;
+    const schema = lazyZodSchema(() => {
+      constructed++;
+      return mini.strictObject({ id: mini.string().check(mini.minLength(1)) });
+    });
+    const parent = mini.strictObject({
+      item: mini._default(schema, () => ({ id: `fallback-${++defaults}` })),
+    });
+    expect(constructed).toBe(0);
+    expect(mini.parse(parent, {})).toEqual({ item: { id: 'fallback-1' } });
+    expect(mini.parse(parent, {})).toEqual({ item: { id: 'fallback-2' } });
+    expect(constructed).toBe(0);
+    expect(mini.safeParse(parent, { item: { id: '', retired: true } }).success).toBe(false);
+    expect(constructed).toBe(1);
+    expect(mini.toJSONSchema(parent, { io: 'input' })).toMatchObject({
+      properties: { item: { properties: { id: { type: 'string', minLength: 1 } } } },
+    });
+  });
+
   it('keeps a defaulted absent field cold while preserving native defaults and reverse validation', async () => {
     let constructed = 0;
     let defaults = 0;
     const schema = lazyZodSchema(() => {
       constructed++;
-      return z.object({ id: z.string().min(1) }).strict();
+      return z.strictObject({ id: z.string().check(z.minLength(1)) });
     });
     const fallback = () => ({ id: `fallback-${++defaults}` });
-    const defaulted = schema.default(fallback);
-    const parent = z.object({ item: defaulted }).strict();
-    expect(parent.parse({})).toEqual({ item: { id: 'fallback-1' } });
-    expect(await parent.parseAsync({})).toEqual({ item: { id: 'fallback-2' } });
-    expect(defaulted.optional().parse(undefined)).toEqual({ id: 'fallback-3' });
+    const defaulted = z._default(schema, fallback);
+    const parent = z.strictObject({ item: defaulted });
+    expect(z.parse(parent, {})).toEqual({ item: { id: 'fallback-1' } });
+    expect(await z.parseAsync(parent, {})).toEqual({ item: { id: 'fallback-2' } });
+    expect(z.parse(z.optional(defaulted), undefined)).toEqual({ id: 'fallback-3' });
     expect(constructed).toBe(0);
-    expect(parent.safeParse({ item: { id: '', extra: true } }).success).toBe(false);
+    expect(z.safeParse(parent, { item: { id: '', extra: true } }).success).toBe(false);
     expect(constructed).toBe(1);
-    expect(defaulted.safeEncode({ id: '' }).success).toBe(false);
-    expect(defaulted.unwrap()).toBeInstanceOf(z.ZodObject);
-    const expected = z.object({ item: z.object({ id: z.string().min(1) }).strict().default({ id: 'fallback' }) }).strict();
-    const projected = z.object({ item: schema.default({ id: 'fallback' }) }).strict();
+    expect(z.safeEncode(defaulted, { id: '' }).success).toBe(false);
+    expect(defaulted._zod.def.innerType).toBeInstanceOf(z.ZodMiniObject);
+    const expected = z.strictObject({ item: z._default(z.strictObject({ id: z.string().check(z.minLength(1)) }), { id: 'fallback' }) });
+    const projected = z.strictObject({ item: z._default(schema, { id: 'fallback' }) });
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
       for (const io of ['input', 'output'] as const) {
         expect(z.toJSONSchema(projected, { target, io })).toEqual(z.toJSONSchema(expected, { target, io }));
@@ -30,34 +52,38 @@ describe('lazyZodSchema', () => {
     }
   });
   it('preserves constraints of a derived facade reused through defaults and arrays', () => {
-    const base = lazyZodSchema(() => z.object({ name: z.string().nullable() }).strict());
-    const account = lazyZodSchema(() => base.extend({ kind: z.literal('account'), accountId: z.string().min(1) }).strict());
-    const schema = lazyZodSchema(() => z.object({
-      owner: account.nullable().optional().default(null),
-      audience: z.object({ accounts: z.array(account) }).strict().nullable().optional().default(null),
-    }).strict());
-    const concrete = z.object({ name: z.string().nullable() }).strict()
-      .extend({ kind: z.literal('account'), accountId: z.string().min(1) }).strict();
-    const expected = z.object({
-      owner: concrete.nullable().optional().default(null),
-      audience: z.object({ accounts: z.array(concrete) }).strict().nullable().optional().default(null),
-    }).strict();
+    const base = lazyZodSchema(() => z.strictObject({ name: z.nullable(z.string()) }));
+    const account = lazyZodSchema(() => mini.extend(base, {
+      kind: mini.literal('account'), accountId: mini.string().check(mini.minLength(1)),
+    }));
+    const schema = lazyZodSchema(() => z.strictObject({
+      owner: z._default(z.optional(z.nullable(account)), null),
+      audience: z._default(z.optional(z.nullable(z.strictObject({ accounts: z.array(account) }))), null),
+    }));
+    const concrete = mini.strictObject({
+      name: mini.nullable(mini.string()), kind: mini.literal('account'),
+      accountId: mini.string().check(mini.minLength(1)),
+    });
+    const expected = z.strictObject({
+      owner: z._default(z.optional(z.nullable(concrete)), null),
+      audience: z._default(z.optional(z.nullable(z.strictObject({ accounts: z.array(concrete) }))), null),
+    });
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
       for (const io of ['input', 'output'] as const) {
         expect(z.toJSONSchema(schema, { target, io })).toEqual(z.toJSONSchema(expected, { target, io }));
       }
     }
-    expect(schema.parse({ audience: { accounts: [{ name: null, kind: 'account', accountId: 'a' }] } }))
+    expect(z.parse(schema, { audience: { accounts: [{ name: null, kind: 'account', accountId: 'a' }] } }))
       .toEqual({ owner: null, audience: { accounts: [{ name: null, kind: 'account', accountId: 'a' }] } });
-    expect(schema.safeParse({ audience: { accounts: [{}] } }).success).toBe(false);
+    expect(z.safeParse(schema, { audience: { accounts: [{}] } }).success).toBe(false);
   });
   it('preserves a refined recursive definition identity in both JSON Schema dialects', () => {
     type Tree = { items?: Tree[] };
-    const tree: z.ZodType<Tree> = z.lazy(() => z.object({ items: z.array(tree).optional() }).strict());
-    const concrete = tree.superRefine(() => {});
+    const tree: z.ZodMiniType<Tree> = z.lazy(() => z.strictObject({ items: z.optional(z.array(tree)) }));
+    const concrete = tree.check(z.superRefine(() => {}));
     const schema = lazyZodSchema(() => concrete);
-    const parent = z.object({ first: schema, second: schema.optional(), items: z.array(schema) }).strict();
-    const expected = z.object({ first: concrete, second: concrete.optional(), items: z.array(concrete) }).strict();
+    const parent = z.strictObject({ first: schema, second: z.optional(schema), items: z.array(schema) });
+    const expected = z.strictObject({ first: concrete, second: z.optional(concrete), items: z.array(concrete) });
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
       for (const io of ['input', 'output'] as const) {
         for (const reused of ['inline', 'ref'] as const) {
@@ -67,12 +93,12 @@ describe('lazyZodSchema', () => {
     }
   });
   it('shares projection identity with native parents produced by deferred composition', () => {
-    const schema = lazyZodSchema(() => z.string().min(1));
-    const derived = schema.nullable().optional();
-    const parent = z.object({ first: schema, second: derived, repeated: z.array(derived) }).strict();
-    const concrete = z.string().min(1);
-    const expectedDerived = concrete.nullable().optional();
-    const expected = z.object({ first: concrete, second: expectedDerived, repeated: z.array(expectedDerived) }).strict();
+    const schema = lazyZodSchema(() => z.string().check(z.minLength(1)));
+    const derived = z.optional(z.nullable(schema));
+    const parent = z.strictObject({ first: schema, second: derived, repeated: z.array(derived) });
+    const concrete = z.string().check(z.minLength(1));
+    const expectedDerived = z.optional(z.nullable(concrete));
+    const expected = z.strictObject({ first: concrete, second: expectedDerived, repeated: z.array(expectedDerived) });
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
       for (const io of ['input', 'output'] as const) {
         for (const reused of ['inline', 'ref'] as const) {
@@ -83,16 +109,17 @@ describe('lazyZodSchema', () => {
   });
   it('keeps scalar constraints and object key derivation cold until their validator is used', () => {
     let constructed = 0;
-    const text = lazyZodSchema(() => {
+    const constrained = lazyZodSchema(() => {
       constructed++;
-      return z.string();
+      return mini.string().check(
+        mini.trim(), mini.minLength(2), mini.maxLength(4), mini.regex(/^[a-z]+$/u),
+      );
     });
-    const constrained = text.trim().min(2).max(4).regex(/^[a-z]+$/u);
     const object = lazyZodSchema(() => {
       constructed++;
-      return z.object({ id: constrained, count: z.number() }).strict();
+      return z.strictObject({ id: constrained, count: z.number() });
     });
-    const keys = object.keyof();
+    const keys = lazyZodSchema(() => mini.keyof(object));
     expect(constructed).toBe(0);
     expect(constrained.parse(' ab ')).toBe('ab');
     expect(constrained.safeParse('a').success).toBe(false);
@@ -103,7 +130,7 @@ describe('lazyZodSchema', () => {
     expect(keys.safeParse('unknown').success).toBe(false);
     expect(object.parse({ id: ' ab ', count: 1 })).toEqual({ id: 'ab', count: 1 });
     expect(constructed).toBe(2);
-    const expected = z.object({ id: z.string().trim().min(2).max(4).regex(/^[a-z]+$/u), count: z.number() }).strict();
+    const expected = z.strictObject({ id: z.string().check(z.trim(), z.minLength(2), z.maxLength(4), z.regex(/^[a-z]+$/u)), count: z.number() });
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
       expect(z.toJSONSchema(object, { target, io: 'input' })).toEqual(z.toJSONSchema(expected, { target, io: 'input' }));
     }
@@ -112,38 +139,36 @@ describe('lazyZodSchema', () => {
     let constructed = 0;
     const schema = lazyZodSchema(() => {
       constructed++;
-      return z.object({ id: z.string().trim().min(1), count: z.number().int().default(3) }).strict();
+      return z.strictObject({ id: z.string().check(z.trim(), z.minLength(1)), count: z._default(z.number().check(z.int()), 3) });
     });
-    const derived = schema.extend({ enabled: z.boolean() }).partial();
-    const optional = schema.optional();
+    const derived = lazyZodSchema(() => z.partial(z.extend(schema, { enabled: z.boolean() })));
+    const optional = z.optional(schema);
     expect(typeof schema.parse).toBe('function');
     expect(typeof schema.safeParse).toBe('function');
     expect(constructed).toBe(0);
     expect(schema.parse({ id: ' a ' })).toEqual({ id: 'a', count: 3 });
     expect(schema.safeParse({ id: '' }).success).toBe(false);
     expect(schema.safeParse({ id: 'a', unknown: true }).success).toBe(false);
-    expect(derived.parse({ enabled: true })).toEqual({ count: 3, enabled: true });
-    expect(optional.parse(undefined)).toBeUndefined();
+    expect(z.parse(derived, { enabled: true })).toEqual({ count: 3, enabled: true });
+    expect(z.parse(optional, undefined)).toBeUndefined();
     expect(constructed).toBe(1);
-    expectTypeOf(schema).toEqualTypeOf<z.ZodObject<{
-      id: z.ZodString; count: z.ZodDefault<z.ZodNumber>;
+    expectTypeOf(schema).toEqualTypeOf<z.ZodMiniObject<{
+      id: z.ZodMiniString; count: z.ZodMiniDefault<z.ZodMiniNumber>;
     }, z.core.$strict>>();
   });
 
   it('composes with real parent parsing, union discrimination, reflection and JSON Schema export', async () => {
-    const schema = lazyZodSchema(() => z.object({ kind: z.literal('item'), id: z.string() }).strict());
-    const parent = z.object({ item: schema.optional() }).strict();
+    const schema = lazyZodSchema(() => z.strictObject({ kind: z.literal('item'), id: z.string() }));
+    const parent = z.strictObject({ item: z.optional(schema) });
     expect(await parent.parseAsync({ item: { kind: 'item', id: 'a' } })).toEqual({ item: { kind: 'item', id: 'a' } });
     expect(parent.safeParse({ item: { kind: 'item', id: 1 } }).success).toBe(false);
-    const union = z.discriminatedUnion('kind', [schema, z.object({ kind: z.literal('empty') }).strict()]);
+    const union = z.discriminatedUnion('kind', [schema, z.strictObject({ kind: z.literal('empty') })]);
     expect(union.parse({ kind: 'item', id: 'a' })).toEqual({ kind: 'item', id: 'a' });
-    expect(schema instanceof z.ZodObject).toBe(true);
-    expect(schema.shape.id instanceof z.ZodString).toBe(true);
-    expect(z.toJSONSchema(schema)).toEqual(z.toJSONSchema(z.object({ kind: z.literal('item'), id: z.string() }).strict()));
-    const documented = lazyZodSchema(() => z.object({ id: z.string().describe('Identifier') })
-      .describe('Documented object').meta({ title: 'Object title' }));
-    expect(z.toJSONSchema(documented)).toEqual(z.toJSONSchema(z.object({ id: z.string().describe('Identifier') })
-      .describe('Documented object').meta({ title: 'Object title' })));
+    expect(schema instanceof z.ZodMiniObject).toBe(true);
+    expect(schema.shape.id instanceof z.ZodMiniString).toBe(true);
+    expect(z.toJSONSchema(schema)).toEqual(z.toJSONSchema(z.strictObject({ kind: z.literal('item'), id: z.string() })));
+    const documented = lazyZodSchema(() => z.object({ id: z.string().check(z.describe('Identifier')) }).check(z.describe('Documented object'), z.meta({ title: 'Object title' })));
+    expect(z.toJSONSchema(documented)).toEqual(z.toJSONSchema(z.object({ id: z.string().check(z.describe('Identifier')) }).check(z.describe('Documented object'), z.meta({ title: 'Object title' }))));
     expect(Reflect.ownKeys(schema)).toContain('_zod');
     Object.freeze(schema);
     expect(schema.parse({ kind: 'item', id: 'b' })).toEqual({ kind: 'item', id: 'b' });
@@ -153,7 +178,7 @@ describe('lazyZodSchema', () => {
     let ready = false;
     const schema = lazyZodSchema(() => {
       if (!ready) throw new Error('definition unavailable');
-      return z.object({ value: z.number().positive() }).strict();
+      return z.strictObject({ value: z.number().check(z.positive()) });
     });
     expect(() => schema.parse({ value: 2 })).toThrow('definition unavailable');
     ready = true;
@@ -164,18 +189,15 @@ describe('lazyZodSchema', () => {
   });
 
   it('projects nested lazy and optional facades using the traversal identity without weakening parsing', () => {
-    const concrete = z.object({ id: z.string().min(1) }).strict().describe('Action arguments');
-    const optional = lazyZodSchema(() => concrete.optional());
+    const concrete = z.strictObject({ id: z.string().check(z.minLength(1)) }).check(z.describe('Action arguments'));
+    const optional = lazyZodSchema(() => z.optional(concrete));
     const deferred = lazyZodSchema(() => z.lazy(() => concrete));
-    const parent = z.object({ optional, repeated: z.array(deferred) }).strict();
-    const expected = z.object({ optional: concrete.optional(), repeated: z.array(z.lazy(() => concrete)) }).strict();
+    const parent = z.strictObject({ optional, repeated: z.array(deferred) });
+    const expected = z.strictObject({ optional: z.optional(concrete), repeated: z.array(z.lazy(() => concrete)) });
 
     for (const target of ['draft-2020-12', 'draft-7'] as const) {
       expect(z.toJSONSchema(parent, { target, io: 'input' })).toEqual(
         z.toJSONSchema(expected, { target, io: 'input' }),
-      );
-      expect(parent.toJSONSchema({ target, io: 'input' })).toEqual(
-        expected.toJSONSchema({ target, io: 'input' }),
       );
     }
     expect(parent.parse({ repeated: [{ id: 'a' }] })).toEqual({ repeated: [{ id: 'a' }] });

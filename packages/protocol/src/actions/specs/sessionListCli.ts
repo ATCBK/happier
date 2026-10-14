@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   SESSION_LIST_PAGE_MAX_LIMIT,
@@ -15,49 +15,49 @@ import {
 } from '../../sessions/awareness/action.js';
 import { actionCliDerivedDefault, type ActionCliBindContext, type ActionCliProjection } from '../actionCliProjection.js';
 
-const SelectorSchema = lazyZodSchema(() => z.string().trim().min(1));
-const GroupSelectorSchema = lazyZodSchema(() => SelectorSchema.refine((value) => {
+const SelectorSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const GroupSelectorSchema = lazyZodSchema(() => SelectorSchema.check(z.refine((value) => {
   const parts = value.split('/');
   return parts.length === 2 && parts.every((part) => part.trim().length > 0);
-}, { message: 'Expected <teamId>/<groupId>' }));
+}, { message: 'Expected <teamId>/<groupId>' })));
 
 /**
  * The established friendly `session list` grammar. Canonical fields stay
  * available, while scalar audience flags are projected into the one Lane 07
  * query instead of teaching the CLI how to filter Session rows itself.
  */
-export const SessionListCliInputSchema = lazyZodSchema(() => z.object({
-  query: SessionListQueryV1Schema.optional(),
-  underSessionId: SelectorSchema.optional(),
-  view: SessionListViewV1Schema.optional(),
-  limit: z.number().int().min(1).optional(),
-  cursor: z.string().min(1).optional(),
-  attentionCursor: z.string().min(1).optional(),
-  includeLastMessagePreview: z.boolean().optional(),
-  activeOnly: z.boolean().optional(),
-  archivedOnly: z.boolean().optional(),
-  includeSystem: z.boolean().optional(),
-  resumableOnly: z.boolean().optional(),
-  scope: SessionListScopeV1Schema.optional(),
-  bot: SessionBotFilterV1Schema.optional(),
-  team: z.array(SelectorSchema).optional(),
-  group: z.array(GroupSelectorSchema).optional(),
-  outsideTeams: z.boolean().optional(),
-  tag: z.array(SelectorSchema).optional(),
-  attention: z.boolean().optional(),
-  includeInactive: z.boolean().optional(),
-  awareness: z.boolean().optional(),
+export const SessionListCliInputSchema = lazyZodSchema(() => z.strictObject({
+  query: z.optional(SessionListQueryV1Schema),
+  underSessionId: z.optional(SelectorSchema),
+  view: z.optional(SessionListViewV1Schema),
+  limit: z.optional(z.number().check(z.int(), z.minimum(1))),
+  cursor: z.optional(z.string().check(z.minLength(1))),
+  attentionCursor: z.optional(z.string().check(z.minLength(1))),
+  includeLastMessagePreview: z.optional(z.boolean()),
+  activeOnly: z.optional(z.boolean()),
+  archivedOnly: z.optional(z.boolean()),
+  includeSystem: z.optional(z.boolean()),
+  resumableOnly: z.optional(z.boolean()),
+  scope: z.optional(SessionListScopeV1Schema),
+  bot: z.optional(SessionBotFilterV1Schema),
+  team: z.optional(z.array(SelectorSchema)),
+  group: z.optional(z.array(GroupSelectorSchema)),
+  outsideTeams: z.optional(z.boolean()),
+  tag: z.optional(z.array(SelectorSchema)),
+  attention: z.optional(z.boolean()),
+  includeInactive: z.optional(z.boolean()),
+  awareness: z.optional(z.boolean()),
   /** Presentation-only compatibility flag; never reaches the Action. */
-  plain: z.boolean().optional(),
-}).strict().superRefine((value, ctx) => {
+  plain: z.optional(z.boolean()),
+}).check(z.superRefine((value, ctx) => {
   if (value.activeOnly && value.archivedOnly) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['archivedOnly'], message: 'active and archived cannot be combined' });
+    ctx.addIssue({ code: "custom", path: ['archivedOnly'], message: 'active and archived cannot be combined' });
   }
   if (value.cursor !== undefined && value.attentionCursor !== undefined) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['attentionCursor'], message: 'cursor and attentionCursor cannot be combined' });
+    ctx.addIssue({ code: "custom", path: ['attentionCursor'], message: 'cursor and attentionCursor cannot be combined' });
   }
   if (value.view !== undefined && value.awareness !== undefined) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['awareness'], message: 'view and awareness cannot be combined' });
+    ctx.addIssue({ code: "custom", path: ['awareness'], message: 'view and awareness cannot be combined' });
   }
   const querySelectors = [
     value.underSessionId,
@@ -78,25 +78,25 @@ export const SessionListCliInputSchema = lazyZodSchema(() => z.object({
     && value.limit > SESSION_LIST_PAGE_MAX_LIMIT
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['limit'],
       message: `limit must be at most ${SESSION_LIST_PAGE_MAX_LIMIT} for a canonical query`,
     });
   }
   if (value.query !== undefined && querySelectors) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['query'], message: 'query cannot be combined with friendly query selectors' });
+    ctx.addIssue({ code: "custom", path: ['query'], message: 'query cannot be combined with friendly query selectors' });
   }
   if (value.query !== undefined) {
     for (const field of ['limit', 'cursor', 'activeOnly', 'archivedOnly', 'resumableOnly'] as const) {
       if (value[field] !== undefined && value[field] !== false) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: `${field} cannot be combined with query` });
+        ctx.addIssue({ code: "custom", path: [field], message: `${field} cannot be combined with query` });
       }
     }
   }
   if ((value.query !== undefined || querySelectors) && (value.activeOnly || value.resumableOnly)) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['activeOnly'], message: 'active/resumable cannot be combined with a canonical query' });
+    ctx.addIssue({ code: "custom", path: ['activeOnly'], message: 'active/resumable cannot be combined with a canonical query' });
   }
-}));
+})));
 export type SessionListCliInput = z.infer<typeof SessionListCliInputSchema>;
 
 function parseGroupSelector(value: string): SessionAudienceSelectionV1 {

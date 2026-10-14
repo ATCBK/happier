@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionAgentActivityEntryV1Schema, type SessionAgentActivityEntryV1 } from './agentActivityEntryV1.js';
 
@@ -17,9 +17,8 @@ export const SessionAgentActivityHeadlineTruncationV1Schema = z
   .object({
     reason: z.literal('entry_limit'),
     /** Terminal entries the producer's history bound dropped. Never a parse-time drop count. */
-    omittedCount: z.number().int().nonnegative(),
-  })
-  .strip();
+    omittedCount: z.number().check(z.int(), z.nonnegative()),
+  });
 export type SessionAgentActivityHeadlineTruncationV1 = z.infer<typeof SessionAgentActivityHeadlineTruncationV1Schema>;
 
 /**
@@ -37,16 +36,15 @@ export type SessionAgentActivityHeadlineTruncationV1 = z.infer<typeof SessionAge
 export const SessionAgentActivityHeadlineV1Schema = z
   .object({
     v: z.literal(1),
-    backendId: z.string().trim().min(1),
-    agentId: z.string().trim().min(1).optional(),
-    updatedAt: z.number().int().nonnegative(),
+    backendId: z.string().check(z.trim(), z.minLength(1)),
+    agentId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    updatedAt: z.number().check(z.int(), z.nonnegative()),
     /** Derived hint, not a second source of truth: the first active entry, or null when none. */
-    primaryEntryId: z.string().trim().min(1).nullable().optional(),
+    primaryEntryId: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
     activeEntries: z.array(SessionAgentActivityEntryV1Schema),
-    recentEntries: z.array(SessionAgentActivityEntryV1Schema).optional(),
-    truncated: SessionAgentActivityHeadlineTruncationV1Schema.optional(),
-  })
-  .strip();
+    recentEntries: z.optional(z.array(SessionAgentActivityEntryV1Schema)),
+    truncated: z.optional(SessionAgentActivityHeadlineTruncationV1Schema),
+  });
 export type SessionAgentActivityHeadlineV1 = z.infer<typeof SessionAgentActivityHeadlineV1Schema>;
 
 /**
@@ -55,9 +53,9 @@ export type SessionAgentActivityHeadlineV1 = z.infer<typeof SessionAgentActivity
  * Derived from the canonical schema with `.extend`, not restated, so an envelope field added above
  * cannot go missing here.
  */
-const SessionAgentActivityHeadlineEnvelopeV1Schema = SessionAgentActivityHeadlineV1Schema.extend({
+const SessionAgentActivityHeadlineEnvelopeV1Schema = z.extend(SessionAgentActivityHeadlineV1Schema, {
   activeEntries: z.array(z.unknown()),
-  recentEntries: z.array(z.unknown()).optional(),
+  recentEntries: z.optional(z.array(z.unknown())),
 });
 
 function keepReadableEntries(entries: readonly unknown[]): SessionAgentActivityEntryV1[] {

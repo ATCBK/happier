@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ACTION_ID_FAMILIES_V1 } from '../../actions/actionIds.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { SessionIdSchema } from '../idsV1.js';
@@ -7,17 +7,17 @@ import { ListSessionFollowSourcesResponseSchema, SetSessionFollowSourceRequestSc
 
 export type SessionFollowActionIdV1 = typeof ACTION_ID_FAMILIES_V1.session_follow[number];
 const SessionIdZodSchema = asProtocolZod(SessionIdSchema);
-const session = z.object({ sessionId: SessionIdZodSchema }).strict();
-const destination = z.object({ destinationSessionId: SessionIdZodSchema }).strict();
-const pair = destination.extend({ sourceSessionId: SessionIdZodSchema });
+const session = z.strictObject({ sessionId: SessionIdZodSchema });
+const destination = z.strictObject({ destinationSessionId: SessionIdZodSchema });
+const pair = z.extend(destination, { sourceSessionId: SessionIdZodSchema });
 export const SessionFollowActionInputSchemasV1 = Object.freeze({
   'session.follow.get': session,
-  'session.follow.set': session.extend(SetSessionFollowRequestSchema.shape),
+  'session.follow.set': z.extend(session, SetSessionFollowRequestSchema.shape),
   'session.follow.remove': session,
   'session.follow.preferences.get': GetSessionAutoFollowPreferencesRequestSchema,
   'session.follow.preferences.set': SetSessionAutoFollowPreferencesRequestSchema,
   'session.follow.sources.list': destination,
-  'session.follow.sources.set': pair.extend(SetSessionFollowSourceRequestSchema.shape),
+  'session.follow.sources.set': z.extend(pair, SetSessionFollowSourceRequestSchema.shape),
   'session.follow.sources.remove': pair,
 });
 export const SessionFollowActionOutputSchemasV1 = Object.freeze({

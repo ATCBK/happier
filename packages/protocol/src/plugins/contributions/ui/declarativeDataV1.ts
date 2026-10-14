@@ -1,41 +1,41 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from '../../actions/internalProtocolZodAdapter.js';
 import { PluginContributionIdentityV1Schema } from '../../contributionIdentity.js';
 import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '../../actions/jsonSchemaValidation.js';
 import { PluginJsonSchemaV2Schema, PluginJsonValueV2Schema, PluginLocalizedStringV2Schema, type PluginJsonSchemaV2 } from '../publicTypes.js';
 
-export const PluginDeclarativeDataFieldV1Schema = lazyZodSchema(() => z.object({
-  path: z.array(z.string().min(1)), type: z.enum(['string', 'number', 'boolean']),
-}).strict());
+export const PluginDeclarativeDataFieldV1Schema = lazyZodSchema(() => z.strictObject({
+  path: z.array(z.string().check(z.minLength(1))), type: z.enum(['string', 'number', 'boolean']),
+}));
 export type PluginDeclarativeDataFieldV1 = z.infer<typeof PluginDeclarativeDataFieldV1Schema>;
 
 /** Resource inputs are the exact mounted consumer inputs, never RPC overrides. */
 export const PluginDeclarativeDataSourceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('resource'), resource: asProtocolZod(PluginContributionIdentityV1Schema),
-    inputSchema: PluginJsonSchemaV2Schema, input: PluginJsonValueV2Schema.optional(), outputSchema: PluginJsonSchemaV2Schema }).strict(),
-  z.object({ kind: z.literal('value'), value: PluginJsonValueV2Schema }).strict(),
+  z.strictObject({ kind: z.literal('resource'), resource: asProtocolZod(PluginContributionIdentityV1Schema),
+    inputSchema: PluginJsonSchemaV2Schema, input: z.optional(PluginJsonValueV2Schema), outputSchema: PluginJsonSchemaV2Schema }),
+  z.strictObject({ kind: z.literal('value'), value: PluginJsonValueV2Schema }),
 ]));
 export type PluginDeclarativeDataSourceV1 = z.infer<typeof PluginDeclarativeDataSourceV1Schema>;
 
-const column = z.object({ label: PluginLocalizedStringV2Schema, field: PluginDeclarativeDataFieldV1Schema,
-  priority: z.enum(['primary', 'secondary']).optional(), proportion: z.boolean().optional() }).strict();
+const column = z.strictObject({ label: PluginLocalizedStringV2Schema, field: PluginDeclarativeDataFieldV1Schema,
+  priority: z.optional(z.enum(['primary', 'secondary'])), proportion: z.optional(z.boolean()) });
 const meaning = z.enum(['good', 'bad', 'neutral']);
-const markState = z.object({ label: PluginLocalizedStringV2Schema, meaning }).strict();
-const mark = z.object({ field: PluginDeclarativeDataFieldV1Schema, whenTrue: markState, whenFalse: markState }).strict();
-export const PluginDeclarativeMetricNodeV1Schema = lazyZodSchema(() => z.object({ kind: z.literal('metric'), label: PluginLocalizedStringV2Schema,
-  data: PluginDeclarativeDataSourceV1Schema, value: PluginDeclarativeDataFieldV1Schema, unit: PluginLocalizedStringV2Schema.optional(),
-  comparison: z.object({ value: PluginDeclarativeDataFieldV1Schema, label: PluginLocalizedStringV2Schema, meaning }).strict().optional() }).strict());
-export const PluginDeclarativeTableNodeV1Schema = lazyZodSchema(() => z.object({ kind: z.literal('table'), label: PluginLocalizedStringV2Schema.optional(),
-  data: PluginDeclarativeDataSourceV1Schema, rows: z.array(z.string().min(1)), columns: z.array(column).min(1), incomplete: z.boolean().optional(), mark: mark.optional() }).strict());
-export const PluginDeclarativeRowsNodeV1Schema = lazyZodSchema(() => PluginDeclarativeTableNodeV1Schema.extend({ kind: z.literal('rows') }));
-const chart = z.object({ kind: z.literal('chart'), label: PluginLocalizedStringV2Schema,
-  data: PluginDeclarativeDataSourceV1Schema, rows: z.array(z.string().min(1)), x: PluginDeclarativeDataFieldV1Schema }).strict();
+const markState = z.strictObject({ label: PluginLocalizedStringV2Schema, meaning });
+const mark = z.strictObject({ field: PluginDeclarativeDataFieldV1Schema, whenTrue: markState, whenFalse: markState });
+export const PluginDeclarativeMetricNodeV1Schema = lazyZodSchema(() => z.strictObject({ kind: z.literal('metric'), label: PluginLocalizedStringV2Schema,
+  data: PluginDeclarativeDataSourceV1Schema, value: PluginDeclarativeDataFieldV1Schema, unit: z.optional(PluginLocalizedStringV2Schema),
+  comparison: z.optional(z.strictObject({ value: PluginDeclarativeDataFieldV1Schema, label: PluginLocalizedStringV2Schema, meaning })) }));
+export const PluginDeclarativeTableNodeV1Schema = lazyZodSchema(() => z.strictObject({ kind: z.literal('table'), label: z.optional(PluginLocalizedStringV2Schema),
+  data: PluginDeclarativeDataSourceV1Schema, rows: z.array(z.string().check(z.minLength(1))), columns: z.array(column).check(z.minLength(1)), incomplete: z.optional(z.boolean()), mark: z.optional(mark) }));
+export const PluginDeclarativeRowsNodeV1Schema = lazyZodSchema(() => z.extend(PluginDeclarativeTableNodeV1Schema, { kind: z.literal('rows') }));
+const chart = z.strictObject({ kind: z.literal('chart'), label: PluginLocalizedStringV2Schema,
+  data: PluginDeclarativeDataSourceV1Schema, rows: z.array(z.string().check(z.minLength(1))), x: PluginDeclarativeDataFieldV1Schema });
 /** Legacy x/y is N=1; neutral long rows declare exactly one series/value mapping. */
 export const PluginDeclarativeChartNodeV1Schema = lazyZodSchema(() => z.union([
-  chart.extend({ style: z.enum(['bar', 'line']), y: PluginDeclarativeDataFieldV1Schema }).strict(),
-  chart.extend({ style: z.enum(['bar', 'line', 'area']), series: PluginDeclarativeDataFieldV1Schema,
-    value: PluginDeclarativeDataFieldV1Schema }).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(chart, { style: z.enum(['bar', 'line']), y: PluginDeclarativeDataFieldV1Schema })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(chart, { style: z.enum(['bar', 'line', 'area']), series: PluginDeclarativeDataFieldV1Schema,
+    value: PluginDeclarativeDataFieldV1Schema })),
 ]));
 export type PluginDeclarativeDataNodeV1 = z.infer<typeof PluginDeclarativeMetricNodeV1Schema>
   | z.infer<typeof PluginDeclarativeTableNodeV1Schema> | z.infer<typeof PluginDeclarativeRowsNodeV1Schema>

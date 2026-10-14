@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 
 import {
   isSessionDiscussionActionIdV1,
@@ -27,14 +27,14 @@ export { isSessionDiscussionActionIdV1 };
 /** The strict semantic-plaintext input this intent declared on its Action row. */
 export function sessionDiscussionActionInputSchemaV1(
   actionId: SessionDiscussionActionIdV1,
-): z.ZodTypeAny {
+): z.ZodMiniType {
   return getActionSpec(actionId).inputSchema;
 }
 
 /** The strict opened result this intent declared on its Action row. */
 export function sessionDiscussionActionOutputSchemaV1(
   actionId: SessionDiscussionActionIdV1,
-): z.ZodTypeAny {
+): z.ZodMiniType {
   const outputSchema = getActionSpec(actionId).outputSchema;
   if (!outputSchema) {
     // A registered family row without a result schema is a registry defect, not

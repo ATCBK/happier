@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   SecretStringV1Schema,
@@ -25,26 +25,19 @@ function normalizeNotificationChannelTopicsV1Input(raw: unknown): unknown {
 }
 
 const NotificationChannelTopicsFieldsV1Schema = lazyZodSchema(() => z.object({
-  ready: z.boolean().default(true),
-  permissionRequest: z.boolean().default(true),
-  userActionRequest: z.boolean().default(true),
-  connectedServiceAccountSwitch: z.boolean().default(true),
-  connectedServiceQuotaBlocked: z.boolean().default(true),
-  connectedServiceQuotaRecovered: z.boolean().default(true),
-  connectedServiceUsage: z.boolean().default(false),
-  machines: z.boolean().default(true),
+  ready: z._default(z.boolean(), true),
+  permissionRequest: z._default(z.boolean(), true),
+  userActionRequest: z._default(z.boolean(), true),
+  connectedServiceAccountSwitch: z._default(z.boolean(), true),
+  connectedServiceQuotaBlocked: z._default(z.boolean(), true),
+  connectedServiceQuotaRecovered: z._default(z.boolean(), true),
+  connectedServiceUsage: z._default(z.boolean(), false),
+  machines: z._default(z.boolean(), true),
 }));
 
-export const NotificationChannelTopicsStrictV1Schema = lazyZodSchema(() => z
-  .preprocess(
-    normalizeNotificationChannelTopicsV1Input,
-    NotificationChannelTopicsFieldsV1Schema.strict(),
-  ));
+export const NotificationChannelTopicsStrictV1Schema = lazyZodSchema(() => z.pipe(z.transform(normalizeNotificationChannelTopicsV1Input), (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(NotificationChannelTopicsFieldsV1Schema)));
 
-export const NotificationChannelTopicsV1Schema = lazyZodSchema(() => z.preprocess(
-  normalizeNotificationChannelTopicsV1Input, NotificationChannelTopicsFieldsV1Schema,
-)
-  .catch({
+export const NotificationChannelTopicsV1Schema = lazyZodSchema(() => z.catch(z.pipe(z.transform(normalizeNotificationChannelTopicsV1Input), NotificationChannelTopicsFieldsV1Schema), {
     ready: true,
     permissionRequest: true,
     userActionRequest: true,
@@ -61,21 +54,21 @@ export const DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1: NotificationChannelTopicsV1
   NotificationChannelTopicsV1Schema.parse({});
 
 const NotificationChannelBaseV1Schema = lazyZodSchema(() => z.object({
-  v: z.literal(1).default(1),
-  id: z.string().trim().min(1),
-  enabled: z.boolean().default(true),
-  topics: NotificationChannelTopicsV1Schema.default(DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1),
-  readyIncludeMessageText: z.boolean().default(true),
-  requestIncludeMessageText: z.boolean().default(true),
+  v: z._default(z.literal(1), 1),
+  id: z.string().check(z.trim(), z.minLength(1)),
+  enabled: z._default(z.boolean(), true),
+  topics: z._default(NotificationChannelTopicsV1Schema, DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1),
+  readyIncludeMessageText: z._default(z.boolean(), true),
+  requestIncludeMessageText: z._default(z.boolean(), true),
 }));
 
-export const ExpoPushNotificationChannelV1Schema = lazyZodSchema(() => NotificationChannelBaseV1Schema.extend({
+export const ExpoPushNotificationChannelV1Schema = lazyZodSchema(() => z.extend(NotificationChannelBaseV1Schema, {
   kind: z.literal('expo_push'),
 }));
 
 export type ExpoPushNotificationChannelV1 = z.infer<typeof ExpoPushNotificationChannelV1Schema>;
 
-const WebhookUrlSchema = lazyZodSchema(() => z.url().refine((value) => {
+const WebhookUrlSchema = lazyZodSchema(() => z.url().check(z.refine((value) => {
   try {
     const protocol = new URL(value).protocol;
     return protocol === 'http:' || protocol === 'https:';
@@ -84,12 +77,12 @@ const WebhookUrlSchema = lazyZodSchema(() => z.url().refine((value) => {
   }
 }, {
   message: 'Webhook notification channels must use http or https URLs',
-}));
+})));
 
-export const WebhookNotificationChannelV1Schema = lazyZodSchema(() => NotificationChannelBaseV1Schema.extend({
+export const WebhookNotificationChannelV1Schema = lazyZodSchema(() => z.extend(NotificationChannelBaseV1Schema, {
   kind: z.literal('webhook'),
   url: WebhookUrlSchema,
-  signingSecret: SecretStringV1Schema.nullable().default(null),
+  signingSecret: z._default(z.nullable(SecretStringV1Schema), null),
 }));
 
 export type WebhookNotificationChannelV1 = z.infer<typeof WebhookNotificationChannelV1Schema>;
@@ -107,7 +100,7 @@ export const NotificationChannelV1Schema = lazyZodSchema(() => z.discriminatedUn
 
 export type NotificationChannelV1 = z.infer<typeof NotificationChannelV1Schema>;
 
-export const NotificationChannelsV1Schema = lazyZodSchema(() => z.array(NotificationChannelV1Schema).default([]));
+export const NotificationChannelsV1Schema = lazyZodSchema(() => z._default(z.array(NotificationChannelV1Schema), []));
 
 export type NotificationChannelsV1 = z.infer<typeof NotificationChannelsV1Schema>;
 

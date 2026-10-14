@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   defineProtocolObject,
@@ -29,12 +29,7 @@ export type PluginContributionLocalId = ReturnType<typeof PluginContributionLoca
  * retain the established local separators while allowing lower-camel protocol
  * roles such as `connectionTest`.
  */
-export const PluginContributionOperationRoleV1Schema = lazyZodSchema(() => z.string()
-  .max(MAX_PLUGIN_IDENTIFIER_BYTES)
-  .regex(
-    PluginContributionOperationRoleV1Pattern,
-    'Contribution operation roles must contain lower-camel alphanumeric segments separated by hyphens or slashes.',
-  ));
+export const PluginContributionOperationRoleV1Schema = lazyZodSchema(() => z.string().check(z.maxLength(MAX_PLUGIN_IDENTIFIER_BYTES), z.regex(PluginContributionOperationRoleV1Pattern, 'Contribution operation roles must contain lower-camel alphanumeric segments separated by hyphens or slashes.')));
 export type PluginContributionOperationRoleV1 = z.infer<typeof PluginContributionOperationRoleV1Schema>;
 
 /**

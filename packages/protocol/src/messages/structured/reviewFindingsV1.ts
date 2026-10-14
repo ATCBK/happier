@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ReviewFindingSchema } from '../../reviews/ReviewFinding.js';
 import { ExecutionRunStructuredRunRefSchema } from './executionRunStructuredRunRef.js';
@@ -7,27 +7,27 @@ import { ExecutionRunStructuredRunRefSchema } from './executionRunStructuredRunR
 import { ReviewTriageStatusSchema } from '../../reviews/reviewTriageStatus.js';
 export { ReviewTriageStatusSchema, type ReviewTriageStatus } from '../../reviews/reviewTriageStatus.js';
 
-export const ReviewTriageOverlaySchema = lazyZodSchema(() => z.object({
-  findings: z.array(z.object({
-    id: z.string().min(1),
-    commentId: z.string().min(1).optional(),
+export const ReviewTriageOverlaySchema = lazyZodSchema(() => z.looseObject({
+  findings: z.array(z.looseObject({
+    id: z.string().check(z.minLength(1)),
+    commentId: z.optional(z.string().check(z.minLength(1))),
     status: ReviewTriageStatusSchema,
-    comment: z.string().min(1).optional(),
-  }).passthrough()),
-}).passthrough());
+    comment: z.optional(z.string().check(z.minLength(1))),
+  })),
+}));
 export type ReviewTriageOverlay = z.infer<typeof ReviewTriageOverlaySchema>;
 
-export const ReviewFindingsV1Schema = lazyZodSchema(() => z.object({
+export const ReviewFindingsV1Schema = lazyZodSchema(() => z.looseObject({
   runRef: ExecutionRunStructuredRunRefSchema,
-  summary: z.string().min(1),
+  summary: z.string().check(z.minLength(1)),
   findings: z.array(ReviewFindingSchema),
-  triage: ReviewTriageOverlaySchema.optional(),
-  limits: z.object({
-    findingsTruncated: z.boolean().optional(),
-    patchesTruncated: z.boolean().optional(),
-  }).passthrough().optional(),
-  generatedAtMs: z.number().int().nonnegative(),
-}).passthrough());
+  triage: z.optional(ReviewTriageOverlaySchema),
+  limits: z.optional(z.looseObject({
+    findingsTruncated: z.optional(z.boolean()),
+    patchesTruncated: z.optional(z.boolean()),
+  })),
+  generatedAtMs: z.number().check(z.int(), z.nonnegative()),
+}));
 
 export type ReviewFindingsV1 = z.infer<typeof ReviewFindingsV1Schema>;
 

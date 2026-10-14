@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * How this Home is reached (plan `2026-09-26-home-owner-console` §3.2, decision B, AM-2).
@@ -14,7 +14,7 @@ import { z } from 'zod';
  * Changing either address never changes the sign-in audience (`canonicalServerUrl`) or the Home
  * identity (invariant I1).
  */
-export const HomeReachabilityGetInputV1Schema = lazyZodSchema(() => z.object({}).strict());
+export const HomeReachabilityGetInputV1Schema = lazyZodSchema(() => z.strictObject({}));
 export type HomeReachabilityGetInputV1 = z.infer<typeof HomeReachabilityGetInputV1Schema>;
 
 /** Where the effective public address comes from: deployment env, a Home setting, inference, or nowhere. */
@@ -53,39 +53,39 @@ export type HomeIrohStateV1 = z.infer<typeof HomeIrohStateV1Schema>;
 export const HomeIrohModeV1Schema = lazyZodSchema(() => z.enum(['enabled', 'disabled']));
 export type HomeIrohModeV1 = z.infer<typeof HomeIrohModeV1Schema>;
 
-export const HomeReachabilityV1Schema = lazyZodSchema(() => z.object({
-  publicAddress: z.object({
-    url: z.string().min(1).nullable(),
+export const HomeReachabilityV1Schema = lazyZodSchema(() => z.strictObject({
+  publicAddress: z.strictObject({
+    url: z.nullable(z.string().check(z.minLength(1))),
     source: HomePublicAddressSourceV1Schema,
     /** Present when `source` is `inferred`. */
-    inferredFrom: HomePublicAddressInferenceV1Schema.optional(),
-  }).strict(),
-  webApp: z.object({
-    url: z.string().min(1),
+    inferredFrom: z.optional(HomePublicAddressInferenceV1Schema),
+  }),
+  webApp: z.strictObject({
+    url: z.string().check(z.minLength(1)),
     source: HomeWebAppAddressSourceV1Schema,
-  }).strict(),
+  }),
   /**
    * The relay-access method configured on the computer that runs this server, when the server can
    * read it there. `null` means the server does not know (for example a deployment behind its own
    * proxy); it is never a promise about another computer.
    */
-  hostAccess: z.object({
+  hostAccess: z.nullable(z.strictObject({
     method: HomeHostAccessMethodV1Schema,
     /** `public` methods make the Home reachable from the internet. */
     exposure: z.enum(['private', 'public']),
-    shareUrl: z.string().min(1).nullable(),
-  }).strict().nullable(),
-  iroh: z.object({
+    shareUrl: z.nullable(z.string().check(z.minLength(1))),
+  })),
+  iroh: z.strictObject({
     /** Direct connections exist only where this server composes them (a Personal Home). */
     availability: z.enum(['available', 'not_available']),
     mode: HomeIrohModeV1Schema,
     /** An explicitly set deployment env value locks the mode. */
     modeFixed: z.boolean(),
     state: HomeIrohStateV1Schema,
-    endpointId: z.string().min(1).nullable(),
-    failureReason: z.string().min(1).nullable(),
-  }).strict(),
-}).strict());
+    endpointId: z.nullable(z.string().check(z.minLength(1))),
+    failureReason: z.nullable(z.string().check(z.minLength(1))),
+  }),
+}));
 
 export type HomeReachabilityV1 = z.infer<typeof HomeReachabilityV1Schema>;
 
@@ -94,7 +94,7 @@ export type HomeReachabilityV1 = z.infer<typeof HomeReachabilityV1Schema>;
  * identity for good and publishes that to devices; turning them back on creates a new identity that
  * devices pick up on their next connection. The public address and every sign-in stay the same.
  */
-export const HomeReachabilityIrohSetInputV1Schema = lazyZodSchema(() => z.object({
+export const HomeReachabilityIrohSetInputV1Schema = lazyZodSchema(() => z.strictObject({
   mode: HomeIrohModeV1Schema,
-}).strict());
+}));
 export type HomeReachabilityIrohSetInputV1 = z.infer<typeof HomeReachabilityIrohSetInputV1Schema>;

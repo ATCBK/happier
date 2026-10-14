@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { WorkflowDestinationsV1Schema } from '../workflowDestinationsV1.js';
 import { AutomationTriggerDefinitionInputSchema, AutomationTriggerDefinitionSchema } from '../../automations/automationTriggerDefinition.js';
 import { AutomationTriggerIdSchema } from '../../automations/automationTriggerIdentity.js';
@@ -17,103 +18,103 @@ import { SessionIdSchema } from '../../sessions/idsV1.js';
 import { AutomationPullRequestTriggerSchema } from '../../automations/automationTriggerDefinition.js';
 import { AutomationSessionLifecyclePolicySchema } from '../../automations/automationSessionLifecycle.js';
 
-const Revision = z.number().int().nonnegative().safe();
+const Revision = z.number().check(z.int(), z.nonnegative(), z.int());
 /** Only public list-safe inputs consumed by the shared human-readable trigger summary. */
 export const WorkflowTriggerSummaryInputV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  AutomationScheduleTriggerProjectionSchema.pick({ kind: true, schedule: true }),
-  AutomationPluginEventTriggerProjectionSchema.pick({ kind: true, eventRef: true }),
-  AutomationSessionLifecycleTriggerProjectionSchema.pick({ kind: true, events: true }),
-  AutomationRunLifecycleTriggerSchema.pick({ kind: true, condition: true }),
-  z.object({ kind: z.literal('prComment') }).strict(),
-  z.object({ kind: z.literal('ciFailed') }).strict(),
+  zMini.pick(AutomationScheduleTriggerProjectionSchema, { kind: true, schedule: true }),
+  zMini.pick(AutomationPluginEventTriggerProjectionSchema, { kind: true, eventRef: true }),
+  zMini.pick(AutomationSessionLifecycleTriggerProjectionSchema, { kind: true, events: true }),
+  zMini.pick(AutomationRunLifecycleTriggerSchema, { kind: true, condition: true }),
+  z.strictObject({ kind: z.literal('prComment') }),
+  z.strictObject({ kind: z.literal('ciFailed') }),
 ]));
 export type WorkflowTriggerSummaryInputV1 = z.infer<typeof WorkflowTriggerSummaryInputV1Schema>;
-const ContextFields = lazyZodSchema(() => AutomationStoredWorkflowDefinitionV2Schema.omit({ workspace: true, inlineDefinition: true, onComplete: true }));
+const ContextFields = lazyZodSchema(() => zMini.omit(AutomationStoredWorkflowDefinitionV2Schema, { workspace: true, inlineDefinition: true, onComplete: true }));
 export const WorkflowTriggerListRequestV1Schema = lazyZodSchema(() => z.union([
-  z.object({ workflow: WorkflowDefinitionRefV1StringSchema }).strict(),
-  z.object({ scope: z.enum(['account_inline', 'account_all']) }).strict(),
-  z.object({ automationId: asProtocolZod(AutomationIdV1Schema), review: z.literal(true) }).strict(),
+  z.strictObject({ workflow: WorkflowDefinitionRefV1StringSchema }),
+  z.strictObject({ scope: z.enum(['account_inline', 'account_all']) }),
+  z.strictObject({ automationId: asProtocolZod(AutomationIdV1Schema), review: z.literal(true) }),
 ]));
-export const WorkflowTriggerAddRequestV1Schema = lazyZodSchema(() => z.object({
-  workflow: WorkflowDefinitionRefV1StringSchema.optional(),
-  target: TriggerTargetV1Schema.optional(),
+export const WorkflowTriggerAddRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  workflow: zMini.optional(WorkflowDefinitionRefV1StringSchema),
+  target: zMini.optional(TriggerTargetV1Schema),
   project: WorkflowProjectTargetV1Schema,
-  ...ContextFields.partial().shape,
+  ...zMini.partial(ContextFields).shape,
   trigger: AutomationTriggerDefinitionInputSchema,
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   if ((value.workflow === undefined) === (value.target === undefined)) {
     ctx.addIssue({ code: 'custom', path: ['target'], message: 'Choose exactly one workflow or target' });
   }
   if (value.target?.kind === 'inline' && value.visibleTeamId !== undefined) {
     ctx.addIssue({ code: 'custom', path: ['visibleTeamId'], message: 'Inline triggers are private' });
   }
-}));
-export const WorkflowTriggerUpdateRequestV1Schema = lazyZodSchema(() => z.object({
+})));
+export const WorkflowTriggerUpdateRequestV1Schema = lazyZodSchema(() => z.strictObject({
   automationId: asProtocolZod(AutomationIdV1Schema),
-  triggerId: AutomationTriggerIdSchema.optional(),
+  triggerId: zMini.optional(AutomationTriggerIdSchema),
   expectedRevision: Revision,
-  confirmLegacyConversion: z.literal(true).optional(),
-  patch: z.object({
-    project: WorkflowProjectTargetV1Schema.optional(),
-    ...ContextFields.partial().shape,
-    target: TriggerTargetV1Schema.optional(),
-    enabled: z.boolean().optional(),
-    trigger: AutomationTriggerDefinitionSchema.optional(),
-  }).strict().refine((patch) => Object.keys(patch).length > 0, 'A trigger update needs a change'),
-}).strict().superRefine((value, ctx) => {
+  confirmLegacyConversion: z.optional(z.literal(true)),
+  patch: z.strictObject({
+    project: zMini.optional(WorkflowProjectTargetV1Schema),
+    ...zMini.partial(ContextFields).shape,
+    target: zMini.optional(TriggerTargetV1Schema),
+    enabled: z.optional(z.boolean()),
+    trigger: zMini.optional(AutomationTriggerDefinitionSchema),
+  }).check(z.refine((patch) => Object.keys(patch).length > 0, 'A trigger update needs a change')),
+}).check(z.superRefine((value, ctx) => {
   if (value.patch.trigger !== undefined && value.triggerId === undefined) {
     ctx.addIssue({ code: 'custom', path: ['triggerId'], message: 'A trigger definition update needs its trigger id' });
   }
   if (value.patch.target?.kind === 'inline' && value.patch.visibleTeamId !== undefined) {
     ctx.addIssue({ code: 'custom', path: ['patch', 'visibleTeamId'], message: 'Inline triggers are private' });
   }
-}));
-export const WorkflowTriggerRemoveRequestV1Schema = lazyZodSchema(() => z.object({
+})));
+export const WorkflowTriggerRemoveRequestV1Schema = lazyZodSchema(() => z.strictObject({
   automationId: asProtocolZod(AutomationIdV1Schema),
   /** Omission removes the Account trigger set; a child id removes only that trigger. */
-  triggerId: AutomationTriggerIdSchema.optional(),
-}).strict());
+  triggerId: zMini.optional(AutomationTriggerIdSchema),
+}));
 /** Admits the retained Automation's manual occurrence; it does not edit or convert the definition. */
-export const WorkflowTriggerRunNowRequestV1Schema = lazyZodSchema(() => z.object({
+export const WorkflowTriggerRunNowRequestV1Schema = lazyZodSchema(() => z.strictObject({
   automationId: asProtocolZod(AutomationIdV1Schema),
-  idempotencyKey: AutomationManualIdempotencyKeyV1Schema.optional(),
-}).strict());
-const OpenedPullRequestTriggerDetailSchema = lazyZodSchema(() => z.object({
+  idempotencyKey: zMini.optional(AutomationManualIdempotencyKeyV1Schema),
+}));
+const OpenedPullRequestTriggerDetailSchema = lazyZodSchema(() => z.strictObject({
   id: AutomationTriggerIdSchema, revision: Revision, enabled: z.boolean(),
-  createdAt: z.number().int().nonnegative().safe(), updatedAt: z.number().int().nonnegative().safe(),
-  sourceSessionId: asProtocolZod(SessionIdSchema), triggerDefinitionEnvelope: z.string().min(1),
+  createdAt: z.number().check(z.int(), z.nonnegative(), z.int()), updatedAt: z.number().check(z.int(), z.nonnegative(), z.int()),
+  sourceSessionId: asProtocolZod(SessionIdSchema), triggerDefinitionEnvelope: z.string().check(z.minLength(1)),
   ...AutomationPullRequestTriggerSchema.shape,
-}).strict());
-export const WorkflowTriggerSetV1Schema = lazyZodSchema(() => z.object({
+}));
+export const WorkflowTriggerSetV1Schema = lazyZodSchema(() => z.strictObject({
   automationId: asProtocolZod(AutomationIdV1Schema), revision: Revision, enabled: z.boolean(),
-  scopeSessionId: asProtocolZod(SessionIdSchema).nullable().optional(),
+  scopeSessionId: zMini.optional(zMini.nullable(asProtocolZod(SessionIdSchema))),
   health: z.enum(['available', 'source_unavailable']),
-  legacy: z.object({ editable: z.literal(false), reason: z.literal('created_in_0_2'),
-    lockedReason: z.enum(['session_key_required', 'migration_required', 'decryption_failed', 'review_required']).optional(),
-    placements: z.array(WorkflowProjectTargetV1Schema.pick({ machineId: true, directory: true })).optional(),
-  }).strict().optional(),
-  target: TriggerTargetV1Schema.optional(),
-  project: WorkflowProjectTargetV1Schema.optional(),
-  context: AutomationStoredWorkflowDefinitionV2Schema.optional(),
-  destinations: WorkflowDestinationsV1Schema.optional(),
+  legacy: z.optional(z.strictObject({ editable: z.literal(false), reason: z.literal('created_in_0_2'),
+    lockedReason: z.optional(z.enum(['session_key_required', 'migration_required', 'decryption_failed', 'review_required'])),
+    placements: z.optional(z.array(zMini.pick(WorkflowProjectTargetV1Schema, { machineId: true, directory: true }))),
+  })),
+  target: zMini.optional(TriggerTargetV1Schema),
+  project: zMini.optional(WorkflowProjectTargetV1Schema),
+  context: zMini.optional(AutomationStoredWorkflowDefinitionV2Schema),
+  destinations: zMini.optional(WorkflowDestinationsV1Schema),
   /** Current enabled assignments; plural/empty predecessor placement is preserved on conversion. */
-  placements: z.array(WorkflowProjectTargetV1Schema.pick({ machineId: true, directory: true })).optional(),
+  placements: z.optional(z.array(zMini.pick(WorkflowProjectTargetV1Schema, { machineId: true, directory: true }))),
   triggers: z.array(z.union([
-    AutomationTriggerDetailSchema.options[2], AutomationTriggerDetailSchema.options[3],
-    AutomationTriggerDetailSchema.options[4], AutomationTriggerDetailSchema.options[5],
+    AutomationTriggerDetailSchema._zod.def.options[2], AutomationTriggerDetailSchema._zod.def.options[3],
+    AutomationTriggerDetailSchema._zod.def.options[4], AutomationTriggerDetailSchema._zod.def.options[5],
     OpenedPullRequestTriggerDetailSchema,
   ])),
-}).strict());
-export const WorkflowTriggerListResultV1Schema = lazyZodSchema(() => z.object({ sets: z.array(WorkflowTriggerSetV1Schema) }).strict());
-export const WorkflowTriggerWriteResultV1Schema = lazyZodSchema(() => z.object({
+}));
+export const WorkflowTriggerListResultV1Schema = lazyZodSchema(() => z.strictObject({ sets: z.array(WorkflowTriggerSetV1Schema) }));
+export const WorkflowTriggerWriteResultV1Schema = lazyZodSchema(() => z.strictObject({
   set: WorkflowTriggerSetV1Schema,
-  triggerId: AutomationTriggerIdSchema.optional(),
-  triggerRevision: Revision.optional(),
-}).strict());
+  triggerId: zMini.optional(AutomationTriggerIdSchema),
+  triggerRevision: z.optional(Revision),
+}));
 export const WorkflowTriggerRemoveResultV1Schema = lazyZodSchema(() => z.union([
   WorkflowTriggerWriteResultV1Schema,
-  z.object({ automationId: asProtocolZod(AutomationIdV1Schema), deleted: z.literal(true),
-    removedRevision: Revision.optional() }).strict(),
+  z.strictObject({ automationId: asProtocolZod(AutomationIdV1Schema), deleted: z.literal(true),
+    removedRevision: z.optional(Revision) }),
 ]));
 export type WorkflowTriggerListRequestV1 = z.infer<typeof WorkflowTriggerListRequestV1Schema>;
 export type WorkflowTriggerAddRequestV1 = z.infer<typeof WorkflowTriggerAddRequestV1Schema>;
@@ -123,77 +124,76 @@ export type WorkflowTriggerRunNowRequestV1 = z.infer<typeof WorkflowTriggerRunNo
 export type WorkflowTriggerSetV1 = z.infer<typeof WorkflowTriggerSetV1Schema>;
 
 const SessionId = asProtocolZod(SessionIdSchema);
-const SessionContextFields = lazyZodSchema(() => AutomationStoredWorkflowDefinitionV2Schema.omit({ workspace: true, inlineDefinition: true }));
-const SessionPullRequestTriggerSchema = lazyZodSchema(() => AutomationPullRequestTriggerSchema.extend({
-  pullRequest: AutomationPullRequestTriggerSchema.shape.pullRequest.optional(),
-}).strict());
+const SessionContextFields = lazyZodSchema(() => zMini.omit(AutomationStoredWorkflowDefinitionV2Schema, { workspace: true, inlineDefinition: true }));
+const SessionPullRequestTriggerSchema = lazyZodSchema(() => (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(zMini.extend(AutomationPullRequestTriggerSchema, {
+  pullRequest: zMini.optional(AutomationPullRequestTriggerSchema.shape.pullRequest),
+})));
 export const SessionTriggerDefinitionV1Schema = lazyZodSchema(() => z.union([AutomationTriggerDefinitionSchema, SessionPullRequestTriggerSchema]));
 export const SessionTriggerDefinitionInputV1Schema = lazyZodSchema(() => z.union([
-  AutomationTriggerDefinitionInputSchema, SessionPullRequestTriggerSchema.extend({ enabled: z.boolean() }).strict(),
+  AutomationTriggerDefinitionInputSchema, (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(zMini.extend(SessionPullRequestTriggerSchema, { enabled: z.boolean() })),
 ]));
 export type SessionTriggerDefinitionV1 = z.infer<typeof SessionTriggerDefinitionV1Schema>;
 export type SessionTriggerDefinitionInputV1 = z.infer<typeof SessionTriggerDefinitionInputV1Schema>;
 /** Birth owns the source Session identity; a turn cannot exist before birth. */
 export const SessionInitialTriggerDefinitionV1Schema = lazyZodSchema(() => z.union([
-  AutomationTriggerDefinitionInputSchema.options[0],
-  AutomationTriggerDefinitionInputSchema.options[1],
-  AutomationTriggerDefinitionInputSchema.options[2].omit({ sourceSessionId: true }).extend({
+  AutomationTriggerDefinitionInputSchema._zod.def.options[0],
+  AutomationTriggerDefinitionInputSchema._zod.def.options[1],
+  (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(zMini.extend(zMini.omit(AutomationTriggerDefinitionInputSchema._zod.def.options[2], { sourceSessionId: true }), {
     policy: z.union([
-      AutomationSessionLifecyclePolicySchema.options[1],
-      AutomationSessionLifecyclePolicySchema.options[2],
-      AutomationSessionLifecyclePolicySchema.options[3],
+      AutomationSessionLifecyclePolicySchema._zod.def.options[1],
+      AutomationSessionLifecyclePolicySchema._zod.def.options[2],
+      AutomationSessionLifecyclePolicySchema._zod.def.options[3],
     ]),
-  }).strict(),
-  AutomationTriggerDefinitionInputSchema.options[3],
-  SessionPullRequestTriggerSchema.extend({ enabled: z.boolean() }).strict(),
+  })),
+  AutomationTriggerDefinitionInputSchema._zod.def.options[3],
+  (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(zMini.extend(SessionPullRequestTriggerSchema, { enabled: z.boolean() })),
 ]));
 export type SessionInitialTriggerDefinitionV1 = z.infer<typeof SessionInitialTriggerDefinitionV1Schema>;
-export const SessionInitialTriggerV1Schema = lazyZodSchema(() => z.object({
+export const SessionInitialTriggerV1Schema = lazyZodSchema(() => z.strictObject({
   target: TriggerTargetV1Schema,
-  ...SessionContextFields.partial().shape,
+  ...zMini.partial(SessionContextFields).shape,
   trigger: SessionInitialTriggerDefinitionV1Schema,
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   if (value.target.kind === 'inline' && value.visibleTeamId !== undefined) {
     ctx.addIssue({ code: 'custom', path: ['visibleTeamId'], message: 'Inline triggers are private' });
   }
-}));
+})));
 export type SessionInitialTriggerV1 = z.infer<typeof SessionInitialTriggerV1Schema>;
-export const SessionTriggerListRequestV1Schema = lazyZodSchema(() => z.object({ sessionId: SessionId }).strict());
-export const SessionTriggerAddRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionTriggerListRequestV1Schema = lazyZodSchema(() => z.strictObject({ sessionId: SessionId }));
+export const SessionTriggerAddRequestV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: SessionId, target: TriggerTargetV1Schema,
   /** Managed scope-end rules execute on the canonical resource controller, not their source guest. */
-  project: WorkflowProjectTargetV1Schema.optional(),
-  ...SessionContextFields.partial().shape, trigger: SessionTriggerDefinitionInputV1Schema,
-}).strict().superRefine((value, ctx) => {
+  project: zMini.optional(WorkflowProjectTargetV1Schema),
+  ...zMini.partial(SessionContextFields).shape, trigger: SessionTriggerDefinitionInputV1Schema,
+}).check(z.superRefine((value, ctx) => {
   if (value.target.kind === 'inline' && value.visibleTeamId !== undefined) {
     ctx.addIssue({ code: 'custom', path: ['visibleTeamId'], message: 'Inline triggers are private' });
   }
-}));
-export const SessionTriggerUpdateRequestV1Schema = lazyZodSchema(() => z.object({
+})));
+export const SessionTriggerUpdateRequestV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: SessionId, triggerId: AutomationTriggerIdSchema, expectedRevision: Revision,
-  patch: z.object({ ...SessionContextFields.partial().shape, target: TriggerTargetV1Schema.optional(),
-    project: WorkflowProjectTargetV1Schema.optional(),
-    enabled: z.boolean().optional(), trigger: SessionTriggerDefinitionV1Schema.optional() }).strict()
-    .refine((patch) => Object.keys(patch).length > 0, 'A trigger update needs a change'),
-}).strict());
-export const SessionTriggerRemoveRequestV1Schema = lazyZodSchema(() => z.object({ sessionId: SessionId, triggerId: AutomationTriggerIdSchema }).strict());
-export const SessionPullRequestLinkV1Schema = lazyZodSchema(() => z.object({
-  provider: z.literal('github'), repository: z.string().min(1), number: z.number().int().positive().safe(),
-  url: z.string().url(),
-  state: z.enum(['open', 'merged', 'closed', 'unknown']).optional(),
-  observedAt: z.number().int().nonnegative().optional(),
-}).strict());
+  patch: z.strictObject({ ...zMini.partial(SessionContextFields).shape, target: zMini.optional(TriggerTargetV1Schema),
+    project: zMini.optional(WorkflowProjectTargetV1Schema),
+    enabled: z.optional(z.boolean()), trigger: z.optional(SessionTriggerDefinitionV1Schema) }).check(z.refine((patch) => Object.keys(patch).length > 0, 'A trigger update needs a change')),
+}));
+export const SessionTriggerRemoveRequestV1Schema = lazyZodSchema(() => z.strictObject({ sessionId: SessionId, triggerId: AutomationTriggerIdSchema }));
+export const SessionPullRequestLinkV1Schema = lazyZodSchema(() => z.strictObject({
+  provider: z.literal('github'), repository: z.string().check(z.minLength(1)), number: z.number().check(z.int(), z.positive(), z.int()),
+  url: z.string().check(z.url()),
+  state: z.optional(z.enum(['open', 'merged', 'closed', 'unknown'])),
+  observedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+}));
 export type SessionPullRequestLinkV1 = z.infer<typeof SessionPullRequestLinkV1Schema>;
 /** Unavailable is not evidence that the Session has no linked pull requests. */
 export const SessionTriggerPullRequestLinksV1Schema = lazyZodSchema(() => z.union([
   z.array(SessionPullRequestLinkV1Schema),
-  z.object({ status: z.literal('unavailable'), code: z.literal('target_unavailable') }).strict(),
+  z.strictObject({ status: z.literal('unavailable'), code: z.literal('target_unavailable') }),
 ]));
 export type SessionTriggerPullRequestLinksV1 = z.infer<typeof SessionTriggerPullRequestLinksV1Schema>;
-export const SessionTriggerListResultV1Schema = lazyZodSchema(() => WorkflowTriggerListResultV1Schema.extend({
+export const SessionTriggerListResultV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(WorkflowTriggerListResultV1Schema, {
   sessionId: SessionId,
   pullRequestLinks: SessionTriggerPullRequestLinksV1Schema,
-}).strict());
+})));
 export type SessionTriggerListRequestV1 = z.infer<typeof SessionTriggerListRequestV1Schema>;
 export type SessionTriggerAddRequestV1 = z.infer<typeof SessionTriggerAddRequestV1Schema>;
 export type SessionTriggerUpdateRequestV1 = z.infer<typeof SessionTriggerUpdateRequestV1Schema>;

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ProviderLocalIdSchema } from '../ids.js';
 import { ProviderOriginRelativePathSchema } from '../originRelativePathSchema.js';
@@ -37,7 +37,7 @@ export type ProviderCatalogParserV1 =
   | (string & {});
 
 export const ProviderCatalogParserV1Schema:
-  z.ZodType<ProviderCatalogParserV1, ProviderCatalogParserV1> = ProviderLocalIdSchema;
+  z.ZodMiniType<ProviderCatalogParserV1, ProviderCatalogParserV1> = ProviderLocalIdSchema;
 
 const BUNDLED_PROVIDER_CATALOG_PARSER_IDS: ReadonlySet<string> = new Set(
   BUNDLED_PROVIDER_CATALOG_PARSERS_V1,
@@ -74,7 +74,7 @@ const BUNDLED_PROVIDER_CATALOG_PARSER_REPORTS_MODEL_LOAD_STATE_V1 = Object.freez
   'lmstudio-native-models': true,
 } as const satisfies Record<BundledProviderCatalogParserV1, boolean>);
 
-export const ProviderCatalogProbeV1Schema = lazyZodSchema(() => z.object({
+export const ProviderCatalogProbeV1Schema = lazyZodSchema(() => z.strictObject({
   endpointTemplateId: ProviderLocalIdSchema,
   path: ProviderOriginRelativePathSchema,
   parser: ProviderCatalogParserV1Schema,
@@ -84,8 +84,8 @@ export const ProviderCatalogProbeV1Schema = lazyZodSchema(() => z.object({
    * here so model loading is decided by the format's behavior rather than by
    * whether the host happens to bundle it.
    */
-  reportsModelLoadState: z.boolean().optional(),
-}).strict());
+  reportsModelLoadState: z.optional(z.boolean()),
+}));
 export type ProviderCatalogProbeV1 = z.infer<typeof ProviderCatalogProbeV1Schema>;
 
 /**
@@ -94,9 +94,7 @@ export type ProviderCatalogProbeV1 = z.infer<typeof ProviderCatalogProbeV1Schema
  * generated adapter can produce different model rows, not on process restart,
  * credential refresh, or plugin reload.
  */
-export const ProviderCatalogSourceRegistryVersionV1Schema = lazyZodSchema(() => z.string()
-  .trim()
-  .min(1));
+export const ProviderCatalogSourceRegistryVersionV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 export type ProviderCatalogSourceRegistryVersionV1 = z.infer<
   typeof ProviderCatalogSourceRegistryVersionV1Schema
 >;
@@ -125,41 +123,41 @@ export type ProviderCatalogMembershipPolicyV1 = z.infer<
   typeof ProviderCatalogMembershipPolicyV1Schema
 >;
 
-const ManualCatalogSchema = lazyZodSchema(() => z.object({
+const ManualCatalogSchema = lazyZodSchema(() => z.strictObject({
   source: z.literal('manual'),
   manualModelPolicy: z.literal('allowed'),
-}).strict());
-const StaticCatalogSchema = lazyZodSchema(() => z.object({
+}));
+const StaticCatalogSchema = lazyZodSchema(() => z.strictObject({
   source: z.literal('static'),
   manualModelPolicy: z.enum(['allowed', 'catalog-only']),
-  staticModels: z.array(ProviderModelDescriptorV1Schema).min(1).max(PROVIDER_CATALOG_LIMITS_V1.maxModelsPerConnection),
-}).strict());
-const ProbeCatalogSchema = lazyZodSchema(() => z.object({
+  staticModels: z.array(ProviderModelDescriptorV1Schema).check(z.minLength(1), z.maxLength(PROVIDER_CATALOG_LIMITS_V1.maxModelsPerConnection)),
+}));
+const ProbeCatalogSchema = lazyZodSchema(() => z.strictObject({
   source: z.literal('probe'),
   manualModelPolicy: z.enum(['allowed', 'catalog-only']),
-  probes: z.array(ProviderCatalogProbeV1Schema).min(1).max(PROVIDER_CATALOG_LIMITS_V1.maxCatalogProbes),
-  sourceRegistryVersion: ProviderCatalogSourceRegistryVersionV1Schema.optional(),
-}).strict());
-const StaticProbeCatalogSchema = lazyZodSchema(() => z.object({
+  probes: z.array(ProviderCatalogProbeV1Schema).check(z.minLength(1), z.maxLength(PROVIDER_CATALOG_LIMITS_V1.maxCatalogProbes)),
+  sourceRegistryVersion: z.optional(ProviderCatalogSourceRegistryVersionV1Schema),
+}));
+const StaticProbeCatalogSchema = lazyZodSchema(() => z.strictObject({
   source: z.literal('static+probe'),
   manualModelPolicy: z.enum(['allowed', 'catalog-only']),
-  membershipPolicy: ProviderCatalogMembershipPolicyV1Schema.optional(),
-  staticModels: z.array(ProviderModelDescriptorV1Schema).min(1).max(PROVIDER_CATALOG_LIMITS_V1.maxModelsPerConnection),
-  probes: z.array(ProviderCatalogProbeV1Schema).min(1).max(PROVIDER_CATALOG_LIMITS_V1.maxCatalogProbes),
-  sourceRegistryVersion: ProviderCatalogSourceRegistryVersionV1Schema.optional(),
-}).strict());
+  membershipPolicy: z.optional(ProviderCatalogMembershipPolicyV1Schema),
+  staticModels: z.array(ProviderModelDescriptorV1Schema).check(z.minLength(1), z.maxLength(PROVIDER_CATALOG_LIMITS_V1.maxModelsPerConnection)),
+  probes: z.array(ProviderCatalogProbeV1Schema).check(z.minLength(1), z.maxLength(PROVIDER_CATALOG_LIMITS_V1.maxCatalogProbes)),
+  sourceRegistryVersion: z.optional(ProviderCatalogSourceRegistryVersionV1Schema),
+}));
 
 export const ProviderCatalogDeclarationV1Schema = lazyZodSchema(() => z.discriminatedUnion('source', [
   ManualCatalogSchema,
   StaticCatalogSchema,
   ProbeCatalogSchema,
   StaticProbeCatalogSchema,
-]).superRefine((value, ctx) => {
+]).check(z.superRefine((value, ctx) => {
   const models = 'staticModels' in value ? value.staticModels : [];
   const ids = new Set<string>();
   models.forEach((model, index) => {
     if (ids.has(model.id)) ctx.addIssue({ code: 'custom', path: ['staticModels', index, 'id'], message: 'Duplicate static model id' });
     ids.add(model.id);
   });
-}));
+})));
 export type ProviderCatalogDeclarationV1 = z.infer<typeof ProviderCatalogDeclarationV1Schema>;

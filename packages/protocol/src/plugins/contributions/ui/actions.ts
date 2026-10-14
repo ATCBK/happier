@@ -1,25 +1,25 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const PluginUiFallbackRefV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('descriptor'),
-    descriptorId: z.string().trim().min(1),
-  }).strict(),
-  z.object({
+    descriptorId: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  z.strictObject({
     kind: z.literal('structuredMessage'),
-    descriptorId: z.string().trim().min(1),
-  }).strict(),
-  z.object({
+    descriptorId: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  z.strictObject({
     kind: z.literal('hostedWeb'),
-    contributionId: z.string().trim().min(1),
-  }).strict(),
-  z.object({
+    contributionId: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  z.strictObject({
     kind: z.literal('unavailable'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('none'),
-  }).strict(),
+  }),
 ]));
 export type PluginUiFallbackRefV1 = z.infer<typeof PluginUiFallbackRefV1Schema>;
 

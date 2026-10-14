@@ -1,11 +1,11 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 // Compatibility class (docs/compatibility.md#sdk-protocol-evolution): a read projection that a
 // machine publishes about itself — additive-open/drop. Unknown properties are stripped; known
 // fields stay strict. The same wire shape the 0.2 line publishes (plan R13 K5).
 
-const NonEmptyString = z.string().trim().min(1);
+const NonEmptyString = z.string().check(z.trim(), z.minLength(1));
 
 /**
  * How the last first-party CLI update on a machine ended (plan R13 f / wave contract K5).
@@ -29,8 +29,8 @@ export type CliUpdateOutcome = z.infer<typeof CliUpdateOutcomeSchema>;
  */
 const CliUpdateLastResultFields = {
   /** Epoch milliseconds when this outcome was recorded. */
-  at: z.number().int().nonnegative(),
-  message: z.string().nullable(),
+  at: z.number().check(z.int(), z.nonnegative()),
+  message: z.nullable(z.string()),
 };
 export const CliUpdateLastResultSchema = lazyZodSchema(() => z.union([
   z.object({
@@ -39,7 +39,7 @@ export const CliUpdateLastResultSchema = lazyZodSchema(() => z.union([
     ...CliUpdateLastResultFields,
   }),
   z.object({
-    targetVersion: NonEmptyString.nullable(),
+    targetVersion: z.nullable(NonEmptyString),
     outcome: z.literal('failed'),
     ...CliUpdateLastResultFields,
   }),
@@ -67,17 +67,17 @@ export type CliInstallSource = z.infer<typeof CliInstallSourceSchema>;
 export const CliUpdateFactsSchema = lazyZodSchema(() => z.object({
   currentVersion: NonEmptyString,
   /** `null` when no check cached a result for this ring yet — never guessed. */
-  latestVersion: NonEmptyString.nullable(),
+  latestVersion: z.nullable(NonEmptyString),
   channel: z.enum(['stable', 'preview', 'dev']),
   installSource: CliInstallSourceSchema,
   /** The exact command a person runs to update this CLI; `null` when none is known. */
-  updateCommand: NonEmptyString.nullable(),
+  updateCommand: z.nullable(NonEmptyString),
   /**
    * Whether this machine's daemon runs the update itself when asked (`cli.update.v1` through
    * `tool.systemTasks`). Only a managed install on a platform whose service manager lets the
    * updater outlive the daemon restart.
    */
   canUpdateRemotely: z.boolean(),
-  lastUpdate: CliUpdateLastResultSchema.nullable(),
+  lastUpdate: z.nullable(CliUpdateLastResultSchema),
 }));
 export type CliUpdateFacts = z.infer<typeof CliUpdateFactsSchema>;

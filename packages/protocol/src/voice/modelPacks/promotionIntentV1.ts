@@ -1,29 +1,29 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 
 function boundedString(maximumLength: number) {
-  return z.string().min(1).max(maximumLength).refine((value) => value.trim() === value);
+  return z.string().check(z.minLength(1), z.maxLength(maximumLength), z.refine((value) => value.trim() === value));
 }
 
 /** Recovery payloads belong to the named recovery owner and remain opaque here. */
-export const ModelPackPromotionIntentV1Schema = lazyZodSchema(() => z.object({
+export const ModelPackPromotionIntentV1Schema = lazyZodSchema(() => z.strictObject({
   schemaVersion: z.literal(1),
   packId: z.string(),
   phase: z.enum(['swap_prepared', 'metadata_pending', 'metadata_committed', 'rollback_pending']),
-  startedAtMs: z.number().int().nonnegative(),
+  startedAtMs: z.number().check(z.int(), z.nonnegative()),
   token: boundedString(256),
-  priorInstall: z.object({
+  priorInstall: z.nullable(z.strictObject({
     scopeKey: boundedString(1024),
     identityKey: boundedString(1024),
-  }).strict().nullable(),
-  recovery: z.preprocess((value, context) => {
+  })),
+  recovery: z.pipe(z.transform((value, context) => {
     if (value && typeof value === 'object' && !Array.isArray(value) && !Object.hasOwn(value, 'value')) {
-      context.addIssue({ code: 'custom', message: 'Recovery records require their own value field' });
+      context.issues.push({ code: 'custom', message: 'Recovery records require their own value field', input: context.value });
     }
     return value;
-  }, z.object({
+  }), z.nullable(z.strictObject({
     kind: boundedString(256),
     value: z.unknown(),
-  }).strict().nullable()),
-}).strict());
+  }))),
+}));

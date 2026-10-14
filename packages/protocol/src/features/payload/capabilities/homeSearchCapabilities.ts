@@ -1,10 +1,10 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /** Dynamic status of the one server-light Personal Home transcript index. */
-export const HomeSearchCapabilitiesSchema = lazyZodSchema(() => z.object({
+export const HomeSearchCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
   enabled: z.boolean(),
-  reason: z.enum(['index_unavailable', 'indexing']).optional(),
-}).strict());
+  reason: z.optional(z.enum(['index_unavailable', 'indexing'])),
+}));
 
 export type HomeSearchCapabilities = z.infer<typeof HomeSearchCapabilitiesSchema>;

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { createProviderFingerprintV1 } from '../fingerprints.js';
 import type { ProviderConnectionSecurityFingerprintV1 } from '../fingerprints.js';
@@ -32,29 +32,27 @@ export type LegacyProfileMigrationConnectionSecurityComparisonV1 = Readonly<{
   winnerEndpointSetFingerprint: string | null;
 }>;
 
-const LegacyProfileConflictFingerprintV1Schema = lazyZodSchema(() => z.string()
-  .startsWith('legacy-profile-migration-conflict:v1:')
-  .max(256));
+const LegacyProfileConflictFingerprintV1Schema = lazyZodSchema(() => z.string().check(z.startsWith('legacy-profile-migration-conflict:v1:'), z.maxLength(256)));
 
-export const LegacyProfileMigrationConflictResolutionV1Schema = lazyZodSchema(() => z.object({
+export const LegacyProfileMigrationConflictResolutionV1Schema = lazyZodSchema(() => z.strictObject({
   sourceProfileId: ProviderMigrationSourceProfileIdSchema,
   expectedCandidateFingerprint: LegacyProfileConflictFingerprintV1Schema,
   decision: z.discriminatedUnion('kind', [
-    z.object({
+    z.strictObject({
       kind: z.literal('keep_existing'),
       existingConnectionId: ProviderConnectionIdSchema,
-      modelSelection: z.object({
+      modelSelection: z.optional(z.nullable(z.strictObject({
         agentTargetKey: ProviderAgentTargetKeySchema,
         modelId: ProviderModelIdSchema,
-      }).strict().nullable().optional(),
-    }).strict(),
-    z.object({
+      }))),
+    }),
+    z.strictObject({
       kind: z.literal('create_named'),
       connectionId: ProviderConnectionIdSchema,
-      displayName: z.string().trim().min(1).max(128),
-    }).strict(),
+      displayName: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+    }),
   ]),
-}).strict());
+}));
 export type LegacyProfileMigrationConflictResolutionV1 = z.infer<
   typeof LegacyProfileMigrationConflictResolutionV1Schema
 >;

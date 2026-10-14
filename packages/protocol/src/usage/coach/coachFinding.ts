@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import type { UsageAnalyticsQueryResponse } from '../usageAnalyticsContracts.js';
 import type { UsageModelPriceOverridesV1 } from '../usageModelPriceCatalog.js';
@@ -33,63 +33,62 @@ export const USAGE_COACH_REQUIRED_EVIDENCE = {
     context_bloat: ['context_composition_capacity'],
     cache_economics: ['cache_accounting'], effort_audit: ['recorded_effort'], subagent_fanout: ['subagent_accounting'],
 } as const satisfies Record<UsageCoachDetectorId, readonly UsageCoachCapability[]>;
-const Id = lazyZodSchema(() => z.string().min(1));
-const Time = lazyZodSchema(() => z.number().int().nonnegative());
-const Amount = lazyZodSchema(() => z.number().finite().nonnegative());
-export const UsageCoachPeriodSchema = lazyZodSchema(() => z.object({ startMs: Time, endMs: Time }).strict()
-    .refine(value => value.endMs >= value.startMs));
+const Id = lazyZodSchema(() => z.string().check(z.minLength(1)));
+const Time = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
+const Amount = lazyZodSchema(() => z.number().check(z.nonnegative()));
+export const UsageCoachPeriodSchema = lazyZodSchema(() => z.strictObject({ startMs: Time, endMs: Time }).check(z.refine(value => value.endMs >= value.startMs)));
 export const UsageCoachCurrentnessSchema = lazyZodSchema(() => z.enum(['current', 'stale', 'unknown']));
-export const UsageCoachEvidenceReferenceSchema = lazyZodSchema(() => z.object({
+export const UsageCoachEvidenceReferenceSchema = lazyZodSchema(() => z.strictObject({
     kind: z.enum(['accounting', 'permission', 'composition', 'file_read', 'compaction', 'model_comparison', 'native_cache', 'tool', 'loop', 'mcp_usage', 'effort', 'subagent']),
     id: Id, observedAtMs: Time,
-}).strict());
-export const UsageCoachMeasurementSchema = lazyZodSchema(() => z.object({
+}));
+export const UsageCoachMeasurementSchema = lazyZodSchema(() => z.strictObject({
     metric: z.enum(['duplicate_injections', 'duplicate_bytes', 'observed_cost_difference', 'cache_write_tokens',
         'permission_wait', 'permission_requests', 'unused_schema_bytes', 'unused_mcp_bindings', 'unchanged_reads', 'compactions',
         'failed_repetitions', 'outside_tokens', 'composed_tokens', 'context_window_tokens', 'cache_read_tokens', 'input_tokens',
         'cache_hit_ratio', 'cache_replacement_premium', 'cache_cost_share', 'cached_history_cost',
         'output_tokens', 'thinking_tokens', 'parent_tokens', 'subagent_tokens', 'fanout_multiplier', 'loaded_schema_tokens']),
     value: Amount, unit: z.enum(['count', 'bytes', 'tokens', 'milliseconds', 'currency']),
-    currency: Id.optional(),
-    costKind: z.enum(['reported', 'estimated', 'api_equivalent', 'invoice']).optional(),
-}).strict());
+    currency: z.optional(Id),
+    costKind: z.optional(z.enum(['reported', 'estimated', 'api_equivalent', 'invoice'])),
+}));
 /** Measured samples, not a filled calendar or an inferred trend. Each point identifies its finding evidence. */
-export const UsageCoachEvidenceSeriesSchema = lazyZodSchema(() => UsageCoachMeasurementSchema.omit({ value: true }).extend({
-    points: z.array(z.object({ evidenceId: Id, observedAtMs: Time, value: Amount }).strict()).min(1),
-}).strict());
-export const UsageCoachEstimateSchema = lazyZodSchema(() => z.object({
+export const UsageCoachEvidenceSeriesSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.omit(UsageCoachMeasurementSchema, { value: true }), {
+    points: z.array(z.strictObject({ evidenceId: Id, observedAtMs: Time, value: Amount })).check(z.minLength(1)),
+})));
+export const UsageCoachEstimateSchema = lazyZodSchema(() => z.strictObject({
     kind: z.enum(['observed_difference', 'potential_duplicate_bytes']), value: Amount,
-    unit: z.enum(['bytes', 'currency']), currency: Id.optional(),
+    unit: z.enum(['bytes', 'currency']), currency: z.optional(Id),
     method: z.enum(['matched_outcome_cost_v1', 'duplicate_injection_bytes_v1']),
-    assumptions: z.array(z.string()), period: UsageCoachPeriodSchema, evidenceIds: z.array(Id).min(1),
-}).strict());
-export const UsageCoachModelComparisonDetailSchema = lazyZodSchema(() => z.object({
+    assumptions: z.array(z.string()), period: UsageCoachPeriodSchema, evidenceIds: z.array(Id).check(z.minLength(1)),
+}));
+export const UsageCoachModelComparisonDetailSchema = lazyZodSchema(() => z.strictObject({
     basis: z.literal('matched_completed_host_request_v1'), sessionId: Id,
-    agentTargetKey: ProviderAgentTargetKeySchema, providerConnectionId: ProviderConnectionIdSchema.nullable(),
+    agentTargetKey: ProviderAgentTargetKeySchema, providerConnectionId: z.nullable(ProviderConnectionIdSchema),
     modelId: Id, candidateModelId: Id, modelTurnId: Id, candidateTurnId: Id,
     requestKey: Id, requestScopeKey: Id, modelCost: Amount, candidateCost: Amount,
     currency: Id, costKind: z.enum(['reported', 'estimated', 'api_equivalent', 'invoice']),
-    costCoverage: z.enum(['complete', 'partial']).optional(),
-    providerAttribution: z.enum(['known', 'unknown']).optional(),
-    modelResponseSource: UsageRequestAttributionSchema.shape.source.optional(),
-    candidateResponseSource: UsageRequestAttributionSchema.shape.source.optional(),
-}).strict().refine(value => value.modelId !== value.candidateModelId && value.modelTurnId !== value.candidateTurnId
-    && value.modelCost > value.candidateCost));
-export const UsageCoachFindingStateSchema = lazyZodSchema(() => z.object({
-    dismissed: z.boolean(), snoozedUntilMs: Time.nullable(),
-    applied: z.object({ asOfMs: Time, remedy: UsageCoachRemedySchema }).strict().nullable(),
-}).strict());
+    costCoverage: z.optional(z.enum(['complete', 'partial'])),
+    providerAttribution: z.optional(z.enum(['known', 'unknown'])),
+    modelResponseSource: z.optional(UsageRequestAttributionSchema.shape.source),
+    candidateResponseSource: z.optional(UsageRequestAttributionSchema.shape.source),
+}).check(z.refine(value => value.modelId !== value.candidateModelId && value.modelTurnId !== value.candidateTurnId
+    && value.modelCost > value.candidateCost)));
+export const UsageCoachFindingStateSchema = lazyZodSchema(() => z.strictObject({
+    dismissed: z.boolean(), snoozedUntilMs: z.nullable(Time),
+    applied: z.nullable(z.strictObject({ asOfMs: Time, remedy: UsageCoachRemedySchema })),
+}));
 /** Explainability is part of the finding, including observations that make no waste claim. */
-export const UsageCoachEvidenceBasisSchema = lazyZodSchema(() => z.object({
+export const UsageCoachEvidenceBasisSchema = lazyZodSchema(() => z.strictObject({
     method: Id, kind: z.enum(['observation', 'derived', 'guidance_derived', 'vendor_fact']),
-    citations: z.array(z.object({ url: z.string().url(), sourceKind: z.enum([
+    citations: z.array(z.strictObject({ url: z.string().check(z.url()), sourceKind: z.enum([
         'vendor_docs', 'vendor_changelog', 'research_paper', 'price_catalog',
-    ]), asOf: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).strict()).min(1),
+    ]), asOf: z.string().check(z.regex(/^\d{4}-\d{2}-\d{2}$/)) })).check(z.minLength(1)),
     limitations: z.array(z.string()), advice: z.array(z.string()),
-}).strict());
-export const UsageCoachFindingSchema = lazyZodSchema(() => z.object({
+}));
+export const UsageCoachFindingSchema = lazyZodSchema(() => z.strictObject({
     detectorId: UsageCoachDetectorIdSchema, evidenceKey: Id, queryKey: Id,
-    period: UsageCoachPeriodSchema, asOfMs: Time.nullable(), currentness: UsageCoachCurrentnessSchema,
+    period: UsageCoachPeriodSchema, asOfMs: z.nullable(Time), currentness: UsageCoachCurrentnessSchema,
     coverage: z.enum(['complete', 'partial', 'unknown']), severity: z.enum(['info', 'warning']),
     classification: z.enum(['informational', 'cost_linked']), basis: UsageCoachEvidenceBasisSchema,
     summaryCode: z.enum(['duplicate_injection_observed', 'compatible_model_cost_difference', 'idle_cache_recreation_observed',
@@ -97,17 +96,17 @@ export const UsageCoachFindingSchema = lazyZodSchema(() => z.object({
         'repeated_compaction_observed', 'failed_loop_observed', 'prefix_change_cache_miss_observed',
         'outside_happier_usage_observed', 'comparable_completed_request_cost_difference', 'compaction_thrash_observed',
         'context_growth_cost_observed', 'cache_economics_observed', 'effort_audit_observed', 'subagent_fanout_observed', 'mcp_definition_overhead_observed']),
-    evidence: z.array(UsageCoachEvidenceReferenceSchema).min(1), measurements: z.array(UsageCoachMeasurementSchema),
-    evidenceSeries: z.array(UsageCoachEvidenceSeriesSchema).min(1).optional(),
-    remedy: UsageCoachRemedySchema.nullable(),
+    evidence: z.array(UsageCoachEvidenceReferenceSchema).check(z.minLength(1)), measurements: z.array(UsageCoachMeasurementSchema),
+    evidenceSeries: z.optional(z.array(UsageCoachEvidenceSeriesSchema).check(z.minLength(1))),
+    remedy: z.nullable(UsageCoachRemedySchema),
     /** The query comes from the admitted consumer scope, never from the remedy. */
-    action: z.object({ actionId: z.literal('usage.coach.apply'), detectorId: UsageCoachDetectorIdSchema, evidenceKey: Id }).strict().nullable(),
-    estimate: UsageCoachEstimateSchema.optional(),
-    modelComparison: UsageCoachModelComparisonDetailSchema.optional(),
-    cacheCauses: z.array(z.object({ cause: z.enum(['ttl_expired', 'prefix_change']), cacheWriteTokens: Amount,
-        premiumUsd: Amount.nullable() }).strict()).optional(),
+    action: z.nullable(z.strictObject({ actionId: z.literal('usage.coach.apply'), detectorId: UsageCoachDetectorIdSchema, evidenceKey: Id })),
+    estimate: z.optional(UsageCoachEstimateSchema),
+    modelComparison: z.optional(UsageCoachModelComparisonDetailSchema),
+    cacheCauses: z.optional(z.array(z.strictObject({ cause: z.enum(['ttl_expired', 'prefix_change']), cacheWriteTokens: Amount,
+        premiumUsd: z.nullable(Amount) }))),
     state: UsageCoachFindingStateSchema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
     if (value.modelComparison && (value.detectorId !== 'model_misfit'
         || value.summaryCode !== 'comparable_completed_request_cost_difference')) {
         context.addIssue({ code: 'custom', message: 'Host response-completion comparison belongs only to its model finding', path: ['modelComparison'] });
@@ -139,18 +138,18 @@ export const UsageCoachFindingSchema = lazyZodSchema(() => z.object({
         || value.estimate.evidenceIds.some(id => !value.evidence.some(ref => ref.id === id)))) {
         context.addIssue({ code: 'custom', message: 'Estimate must use the finding period and evidence', path: ['estimate'] });
     }
-}));
+})));
 export type UsageCoachFinding = z.infer<typeof UsageCoachFindingSchema>;
 export const UsageCoachConceptEvaluationSchema = lazyZodSchema(() => z.discriminatedUnion('status', [
-    z.object({ detectorId: UsageCoachDetectorIdSchema, requiredEvidence: z.array(UsageCoachCapabilitySchema),
-        status: z.literal('finding'), finding: UsageCoachFindingSchema }).strict(),
-    z.object({ detectorId: UsageCoachDetectorIdSchema, requiredEvidence: z.array(UsageCoachCapabilitySchema),
-        status: z.literal('insufficient_evidence'), missingEvidence: z.array(UsageCoachCapabilitySchema).min(1) }).strict(),
-    z.object({ detectorId: UsageCoachDetectorIdSchema, requiredEvidence: z.array(UsageCoachCapabilitySchema),
-        status: z.literal('no_finding') }).strict(),
-    z.object({ detectorId: UsageCoachDetectorIdSchema, requiredEvidence: z.array(UsageCoachCapabilitySchema),
-        status: z.literal('disabled') }).strict(),
-]).superRefine((value, context) => {
+    z.strictObject({ detectorId: UsageCoachDetectorIdSchema, requiredEvidence: z.array(UsageCoachCapabilitySchema),
+        status: z.literal('finding'), finding: UsageCoachFindingSchema }),
+    z.strictObject({ detectorId: UsageCoachDetectorIdSchema, requiredEvidence: z.array(UsageCoachCapabilitySchema),
+        status: z.literal('insufficient_evidence'), missingEvidence: z.array(UsageCoachCapabilitySchema).check(z.minLength(1)) }),
+    z.strictObject({ detectorId: UsageCoachDetectorIdSchema, requiredEvidence: z.array(UsageCoachCapabilitySchema),
+        status: z.literal('no_finding') }),
+    z.strictObject({ detectorId: UsageCoachDetectorIdSchema, requiredEvidence: z.array(UsageCoachCapabilitySchema),
+        status: z.literal('disabled') }),
+]).check(z.superRefine((value, context) => {
     if (JSON.stringify(value.requiredEvidence) !== JSON.stringify(USAGE_COACH_REQUIRED_EVIDENCE[value.detectorId])) {
         context.addIssue({ code: 'custom', message: 'The concept must declare its required evidence', path: ['requiredEvidence'] });
     }
@@ -161,16 +160,16 @@ export const UsageCoachConceptEvaluationSchema = lazyZodSchema(() => z.discrimin
         || value.missingEvidence.some(capability => !value.requiredEvidence.includes(capability)))) {
         context.addIssue({ code: 'custom', message: 'Missing evidence must identify unmet required capabilities', path: ['missingEvidence'] });
     }
-}));
+})));
 export type UsageCoachConceptEvaluation = z.infer<typeof UsageCoachConceptEvaluationSchema>;
-export const UsageCoachEvaluationSchema = lazyZodSchema(() => z.object({
-    v: z.literal(1), queryKey: Id, period: UsageCoachPeriodSchema, asOfMs: Time.nullable(),
+export const UsageCoachEvaluationSchema = lazyZodSchema(() => z.strictObject({
+    v: z.literal(1), queryKey: Id, period: UsageCoachPeriodSchema, asOfMs: z.nullable(Time),
     currentness: UsageCoachCurrentnessSchema, evaluations: z.array(UsageCoachConceptEvaluationSchema),
     findings: z.array(UsageCoachFindingSchema),
-    digestSuggestion: UsageCoachDigestSuggestionSchema.optional(),
-    unavailableChecks: z.array(z.object({ check: z.enum(['fast_mode', 'scheduled_interval_vs_ttl']),
-        reason: z.literal('not_available') }).strict()).optional(),
-}).strict().superRefine((value, context) => {
+    digestSuggestion: z.optional(UsageCoachDigestSuggestionSchema),
+    unavailableChecks: z.optional(z.array(z.strictObject({ check: z.enum(['fast_mode', 'scheduled_interval_vs_ttl']),
+        reason: z.literal('not_available') }))),
+}).check(z.superRefine((value, context) => {
     if (value.digestSuggestion && (value.digestSuggestion.queryKey !== value.queryKey
         || value.digestSuggestion.lookbackMs !== value.period.endMs - value.period.startMs)) {
         context.addIssue({ code: 'custom', message: 'The digest must belong to this query and witnessed period', path: ['digestSuggestion'] });
@@ -190,7 +189,7 @@ export const UsageCoachEvaluationSchema = lazyZodSchema(() => z.object({
         || finding.period.endMs !== value.period.endMs || finding.asOfMs !== value.asOfMs || finding.currentness !== value.currentness)) {
         context.addIssue({ code: 'custom', message: 'Findings must belong to this query and observation', path: ['findings'] });
     }
-}));
+})));
 export type UsageCoachEvaluation = z.infer<typeof UsageCoachEvaluationSchema>;
 
 export interface UsageCoachFileReadFact {

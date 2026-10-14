@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
@@ -16,55 +16,55 @@ import { ProjectExecutionChoiceV1Schema, WorkspaceExecutionConfigAddressV1Schema
   type WorkspaceExecutionSettingsV1 } from './projectWorkerPreferencesV1.js';
 
 /** Desired service placement; actual native service custody belongs to Local Services. */
-export const ProjectServicePlacementV1Schema = lazyZodSchema(() => z.object({
+export const ProjectServicePlacementV1Schema = lazyZodSchema(() => z.strictObject({
   runsOn: ProjectExecutionChoiceV1Schema,
   unavailable: z.enum(['primary', 'fail']),
-}).strict());
+}));
 export type ProjectServicePlacementV1 = z.infer<typeof ProjectServicePlacementV1Schema>;
 export const ProjectServicePlacementV1StoredSchema = createStoredReadSchema(ProjectServicePlacementV1Schema);
 
 export const ProjectServicePlacementExpectationV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('absent') }).strict(),
-  z.object({ kind: z.literal('value'), value: ProjectServicePlacementV1Schema }).strict(),
+  z.strictObject({ kind: z.literal('absent') }),
+  z.strictObject({ kind: z.literal('value'), value: ProjectServicePlacementV1Schema }),
 ]));
 export type ProjectServicePlacementExpectationV1 = z.infer<typeof ProjectServicePlacementExpectationV1Schema>;
-export const ProjectServicePlacementGetV1Schema = lazyZodSchema(() => z.object({
-  workspace: WorkspaceExecutionConfigAddressV1Schema, serviceName: z.string().min(1),
-}).strict());
+export const ProjectServicePlacementGetV1Schema = lazyZodSchema(() => z.strictObject({
+  workspace: WorkspaceExecutionConfigAddressV1Schema, serviceName: z.string().check(z.minLength(1)),
+}));
 export type ProjectServicePlacementGetV1 = z.infer<typeof ProjectServicePlacementGetV1Schema>;
-export const ProjectServicePlacementSetV1Schema = lazyZodSchema(() => ProjectServicePlacementGetV1Schema.extend({
+export const ProjectServicePlacementSetV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ProjectServicePlacementGetV1Schema, {
   expectedRevision: WorkspaceExecutionConfigRevisionV1Schema,
   expected: ProjectServicePlacementExpectationV1Schema, value: ProjectServicePlacementV1Schema,
-}).strict());
+})));
 export type ProjectServicePlacementSetV1 = z.infer<typeof ProjectServicePlacementSetV1Schema>;
 const ObservationSchema = lazyZodSchema(() => z.object({
   placement: ProjectServicePlacementV1Schema, revision: WorkspaceExecutionConfigRevisionV1Schema,
   provenance: z.enum(['default', 'saved']),
 }));
 export const ProjectServicePlacementReadResultV1Schema = lazyZodSchema(() => z.union([
-  ObservationSchema.extend({ status: z.literal('ready') }).strict(),
-  z.object({ status: z.enum(['locked', 'invalid', 'unavailable']) }).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ObservationSchema, { status: z.literal('ready') })),
+  z.strictObject({ status: z.enum(['locked', 'invalid', 'unavailable']) }),
 ]));
 export type ProjectServicePlacementReadResultV1 = z.infer<typeof ProjectServicePlacementReadResultV1Schema>;
 // Reuse Local Services' observation, while refusing an inert suggestion as native custody.
-const ObservedManagedTargetSchema = lazyZodSchema(() => LocalServiceLaunchTargetV1Schema.refine(target =>
+const ObservedManagedTargetSchema = lazyZodSchema(() => LocalServiceLaunchTargetV1Schema.check(z.refine(target =>
   target.source === 'managed_service' && target.sourceClass?.kind === 'managed_service'
   && target.workspace !== undefined && target.workspaceId === target.workspace.workspaceId
   && target.machineId === target.workspace.machineId && target.declaration !== undefined
   && target.declaration.workspaceRefId === target.workspaceId && target.cwd !== undefined
-  && target.serviceState !== undefined, 'A current native binding requires exact managed provenance'));
+  && target.serviceState !== undefined, 'A current native binding requires exact managed provenance')));
 export const ProjectServicePlacementGetResultV1Schema = lazyZodSchema(() => z.union([
-  ObservationSchema.extend({ status: z.literal('ready'), actual: z.union([
-    z.object({ status: z.literal('present'), target: ObservedManagedTargetSchema }).strict(),
-    z.object({ status: z.literal('ambiguous'), targets: z.array(ObservedManagedTargetSchema).min(2) }).strict(),
-    z.object({ status: z.enum(['absent', 'unavailable']) }).strict(),
-  ]) }).strict(),
-  z.object({ status: z.enum(['locked', 'invalid', 'unavailable']) }).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ObservationSchema, { status: z.literal('ready'), actual: z.union([
+    z.strictObject({ status: z.literal('present'), target: ObservedManagedTargetSchema }),
+    z.strictObject({ status: z.literal('ambiguous'), targets: z.array(ObservedManagedTargetSchema).check(z.minLength(2)) }),
+    z.strictObject({ status: z.enum(['absent', 'unavailable']) }),
+  ]) })),
+  z.strictObject({ status: z.enum(['locked', 'invalid', 'unavailable']) }),
 ]));
 export type ProjectServicePlacementGetResultV1 = z.infer<typeof ProjectServicePlacementGetResultV1Schema>;
 export const ProjectServicePlacementMutationResultV1Schema = lazyZodSchema(() => z.union([
-  ObservationSchema.extend({ status: z.enum(['applied', 'satisfied', 'unchanged', 'conflict']) }).strict(),
-  z.object({ status: z.enum(['outcomeUnknown', 'cancelled', 'locked', 'invalid', 'unavailable']) }).strict(),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ObservationSchema, { status: z.enum(['applied', 'satisfied', 'unchanged', 'conflict']) })),
+  z.strictObject({ status: z.enum(['outcomeUnknown', 'cancelled', 'locked', 'invalid', 'unavailable']) }),
 ]));
 export type ProjectServicePlacementMutationResultV1 = z.infer<typeof ProjectServicePlacementMutationResultV1Schema>;
 

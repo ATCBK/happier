@@ -1,24 +1,22 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { RunnerPublicKeySchema, RunnerResourceIdSchema, RunnerSignatureSchema } from './activation.js';
 
 export const RUNNER_MACHINE_CONTENT_KEY_FINGERPRINT_PREFIX = 'runner-machine-content-key-sha256:' as const;
 
-export const RunnerMachineContentKeyFingerprintV1Schema = lazyZodSchema(() => z.string().regex(
-  /^runner-machine-content-key-sha256:[a-f0-9]{64}$/,
-));
+export const RunnerMachineContentKeyFingerprintV1Schema = lazyZodSchema(() => z.string().check(z.regex(/^runner-machine-content-key-sha256:[a-f0-9]{64}$/)));
 
-export const RunnerMachineContentKeyBindingPayloadV1Schema = lazyZodSchema(() => z.object({
+export const RunnerMachineContentKeyBindingPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   purpose: z.literal('happier.ephemeral-runner.machine-content-key'),
   homeServerIdentityId: RunnerResourceIdSchema,
-  activationId: z.string().uuid(),
+  activationId: z.string().check(z.uuid()),
   creatorAccountId: RunnerResourceIdSchema,
   machineId: RunnerResourceIdSchema,
   installationId: RunnerResourceIdSchema,
   machineContentKeyFingerprint: RunnerMachineContentKeyFingerprintV1Schema,
-}).strict());
+}));
 export type RunnerMachineContentKeyBindingPayloadV1 = z.infer<
   typeof RunnerMachineContentKeyBindingPayloadV1Schema
 >;
@@ -34,21 +32,21 @@ export type RunnerMachineContentKeyBindingPayloadV1 = z.infer<
  * it. It is outside the signed payload by construction: the creator seals it
  * after signing, and both the signer and the verifier ignore it.
  */
-export const RunnerMachineContentKeyVerifierFactPayloadV1Schema = lazyZodSchema(() => z.object({
+export const RunnerMachineContentKeyVerifierFactPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  activationId: z.string().uuid(),
+  activationId: z.string().check(z.uuid()),
   machineId: RunnerResourceIdSchema,
   activationSigningPublicKey: RunnerPublicKeySchema,
-}).strict());
+}));
 export type RunnerMachineContentKeyVerifierFactPayloadV1 = z.infer<
   typeof RunnerMachineContentKeyVerifierFactPayloadV1Schema
 >;
 
-export const RunnerMachineContentKeyBindingV1Schema = lazyZodSchema(() => RunnerMachineContentKeyBindingPayloadV1Schema.extend({
+export const RunnerMachineContentKeyBindingV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(RunnerMachineContentKeyBindingPayloadV1Schema, {
   accountSignatureBase64Url: RunnerSignatureSchema,
   /** Account-sealed `RunnerMachineContentKeyVerifierFactPayloadV1`; never signed. */
-  creatorVerifierFactCiphertext: z.string().min(1).max(4096).optional(),
-}).strict());
+  creatorVerifierFactCiphertext: z.optional(z.string().check(z.minLength(1), z.maxLength(4096))),
+})));
 export type RunnerMachineContentKeyBindingV1 = z.infer<typeof RunnerMachineContentKeyBindingV1Schema>;
 
 /** The non-signature fields the activation signature actually covers. */

@@ -1,21 +1,21 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
-const Timestamp = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const CeilingBytes = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+const Timestamp = z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER));
+const CeilingBytes = z.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER));
 const WarningRule = z.enum(['idle_sessions', 'memory_guard']);
 const StopRule = z.enum(['idle_sessions', 'memory_guard', 'ceiling']);
 const stopping = { kind: z.literal('stopping'), stopAt: Timestamp, rule: WarningRule };
 const stopped = { kind: z.literal('stopped'), at: Timestamp, rule: StopRule,
-  idleMs: Timestamp.optional(), freedBytes: Timestamp.optional() };
+  idleMs: z.optional(Timestamp), freedBytes: z.optional(Timestamp) };
 
 /** Content-free presentation, carried by the Session's canonical shared metadata. */
 export const SessionGuardStateV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ v: z.literal(1), ...stopping, ceilingBytes: CeilingBytes.nullable().optional() }).strict(),
-  z.object({ v: z.literal(1), ...stopped, ceilingBytes: CeilingBytes.nullable().optional() }).strict(),
-  z.object({ v: z.literal(1), ...stopped, kind: z.literal('requested'), ceilingBytes: CeilingBytes.nullable().optional() }).strict(),
-  z.object({ v: z.literal(1), kind: z.literal('configured'), ceilingBytes: CeilingBytes.nullable() }).strict(),
+  z.strictObject({ v: z.literal(1), ...stopping, ceilingBytes: z.optional(z.nullable(CeilingBytes)) }),
+  z.strictObject({ v: z.literal(1), ...stopped, ceilingBytes: z.optional(z.nullable(CeilingBytes)) }),
+  z.strictObject({ v: z.literal(1), ...stopped, kind: z.literal('requested'), ceilingBytes: z.optional(z.nullable(CeilingBytes)) }),
+  z.strictObject({ v: z.literal(1), kind: z.literal('configured'), ceilingBytes: z.nullable(CeilingBytes) }),
 ]));
 export type SessionGuardStateV1 = z.infer<typeof SessionGuardStateV1Schema>;
 export const SessionGuardStateV1StoredSchema = createStoredReadSchema(SessionGuardStateV1Schema);
@@ -31,7 +31,7 @@ export function readSessionMemoryCeilingOverride(metadata: unknown): number | nu
 export function applySessionMemoryCeilingOverrideToMetadata<T extends Record<string, unknown>>(
   metadata: T, bytes: number | null,
 ): T & { sessionGuardStateV1: SessionGuardStateV1 } {
-  const ceilingBytes = CeilingBytes.nullable().parse(bytes);
+  const ceilingBytes = z.nullable(CeilingBytes).parse(bytes);
   const previous = metadata.sessionGuardStateV1;
   const presentation = previous === undefined ? undefined : SessionGuardStateV1StoredSchema.parse(previous);
   const sessionGuardStateV1: SessionGuardStateV1 = presentation
@@ -41,28 +41,28 @@ export function applySessionMemoryCeilingOverrideToMetadata<T extends Record<str
 }
 
 export const SessionGuardNoticeStateV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object(stopping).strict(),
-  z.object({ ...stopped, ceilingBytes: CeilingBytes.optional() }).strict(),
-  z.object({ kind: z.literal('clear') }).strict(),
-  z.object({ kind: z.literal('ceiling'), bytes: CeilingBytes.nullable() }).strict(),
-  z.object({ kind: z.literal('notify_ceiling'), notice: z.enum(['ceiling_near', 'ceiling_reached']) }).strict(),
-  z.object({ kind: z.literal('notify_terminal_warning'), terminalId: z.string().min(1),
-    terminalKey: z.string().min(1).max(2000), stopAt: Timestamp, idleMs: Timestamp.optional() }).strict(),
+  z.strictObject(stopping),
+  z.strictObject({ ...stopped, ceilingBytes: z.optional(CeilingBytes) }),
+  z.strictObject({ kind: z.literal('clear') }),
+  z.strictObject({ kind: z.literal('ceiling'), bytes: z.nullable(CeilingBytes) }),
+  z.strictObject({ kind: z.literal('notify_ceiling'), notice: z.enum(['ceiling_near', 'ceiling_reached']) }),
+  z.strictObject({ kind: z.literal('notify_terminal_warning'), terminalId: z.string().check(z.minLength(1)),
+    terminalKey: z.string().check(z.minLength(1), z.maxLength(2000)), stopAt: Timestamp, idleMs: z.optional(Timestamp) }),
 ]));
 export type SessionGuardNoticeStateV1 = z.infer<typeof SessionGuardNoticeStateV1Schema>;
 
-export const SessionGuardNoticeRequestV1Schema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1), state: SessionGuardNoticeStateV1Schema,
-}).strict());
+export const SessionGuardNoticeRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.minLength(1)), state: SessionGuardNoticeStateV1Schema,
+}));
 export type SessionGuardNoticeRequestV1 = z.infer<typeof SessionGuardNoticeRequestV1Schema>;
-export const SessionGuardNoticeResponseV1Schema = lazyZodSchema(() => z.object({ ok: z.boolean() }).strict());
+export const SessionGuardNoticeResponseV1Schema = lazyZodSchema(() => z.strictObject({ ok: z.boolean() }));
 
-export const SessionStopRecordV1Schema = lazyZodSchema(() => z.object({
-  v: z.literal(1), at: Timestamp, rule: StopRule, idleMs: Timestamp.optional(), freedBytes: Timestamp.optional(),
-  ceilingBytes: CeilingBytes.optional(),
+export const SessionStopRecordV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1), at: Timestamp, rule: StopRule, idleMs: z.optional(Timestamp), freedBytes: z.optional(Timestamp),
+  ceilingBytes: z.optional(CeilingBytes),
   status: z.enum(['requested', 'stopped', 'cancelled', 'failed']),
-  settledAt: Timestamp.optional(),
-}).strict());
+  settledAt: z.optional(Timestamp),
+}));
 export type SessionStopRecordV1 = z.infer<typeof SessionStopRecordV1Schema>;
 export const SessionStopRecordV1StoredSchema = createStoredReadSchema(SessionStopRecordV1Schema);
 

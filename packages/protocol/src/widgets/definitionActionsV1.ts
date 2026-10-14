@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { VoiceTrackedSessionAddressV1Schema } from '../sessions/follow/voiceTrackedTargetsCompatibilityV1.js';
 import { WidgetDefinitionDraftV1Schema, WidgetDefinitionPatchV1Schema, WidgetDefinitionV1Schema, type WidgetDefinitionDraftV1 } from './widgetDefinitionV1.js';
 import { WidgetInstanceRefV1Schema, WidgetInputBindingsV1Schema } from './widgetInstanceV1.js';
@@ -10,27 +10,27 @@ import { WidgetDefinitionSummaryV1Schema } from './widgetDefinitionArtifactV1.js
 export { WIDGET_DEFINITION_ACTION_IDS_V1, WidgetDefinitionActionIdV1Schema } from './definitionActionIdsV1.js';
 export type { WidgetDefinitionActionIdV1 } from './definitionActionIdsV1.js';
 
-const id = z.string().trim().min(1);
-export const WidgetDefinitionAccountV1Schema = lazyZodSchema(() => z.object({ serverId: id, accountId: id }).strict());
-const account = z.object({ account: WidgetDefinitionAccountV1Schema }).strict();
-const reference = account.extend({ artifactId: id }).strict();
+const id = z.string().check(z.trim(), z.minLength(1));
+export const WidgetDefinitionAccountV1Schema = lazyZodSchema(() => z.strictObject({ serverId: id, accountId: id }));
+const account = z.strictObject({ account: WidgetDefinitionAccountV1Schema });
+const reference = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(account, { artifactId: id }));
 export const WidgetDefinitionActionInputSchemasV1 = {
     'widgets.definition.list': account,
     'widgets.definition.get': reference,
-    'widgets.definition.create': account.extend({ artifactId: id, definition: WidgetDefinitionDraftV1Schema }).strict(),
-    'widgets.definition.update': reference.extend({ patch: WidgetDefinitionPatchV1Schema }).strict(),
-    'widgets.definition.duplicate': reference.extend({ newArtifactId: id, name: id.optional() }).strict(),
+    'widgets.definition.create': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(account, { artifactId: id, definition: WidgetDefinitionDraftV1Schema })),
+    'widgets.definition.update': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(reference, { patch: WidgetDefinitionPatchV1Schema })),
+    'widgets.definition.duplicate': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(reference, { newArtifactId: id, name: z.optional(id) })),
     'widgets.definition.delete': reference,
-    'widgets.definition.saveFromSession': account.extend({ session: VoiceTrackedSessionAddressV1Schema, itemId: id, artifactId: id, name: id.optional() }).strict(),
+    'widgets.definition.saveFromSession': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(account, { session: VoiceTrackedSessionAddressV1Schema, itemId: id, artifactId: id, name: z.optional(id) })),
 } as const;
-export const WidgetDefinitionPlacementSummaryV1Schema = lazyZodSchema(() => z.object({ placements: z.array(WidgetInstanceRefV1Schema), unavailableScopes: z.array(id) }).strict());
-const result = z.object({ definition: WidgetDefinitionV1Schema }).strict();
+export const WidgetDefinitionPlacementSummaryV1Schema = lazyZodSchema(() => z.strictObject({ placements: z.array(WidgetInstanceRefV1Schema), unavailableScopes: z.array(id) }));
+const result = z.strictObject({ definition: WidgetDefinitionV1Schema });
 export const WidgetDefinitionActionOutputSchemasV1 = {
-    'widgets.definition.list': z.object({ definitions: z.array(WidgetDefinitionSummaryV1Schema) }).strict(),
-    'widgets.definition.get': result.extend({ placementSummary: WidgetDefinitionPlacementSummaryV1Schema.optional() }).strict(),
+    'widgets.definition.list': z.strictObject({ definitions: z.array(WidgetDefinitionSummaryV1Schema) }),
+    'widgets.definition.get': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(result, { placementSummary: z.optional(WidgetDefinitionPlacementSummaryV1Schema) })),
     'widgets.definition.create': result, 'widgets.definition.update': result, 'widgets.definition.duplicate': result,
-    'widgets.definition.delete': z.object({ artifactId: id, status: z.literal('deleted') }).strict(),
-    'widgets.definition.saveFromSession': result.extend({ suggestedBindings: WidgetInputBindingsV1Schema }).strict(),
+    'widgets.definition.delete': z.strictObject({ artifactId: id, status: z.literal('deleted') }),
+    'widgets.definition.saveFromSession': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(result, { suggestedBindings: WidgetInputBindingsV1Schema })),
 } as const;
 /** Current sealed Session item plus admitted descriptor; this reader never removes or rewrites it. */
 export type SessionWidgetDefinitionSourceV1 = Readonly<{ definition: WidgetDefinitionDraftV1; bindings: z.infer<typeof WidgetInputBindingsV1Schema> }>;

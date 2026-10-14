@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createWorkBoardArtifactBoundary } from '../boards/workBoardArtifactV1.testkit.js';
 import { createHomeHubArtifactPortV1, buildHomeHubArtifactIdV1, HOME_HUB_ARTIFACT_KIND_V1, type HomeHubArtifactTransportV1 } from './homeHubArtifactV1.js';
 import { HOME_HUB_DEFAULT_LAYOUT, homeHubDefaultWidgetInstanceId, type HomeHubWidgetInput } from './homeHubLayoutV1.js';
@@ -195,7 +195,7 @@ describe('Home Account Artifact semantic edits', () => {
         seed([storedInstance]);
         const known = { ...HOME_HUB_DEFAULT_LAYOUT, items: [{ kind: 'widget', instance, frameStyle: 'plain' }], order: ['one'] };
         expect(await port.read()).toEqual(known);
-        await expect(port.apply({ kind: 'widget_add', instance: storedInstance })).rejects.toBeInstanceOf(z.ZodError);
+        await expect(port.apply({ kind: 'widget_add', instance: storedInstance })).rejects.toBeInstanceOf(z.core.$ZodError);
         expect(b.updates).toEqual([]);
         const edited = (await port.apply({ kind: 'widget_rename', instanceId: 'one', displayName: 'Renamed' })).layout;
         expect(configuredCopies(edited)).toEqual([{ ...instance, displayName: 'Renamed' }]);
@@ -388,7 +388,7 @@ describe('Home Account Artifact semantic edits', () => {
         expect((await port.read()).order).toEqual(moved.order);
         await expect(port.apply({ kind: 'move_to', sectionId: 'one',
             position: { nativeIndex: 0, anchorId: 'start', placement: 'before' } }))
-            .rejects.toBeInstanceOf(z.ZodError);
+            .rejects.toBeInstanceOf(z.core.$ZodError);
     });
 
     it('guards a default-projected source against the canonical full order without materializing a second copy', async () => {
@@ -421,7 +421,7 @@ describe('Home Account Artifact semantic edits', () => {
     it('uses distinct valid Artifact UUIDs for Accounts and refuses substituted ownership and unreadable records', async () => {
         const b = boundary();
         const id = buildHomeHubArtifactIdV1(accountId);
-        expect(z.string().uuid().parse(id)).toBe(id);
+        expect(z.string().check(z.uuid()).parse(id)).toBe(id);
         expect(buildHomeHubArtifactIdV1('account-two')).not.toBe(id);
         b.rows.set(id, { artifactId: id, header: { v: 1, kind: 'another-kind' }, body: JSON.stringify(HOME_HUB_DEFAULT_LAYOUT), revision: { headerVersion: 1, bodyVersion: 1 } });
         const port = createHomeHubArtifactPortV1(b.transport, { accountId });

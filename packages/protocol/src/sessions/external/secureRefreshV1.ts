@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionIdSchema } from '../idsV1.js';
 import { NonBlankOpaqueIdentifierSchema } from '../../strings/opaqueIdentifier.js';
@@ -18,39 +18,25 @@ import {
 export const EXTERNAL_SESSION_TRANSCRIPT_INVALIDATION_EVENT_V1 =
   'external-session-transcript-invalidated' as const;
 
-const ExternalSessionRefreshMachineIdV1Schema = lazyZodSchema(() => z.string().trim().min(1).max(256));
-const ExternalSessionRefreshGenerationV1Schema = lazyZodSchema(() => z.string().trim().min(1).max(256));
+const ExternalSessionRefreshMachineIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
+const ExternalSessionRefreshGenerationV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 /** Agent-minted: presence decided by the opaque-identifier owner, bytes kept. */
-const ExternalSessionRefreshRemoteSessionIdV1Schema = lazyZodSchema(() => NonBlankOpaqueIdentifierSchema.max(2_000));
-export const ExternalSessionRefreshCursorV1Schema = lazyZodSchema(() => z.string()
-  .trim()
-  .min(1)
-  .max(4_096)
-  .regex(
-    /^happier_external_cursor_v1:[A-Za-z0-9_-]+$/,
-    'External-session refresh cursors must use the canonical host-qualified cursor carrier.',
-  ));
+const ExternalSessionRefreshRemoteSessionIdV1Schema = lazyZodSchema(() => NonBlankOpaqueIdentifierSchema.check(z.maxLength(2_000)));
+export const ExternalSessionRefreshCursorV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(4_096), z.regex(/^happier_external_cursor_v1:[A-Za-z0-9_-]+$/, 'External-session refresh cursors must use the canonical host-qualified cursor carrier.')));
 export type ExternalSessionRefreshCursorV1 = z.infer<
   typeof ExternalSessionRefreshCursorV1Schema
 >;
-export const ExternalSessionRefreshCursorIdentityV1Schema = lazyZodSchema(() => z.string()
-  .regex(
-    /^external_session_cursor_binding_v1:[0-9a-f]{64}$/,
-    'External-session refresh cursor identities must use the canonical non-reversible binding carrier.',
-  ));
+export const ExternalSessionRefreshCursorIdentityV1Schema = lazyZodSchema(() => z.string().check(z.regex(/^external_session_cursor_binding_v1:[0-9a-f]{64}$/, 'External-session refresh cursor identities must use the canonical non-reversible binding carrier.')));
 export type ExternalSessionRefreshCursorIdentityV1 = z.infer<
   typeof ExternalSessionRefreshCursorIdentityV1Schema
 >;
-const ExternalSessionRefreshBoundaryV1Schema = lazyZodSchema(() => z.string().trim().min(1).max(2_000));
-export const ExternalSessionRefreshReadDiagnosticV1Schema = lazyZodSchema(() => z.object({
-  code: z.string().trim().min(1).max(128),
+const ExternalSessionRefreshBoundaryV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000)));
+export const ExternalSessionRefreshReadDiagnosticV1Schema = lazyZodSchema(() => z.strictObject({
+  code: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
   severity: z.enum(['benign', 'required']),
-  count: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  positions: z.array(z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)).max(200),
-}).strict().refine(
-  (diagnostic) => diagnostic.count >= diagnostic.positions.length,
-  'Diagnostic count must cover every reported position.',
-));
+  count: z.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER)),
+  positions: z.array(z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER))).check(z.maxLength(200)),
+}).check(z.refine((diagnostic) => diagnostic.count >= diagnostic.positions.length, 'Diagnostic count must cover every reported position.')));
 export type ExternalSessionRefreshReadDiagnosticV1 = z.infer<
   typeof ExternalSessionRefreshReadDiagnosticV1Schema
 >;
@@ -64,21 +50,21 @@ export type ExternalSessionRefreshReadDiagnosticV1 = z.infer<
  * device-local secret owner from the complete host-qualified cursor and this
  * authority tuple.
  */
-export const ExternalSessionTranscriptRefreshBindingV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionTranscriptRefreshBindingV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   machineId: ExternalSessionRefreshMachineIdV1Schema,
   sessionId: asProtocolZod(SessionIdSchema),
-  link: z.object({
+  link: z.strictObject({
     generation: ExternalSessionRefreshGenerationV1Schema,
     remoteSessionId: ExternalSessionRefreshRemoteSessionIdV1Schema,
-  }).strict(),
-  source: z.object({
+  }),
+  source: z.strictObject({
     qualifiedIdentity: LinkedExternalSessionQualifiedIdentityV1Schema,
     generation: ExternalSessionRefreshGenerationV1Schema,
-  }).strict(),
+  }),
   sourceCustody: PluginSourceCustodyV1Schema,
   cursorIdentity: ExternalSessionRefreshCursorIdentityV1Schema,
-}).strict());
+}));
 export type ExternalSessionTranscriptRefreshBindingV1 = z.infer<
   typeof ExternalSessionTranscriptRefreshBindingV1Schema
 >;
@@ -87,11 +73,11 @@ export type ExternalSessionTranscriptRefreshBindingV1 = z.infer<
  * Server-visible live hint. It deliberately carries no transcript item,
  * preview, title, raw source path, linkData, or source-native cursor.
  */
-export const ExternalSessionTranscriptInvalidationV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionTranscriptInvalidationV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   type: z.literal(EXTERNAL_SESSION_TRANSCRIPT_INVALIDATION_EVENT_V1),
   binding: ExternalSessionTranscriptRefreshBindingV1Schema,
-}).strict());
+}));
 export type ExternalSessionTranscriptInvalidationV1 = z.infer<
   typeof ExternalSessionTranscriptInvalidationV1Schema
 >;
@@ -100,13 +86,13 @@ export const EXTERNAL_SESSION_SOURCE_UNAVAILABLE_OCCURRENCE_EVENT_V1 =
   'external-session-source-unavailable' as const;
 
 /** Content-free committed Follow-status transition emitted by its exact source Machine. */
-export const ExternalSessionSourceUnavailableOccurrenceV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionSourceUnavailableOccurrenceV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   type: z.literal(EXTERNAL_SESSION_SOURCE_UNAVAILABLE_OCCURRENCE_EVENT_V1),
-  sessionId: z.string().trim().min(1),
-  machineId: z.string().trim().min(1),
-  observedAtMs: z.number().int().nonnegative(),
-}).strict());
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
+  machineId: z.string().check(z.trim(), z.minLength(1)),
+  observedAtMs: z.number().check(z.int(), z.nonnegative()),
+}));
 export type ExternalSessionSourceUnavailableOccurrenceV1 = z.infer<
   typeof ExternalSessionSourceUnavailableOccurrenceV1Schema
 >;
@@ -114,55 +100,52 @@ export type ExternalSessionSourceUnavailableOccurrenceV1 = z.infer<
 /**
  * Plaintext contract before the existing machine-RPC owner encrypts it.
  */
-export const ExternalSessionTranscriptRefreshReadAfterRequestV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionTranscriptRefreshReadAfterRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   binding: ExternalSessionTranscriptRefreshBindingV1Schema,
   cursor: ExternalSessionRefreshCursorV1Schema,
-}).strict());
+}));
 export type ExternalSessionTranscriptRefreshReadAfterRequestV1 = z.infer<
   typeof ExternalSessionTranscriptRefreshReadAfterRequestV1Schema
 >;
 
 export const ExternalSessionTranscriptRefreshItemV1Schema =
-  createExternalSessionTranscriptSourceItemV1Schema({
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(createExternalSessionTranscriptSourceItemV1Schema({
     identifier: ExternalSessionTranscriptItemIdV1Schema,
     raw: AgentExternalSessionTranscriptRawRecordSchema,
-  }).strict();
+  }));
 export type ExternalSessionTranscriptRefreshItemV1 = z.infer<
   typeof ExternalSessionTranscriptRefreshItemV1Schema
 >;
 
-const ExternalSessionTranscriptAlreadyCurrentV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionTranscriptAlreadyCurrentV1Schema = lazyZodSchema(() => z.strictObject({
   outcome: z.literal('already_current'),
-}).strict());
+}));
 
-const ExternalSessionTranscriptAdvancedV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionTranscriptAdvancedV1Schema = lazyZodSchema(() => z.strictObject({
   outcome: z.literal('advanced'),
-  items: z.array(ExternalSessionTranscriptRefreshItemV1Schema).max(200),
+  items: z.array(ExternalSessionTranscriptRefreshItemV1Schema).check(z.maxLength(200)),
   nextCursor: ExternalSessionRefreshCursorV1Schema,
   boundary: ExternalSessionRefreshBoundaryV1Schema,
   hasMore: z.boolean(),
-  diagnostics: z.array(ExternalSessionRefreshReadDiagnosticV1Schema).min(1).max(32).optional(),
-}).strict().refine(
-  (result) => result.items.length > 0 || (result.diagnostics?.length ?? 0) > 0,
-  'An empty advanced result requires bounded structured diagnostics.',
-));
+  diagnostics: z.optional(z.array(ExternalSessionRefreshReadDiagnosticV1Schema).check(z.minLength(1), z.maxLength(32))),
+}).check(z.refine((result) => result.items.length > 0 || (result.diagnostics?.length ?? 0) > 0, 'An empty advanced result requires bounded structured diagnostics.')));
 
-const ExternalSessionTranscriptGapOrCursorExpiredV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionTranscriptGapOrCursorExpiredV1Schema = lazyZodSchema(() => z.strictObject({
   outcome: z.literal('gap_or_cursor_expired'),
-}).strict());
+}));
 
-const ExternalSessionTranscriptSourceReplacedV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionTranscriptSourceReplacedV1Schema = lazyZodSchema(() => z.strictObject({
   outcome: z.literal('source_replaced'),
-}).strict());
+}));
 
-const ExternalSessionTranscriptSourceUnavailableV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionTranscriptSourceUnavailableV1Schema = lazyZodSchema(() => z.strictObject({
   outcome: z.literal('source_unavailable'),
-}).strict());
+}));
 
-const ExternalSessionTranscriptReadFailedV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionTranscriptReadFailedV1Schema = lazyZodSchema(() => z.strictObject({
   outcome: z.literal('read_failed'),
-}).strict());
+}));
 
 export const ExternalSessionTranscriptRefreshReadAfterResultV1Schema = lazyZodSchema(() => z.discriminatedUnion(
   'outcome',
@@ -184,11 +167,11 @@ export type ExternalSessionTranscriptRefreshReadAfterResultV1 = z.infer<
  * Transcript items are protected once as part of that whole RPC payload; this
  * schema intentionally defines no per-item encryption envelope.
  */
-export const ExternalSessionTranscriptRefreshReadAfterResponseV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionTranscriptRefreshReadAfterResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   binding: ExternalSessionTranscriptRefreshBindingV1Schema,
   result: ExternalSessionTranscriptRefreshReadAfterResultV1Schema,
-}).strict());
+}));
 export type ExternalSessionTranscriptRefreshReadAfterResponseV1 = z.infer<
   typeof ExternalSessionTranscriptRefreshReadAfterResponseV1Schema
 >;

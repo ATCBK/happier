@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { normalizeStrictJsonValue, StrictJsonValueSchema, type JsonValue } from '../json/strictJsonValue.js';
 import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
@@ -13,19 +13,19 @@ import { UiSurfaceNetworkRequestV1Schema } from '../plugins/contributions/ui/hos
 import { USAGE_BUILTIN_WIDGET_IDS_V1 } from './builtinWidgetDescriptorV1.js';
 import { USAGE_QUERY_INPUT_FIELDS } from '../inputs/usageQuery.js';
 
-const id = z.string().trim().min(1);
+const id = z.string().check(z.trim(), z.minLength(1));
 export const WidgetDefinitionRefV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('installed'), surface: asProtocolZod(PluginContributionIdentityV1Schema) }).strict(),
-  z.object({ kind: z.literal('builtin'), id }).strict(),
-  z.object({ kind: z.literal('artifact'), artifactId: id }).strict(),
+  z.strictObject({ kind: z.literal('installed'), surface: asProtocolZod(PluginContributionIdentityV1Schema) }),
+  z.strictObject({ kind: z.literal('builtin'), id }),
+  z.strictObject({ kind: z.literal('artifact'), artifactId: id }),
   // Explicit Session audience copy. It never makes an Account-private Artifact readable.
-  z.object({ kind: z.literal('inline'), definition: z.lazy(() => WidgetDefinitionV1Schema) }).strict(),
+  z.strictObject({ kind: z.literal('inline'), definition: z.lazy(() => WidgetDefinitionV1Schema) }),
 ]));
 export type WidgetDefinitionRefV1 = z.infer<typeof WidgetDefinitionRefV1Schema>;
 export const WidgetInputBindingV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('value'), value: StrictJsonValueSchema }).strict(),
-  z.object({ kind: z.literal('context'), slot: id }).strict(),
-  z.object({ kind: z.literal('viewer'), purpose: ConnectedAccountPurposeIdSchema }).strict(),
+  z.strictObject({ kind: z.literal('value'), value: StrictJsonValueSchema }),
+  z.strictObject({ kind: z.literal('context'), slot: id }),
+  z.strictObject({ kind: z.literal('viewer'), purpose: ConnectedAccountPurposeIdSchema }),
 ]));
 export type WidgetInputBindingV1 = z.infer<typeof WidgetInputBindingV1Schema>;
 export const WidgetInputBindingsV1Schema = lazyZodSchema(() => z.record(InputPathSchema, WidgetInputBindingV1Schema));
@@ -42,37 +42,37 @@ export function resetWidgetInputBindingsV1(bindings: WidgetInputBindingsV1, path
   const removed = new Set(paths);
   return Object.fromEntries(Object.entries(bindings).filter(([path]) => !removed.has(path)));
 }
-export const WidgetInstanceV1Schema = lazyZodSchema(() => z.object({
+export const WidgetInstanceV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1), id, definition: WidgetDefinitionRefV1Schema,
-  bindings: WidgetInputBindingsV1Schema, displayName: id.optional(),
+  bindings: WidgetInputBindingsV1Schema, displayName: z.optional(id),
   /** Guest-frame egress only; the renderer's installed authority remains the ceiling. */
-  networkOverride: UiSurfaceNetworkRequestV1Schema.optional(),
-}).strict());
+  networkOverride: z.optional(UiSurfaceNetworkRequestV1Schema),
+}));
 export type WidgetInstanceV1 = z.infer<typeof WidgetInstanceV1Schema>;
 
 /** Identity only: a surface reference never supplies data access or an executable target. */
-export const WidgetSurfaceRefV1Schema = lazyZodSchema(() => z.object({
+export const WidgetSurfaceRefV1Schema = lazyZodSchema(() => z.strictObject({
   serverId: id, accountId: id,
   /** Explicit attached Artifact binding; it grants no access and is not stored owner identity. */
-  artifactId: id.optional(),
-  owner: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('home') }).strict(),
-    z.object({ kind: z.literal('sessionBoard'), sessionId: id }).strict(),
-    z.object({ kind: z.literal('companion'), sessionId: id }).strict(),
-    z.object({ kind: z.literal('workBoard'), boardId: id }).strict(),
-    z.object({ kind: z.literal('project'), projectId: id, layoutId: id.optional() }).strict(),
-    z.object({ kind: z.literal('pluginArea'), pluginId: id, pageId: id, area: id, layoutId: id.optional() }).strict(),
-    z.object({ kind: z.literal('corePage'), pageId: id, area: id, layoutId: id.optional() }).strict(),
-  ]).transform(owner => {
+  artifactId: z.optional(id),
+  owner: z.pipe(z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('home') }),
+    z.strictObject({ kind: z.literal('sessionBoard'), sessionId: id }),
+    z.strictObject({ kind: z.literal('companion'), sessionId: id }),
+    z.strictObject({ kind: z.literal('workBoard'), boardId: id }),
+    z.strictObject({ kind: z.literal('project'), projectId: id, layoutId: z.optional(id) }),
+    z.strictObject({ kind: z.literal('pluginArea'), pluginId: id, pageId: id, area: id, layoutId: z.optional(id) }),
+    z.strictObject({ kind: z.literal('corePage'), pageId: id, area: id, layoutId: z.optional(id) }),
+  ]), z.transform(owner => {
     if (owner.kind !== 'project' || owner.layoutId !== 'overview') return owner;
     // The stock Project layout keeps its original omitted-default Artifact identity.
     const canonical = { ...owner };
     delete canonical.layoutId;
     return canonical;
-  }),
-}).strict());
+  })),
+}));
 export type WidgetSurfaceRefV1 = z.infer<typeof WidgetSurfaceRefV1Schema>;
-export const WidgetInstanceRefV1Schema = lazyZodSchema(() => z.object({ surface: WidgetSurfaceRefV1Schema, instanceId: id }).strict());
+export const WidgetInstanceRefV1Schema = lazyZodSchema(() => z.strictObject({ surface: WidgetSurfaceRefV1Schema, instanceId: id }));
 export type WidgetInstanceRefV1 = z.infer<typeof WidgetInstanceRefV1Schema>;
 export const WidgetDefinitionRefV1StoredSchema = createStoredReadSchema(WidgetDefinitionRefV1Schema);
 export const WidgetInputBindingV1StoredSchema = createStoredReadSchema(WidgetInputBindingV1Schema);

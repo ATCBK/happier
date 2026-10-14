@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const SCM_OPERATION_ERROR_CODES = {
   NOT_REPOSITORY: 'NOT_REPOSITORY',

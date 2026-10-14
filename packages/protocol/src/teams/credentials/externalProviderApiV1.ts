@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { decodeBase64, encodeBase64 } from '../../crypto/base64.js';
 import { ProviderPublicHeadersV1Schema } from '../../providers/publicHeadersSchema.js';
@@ -20,15 +20,15 @@ export const TEAM_CREDENTIAL_EXTERNAL_PROVIDER_ADMISSION_HTTP_PATH_V1 = '/v1/tea
 export const TEAM_CREDENTIAL_EXTERNAL_PROVIDER_TERMINAL_USAGE_HTTP_PATH_V1 = '/v1/teams/credential-resources/broker/external/terminal-usage' as const;
 export const TEAM_CREDENTIAL_EXTERNAL_PROVIDER_OPERATION_RETIRE_EVENT_V1 = 'team-credential-external-provider-operation-retire-v1' as const;
 
-export const TeamCredentialExternalProviderOperationRetireV1Schema = lazyZodSchema(() => z.object({
+export const TeamCredentialExternalProviderOperationRetireV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  externalApiKeyId: z.string().uuid(),
-  operationId: z.string().uuid(),
-}).strict());
+  externalApiKeyId: z.string().check(z.uuid()),
+  operationId: z.string().check(z.uuid()),
+}));
 export type TeamCredentialExternalProviderOperationRetireV1 = z.infer<typeof TeamCredentialExternalProviderOperationRetireV1Schema>;
 export const TeamCredentialExternalProviderOperationRetireResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({ ok: z.literal(true), retired: z.boolean() }).strict(),
-  z.object({ ok: z.literal(false), reasonCode: z.enum(['invalid_request', 'resource_forbidden']) }).strict(),
+  z.strictObject({ ok: z.literal(true), retired: z.boolean() }),
+  z.strictObject({ ok: z.literal(false), reasonCode: z.enum(['invalid_request', 'resource_forbidden']) }),
 ]));
 export type TeamCredentialExternalProviderOperationRetireResponseV1 = z.infer<typeof TeamCredentialExternalProviderOperationRetireResponseV1Schema>;
 export const TEAM_CREDENTIAL_RESOURCE_TEST_ADMISSION_HTTP_PATH_V1 = '/v1/teams/credential-resources/broker/resource-test/admit' as const;
@@ -58,10 +58,10 @@ export const TeamCredentialExternalProviderRouteV1Schema = lazyZodSchema(() => z
 ]));
 export type TeamCredentialExternalProviderRouteV1 = z.infer<typeof TeamCredentialExternalProviderRouteV1Schema>;
 
-const ExternalProviderIdentityV1Schema = lazyZodSchema(() => z.string().min(1));
-const ExternalProviderApiKeyIdV1Schema = lazyZodSchema(() => z.string().uuid());
+const ExternalProviderIdentityV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1)));
+const ExternalProviderApiKeyIdV1Schema = lazyZodSchema(() => z.string().check(z.uuid()));
 
-export const TeamCredentialExternalProviderRequestHeadersV1Schema = lazyZodSchema(() => ProviderPublicHeadersV1Schema.superRefine((headers, context) => {
+export const TeamCredentialExternalProviderRequestHeadersV1Schema = lazyZodSchema(() => ProviderPublicHeadersV1Schema.check(z.superRefine((headers, context) => {
   if (Object.keys(headers).some((name) => (
     name.startsWith('x-happier-')
     || name === 'cookie'
@@ -72,24 +72,23 @@ export const TeamCredentialExternalProviderRequestHeadersV1Schema = lazyZodSchem
   ))) {
     context.addIssue({ code: 'custom', message: 'Caller authentication or forwarding headers cannot cross the external Provider boundary.' });
   }
-}));
+})));
 
-export const TeamCredentialExternalProviderCallerV1Schema = lazyZodSchema(() => z.object({
+export const TeamCredentialExternalProviderCallerV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('external_api_key'),
   keyId: ExternalProviderApiKeyIdV1Schema,
   assignedAccountId: ExternalProviderIdentityV1Schema,
   assignedTeamMembershipId: ExternalProviderIdentityV1Schema,
-}).strict());
+}));
 export type TeamCredentialExternalProviderCallerV1 = z.infer<typeof TeamCredentialExternalProviderCallerV1Schema>;
 
-const CanonicalRequestBodyBase64V1Schema = lazyZodSchema(() => z.string().min(1)
-  .max(TEAM_CREDENTIAL_EXTERNAL_PROVIDER_BODY_BASE64_MAX_CHARS_V1).refine((value) => {
+const CanonicalRequestBodyBase64V1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(TEAM_CREDENTIAL_EXTERNAL_PROVIDER_BODY_BASE64_MAX_CHARS_V1), z.refine((value) => {
   try {
     return encodeBase64(decodeBase64(value, 'base64'), 'base64') === value;
   } catch {
     return false;
   }
-}, 'Request body must be canonical base64.'));
+}, 'Request body must be canonical base64.')));
 
 export const TEAM_CREDENTIAL_EXTERNAL_PROVIDER_HTTP_ROUTES_V1 = Object.freeze({
   models: { method: 'GET', publicPath: '/models', providerPath: '/v1/models', inference: false },
@@ -114,7 +113,7 @@ export const TEAM_CREDENTIAL_EXTERNAL_PROVIDER_PROTOCOLS_V1 = Object.freeze([
  * managed-service authority remain exclusively owned by the existing signed
  * broker grant and carrier.
  */
-export const TeamCredentialExternalProviderApplicationRequestV1Schema = lazyZodSchema(() => z.object({
+export const TeamCredentialExternalProviderApplicationRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   requestId: ExternalProviderIdentityV1Schema,
   teamId: ExternalProviderIdentityV1Schema,
@@ -122,10 +121,10 @@ export const TeamCredentialExternalProviderApplicationRequestV1Schema = lazyZodS
   caller: TeamCredentialExternalProviderCallerV1Schema,
   route: TeamCredentialExternalProviderRouteV1Schema,
   method: z.enum(['GET', 'POST']),
-  pathAndQuery: z.string().min(1),
-  headers: TeamCredentialExternalProviderRequestHeadersV1Schema.optional(),
-  bodyBase64: CanonicalRequestBodyBase64V1Schema.nullable(),
-}).strict().superRefine((request, context) => {
+  pathAndQuery: z.string().check(z.minLength(1)),
+  headers: z.optional(TeamCredentialExternalProviderRequestHeadersV1Schema),
+  bodyBase64: z.nullable(CanonicalRequestBodyBase64V1Schema),
+}).check(z.superRefine((request, context) => {
   const descriptor = TEAM_CREDENTIAL_EXTERNAL_PROVIDER_HTTP_ROUTES_V1[request.route];
   if (request.method !== descriptor.method) {
     context.addIssue({ code: 'custom', path: ['method'], message: 'Method does not match the selected Provider route.' });
@@ -136,28 +135,28 @@ export const TeamCredentialExternalProviderApplicationRequestV1Schema = lazyZodS
   if ((request.method === 'GET') !== (request.bodyBase64 === null)) {
     context.addIssue({ code: 'custom', path: ['bodyBase64'], message: 'GET is bodyless and Provider POST routes require a body.' });
   }
-}));
+})));
 export type TeamCredentialExternalProviderApplicationRequestV1 = z.infer<
   typeof TeamCredentialExternalProviderApplicationRequestV1Schema
 >;
 
-export const TeamCredentialResourceTestApplicationRequestV1Schema = lazyZodSchema(() => z.object({
+export const TeamCredentialResourceTestApplicationRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: z.literal('resource_test'),
   requestId: ExternalProviderIdentityV1Schema,
   teamId: ExternalProviderIdentityV1Schema,
   resourceId: ExternalProviderIdentityV1Schema,
-  route: TeamCredentialExternalProviderRouteV1Schema.exclude(['models']),
+  route: z.enum(TeamCredentialExternalProviderRouteV1Schema.options.filter((value): value is Exclude<(typeof TeamCredentialExternalProviderRouteV1Schema.options)[number], 'models'> => !(['models'] as readonly string[]).includes(value))),
   method: z.literal('POST'),
-  pathAndQuery: z.string().min(1),
-  headers: TeamCredentialExternalProviderRequestHeadersV1Schema.optional(),
+  pathAndQuery: z.string().check(z.minLength(1)),
+  headers: z.optional(TeamCredentialExternalProviderRequestHeadersV1Schema),
   bodyBase64: CanonicalRequestBodyBase64V1Schema,
-}).strict().superRefine((request, context) => {
+}).check(z.superRefine((request, context) => {
   const descriptor = TEAM_CREDENTIAL_EXTERNAL_PROVIDER_HTTP_ROUTES_V1[request.route];
   if (request.pathAndQuery !== descriptor.providerPath) {
     context.addIssue({ code: 'custom', path: ['pathAndQuery'], message: 'Path does not match the selected Provider route.' });
   }
-}));
+})));
 export type TeamCredentialResourceTestApplicationRequestV1 = z.infer<typeof TeamCredentialResourceTestApplicationRequestV1Schema>;
 
 export const TeamCredentialProviderBrokerApplicationCarrierRequestV1Schema = lazyZodSchema(() => z.union([
@@ -168,58 +167,58 @@ export type TeamCredentialProviderBrokerApplicationCarrierRequestV1 = z.infer<ty
 
 /** Broker-Machine to Home currentness and usage admission. The authenticated
  * broker Account is transport authority and is intentionally absent here. */
-export const TeamCredentialExternalProviderAdmissionV1Schema = lazyZodSchema(() => z.object({
+export const TeamCredentialExternalProviderAdmissionV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   binding: ProviderBrokerExternalApiKeyRelayBindingV1Schema,
   brokerMachineId: ExternalProviderIdentityV1Schema,
-  expectedResourceRevision: z.number().int().nonnegative(),
+  expectedResourceRevision: z.number().check(z.int(), z.nonnegative()),
   application: ProviderBrokerApplicationBindingV1Schema,
   requestFacts: ProviderBrokerRequestFactsV1Schema,
-}).strict());
+}));
 
 /** Metadata-only external-key authorization. It deliberately carries no
  * inference facts, source binding, UsageEvent identity, or Provider access. */
-export const TeamCredentialExternalProviderModelCatalogAuthorizationV1Schema = lazyZodSchema(() => z.object({
+export const TeamCredentialExternalProviderModelCatalogAuthorizationV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   binding: ProviderBrokerExternalApiKeyRelayBindingV1Schema,
   brokerMachineId: ExternalProviderIdentityV1Schema,
-  expectedResourceRevision: z.number().int().nonnegative(),
+  expectedResourceRevision: z.number().check(z.int(), z.nonnegative()),
   application: ProviderBrokerApplicationBindingV1Schema,
-}).strict());
+}));
 export type TeamCredentialExternalProviderModelCatalogAuthorizationV1 = z.infer<
   typeof TeamCredentialExternalProviderModelCatalogAuthorizationV1Schema
 >;
 
 export const TeamCredentialExternalProviderAdmissionResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     resourceId: ExternalProviderIdentityV1Schema,
-    resourceRevision: z.number().int().nonnegative(),
+    resourceRevision: z.number().check(z.int(), z.nonnegative()),
     brokerMachineId: ExternalProviderIdentityV1Schema,
     source: TeamCredentialSourceBindingV1Schema,
-    operation: z.object({
+    operation: z.strictObject({
       kind: z.literal('external_api_key'),
       externalApiKeyId: ExternalProviderApiKeyIdV1Schema,
-      operationId: z.string().uuid(),
+      operationId: z.string().check(z.uuid()),
       assignedAccountId: ExternalProviderIdentityV1Schema,
       assignedTeamMembershipId: ExternalProviderIdentityV1Schema,
-    }).strict(),
-    usageEventId: ExternalProviderIdentityV1Schema.nullable(),
-    terminalRequestId: ExternalProviderIdentityV1Schema.nullable(),
-  }).strict(),
-  z.object({
+    }),
+    usageEventId: z.nullable(ExternalProviderIdentityV1Schema),
+    terminalRequestId: z.nullable(ExternalProviderIdentityV1Schema),
+  }),
+  z.strictObject({
     ok: z.literal(false),
     reasonCode: z.enum([
       'invalid_request', 'resource_forbidden', 'resource_unavailable', 'resource_changed',
       'operation_not_current', 'broker_unavailable', 'team_credential_usage_limit',
       'token_limit_unavailable', 'cost_limit_unavailable', 'duplicate_request',
     ]),
-    usageLimit: TeamCredentialUsageLimitDenialV1Schema.optional(),
-  }).strict().superRefine((value, context) => {
+    usageLimit: z.optional(TeamCredentialUsageLimitDenialV1Schema),
+  }).check(z.superRefine((value, context) => {
     if (value.usageLimit && value.reasonCode !== 'team_credential_usage_limit') {
       context.addIssue({ code: 'custom', path: ['usageLimit'], message: 'usageLimit requires an exhausted Team credential limit' });
     }
-  }),
+  })),
 ]));
 export type TeamCredentialExternalProviderAdmissionV1 = z.infer<typeof TeamCredentialExternalProviderAdmissionV1Schema>;
 export type TeamCredentialExternalProviderAdmissionResponseV1 = z.infer<typeof TeamCredentialExternalProviderAdmissionResponseV1Schema>;
@@ -236,18 +235,18 @@ export type TeamCredentialExternalProviderAdmissionResponseV1 = z.infer<typeof T
  * Reuse the canonical UsageEvent token shape so the writer, the personal
  * observation path and this report cannot drift into three token vocabularies.
  */
-export const TeamCredentialExternalProviderTerminalUsageV1Schema = lazyZodSchema(() => z.object({
+export const TeamCredentialExternalProviderTerminalUsageV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   admissionUsageEventId: ExternalProviderIdentityV1Schema,
   requestId: ExternalProviderIdentityV1Schema,
   brokerMachineId: ExternalProviderIdentityV1Schema,
-  completedAtMs: z.number().int().nonnegative().safe(),
+  completedAtMs: z.number().check(z.int(), z.nonnegative(), z.int()),
   outcome: z.enum(['succeeded', 'failed', 'cancelled']),
   measurement: z.enum(['reported', 'unavailable']),
   /** The model the Provider actually answered with, when it names one. */
-  actualModelId: z.string().min(1).max(PROVIDER_ENDPOINT_SAFETY_LIMITS.maxHeaderValueChars).nullable(),
-  tokens: UsageObservationTokensSchema.nullable(),
-}).strict().superRefine((usage, context) => {
+  actualModelId: z.nullable(z.string().check(z.minLength(1), z.maxLength(PROVIDER_ENDPOINT_SAFETY_LIMITS.maxHeaderValueChars))),
+  tokens: z.nullable(UsageObservationTokensSchema),
+}).check(z.superRefine((usage, context) => {
   if ((usage.measurement === 'reported') !== (usage.tokens !== null)) {
     context.addIssue({
       code: 'custom',
@@ -255,14 +254,14 @@ export const TeamCredentialExternalProviderTerminalUsageV1Schema = lazyZodSchema
       message: 'A reported terminal measurement carries exactly its observed token fact.',
     });
   }
-}));
+})));
 export type TeamCredentialExternalProviderTerminalUsageV1 = z.infer<
   typeof TeamCredentialExternalProviderTerminalUsageV1Schema
 >;
 
 export const TeamCredentialExternalProviderTerminalUsageResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({ ok: z.literal(true), usageEventId: ExternalProviderIdentityV1Schema, created: z.boolean() }).strict(),
-  z.object({ ok: z.literal(false), reasonCode: z.enum(['invalid_request', 'terminal_usage_mismatch']) }).strict(),
+  z.strictObject({ ok: z.literal(true), usageEventId: ExternalProviderIdentityV1Schema, created: z.boolean() }),
+  z.strictObject({ ok: z.literal(false), reasonCode: z.enum(['invalid_request', 'terminal_usage_mismatch']) }),
 ]));
 export type TeamCredentialExternalProviderTerminalUsageResponseV1 = z.infer<
   typeof TeamCredentialExternalProviderTerminalUsageResponseV1Schema
@@ -272,40 +271,40 @@ export type TeamCredentialExternalProviderTerminalUsageResponseV1 = z.infer<
  * Home re-verifies the complete relay authorization and compares this strict
  * inner binding before disclosure or usage; no external key or Session is
  * fabricated for this effect. */
-export const TeamCredentialResourceTestAdmissionV1Schema = lazyZodSchema(() => z.object({
+export const TeamCredentialResourceTestAdmissionV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   binding: ProviderBrokerResourceTestRelayBindingV1Schema,
   brokerMachineId: ExternalProviderIdentityV1Schema,
   relayAuthorization: PeerTcpTunnelRelayAuthorizationV2Schema,
   requestFacts: ProviderBrokerRequestFactsV1Schema,
-}).strict());
+}));
 
 export const TeamCredentialResourceTestAdmissionResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     resourceId: ExternalProviderIdentityV1Schema,
-    resourceRevision: z.number().int().positive(),
+    resourceRevision: z.number().check(z.int(), z.positive()),
     brokerMachineId: ExternalProviderIdentityV1Schema,
     source: TeamCredentialSourceBindingV1Schema,
-    operation: z.object({
+    operation: z.strictObject({
       kind: z.literal('resource_test'),
       actorAccountId: ExternalProviderIdentityV1Schema,
-    }).strict(),
-    usageEventId: ExternalProviderIdentityV1Schema.nullable(),
-  }).strict(),
-  z.object({
+    }),
+    usageEventId: z.nullable(ExternalProviderIdentityV1Schema),
+  }),
+  z.strictObject({
     ok: z.literal(false),
     reasonCode: z.enum([
       'invalid_request', 'resource_forbidden', 'resource_unavailable', 'resource_changed',
       'operation_not_current', 'broker_unavailable', 'team_credential_usage_limit',
       'token_limit_unavailable', 'cost_limit_unavailable', 'duplicate_request',
     ]),
-    usageLimit: TeamCredentialUsageLimitDenialV1Schema.optional(),
-  }).strict().superRefine((value, context) => {
+    usageLimit: z.optional(TeamCredentialUsageLimitDenialV1Schema),
+  }).check(z.superRefine((value, context) => {
     if (value.usageLimit && value.reasonCode !== 'team_credential_usage_limit') {
       context.addIssue({ code: 'custom', path: ['usageLimit'], message: 'usageLimit requires an exhausted Team credential limit' });
     }
-  }),
+  })),
 ]));
 export type TeamCredentialResourceTestAdmissionV1 = z.infer<typeof TeamCredentialResourceTestAdmissionV1Schema>;
 export type TeamCredentialResourceTestAdmissionResponseV1 = z.infer<typeof TeamCredentialResourceTestAdmissionResponseV1Schema>;
@@ -323,11 +322,11 @@ export const TeamCredentialExternalProviderErrorCodeV1Schema = lazyZodSchema(() 
 ]));
 export type TeamCredentialExternalProviderErrorCodeV1 = z.infer<typeof TeamCredentialExternalProviderErrorCodeV1Schema>;
 
-export const TeamCredentialExternalProviderErrorV1Schema = lazyZodSchema(() => z.object({
-  error: z.object({
+export const TeamCredentialExternalProviderErrorV1Schema = lazyZodSchema(() => z.strictObject({
+  error: z.strictObject({
     type: z.literal('happier_provider_broker_error'),
     code: TeamCredentialExternalProviderErrorCodeV1Schema,
-    message: z.string().min(1).max(240),
-  }).strict(),
-}).strict());
+    message: z.string().check(z.minLength(1), z.maxLength(240)),
+  }),
+}));
 export type TeamCredentialExternalProviderErrorV1 = z.infer<typeof TeamCredentialExternalProviderErrorV1Schema>;

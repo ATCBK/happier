@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ImageRefSchema } from '../common/imageRef.js';
 import { TeamCapabilitiesV1Schema } from './capabilities.js';
@@ -20,13 +20,13 @@ import { isTeamPrincipalRoleV1, TeamPolicyV1Schema, TeamRoleV1Schema } from './t
  */
 const TeamHistoryChoiceAvailabilityV1Schema = lazyZodSchema(() => z.enum(['choice', 'hidden']));
 
-export const TeamAdmissionProjectionV1Schema = lazyZodSchema(() => z.object({
-  historyChoice: z.object({
+export const TeamAdmissionProjectionV1Schema = lazyZodSchema(() => z.strictObject({
+  historyChoice: z.strictObject({
     admin: TeamHistoryChoiceAvailabilityV1Schema,
     member: TeamHistoryChoiceAvailabilityV1Schema,
     guest: TeamHistoryChoiceAvailabilityV1Schema,
-  }).strict(),
-}).strict());
+  }),
+}));
 export type TeamAdmissionProjectionV1 = z.infer<typeof TeamAdmissionProjectionV1Schema>;
 
 /**
@@ -77,36 +77,36 @@ export function resolveTeamAdmissionProjectionV1(): TeamAdmissionProjectionV1 {
  * - `archivedGroups`: archived Groups; omitted by older projections.
  * - `waitingInvitations`: invitations that are neither accepted, revoked nor expired.
  */
-export const TeamSummaryCountsV1Schema = lazyZodSchema(() => z.object({
-  members: z.number().int().min(0),
-  suspendedMembers: z.number().int().min(0),
-  groups: z.number().int().min(0).nullable(),
-  archivedGroups: z.number().int().min(0).nullable().optional(),
-  waitingInvitations: z.number().int().min(0).nullable(),
-}).strict());
+export const TeamSummaryCountsV1Schema = lazyZodSchema(() => z.strictObject({
+  members: z.number().check(z.int(), z.minimum(0)),
+  suspendedMembers: z.number().check(z.int(), z.minimum(0)),
+  groups: z.nullable(z.number().check(z.int(), z.minimum(0))),
+  archivedGroups: z.optional(z.nullable(z.number().check(z.int(), z.minimum(0)))),
+  waitingInvitations: z.nullable(z.number().check(z.int(), z.minimum(0))),
+}));
 export type TeamSummaryCountsV1 = z.infer<typeof TeamSummaryCountsV1Schema>;
 
-export const TeamSummaryV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().min(1),
+export const TeamSummaryV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.minLength(1)),
   name: z.string(),
-  description: z.string().nullable(),
-  logo: ImageRefSchema.nullable(),
-  archivedAt: z.number().nullable(),
-  recovery: z.object({
+  description: z.nullable(z.string()),
+  logo: z.nullable(ImageRefSchema),
+  archivedAt: z.nullable(z.number()),
+  recovery: z.nullable(z.strictObject({
     kind: z.literal('owner_required'),
     canAppointOwner: z.boolean(),
-  }).strict().nullable(),
+  })),
   policy: TeamPolicyV1Schema,
-  viewerRole: TeamRoleV1Schema.nullable(),
+  viewerRole: z.nullable(TeamRoleV1Schema),
   capabilities: TeamCapabilitiesV1Schema,
   admission: TeamAdmissionProjectionV1Schema,
-  counts: TeamSummaryCountsV1Schema.nullable(),
+  counts: z.nullable(TeamSummaryCountsV1Schema),
   /** Member-readable presentation only. Omission by an older server is unknown, not absent. */
-  directoryMembership: z.object({
+  directoryMembership: z.optional(z.nullable(z.strictObject({
     providerDisplayName: z.string(),
     state: z.enum(['syncing', 'healthy', 'needs_attention']),
-  }).strict().nullable().optional(),
-}).strict());
+  }))),
+}));
 export type TeamSummaryV1 = z.infer<typeof TeamSummaryV1Schema>;
 
 /**
@@ -124,20 +124,20 @@ export type TeamSummaryV1 = z.infer<typeof TeamSummaryV1Schema>;
 export const TEAM_DIRECTORY_PAGE_LIMIT_MAX_V1 = 100;
 export const TEAM_DIRECTORY_PAGE_LIMIT_DEFAULT_V1 = 50;
 
-export const TeamsListInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamsListInputV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   scope: z.enum(['member', 'administered']),
   archived: z.enum(['active', 'archived']),
-  limit: z.number().int().min(1).max(TEAM_DIRECTORY_PAGE_LIMIT_MAX_V1).optional(),
-  cursor: z.string().min(1).nullable().optional(),
-}).strict());
+  limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(TEAM_DIRECTORY_PAGE_LIMIT_MAX_V1))),
+  cursor: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+}));
 export type TeamsListInputV1 = z.infer<typeof TeamsListInputV1Schema>;
 
 /** The repository's public page convention; no generic pagination framework. */
-export const TeamsPageV1Schema = lazyZodSchema(() => z.object({
+export const TeamsPageV1Schema = lazyZodSchema(() => z.strictObject({
   items: z.array(TeamSummaryV1Schema),
-  nextCursor: z.string().nullable(),
-}).strict());
+  nextCursor: z.nullable(z.string()),
+}));
 export type TeamsPageV1 = z.infer<typeof TeamsPageV1Schema>;
 
 /**

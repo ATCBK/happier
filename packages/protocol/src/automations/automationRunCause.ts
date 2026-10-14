@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { AutomationRunLifecycleConfigurationSchema, type AutomationRunLifecycleSource } from './automationRunLifecycle.js';
 
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
@@ -39,32 +40,32 @@ export {
   type AutomationTriggerRevision,
 } from './automationTriggerIdentity.js';
 
-const IDENTIFIER_SCHEMA = z.string().trim().min(1).max(191);
+const IDENTIFIER_SCHEMA = z.string().check(z.trim(), z.minLength(1), z.maxLength(191));
 
-const AutomationScheduleRunCauseSchema = lazyZodSchema(() => z.object({
+const AutomationScheduleRunCauseSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('trigger'),
   triggerId: AutomationTriggerIdSchema,
   triggerRevision: AutomationTriggerRevisionSchema,
   triggerKind: z.literal('schedule'),
   occurrenceKey: AutomationOccurrenceKeyV1Schema,
   occurredAt: AutomationOccurredAtV1Schema,
-  evidence: z.object({
+  evidence: z.strictObject({
     scheduledFor: AutomationOccurredAtV1Schema,
-  }).strict(),
-}).strict());
+  }),
+}));
 
-const AutomationPluginEventRunCauseSchema = lazyZodSchema(() => z.object({
+const AutomationPluginEventRunCauseSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('trigger'),
   triggerId: AutomationTriggerIdSchema,
   triggerRevision: AutomationTriggerRevisionSchema,
   triggerKind: z.literal('pluginEvent'),
   occurrenceKey: AutomationOccurrenceKeyV1Schema,
   occurredAt: AutomationOccurredAtV1Schema,
-  evidence: z.object({
+  evidence: z.strictObject({
     eventRef: asProtocolZod(PluginContributionIdentityV1Schema),
     sourceSelectorId: AutomationSourceSelectorIdV1Schema,
-  }).strict(),
-}).strict());
+  }),
+}));
 
 const AUTOMATION_SESSION_LIFECYCLE_RUN_CAUSE_SHAPE = {
   kind: z.literal('trigger'),
@@ -75,52 +76,52 @@ const AUTOMATION_SESSION_LIFECYCLE_RUN_CAUSE_SHAPE = {
   occurredAt: AutomationOccurredAtV1Schema,
 } as const;
 
-const AutomationSessionLifecycleRunCauseSchema = lazyZodSchema(() => z.object({
+const AutomationSessionLifecycleRunCauseSchema = lazyZodSchema(() => z.strictObject({
   ...AUTOMATION_SESSION_LIFECYCLE_RUN_CAUSE_SHAPE,
   evidence: z.discriminatedUnion('event', [
-    z.object({
-      event: AutomationSessionLifecycleEventSchema.exclude(['userActionRequired', 'sessionStarted', 'sessionArchived']),
+    z.strictObject({
+      event: zMini.enum(AutomationSessionLifecycleEventSchema.options.filter((value): value is Exclude<(typeof AutomationSessionLifecycleEventSchema.options)[number], 'userActionRequired' | 'sessionStarted' | 'sessionArchived'> => !(['userActionRequired', 'sessionStarted', 'sessionArchived'] as readonly string[]).includes(value))),
       sourceSessionId: IDENTIFIER_SCHEMA,
       sourceTurnId: IDENTIFIER_SCHEMA,
       policy: AutomationSessionLifecyclePolicySnapshotSchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       event: z.enum(['sessionStarted', 'sessionArchived']),
       sourceSessionId: IDENTIFIER_SCHEMA,
       policy: AutomationSessionLifecyclePolicySnapshotSchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       event: z.literal('userActionRequired'),
       sourceSessionId: IDENTIFIER_SCHEMA,
       sourceTurnId: IDENTIFIER_SCHEMA,
       requestId: IDENTIFIER_SCHEMA,
       requestKind: AutomationSessionLifecycleRequestKindSchema,
       policy: AutomationSessionLifecyclePolicySnapshotSchema,
-    }).strict(),
+    }),
   ]),
-}).strict());
+}));
 
-const AutomationManualRunCauseSchema = lazyZodSchema(() => z.object({
+const AutomationManualRunCauseSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('manual'),
   invokedAt: AutomationOccurredAtV1Schema,
-}).strict());
+}));
 
-const AutomationRunLifecycleRunCauseSchema = lazyZodSchema(() => z.object({
+const AutomationRunLifecycleRunCauseSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('trigger'), triggerId: AutomationTriggerIdSchema,
   triggerRevision: AutomationTriggerRevisionSchema, triggerKind: z.literal('runLifecycle'),
   occurrenceKey: AutomationOccurrenceKeyV1Schema, occurredAt: AutomationOccurredAtV1Schema,
-  evidence: AutomationRunLifecycleConfigurationSchema.extend({
-    sourceRevision: z.number().int().nonnegative().safe(),
-    originRunId: IDENTIFIER_SCHEMA.optional(),
-  }).strict(),
-}).strict());
+  evidence: (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(zMini.extend(AutomationRunLifecycleConfigurationSchema, {
+    sourceRevision: z.number().check(z.int(), z.nonnegative(), z.int()),
+    originRunId: z.optional(IDENTIFIER_SCHEMA),
+  })),
+}));
 
-const AutomationConversationRunCauseSchema = lazyZodSchema(() => z.object({
+const AutomationConversationRunCauseSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('conversation'),
-  triggerId: AutomationTriggerIdSchema.optional(),
+  triggerId: zMini.optional(AutomationTriggerIdSchema),
   occurrenceKey: AutomationOccurrenceKeyV1Schema,
   occurredAt: AutomationOccurredAtV1Schema,
-}).strict());
+}));
 
 /**
  * Immutable, bounded Run provenance. This is the sole current cause owner;
@@ -282,4 +283,4 @@ export const AutomationRunCauseSchema = z.union([
   AutomationRunLifecycleRunCauseSchema,
   AutomationManualRunCauseSchema,
   AutomationConversationRunCauseSchema,
-]) satisfies z.ZodType<AutomationRunCause>;
+]) satisfies z.ZodMiniType<AutomationRunCause>;

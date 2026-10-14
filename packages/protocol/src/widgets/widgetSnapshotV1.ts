@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { WidgetSurfaceRefV1Schema } from './widgetInstanceV1.js';
 import { SessionSurfaceItemIdSchema } from '../sessions/board/ids.js';
 import { SessionBoardItemPlacementV1Schema } from '../sessions/board/layoutOperations.js';
@@ -8,16 +8,16 @@ import { WidgetSnapshotPreviewV1Schema } from '../sessions/board/declarative/sna
 export { WidgetSnapshotDocumentV1Schema, WidgetSnapshotMetadataV1Schema, WidgetSnapshotPreviewV1Schema, projectWidgetSnapshotPreviewV1,
   type WidgetSnapshotDocumentV1, type WidgetSnapshotMetadataV1, type WidgetSnapshotPreviewV1 } from '../sessions/board/declarative/snapshot.js';
 
-export const WidgetSnapshotPostInputV1Schema = lazyZodSchema(() => z.object({
-  surface: WidgetSurfaceRefV1Schema.refine((surface) => surface.owner.kind === 'sessionBoard'),
-  sessionId: z.string().trim().min(1).optional(), itemId: SessionSurfaceItemIdSchema,
-  title: z.string().trim().min(1), preview: WidgetSnapshotPreviewV1Schema,
+export const WidgetSnapshotPostInputV1Schema = lazyZodSchema(() => z.strictObject({
+  surface: WidgetSurfaceRefV1Schema.check(z.refine((surface) => surface.owner.kind === 'sessionBoard')),
+  sessionId: z.optional(z.string().check(z.trim(), z.minLength(1))), itemId: SessionSurfaceItemIdSchema,
+  title: z.string().check(z.trim(), z.minLength(1)), preview: WidgetSnapshotPreviewV1Schema,
   placement: SessionBoardItemPlacementV1Schema,
-}).strict().superRefine((input, context) => {
+}).check(z.superRefine((input, context) => {
   if (input.surface.owner.kind === 'sessionBoard' && input.sessionId !== undefined && input.sessionId !== input.surface.owner.sessionId) {
     context.addIssue({ code: 'custom', path: ['sessionId'], message: 'Snapshot target Session must match its captured surface' });
   }
-}));
+})));
 export type WidgetSnapshotPostInputV1 = z.infer<typeof WidgetSnapshotPostInputV1Schema>;
 export const WidgetSnapshotPostOutputV1Schema = SessionBoardMutationActionResultV1Schema;
 

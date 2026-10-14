@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { MACHINE_PRESET_ACTION_IDS_V1, type MachinePresetActionIdV1 } from './machinePresetActionIdsV1.js';
 import {
@@ -17,7 +17,7 @@ export const MachinePresetActionInputSchemasV1 = {
   'machines.presets.update': ManagedMachinePresetUpdateInputV1Schema,
   'machines.presets.archive': ManagedMachinePresetRevisionInputV1Schema,
   'machines.presets.restore': ManagedMachinePresetRevisionInputV1Schema,
-} as const satisfies Record<MachinePresetActionIdV1, z.ZodType>;
+} as const satisfies Record<MachinePresetActionIdV1, z.ZodMiniType>;
 export const MachinePresetActionOutputSchemasV1 = {
   'machines.presets.list': ManagedMachinePresetListResultV1Schema,
   'machines.presets.get': ManagedMachinePresetGetResultV1Schema,
@@ -25,7 +25,7 @@ export const MachinePresetActionOutputSchemasV1 = {
   'machines.presets.update': PresetMutationResultV1Schema,
   'machines.presets.archive': PresetMutationResultV1Schema,
   'machines.presets.restore': PresetMutationResultV1Schema,
-} as const satisfies Record<MachinePresetActionIdV1, z.ZodType>;
+} as const satisfies Record<MachinePresetActionIdV1, z.ZodMiniType>;
 export type MachinePresetActionInputV1<T extends MachinePresetActionIdV1 = MachinePresetActionIdV1> =
   z.infer<typeof MachinePresetActionInputSchemasV1[T]>;
 export type MachinePresetActionOutputV1<T extends MachinePresetActionIdV1 = MachinePresetActionIdV1> =

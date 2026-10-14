@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { ScmRepositoryCloneInputSchema, ScmRepositoryContainedSubdirV1Schema } from '../scm/repositoryClone.js';
 import { SessionAuthoringCheckoutCreationDraftV1Schema } from '../sessions/authoring/creationFieldsV1.js';
@@ -7,74 +7,74 @@ import { WorkspaceAddressV1Schema, WorkspaceRefV1WriteSchema, WorkspaceProjectFa
 import { ProjectSourceRepositorySelectorV1Schema } from './sources/projectSourceV1.js';
 import { ScmRepositoryProvisioningFailureResponseSchema, ScmRepositoryProvisioningRemediationSchema } from '../scm/repositoryProvisioning.js';
 
-const IdSchema = lazyZodSchema(() => z.string().trim().min(1));
-const PathSchema = lazyZodSchema(() => z.string().trim().min(1).refine(value => !value.includes('\0')));
+const IdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const PathSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.refine(value => !value.includes('\0'))));
 
 /** Closed choices consumed by the incumbent SCM and Sync realization owners. */
 export const WorkspaceActivationRequestV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('attach') }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('attach') }),
+  z.strictObject({
     kind: z.literal('worktree'),
     checkout: SessionAuthoringCheckoutCreationDraftV1Schema,
-    targetPath: PathSchema.optional(),
-  }).strict(),
-  ScmRepositoryCloneInputSchema.pick({ destinationParentPath: true, destinationDirectoryName: true }).extend({
+    targetPath: z.optional(PathSchema),
+  }),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.pick(ScmRepositoryCloneInputSchema, { destinationParentPath: true, destinationDirectoryName: true }), {
     kind: z.literal('clone'),
-  }).strict(),
-  z.object({
+  })),
+  z.strictObject({
     kind: z.literal('sync'),
     targetPath: PathSchema,
-    workspaceAction: HandoffWorkspaceActionV1Schema.refine(action => action.kind !== 'none'),
-  }).strict(),
+    workspaceAction: HandoffWorkspaceActionV1Schema.check(z.refine(action => action.kind !== 'none')),
+  }),
 ]));
 export type WorkspaceActivationRequestV1 = z.infer<typeof WorkspaceActivationRequestV1Schema>;
 
-export const OpenProjectInputV1Schema = lazyZodSchema(() => z.object({
+export const OpenProjectInputV1Schema = lazyZodSchema(() => z.strictObject({
   serverId: IdSchema,
   machineId: IdSchema,
   source: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('workspace'), workspaceId: IdSchema, checkout: WorkspaceAddressV1Schema.optional() }).strict(),
-    z.object({ kind: z.literal('folder'), path: PathSchema }).strict(),
-    z.object({
-      kind: z.literal('source'), id: IdSchema, revision: z.number().int().positive(),
+    z.strictObject({ kind: z.literal('workspace'), workspaceId: IdSchema, checkout: z.optional(WorkspaceAddressV1Schema) }),
+    z.strictObject({ kind: z.literal('folder'), path: PathSchema }),
+    z.strictObject({
+      kind: z.literal('source'), id: IdSchema, revision: z.number().check(z.int(), z.positive()),
       selector: ProjectSourceRepositorySelectorV1Schema,
-      defaultRef: IdSchema.optional(), subdir: ScmRepositoryContainedSubdirV1Schema.optional(),
-      checkout: WorkspaceAddressV1Schema.optional(),
-    }).strict(),
-    z.object({ kind: z.literal('repository'), selector: ProjectSourceRepositorySelectorV1Schema }).strict(),
+      defaultRef: z.optional(IdSchema), subdir: z.optional(ScmRepositoryContainedSubdirV1Schema),
+      checkout: z.optional(WorkspaceAddressV1Schema),
+    }),
+    z.strictObject({ kind: z.literal('repository'), selector: ProjectSourceRepositorySelectorV1Schema }),
   ]),
-  ref: IdSchema.optional(),
-  subdir: ScmRepositoryContainedSubdirV1Schema.optional(),
+  ref: z.optional(IdSchema),
+  subdir: z.optional(ScmRepositoryContainedSubdirV1Schema),
   materialization: WorkspaceActivationRequestV1Schema,
-}).strict().superRefine((input, context) => {
+}).check(z.superRefine((input, context) => {
   if ((input.source.kind === 'workspace' || input.source.kind === 'source') && input.source.checkout) {
     if (input.source.checkout.serverId !== input.serverId
       || input.source.kind === 'workspace' && input.source.checkout.workspaceId !== input.source.workspaceId) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['source', 'checkout'], message: 'Checkout must match the selected Home and Workspace' });
+      context.addIssue({ code: "custom", path: ['source', 'checkout'], message: 'Checkout must match the selected Home and Workspace' });
     }
   }
-}));
+})));
 export type OpenProjectInputV1 = z.infer<typeof OpenProjectInputV1Schema>;
 
 export const OpenProjectResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('opened'), workspace: WorkspaceAddressV1Schema, directory: PathSchema,
     setup: z.enum(['notRequired', 'approvalRequired', 'prepared', 'failed']),
-    facts: WorkspaceProjectFactsV1Schema.optional(),
-  }).strict(),
-  z.object({ kind: z.literal('ambiguous'), candidates: z.array(WorkspaceRefV1WriteSchema) }).strict(),
-  z.object({ kind: z.literal('refused'), code: IdSchema,
+    facts: z.optional(WorkspaceProjectFactsV1Schema),
+  }),
+  z.strictObject({ kind: z.literal('ambiguous'), candidates: z.array(WorkspaceRefV1WriteSchema) }),
+  z.strictObject({ kind: z.literal('refused'), code: IdSchema,
     retryNotBeforeMs: ScmRepositoryProvisioningFailureResponseSchema.shape.retryNotBeforeMs,
-    remediation: ScmRepositoryProvisioningRemediationSchema.strict().optional(),
-  }).strict(),
-  z.object({ kind: z.literal('outcomeUnknown'), operationId: IdSchema.optional() }).strict(),
+    remediation: z.optional((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(ScmRepositoryProvisioningRemediationSchema)),
+  }),
+  z.strictObject({ kind: z.literal('outcomeUnknown'), operationId: z.optional(IdSchema) }),
 ]));
 export type OpenProjectResultV1 = z.infer<typeof OpenProjectResultV1Schema>;
 
 /** Private source-host acknowledgement; target Open still validates and accepts its local directory. */
 export const ProjectOpenSyncMaterializationResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('materialized') }).strict(),
-  z.object({ kind: z.literal('refused'), code: IdSchema }).strict(),
-  z.object({ kind: z.literal('outcomeUnknown') }).strict(),
+  z.strictObject({ kind: z.literal('materialized') }),
+  z.strictObject({ kind: z.literal('refused'), code: IdSchema }),
+  z.strictObject({ kind: z.literal('outcomeUnknown') }),
 ]));
 export type ProjectOpenSyncMaterializationResultV1 = z.infer<typeof ProjectOpenSyncMaterializationResultV1Schema>;

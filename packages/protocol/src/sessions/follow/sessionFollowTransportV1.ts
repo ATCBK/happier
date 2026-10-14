@@ -1,6 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { sha256 } from '@noble/hashes/sha2';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { encodeBase64 } from '../../crypto/base64.js';
 import { SessionIdSchema } from '../idsV1.js';
@@ -27,8 +27,8 @@ export function isSessionFollowWakeEventLocalId(localId: unknown): localId is st
     && localId.length > SESSION_FOLLOW_WAKE_EVENT_LOCAL_ID_PREFIX.length;
 }
 
-const PublisherGenerationV1Schema = lazyZodSchema(() => z.string().regex(/^(?:0|[1-9]\d{0,18})$/u).refine((value) => BigInt(value) <= 9_223_372_036_854_775_807n));
-const NonBlankStringSchema = lazyZodSchema(() => z.string().trim().min(1));
+const PublisherGenerationV1Schema = lazyZodSchema(() => z.string().check(z.regex(/^(?:0|[1-9]\d{0,18})$/u), z.refine((value) => BigInt(value) <= 9_223_372_036_854_775_807n)));
+const NonBlankStringSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 // SessionIdSchema is the Protocol composable schema; adapt it at this Zod
 // composition boundary so discriminated unions receive a native Zod node
 // while admission remains owned by the canonical SessionId schema.
@@ -46,20 +46,18 @@ function serializeWakeFrontier(frontier: SessionFollowFrontierV1) {
   ] as const;
 }
 
-export const SessionFollowWakeObservationV1Schema = lazyZodSchema(() => z.object({
+export const SessionFollowWakeObservationV1Schema = lazyZodSchema(() => z.strictObject({
   sourceSessionId: SessionIdZodSchema,
-  edgeKind: z.literal('reports_to').optional(),
-  attachedAt: z.number().int().nonnegative().optional(),
+  edgeKind: z.optional(z.literal('reports_to')),
+  attachedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
   expected: SessionFollowFrontierV1Schema,
   consumed: SessionFollowFrontierV1Schema,
-}).strict().refine((value) => (value.edgeKind === 'reports_to') === (value.attachedAt !== undefined), {
+}).check(z.refine((value) => (value.edgeKind === 'reports_to') === (value.attachedAt !== undefined), {
   path: ['attachedAt'], message: 'Reports-to observations require their exact attachment identity',
-}));
+})));
 export type SessionFollowWakeObservationV1 = z.infer<typeof SessionFollowWakeObservationV1Schema>;
 
-const SessionFollowWakeObservationBatchV1Schema = lazyZodSchema(() => z.array(SessionFollowWakeObservationV1Schema)
-  .min(1)
-  .superRefine((observations, context) => {
+const SessionFollowWakeObservationBatchV1Schema = lazyZodSchema(() => z.array(SessionFollowWakeObservationV1Schema).check(z.minLength(1), z.superRefine((observations, context) => {
     const seenSourceSessionIds = new Set<string>();
     for (const [index, observation] of observations.entries()) {
       const identity = `${observation.edgeKind ?? 'follow'}:${observation.sourceSessionId}`;
@@ -72,7 +70,7 @@ const SessionFollowWakeObservationBatchV1Schema = lazyZodSchema(() => z.array(Se
       }
       seenSourceSessionIds.add(identity);
     }
-  }));
+  })));
 
 /** Canonical byte-order normalization for the exact source batch represented by a wake event. */
 export function normalizeSessionFollowWakeObservationsV1(
@@ -118,86 +116,86 @@ export function deriveSessionFollowWakeEventLocalIdV1(input: Readonly<{
   );
 }
 
-export const SessionFollowPendingObservationV1Schema = lazyZodSchema(() => z.object({
+export const SessionFollowPendingObservationV1Schema = lazyZodSchema(() => z.strictObject({
   sourceSessionId: SessionIdZodSchema,
   destinationSessionId: SessionIdZodSchema,
-  edgeKind: z.literal('reports_to').optional(),
-  attachedAt: z.number().int().nonnegative().optional(),
+  edgeKind: z.optional(z.literal('reports_to')),
+  attachedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
   delivered: SessionFollowFrontierV1Schema,
   observed: SessionFollowFrontierV1Schema,
-  mode: z.enum(['next_turn', 'wake_on_human_change']).default('next_turn'),
-}).strict().refine((value) => (value.edgeKind === 'reports_to') === (value.attachedAt !== undefined), {
+  mode: z._default(z.enum(['next_turn', 'wake_on_human_change']), 'next_turn'),
+}).check(z.refine((value) => (value.edgeKind === 'reports_to') === (value.attachedAt !== undefined), {
   path: ['attachedAt'], message: 'Reports-to observations require their exact attachment identity',
-}));
+})));
 export type SessionFollowPendingObservationV1 = z.infer<typeof SessionFollowPendingObservationV1Schema>;
 
-export const SessionFollowObservePendingRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionFollowObservePendingRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   sessionId: SessionIdZodSchema,
-  includeReportsTo: z.boolean().optional(),
-}).strict());
+  includeReportsTo: z.optional(z.boolean()),
+}));
 export type SessionFollowObservePendingRequestV1 = z.infer<typeof SessionFollowObservePendingRequestV1Schema>;
 
 export const SessionFollowObservePendingResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     v: z.literal(1),
     sessionId: SessionIdZodSchema,
     publisherGeneration: PublisherGenerationV1Schema,
     currentSourceSessionIds: z.array(SessionIdZodSchema),
     observations: z.array(SessionFollowPendingObservationV1Schema),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(false),
     v: z.literal(1),
     error: z.enum(['invalid_request', 'forbidden', 'unsupported', 'internal']),
-  }).strict(),
+  }),
 ]));
 export type SessionFollowObservePendingResponseV1 = z.infer<typeof SessionFollowObservePendingResponseV1Schema>;
 
-export const SessionFollowAcknowledgeRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionFollowAcknowledgeRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   destinationSessionId: SessionIdZodSchema,
   sourceSessionId: SessionIdZodSchema,
-  edgeKind: z.literal('reports_to').optional(),
-  attachedAt: z.number().int().nonnegative().optional(),
+  edgeKind: z.optional(z.literal('reports_to')),
+  attachedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
   expectedPublisherGeneration: PublisherGenerationV1Schema,
   expected: SessionFollowFrontierV1Schema,
   observed: SessionFollowFrontierV1Schema,
   consumed: SessionFollowFrontierV1Schema,
   acceptance: z.union([
-    z.object({
+    z.strictObject({
       kind: z.literal('admitted_input'),
       localInputId: NonBlankStringSchema,
-      userMessageSeq: z.number().int().nonnegative().nullable(),
-    }).strict(),
-    z.object({
+      userMessageSeq: z.nullable(z.number().check(z.int(), z.nonnegative())),
+    }),
+    z.strictObject({
       kind: z.literal('context_only_wake'),
-      eventLocalId: NonBlankStringSchema.refine(isSessionFollowWakeEventLocalId, {
+      eventLocalId: NonBlankStringSchema.check(z.refine(isSessionFollowWakeEventLocalId, {
         message: 'Expected a canonical Session Follow wake event id',
-      }),
+      })),
       observations: SessionFollowWakeObservationBatchV1Schema,
-    }).strict(),
+    }),
   ]),
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if ((value.edgeKind === 'reports_to') !== (value.attachedAt !== undefined)) {
     context.addIssue({ code: 'custom', path: ['attachedAt'], message: 'Reports-to ACK requires the exact attachment timestamp' });
   }
   if (value.sourceSessionId === value.destinationSessionId) {
     context.addIssue({ code: 'custom', path: ['sourceSessionId'], message: 'Follow requires distinct Sessions' });
   }
-}));
+})));
 export type SessionFollowAcknowledgeRequestV1 = z.infer<typeof SessionFollowAcknowledgeRequestV1Schema>;
 
 export const SessionFollowAcknowledgeResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     v: z.literal(1),
     destinationSessionId: SessionIdZodSchema,
     sourceSessionId: SessionIdZodSchema,
     delivered: SessionFollowFrontierV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(false),
     v: z.literal(1),
     error: z.enum([
@@ -214,6 +212,6 @@ export const SessionFollowAcknowledgeResponseV1Schema = lazyZodSchema(() => z.di
       'unsupported',
       'internal',
     ]),
-  }).strict(),
+  }),
 ]));
 export type SessionFollowAcknowledgeResponseV1 = z.infer<typeof SessionFollowAcknowledgeResponseV1Schema>;

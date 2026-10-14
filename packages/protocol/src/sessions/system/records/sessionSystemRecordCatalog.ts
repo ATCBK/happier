@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../../json/storedReadSchema.js';
 import { SessionBoardLayoutV1Schema } from '../../board/layout.js';
 import { SessionSurfaceItemV1Schema } from '../../board/item.js';
@@ -17,7 +17,7 @@ import { SESSION_SYSTEM_RECORD_ACTIVITY_NAMESPACE } from './activity/activitySys
 import { SESSION_SYSTEM_RECORD_MEMORY_NAMESPACE } from './memory/memorySystemRecordKinds.js';
 
 export type SessionSystemRecordKindDefinition = Readonly<{
-  payloadSchema: z.ZodType<unknown>;
+  payloadSchema: z.ZodMiniType<unknown>;
   policy: SessionSystemRecordKindPolicy;
 }>;
 
@@ -143,13 +143,13 @@ export const SESSION_SYSTEM_RECORD_CATALOG = defineSessionSystemRecordCatalog({
   },
 });
 
-export function getSessionSystemRecordPayloadSchema(namespace: string, kind: string): z.ZodType<unknown> | null {
+export function getSessionSystemRecordPayloadSchema(namespace: string, kind: string): z.ZodMiniType<unknown> | null {
   const catalog: SessionSystemRecordCatalog = SESSION_SYSTEM_RECORD_CATALOG;
   return catalog[namespace]?.kinds[kind]?.payloadSchema ?? null;
 }
 
 /** Stored payloads normalize from the same registered contract as strict write admission. */
-export function getSessionSystemRecordStoredPayloadSchema(namespace: string, kind: string): z.ZodType<unknown> | null {
+export function getSessionSystemRecordStoredPayloadSchema(namespace: string, kind: string): z.ZodMiniType<unknown> | null {
   const schema = getSessionSystemRecordPayloadSchema(namespace, kind);
   return schema ? createStoredReadSchema(schema) : null;
 }
@@ -163,10 +163,10 @@ export function isRegisteredSessionSystemRecordKind(namespace: string, kind: str
   return getSessionSystemRecordPayloadSchema(namespace, kind) !== null;
 }
 
-export function addRegisteredSessionSystemRecordKindIssue(value: { namespace: string; kind: string }, ctx: z.RefinementCtx): void {
+export function addRegisteredSessionSystemRecordKindIssue(value: { namespace: string; kind: string }, ctx: z.core.$RefinementCtx): void {
   if (!isRegisteredSessionSystemRecordKind(value.namespace, value.kind)) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'Unregistered session system record namespace/kind pair',
       path: ['kind'],
     });
@@ -175,7 +175,7 @@ export function addRegisteredSessionSystemRecordKindIssue(value: { namespace: st
 
 export function addSessionSystemRecordPlainContentPayloadIssue(
   value: { namespace: string; kind: string; content?: unknown },
-  ctx: z.RefinementCtx,
+  ctx: z.core.$RefinementCtx,
 ): void {
   addRegisteredSessionSystemRecordKindIssue(value, ctx);
 
@@ -191,7 +191,7 @@ export function addSessionSystemRecordPlainContentPayloadIssue(
   if (parsed.success) return;
 
   ctx.addIssue({
-    code: z.ZodIssueCode.custom,
+    code: "custom",
     message: 'Plain session system record content does not match registered namespace/kind payload schema',
     path: ['content', 'v'],
   });

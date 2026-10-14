@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ActionIdSchema } from '../../../actions/actionIds.js';
 import { asProtocolZod } from '../../actions/internalProtocolZodAdapter.js';
@@ -39,7 +39,7 @@ import {
 const UI_SURFACE_HTTPS_ORIGIN_PATTERN_V1 =
   /^https:\/\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::\d{1,5})?$/u;
 
-export const UiSurfaceNetworkOriginV1Schema = lazyZodSchema(() => z.string().superRefine((value, ctx) => {
+export const UiSurfaceNetworkOriginV1Schema = lazyZodSchema(() => z.string().check(z.superRefine((value, ctx) => {
   if (
     !UI_SURFACE_HTTPS_ORIGIN_PATTERN_V1.test(value)
     || !CanonicalHttpOriginSchema.safeParse(value).success
@@ -49,7 +49,7 @@ export const UiSurfaceNetworkOriginV1Schema = lazyZodSchema(() => z.string().sup
       message: 'Expected an exact canonical HTTPS origin without path, query, or credentials.',
     });
   }
-}));
+})));
 export type UiSurfaceNetworkOriginV1 = z.infer<typeof UiSurfaceNetworkOriginV1Schema>;
 
 /** Resources are always the canonical qualified contribution identity. */
@@ -68,19 +68,17 @@ export const UiSurfaceActionRequestV1Schema = lazyZodSchema(() => z.union([
 ]));
 export type UiSurfaceActionRequestV1 = z.infer<typeof UiSurfaceActionRequestV1Schema>;
 
-const capabilityRequestFieldsV1 = () => z.object({
-  hostMethods: z.array(PluginUiHostMethodV1Schema)
-    .max(PluginUiHostMethodV1Schema.options.length)
-    .optional(),
-  resources: z.array(UiSurfaceResourceRequestV1Schema).optional(),
-  actions: z.array(UiSurfaceActionRequestV1Schema).optional(),
-  networkOrigins: z.array(UiSurfaceNetworkOriginV1Schema).optional(),
-  network: z.enum(['none', 'open']).optional(),
-}).strict();
+const capabilityRequestFieldsV1 = () => z.strictObject({
+  hostMethods: z.optional(z.array(PluginUiHostMethodV1Schema).check(z.maxLength(PluginUiHostMethodV1Schema.options.length))),
+  resources: z.optional(z.array(UiSurfaceResourceRequestV1Schema)),
+  actions: z.optional(z.array(UiSurfaceActionRequestV1Schema)),
+  networkOrigins: z.optional(z.array(UiSurfaceNetworkOriginV1Schema)),
+  network: z.optional(z.enum(['none', 'open'])),
+});
 
 function validateNetworkAlternativeV1(
   request: Readonly<{ network?: 'none' | 'open'; networkOrigins?: readonly string[] }>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   if (request.network !== undefined && (request.networkOrigins?.length ?? 0) > 0) {
     context.addIssue({ code: 'custom', path: ['networkOrigins'], message: 'Choose exact origins or an explicit network alternative.' });
@@ -88,10 +86,9 @@ function validateNetworkAlternativeV1(
 }
 
 export type UiSurfaceCapabilityRequestV1 = z.infer<ReturnType<typeof capabilityRequestFieldsV1>>;
-export const UiSurfaceCapabilityRequestV1Schema: z.ZodType<UiSurfaceCapabilityRequestV1, UiSurfaceCapabilityRequestV1> = lazyZodSchema(() => capabilityRequestFieldsV1().superRefine(validateNetworkAlternativeV1));
+export const UiSurfaceCapabilityRequestV1Schema: z.ZodMiniType<UiSurfaceCapabilityRequestV1, UiSurfaceCapabilityRequestV1> = lazyZodSchema(() => capabilityRequestFieldsV1().check(z.superRefine(validateNetworkAlternativeV1)));
 
-export const UiSurfaceNetworkRequestV1Schema = lazyZodSchema(() => capabilityRequestFieldsV1()
-  .pick({ network: true, networkOrigins: true }).superRefine(validateNetworkAlternativeV1));
+export const UiSurfaceNetworkRequestV1Schema = lazyZodSchema(() => z.pick(capabilityRequestFieldsV1(), { network: true, networkOrigins: true }).check(z.superRefine(validateNetworkAlternativeV1)));
 export type UiSurfaceNetworkRequestV1 = z.infer<typeof UiSurfaceNetworkRequestV1Schema>;
 
 /**
@@ -102,9 +99,7 @@ export type UiSurfaceNetworkRequestV1 = z.infer<typeof UiSurfaceNetworkRequestV1
  * does not own. Two host-method declarations on one renderer would be two
  * decision-makers for the same fact.
  */
-export const PluginUiHostedHtmlRequestedCapabilitiesV1Schema = lazyZodSchema(() => capabilityRequestFieldsV1()
-  .omit({ hostMethods: true })
-  .superRefine(validateNetworkAlternativeV1));
+export const PluginUiHostedHtmlRequestedCapabilitiesV1Schema = lazyZodSchema(() => z.omit(capabilityRequestFieldsV1(), { hostMethods: true }).check(z.superRefine(validateNetworkAlternativeV1)));
 export type PluginUiHostedHtmlRequestedCapabilitiesV1 =
   z.infer<typeof PluginUiHostedHtmlRequestedCapabilitiesV1Schema>;
 
@@ -123,14 +118,14 @@ export type NormalizedUiSurfaceCapabilityRequestV1 = Readonly<{
 }>;
 
 /** Effective guest egress; empty exact-origin declarations normalize to none. */
-export const UiSurfaceNetworkPolicyV1Schema = lazyZodSchema(() => z.object({
+export const UiSurfaceNetworkPolicyV1Schema = lazyZodSchema(() => z.strictObject({
   network: z.enum(['none', 'origins', 'open']),
   networkOrigins: z.array(UiSurfaceNetworkOriginV1Schema),
-}).strict().superRefine((policy, context) => {
+}).check(z.superRefine((policy, context) => {
   if ((policy.network === 'origins') !== (policy.networkOrigins.length > 0)) {
     context.addIssue({ code: 'custom', path: ['networkOrigins'], message: 'Normalized origins exist only for the exact-origin policy.' });
   }
-}));
+})));
 export type UiSurfaceNetworkPolicyV1 = Readonly<{
   network: z.infer<typeof UiSurfaceNetworkPolicyV1Schema>['network'];
   networkOrigins: readonly UiSurfaceNetworkOriginV1[];

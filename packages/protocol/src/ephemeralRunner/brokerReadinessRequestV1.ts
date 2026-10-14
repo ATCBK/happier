@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { IrohEndpointIdV1Schema } from '../connectivity/iroh/endpointDescriptorV1.js';
 import { encodeBase64 } from '../crypto/base64.js';
@@ -11,31 +11,31 @@ import { ProviderAgentTargetKeySchema, ProviderModelIdSchema } from '../provider
 import { RunnerResourceIdSchema, RunnerSha256CommitmentSchema, RunnerSignatureSchema } from './activation.js';
 import { RunnerClaimV1Schema, verifyRunnerClaimV1 } from './endpoint.js';
 
-export const RunnerBrokerReadinessFactsV1Schema = lazyZodSchema(() => z.object({
+export const RunnerBrokerReadinessFactsV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: z.literal('provider_broker_readiness'),
   homeServerIdentityId: RunnerResourceIdSchema,
-  activationId: z.string().uuid(),
+  activationId: z.string().check(z.uuid()),
   launchManifestCommitment: RunnerSha256CommitmentSchema,
   resourceId: RunnerResourceIdSchema,
   agentTargetKey: ProviderAgentTargetKeySchema,
   modelId: ProviderModelIdSchema,
   protocol: ProviderWireProtocolSchema,
-  initiator: z.object({
+  initiator: z.strictObject({
     installationId: RunnerResourceIdSchema,
     endpointId: IrohEndpointIdV1Schema,
-  }).strict(),
-  target: z.object({
+  }),
+  target: z.strictObject({
     machineId: RunnerResourceIdSchema,
     endpointId: IrohEndpointIdV1Schema,
-  }).strict(),
-}).strict());
+  }),
+}));
 export type RunnerBrokerReadinessFactsV1 = z.infer<typeof RunnerBrokerReadinessFactsV1Schema>;
 
-export const RunnerBrokerReadinessRequestV1Schema = lazyZodSchema(() => RunnerBrokerReadinessFactsV1Schema.extend({
+export const RunnerBrokerReadinessRequestV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(RunnerBrokerReadinessFactsV1Schema, {
   activationSignature: RunnerSignatureSchema,
   installationSignature: RunnerSignatureSchema,
-}).strict());
+})));
 export type RunnerBrokerReadinessRequestV1 = z.infer<typeof RunnerBrokerReadinessRequestV1Schema>;
 
 export const IrohRunnerBrokerReadinessHandshakeV1Schema = RunnerBrokerReadinessRequestV1Schema;

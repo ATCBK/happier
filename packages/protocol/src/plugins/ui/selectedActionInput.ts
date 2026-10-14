@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { pluginJsonValuesEqual } from '../contributions/jsonSchemaValues.js';
 import type { PluginUiJsonValueV1 } from '../contributions/ui/json.js';
@@ -27,18 +27,18 @@ export type PluginUiSelectedActionInputV1 = PluginUiSelectActionInputTargetedSub
  * admitted operation that produced it. The issuer retains the active carrier;
  * this value itself does not confer authority across a realm.
  */
-export const PluginUiSelectedActionInputCarrierV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiSelectedActionInputCarrierV1Schema = lazyZodSchema(() => z.strictObject({
   operation: PluginUiTargetedContributionOperationV1Schema,
   result: PluginUiSelectActionInputTargetedSubmittedV1Schema,
-}).strict().superRefine((carrier, ctx) => {
+}).check(z.superRefine((carrier, ctx) => {
   if (!pluginUiSelectedActionInputMatchesOperation(carrier.result, carrier.operation)) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['result'],
       message: 'Selected Action input does not match its targeted operation.',
     });
   }
-}));
+})));
 export type PluginUiSelectedActionInputCarrierV1 = z.infer<
   typeof PluginUiSelectedActionInputCarrierV1Schema
 >;

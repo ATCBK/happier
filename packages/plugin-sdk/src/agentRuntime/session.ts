@@ -4,7 +4,7 @@ import type {
   RuntimeCapabilities,
   TerminalHostHandle,
 } from '@happier-dev/agents';
-import type { $brand } from 'zod';
+import type { $brand } from 'zod/mini';
 import type { AgentTerminalLaunchPlan, AgentTerminalLaunchRequest } from './surfaces.js';
 
 import type { JsonValue } from '../identity.js';

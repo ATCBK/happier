@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { VoiceProviderIdSchema, VoiceProviderSettingsJsonValueV1Schema, type VoiceProviderSettingsJsonValueV1 } from '../../voice/realtime/providerSettings.js';
@@ -22,13 +22,13 @@ export function readBuiltInSessionVoiceDeclarationV1(providerContributionId: str
 }
 
 /** One provider-declared voice setting. Declaration/value admission belongs to the current provider. */
-export const SessionVoicePreferenceV1Schema = lazyZodSchema(() => z.object({
+export const SessionVoicePreferenceV1Schema = lazyZodSchema(() => z.strictObject({
   providerContributionId: VoiceProviderIdSchema,
   settingFieldPath: VoiceProviderSettingsPresentationPathSchema,
   value: VoiceProviderSettingsJsonValueV1Schema,
   /** Last selected catalog label; presentation only, never provider config or voice admission. */
-  displayName: z.string().trim().min(1).optional(),
-}).strict());
+  displayName: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}));
 export type SessionVoicePreferenceV1 = Readonly<z.infer<typeof SessionVoicePreferenceV1Schema>>;
 function isVoiceSettingsRecord(value: VoiceProviderSettingsJsonValueV1 | undefined): value is Readonly<{ [key: string]: VoiceProviderSettingsJsonValueV1 }> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

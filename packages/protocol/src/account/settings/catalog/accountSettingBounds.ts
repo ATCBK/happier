@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const ACCOUNT_SETTING_MAX_STRING_BYTES = 64 * 1024;
 export const ACCOUNT_SETTING_MAX_COLLECTION_ENTRIES = 256;
@@ -124,16 +124,16 @@ export function inspectAccountSettingValueBounds(
  * domain schema's static input/output type. The per-key serialized ceiling avoids a single
  * compatibility root claiming the whole 512 KiB document budget.
  */
-export function withAccountSettingBounds<TSchema extends z.ZodTypeAny>(
+export function withAccountSettingBounds<TSchema extends z.ZodMiniType>(
   schema: TSchema,
   maximumSerializedValueBytes: number,
   structuralBoundsOwner: AccountSettingStructuralBoundsOwner = 'accountGeneric',
 ): TSchema {
-  return schema.superRefine((value, ctx) => {
+  return schema.check(z.superRefine((value, ctx) => {
     try {
       JSON.stringify(value);
     } catch {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'must be JSON serializable' });
+      ctx.addIssue({ code: "custom", message: 'must be JSON serializable' });
       return;
     }
     const issue = inspectAccountSettingValueBounds(
@@ -142,7 +142,7 @@ export function withAccountSettingBounds<TSchema extends z.ZodTypeAny>(
       structuralBoundsOwner,
     );
     if (issue) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue.message });
+      ctx.addIssue({ code: "custom", message: issue.message });
     }
-  }) as TSchema;
+  })) as TSchema;
 }

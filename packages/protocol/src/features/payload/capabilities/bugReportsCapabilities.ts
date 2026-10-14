@@ -1,16 +1,16 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { normalizeBugReportProviderUrl } from '../../../bugs/reports/sanitize.js';
 import { isRecord } from '../isRecord.js';
 
 export const BugReportsCapabilitiesSchema = lazyZodSchema(() => z.object({
-  providerUrl: z.string().url().nullable(),
+  providerUrl: z.nullable(z.string().check(z.url())),
   defaultIncludeDiagnostics: z.boolean(),
-  maxArtifactBytes: z.number().int().positive(),
-  acceptedArtifactKinds: z.array(z.string().min(1)).min(1),
-  uploadTimeoutMs: z.number().int().positive(),
-  contextWindowMs: z.number().int().min(1000).max(24 * 60 * 60 * 1000),
+  maxArtifactBytes: z.number().check(z.int(), z.positive()),
+  acceptedArtifactKinds: z.array(z.string().check(z.minLength(1))).check(z.minLength(1)),
+  uploadTimeoutMs: z.number().check(z.int(), z.positive()),
+  contextWindowMs: z.number().check(z.int(), z.minimum(1000), z.maximum(24 * 60 * 60 * 1000)),
 }));
 
 export type BugReportsCapabilities = z.infer<typeof BugReportsCapabilitiesSchema>;

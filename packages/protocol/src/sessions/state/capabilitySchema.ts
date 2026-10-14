@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const SessionStateHappierToProviderTransportSchema = lazyZodSchema(() => z.enum([
   'runtime-hook',
@@ -14,83 +14,56 @@ export const SessionStateProviderToHappierSourceSchema = lazyZodSchema(() => z.e
   'inference',
 ]));
 
-export const SessionStateHappierToProviderCapabilitySchema = lazyZodSchema(() => z
-  .object({
+export const SessionStateHappierToProviderCapabilitySchema = lazyZodSchema(() => z.strictObject({
     supported: z.boolean(),
-    transport: SessionStateHappierToProviderTransportSchema.optional(),
-  })
-  .strict());
+    transport: z.optional(SessionStateHappierToProviderTransportSchema),
+  }));
 
-export const SessionStateProviderToHappierCapabilitySchema = lazyZodSchema(() => z
-  .object({
+export const SessionStateProviderToHappierCapabilitySchema = lazyZodSchema(() => z.strictObject({
     supported: z.boolean(),
-    source: SessionStateProviderToHappierSourceSchema.optional(),
-  })
-  .strict());
+    source: z.optional(SessionStateProviderToHappierSourceSchema),
+  }));
 
 const UnsupportedHappierToProviderCapability = Object.freeze({ supported: false });
 const UnsupportedProviderToHappierCapability = Object.freeze({ supported: false });
 
-export const SessionStateFieldCapabilitySchema = lazyZodSchema(() => z
-  .object({
+export const SessionStateFieldCapabilitySchema = lazyZodSchema(() => z.strictObject({
     supported: z.boolean(),
-    happierToProvider: SessionStateHappierToProviderCapabilitySchema
-      .optional()
-      .default(UnsupportedHappierToProviderCapability),
-    providerToHappier: SessionStateProviderToHappierCapabilitySchema
-      .optional()
-      .default(UnsupportedProviderToHappierCapability),
-  })
-  .strict());
+    happierToProvider: z._default(z.optional(SessionStateHappierToProviderCapabilitySchema), UnsupportedHappierToProviderCapability),
+    providerToHappier: z._default(z.optional(SessionStateProviderToHappierCapabilitySchema), UnsupportedProviderToHappierCapability),
+  }));
 
-export const SessionStateCapabilitiesV1Schema = lazyZodSchema(() => z
-  .object({
-    identity: z
-      .object({
-        runtimeDescriptor: SessionStateFieldCapabilitySchema.optional(),
-        providerSessionId: SessionStateFieldCapabilitySchema.optional(),
-      })
-      .strict()
-      .optional(),
-    intent: z
-      .object({
-        model: SessionStateFieldCapabilitySchema.optional(),
-        role: SessionStateFieldCapabilitySchema.optional(),
-        sessionRoles: SessionStateFieldCapabilitySchema.optional(),
-        memoryEnabled: SessionStateFieldCapabilitySchema.optional(),
-        voicePreference: SessionStateFieldCapabilitySchema.optional(),
-        context: SessionStateFieldCapabilitySchema.optional(),
-        permissionMode: SessionStateFieldCapabilitySchema.optional(),
-        acpSessionMode: SessionStateFieldCapabilitySchema.optional(),
-        acpConfigOption: SessionStateFieldCapabilitySchema.optional(),
-      })
-      .strict()
-      .optional(),
-    display: z
-      .object({
-        title: SessionStateFieldCapabilitySchema.optional(),
-        bot: SessionStateFieldCapabilitySchema.optional(),
-      })
-      .strict()
-      .optional(),
-    runtime: z
-      .object({
-        workState: SessionStateFieldCapabilitySchema.optional(),
-        activity: SessionStateFieldCapabilitySchema.optional(),
-        externalAgent: SessionStateFieldCapabilitySchema.optional(),
-        externalSessionOperation: SessionStateFieldCapabilitySchema.optional(),
-        usageLimitRecovery: SessionStateFieldCapabilitySchema.optional(),
-        sessionRunner: SessionStateFieldCapabilitySchema.optional(),
-      })
-      .strict()
-      .optional(),
-    view: z
-      .object({
-        readState: SessionStateFieldCapabilitySchema.optional(),
-        attention: SessionStateFieldCapabilitySchema.optional(),
-        transcriptToolCalls: SessionStateFieldCapabilitySchema.optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict());
+export const SessionStateCapabilitiesV1Schema = lazyZodSchema(() => z.strictObject({
+    identity: z.optional(z.strictObject({
+        runtimeDescriptor: z.optional(SessionStateFieldCapabilitySchema),
+        providerSessionId: z.optional(SessionStateFieldCapabilitySchema),
+      })),
+    intent: z.optional(z.strictObject({
+        model: z.optional(SessionStateFieldCapabilitySchema),
+        role: z.optional(SessionStateFieldCapabilitySchema),
+        sessionRoles: z.optional(SessionStateFieldCapabilitySchema),
+        memoryEnabled: z.optional(SessionStateFieldCapabilitySchema),
+        voicePreference: z.optional(SessionStateFieldCapabilitySchema),
+        context: z.optional(SessionStateFieldCapabilitySchema),
+        permissionMode: z.optional(SessionStateFieldCapabilitySchema),
+        acpSessionMode: z.optional(SessionStateFieldCapabilitySchema),
+        acpConfigOption: z.optional(SessionStateFieldCapabilitySchema),
+      })),
+    display: z.optional(z.strictObject({
+        title: z.optional(SessionStateFieldCapabilitySchema),
+        bot: z.optional(SessionStateFieldCapabilitySchema),
+      })),
+    runtime: z.optional(z.strictObject({
+        workState: z.optional(SessionStateFieldCapabilitySchema),
+        activity: z.optional(SessionStateFieldCapabilitySchema),
+        externalAgent: z.optional(SessionStateFieldCapabilitySchema),
+        externalSessionOperation: z.optional(SessionStateFieldCapabilitySchema),
+        usageLimitRecovery: z.optional(SessionStateFieldCapabilitySchema),
+        sessionRunner: z.optional(SessionStateFieldCapabilitySchema),
+      })),
+    view: z.optional(z.strictObject({
+        readState: z.optional(SessionStateFieldCapabilitySchema),
+        attention: z.optional(SessionStateFieldCapabilitySchema),
+        transcriptToolCalls: z.optional(SessionStateFieldCapabilitySchema),
+      })),
+  }));

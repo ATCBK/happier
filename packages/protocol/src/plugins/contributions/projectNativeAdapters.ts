@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import * as mini from 'zod/mini';
 import { lazyDefinition, lazyZodSchema } from '../../lazyZodSchema.js';
 import { PluginContributionIdentityV1Schema, PluginContributionLocalIdSchema } from '../contributionIdentity.js';
@@ -50,11 +50,11 @@ export function listMachineEnvironmentAdaptersV1(platform: string): readonly Bui
 }
 
 /** File names are declarations, not permission to read outside the admitted root. */
-export const PluginProjectNativeAdapterContributionV1Schema = lazyZodSchema(() => z.object({
+export const PluginProjectNativeAdapterContributionV1Schema = lazyZodSchema(() => z.strictObject({
     id: asProtocolZod(PluginContributionLocalIdSchema),
-    files: z.array(ProjectNativeFilePathV1Schema).min(1),
-    roles: z.array(z.enum(PROJECT_NATIVE_ADAPTER_ROLES_V1)).min(1).refine(roles => new Set(roles).size === roles.length, 'Duplicate adapter role'),
-}).strict());
+    files: z.array(ProjectNativeFilePathV1Schema).check(z.minLength(1)),
+    roles: z.array(z.enum(PROJECT_NATIVE_ADAPTER_ROLES_V1)).check(z.minLength(1), z.refine(roles => new Set(roles).size === roles.length, 'Duplicate adapter role')),
+}));
 export type PluginProjectNativeAdapterContributionV1 = z.infer<typeof PluginProjectNativeAdapterContributionV1Schema>;
 
 const ProcessValueSchema = mini.string().check(mini.regex(/^[^\0]*$/u));

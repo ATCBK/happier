@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * Reverse (daemon -> UI) browser-recording native-view capture contract (W2C-BA-1).
@@ -14,28 +14,26 @@ import { z } from 'zod';
  * The raw pixel buffer never crosses the RPC boundary in either direction.
  */
 
-const IdSchema = lazyZodSchema(() => z.string().trim().min(1).max(256));
-const NonNegativeIntSchema = lazyZodSchema(() => z.number().int().nonnegative());
-const PositiveIntSchema = lazyZodSchema(() => z.number().int().positive());
+const IdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
+const NonNegativeIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
+const PositiveIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.positive()));
 
 /**
  * Request the daemon sends the connected desktop UI to capture one recording frame. Mirrors the
  * daemon-facing `DesktopBrowserRecordingFrameCaptureRequest` so the UI handler can forward it
  * straight to the A2-registered `desktop_browser_capture_recording_frame` Tauri command.
  */
-export const UiBrowserRecordingCaptureFrameRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const UiBrowserRecordingCaptureFrameRequestV1Schema = lazyZodSchema(() => z.strictObject({
     protocolVersion: z.literal(1),
     browserSessionId: IdSchema,
     viewId: IdSchema,
     navigationGeneration: NonNegativeIntSchema,
     captureRequestId: IdSchema,
     /** Local filesystem path the native side must write the captured PNG to. */
-    outputPath: z.string().trim().min(1),
+    outputPath: z.string().check(z.trim(), z.minLength(1)),
     /** Recording byte cap; the native side rejects a capture larger than this. */
     maxBytes: PositiveIntSchema,
-  })
-  .strict());
+  }));
 export type UiBrowserRecordingCaptureFrameRequestV1 = z.infer<
   typeof UiBrowserRecordingCaptureFrameRequestV1Schema
 >;
@@ -45,38 +43,30 @@ export type UiBrowserRecordingCaptureFrameRequestV1 = z.infer<
  * bytes — the daemon resolves the artifact from `path` under the recording working directory.
  */
 export const UiBrowserRecordingCaptureFrameResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z
-    .object({
+  z.strictObject({
       ok: z.literal(true),
-      frame: z
-        .object({
+      frame: z.strictObject({
           mimeType: IdSchema,
           width: NonNegativeIntSchema,
           height: NonNegativeIntSchema,
           sizeBytes: NonNegativeIntSchema,
           /** Path the native side actually wrote the PNG to (echoes the requested `outputPath`). */
-          path: z.string().trim().min(1),
-        })
-        .strict(),
-    })
-    .strict(),
-  z
-    .object({
+          path: z.string().check(z.trim(), z.minLength(1)),
+        }),
+    }),
+  z.strictObject({
       ok: z.literal(false),
       errorCode: IdSchema,
-    })
-    .strict(),
+    }),
 ]));
 export type UiBrowserRecordingCaptureFrameResultV1 = z.infer<
   typeof UiBrowserRecordingCaptureFrameResultV1Schema
 >;
 
-export const UiBrowserRecordingCaptureFrameResponseV1Schema = lazyZodSchema(() => z
-  .object({
+export const UiBrowserRecordingCaptureFrameResponseV1Schema = lazyZodSchema(() => z.strictObject({
     protocolVersion: z.literal(1),
     result: UiBrowserRecordingCaptureFrameResultV1Schema,
-  })
-  .strict());
+  }));
 export type UiBrowserRecordingCaptureFrameResponseV1 = z.infer<
   typeof UiBrowserRecordingCaptureFrameResponseV1Schema
 >;

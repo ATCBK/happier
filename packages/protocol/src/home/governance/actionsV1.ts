@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * The user-invocable Home-governance intents.
@@ -45,14 +45,14 @@ export const HomeGovernanceActionIdV1Schema = lazyZodSchema(() => z.enum(HOME_GO
  * `home.governance.get` takes no arguments: the Home and the viewer both come
  * from the authenticated request, never from caller-supplied input.
  */
-export const HomeGovernanceGetInputV1Schema = lazyZodSchema(() => z.object({}).strict());
+export const HomeGovernanceGetInputV1Schema = lazyZodSchema(() => z.strictObject({}));
 
 /**
  * The minimum eligibility read is intentionally a distinct strict contract:
  * ordinary members must never receive the administrative projection and then
  * rely on a client to discard its policy and deployment facts.
  */
-export const HomeGovernanceEligibilityGetInputV1Schema = lazyZodSchema(() => z.object({}).strict());
+export const HomeGovernanceEligibilityGetInputV1Schema = lazyZodSchema(() => z.strictObject({}));
 
 /** The authenticated Home and owner are selected by the request, never by caller input. */
-export const HomeEmptinessGetInputV1Schema = lazyZodSchema(() => z.object({}).strict());
+export const HomeEmptinessGetInputV1Schema = lazyZodSchema(() => z.strictObject({}));

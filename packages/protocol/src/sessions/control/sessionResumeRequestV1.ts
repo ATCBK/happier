@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { AgentExecutionTargetV1Schema } from '../../agents/executionTargetV1.js';
 import { BackendTargetRefV2Schema, normalizeBackendTargetRefV2InputToV2, type BackendTargetRefV2Input } from '../../backends/targets/backendTargetRefV2.js';
@@ -12,33 +12,33 @@ import { SessionInitialGoalRequestV1Schema } from '../work/state/sessionWorkStat
 import type { ProtocolJsonValue } from '../../plugins/actions/protocolComposableSchema.js';
 
 /** Resume launch intent only. Home admission and requester custody are host-private. */
-export const SessionResumeRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionResumeRequestV1Schema = lazyZodSchema(() => z.strictObject({
     type: z.literal('resume-session'),
-    sessionId: z.string().min(1),
-    directory: z.string().min(1),
-    agentTarget: AgentExecutionTargetV1Schema.optional(),
-    backendTarget: z.preprocess((input: BackendTargetRefV2Input) => normalizeBackendTargetRefV2InputToV2(input), BackendTargetRefV2Schema).optional(),
-    resume: z.string().min(1).optional(),
-    runtimeDescriptorV1: z.preprocess((input: ProtocolJsonValue) => input, RuntimeDescriptorV1Schema).optional(),
-    environmentVariables: z.record(z.string(), z.string()).optional(),
-    terminal: SpawnSessionTerminalSchema.optional(),
-    connectedServices: z.preprocess((input: ProtocolJsonValue) => input, SessionAuthoringValueV1Schema.shape.connectedServices).optional(),
-    connectedServicesUpdatedAt: z.number().optional(),
-    transcriptStorage: z.enum(['direct', 'persisted']).optional(),
-    attachMetadataIdentityPolicy: SessionAttachMetadataIdentityPolicySchema.optional(),
-    permissionMode: z.enum(SESSION_PERMISSION_MODES).optional(),
-    permissionModeUpdatedAt: z.number().optional(),
-    modelSelection: SessionModelSelectionV1Schema.optional(),
-    accountSettingsVersionHint: z.number().int().nonnegative().optional(),
-    initialTranscriptAfterSeq: z.number().int().nonnegative().optional(),
-    executionAuthorization: SpawnSessionExecutionAuthorizationSchema.optional(),
-    approvedNewDirectoryCreation: z.boolean().optional(),
-    initialGoal: z.preprocess((input: ProtocolJsonValue) => input, SessionInitialGoalRequestV1Schema).optional(),
-    spawnNonce: z.string().min(1).optional(),
-}).strict().superRefine((value, context) => {
+    sessionId: z.string().check(z.minLength(1)),
+    directory: z.string().check(z.minLength(1)),
+    agentTarget: z.optional(AgentExecutionTargetV1Schema),
+    backendTarget: z.optional(z.pipe(z.transform((input: BackendTargetRefV2Input) => normalizeBackendTargetRefV2InputToV2(input)), BackendTargetRefV2Schema)),
+    resume: z.optional(z.string().check(z.minLength(1))),
+    runtimeDescriptorV1: z.optional(z.pipe(z.transform((input: ProtocolJsonValue) => input), RuntimeDescriptorV1Schema)),
+    environmentVariables: z.optional(z.record(z.string(), z.string())),
+    terminal: z.optional(SpawnSessionTerminalSchema),
+    connectedServices: z.optional(z.pipe(z.transform((input: ProtocolJsonValue) => input), SessionAuthoringValueV1Schema.shape.connectedServices)),
+    connectedServicesUpdatedAt: z.optional(z.number()),
+    transcriptStorage: z.optional(z.enum(['direct', 'persisted'])),
+    attachMetadataIdentityPolicy: z.optional(SessionAttachMetadataIdentityPolicySchema),
+    permissionMode: z.optional(z.enum(SESSION_PERMISSION_MODES)),
+    permissionModeUpdatedAt: z.optional(z.number()),
+    modelSelection: z.optional(SessionModelSelectionV1Schema),
+    accountSettingsVersionHint: z.optional(z.number().check(z.int(), z.nonnegative())),
+    initialTranscriptAfterSeq: z.optional(z.number().check(z.int(), z.nonnegative())),
+    executionAuthorization: z.optional(SpawnSessionExecutionAuthorizationSchema),
+    approvedNewDirectoryCreation: z.optional(z.boolean()),
+    initialGoal: z.optional(z.pipe(z.transform((input: ProtocolJsonValue) => input), SessionInitialGoalRequestV1Schema)),
+    spawnNonce: z.optional(z.string().check(z.minLength(1))),
+}).check(z.superRefine((value, context) => {
     if (!value.agentTarget && !value.backendTarget) context.addIssue({
         code: 'custom', path: ['agentTarget'], message: 'agentTarget or configured backendTarget is required',
     });
-}));
+})));
 
 export type SessionResumeRequestV1 = z.infer<typeof SessionResumeRequestV1Schema>;

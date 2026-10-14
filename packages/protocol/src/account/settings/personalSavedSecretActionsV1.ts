@@ -1,28 +1,28 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { ActionExecuteFailureSchema } from '../../actions/actionExecutionResult.js';
 
 export const PERSONAL_SAVED_SECRET_ACTION_IDS_V1 = ['secrets.list', 'secrets.create', 'secrets.update', 'secrets.delete'] as const;
 export type PersonalSavedSecretActionIdV1 = typeof PERSONAL_SAVED_SECRET_ACTION_IDS_V1[number];
-const identity = () => z.string().min(1);
-const name = () => z.string().trim().min(1).max(100);
+const identity = () => z.string().check(z.minLength(1));
+const name = () => z.string().check(z.trim(), z.minLength(1), z.maxLength(100));
 const kind = () => z.enum(['apiKey', 'token', 'password', 'other']);
 // These established Action field names carry the private resource's revision,
 // an opaque concurrency token, rather than an invented wall-clock timestamp.
-const revision = () => z.number().int().positive();
+const revision = () => z.number().check(z.int(), z.positive());
 export const PERSONAL_SAVED_SECRET_ACTION_INPUT_SCHEMAS_V1 = {
-  'secrets.list': lazyZodSchema(() => z.object({}).strict()),
-  'secrets.create': lazyZodSchema(() => z.object({ name: name(), kind: kind().optional(), value: identity() }).strict()),
-  'secrets.update': lazyZodSchema(() => z.object({ secretId: identity(), name: name().optional(), value: identity().optional(),
-    expectedUpdatedAt: revision() }).strict()),
-  'secrets.delete': lazyZodSchema(() => z.object({ secretId: identity(), expectedUpdatedAt: revision() }).strict()),
+  'secrets.list': lazyZodSchema(() => z.strictObject({})),
+  'secrets.create': lazyZodSchema(() => z.strictObject({ name: name(), kind: z.optional(kind()), value: identity() })),
+  'secrets.update': lazyZodSchema(() => z.strictObject({ secretId: identity(), name: z.optional(name()), value: z.optional(identity()),
+    expectedUpdatedAt: revision() })),
+  'secrets.delete': lazyZodSchema(() => z.strictObject({ secretId: identity(), expectedUpdatedAt: revision() })),
 };
 export const PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1 = {
-  'secrets.list': lazyZodSchema(() => z.object({ secrets: z.array(z.object({ secretId: identity(), name: name(), kind: kind(),
-    updatedAt: revision() }).strict()) }).strict()),
-  'secrets.create': lazyZodSchema(() => z.object({ secretId: identity(), secretRef: identity() }).strict()),
-  'secrets.update': lazyZodSchema(() => z.object({ secretId: identity(), updatedAt: revision() }).strict()),
-  'secrets.delete': lazyZodSchema(() => z.object({ deleted: z.literal(true) }).strict()),
+  'secrets.list': lazyZodSchema(() => z.strictObject({ secrets: z.array(z.strictObject({ secretId: identity(), name: name(), kind: kind(),
+    updatedAt: revision() })) })),
+  'secrets.create': lazyZodSchema(() => z.strictObject({ secretId: identity(), secretRef: identity() })),
+  'secrets.update': lazyZodSchema(() => z.strictObject({ secretId: identity(), updatedAt: revision() })),
+  'secrets.delete': lazyZodSchema(() => z.strictObject({ deleted: z.literal(true) })),
 };
 
 export type PersonalSavedSecretMetadataV1 = Readonly<{ secretId: string; name: string; kind: z.infer<ReturnType<typeof kind>>; revision: number }>;

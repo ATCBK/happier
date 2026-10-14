@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import type {
     TeamCredentialUsageBreakdownDimensionV1,
@@ -14,13 +14,13 @@ import {
 } from '../../usage/usageExport.js';
 import { resolveEffectiveUsageCostUsd, type UsageCostMode } from '../../usage/usageCostFacts.js';
 
-export const TeamCredentialUsageExportInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamCredentialUsageExportInputV1Schema = lazyZodSchema(() => z.strictObject({
     query: TeamCredentialUsageQueryInputV1Schema,
     /** Display-only title; it never selects or authorizes a resource. */
-    resourceName: z.string().min(1),
+    resourceName: z.string().check(z.minLength(1)),
     /** Explicit ranked-row selection, preserving the UI's loaded-page scope. */
-    breakdownRowCount: z.number().int().nonnegative().optional(),
-}).strict());
+    breakdownRowCount: z.optional(z.number().check(z.int(), z.nonnegative())),
+}));
 export type TeamCredentialUsageExportInputV1 = z.output<typeof TeamCredentialUsageExportInputV1Schema>;
 
 /**

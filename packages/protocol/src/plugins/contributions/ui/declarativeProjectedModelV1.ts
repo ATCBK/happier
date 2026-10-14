@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PluginDeclarativeMetricNodeV1Schema, PluginDeclarativeTableNodeV1Schema, PluginDeclarativeRowsNodeV1Schema, PluginDeclarativeChartNodeV1Schema, type PluginDeclarativeDataNodeV1 } from './declarativeDataV1.js';
 import { ActionIdSchema, type ActionId } from '../../../actions/actionIds.js';
 import { asProtocolZod } from '../../actions/internalProtocolZodAdapter.js';
@@ -88,11 +88,11 @@ export type PluginDeclarativeProjectedQualifiedReferenceV1 = Readonly<{
   occurrenceId?: string;
 }>;
 
-export const PluginDeclarativeProjectedQualifiedReferenceV1Schema = lazyZodSchema(() => z.object({
+export const PluginDeclarativeProjectedQualifiedReferenceV1Schema = lazyZodSchema(() => z.strictObject({
   identity: PluginContributionIdentityV1ZodSchema,
-  qualifiedId: z.string().trim().min(1).max(1_024),
-  occurrenceId: z.string().trim().min(1).max(MAX_PLUGIN_DECLARATIVE_DOCUMENT_OCCURRENCE_LENGTH_V1).optional(),
-}).strict());
+  qualifiedId: z.string().check(z.trim(), z.minLength(1), z.maxLength(1_024)),
+  occurrenceId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(MAX_PLUGIN_DECLARATIVE_DOCUMENT_OCCURRENCE_LENGTH_V1))),
+}));
 
 export type PluginDeclarativeProjectedActionBindingV1 =
   PluginDeclarativeProjectedQualifiedReferenceV1 & Readonly<{
@@ -103,10 +103,10 @@ export type PluginDeclarativeProjectedActionBindingV1 =
   }>;
 
 export const PluginDeclarativeProjectedActionBindingV1Schema =
-  lazyZodSchema(() => PluginDeclarativeProjectedQualifiedReferenceV1Schema.extend({
+  lazyZodSchema(() => z.extend(PluginDeclarativeProjectedQualifiedReferenceV1Schema, {
     enabled: z.boolean(),
-    title: z.string().trim().min(1).optional(),
-    icon: z.string().trim().min(1).optional(),
+    title: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    icon: z.optional(z.string().check(z.trim(), z.minLength(1))),
   }));
 
 /**
@@ -132,33 +132,33 @@ export type PluginDeclarativeProjectedSettingsFieldV1 = Readonly<{
   }>;
 }>;
 
-export const PluginDeclarativeProjectedSettingsFieldV1Schema = lazyZodSchema(() => z.object({
+export const PluginDeclarativeProjectedSettingsFieldV1Schema = lazyZodSchema(() => z.strictObject({
   id: PluginSettingFieldIdV2Schema,
   contributionId: asProtocolZod(PluginContributionLocalIdSchema),
-  qualifiedId: z.string().trim().min(1).max(1_024),
-  descriptor: z.object({
+  qualifiedId: z.string().check(z.trim(), z.minLength(1), z.maxLength(1_024)),
+  descriptor: z.strictObject({
     id: PluginSettingFieldIdV2Schema,
-    title: z.string().trim().min(1),
-    description: z.string().trim().min(1).optional(),
+    title: z.string().check(z.trim(), z.minLength(1)),
+    description: z.optional(z.string().check(z.trim(), z.minLength(1))),
     target: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('plugin') }).strict(),
-      z.object({ kind: z.literal('agent'), agent: PluginContributionIdentityV1ZodSchema }).strict(),
+      z.strictObject({ kind: z.literal('plugin') }),
+      z.strictObject({ kind: z.literal('agent'), agent: PluginContributionIdentityV1ZodSchema }),
     ]),
     scope: z.enum(['account', 'daemon']),
     schema: PluginJsonSchemaV2Schema,
-    readOnly: z.boolean().optional(),
-    secret: z.boolean().optional(),
-    default: PluginJsonValueV2Schema.optional(),
-  }).strict().superRefine((value, context) => {
+    readOnly: z.optional(z.boolean()),
+    secret: z.optional(z.boolean()),
+    default: z.optional(PluginJsonValueV2Schema),
+  }).check(z.superRefine((value, context) => {
     if (value.secret === true && value.default !== undefined) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['default'],
         message: 'A secret setting descriptor cannot declare a default value.',
       });
     }
-  }),
-}).strict());
+  })),
+}));
 
 export type PluginDeclarativeProjectedSettingsBindingV1 =
   Readonly<{
@@ -171,7 +171,7 @@ export type PluginDeclarativeProjectedSettingsBindingV1 =
   }>;
 
 export const PluginDeclarativeProjectedSettingsBindingV1Schema =
-  lazyZodSchema(() => PluginDeclarativeSettingsInventoryEntryV1Schema.extend({
+  lazyZodSchema(() => z.extend(PluginDeclarativeSettingsInventoryEntryV1Schema, {
     setting: PluginDeclarativeProjectedSettingsFieldV1Schema,
   }));
 
@@ -180,14 +180,14 @@ export type PluginDeclarativeProjectedCollectionRowCommandV1 =
   | Readonly<{ kind: 'openSurface'; destination: PluginDeclarativeProjectedQualifiedReferenceV1 }>;
 
 export const PluginDeclarativeProjectedCollectionRowCommandV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('action'),
     action: PluginDeclarativeProjectedQualifiedReferenceV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('openSurface'),
     destination: PluginDeclarativeProjectedQualifiedReferenceV1Schema,
-  }).strict(),
+  }),
 ]));
 
 export type PluginDeclarativeProjectedStateNodeV1 = Readonly<{
@@ -201,18 +201,18 @@ export type PluginDeclarativeProjectedStateNodeV1 = Readonly<{
 }>;
 
 const ProjectedNodeBaseV1Shape = {
-  path: z.string().trim().min(1),
-  order: z.number().int().nonnegative(),
+  path: z.string().check(z.trim(), z.minLength(1)),
+  order: z.number().check(z.int(), z.nonnegative()),
 } as const;
 
-export const PluginDeclarativeProjectedStateNodeV1Schema = lazyZodSchema(() => z.object({
+export const PluginDeclarativeProjectedStateNodeV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('state'),
   ...ProjectedNodeBaseV1Shape,
   state: PluginDeclarativeStateV2Schema,
   title: PluginLocalizedStringV2Schema,
-  description: PluginLocalizedStringV2Schema.optional(),
-  icon: PluginUiIconTokenV1Schema.optional(),
-}).strict());
+  description: z.optional(PluginLocalizedStringV2Schema),
+  icon: z.optional(PluginUiIconTokenV1Schema),
+}));
 
 /**
  * The projected node tree. Protocol already normalized, bounded, and qualified
@@ -339,137 +339,135 @@ export type PluginDeclarativeProjectedNodeV1 =
     children: readonly PluginDeclarativeProjectedNodeV1[];
   }>;
 
-export const PluginDeclarativeProjectedNodeV1Schema: z.ZodType<PluginDeclarativeProjectedNodeV1> = z.lazy(
-  () => z.union([z.union(PluginDeclarativeChartNodeV1Schema.options.map(schema => schema.extend(ProjectedNodeBaseV1Shape))), z.discriminatedUnion('kind', [
-    PluginDeclarativeMetricNodeV1Schema.extend(ProjectedNodeBaseV1Shape),
-    PluginDeclarativeTableNodeV1Schema.extend(ProjectedNodeBaseV1Shape),
-    PluginDeclarativeRowsNodeV1Schema.extend(ProjectedNodeBaseV1Shape),
-    z.object({ kind: z.literal('dragSource'), ...ProjectedNodeBaseV1Shape, source: PluginDeclarativeProjectedQualifiedReferenceV1Schema, reference: PluginJsonValueV2Schema, organizing: z.boolean().optional(), children: z.array(PluginDeclarativeProjectedNodeV1Schema) }).strict(),
-    z.object({ kind: z.literal('dropTarget'), ...ProjectedNodeBaseV1Shape, target: PluginDeclarativeProjectedQualifiedReferenceV1Schema, input: PluginJsonValueV2Schema.optional(), children: z.array(PluginDeclarativeProjectedNodeV1Schema) }).strict(),
-    z.object({ kind: z.literal('widgetArea'), ...ProjectedNodeBaseV1Shape, area: z.string().trim().min(1), context: z.record(z.string(), PluginJsonValueV2Schema).optional() }).strict(),
-    z.object({ kind: z.literal('text'), ...ProjectedNodeBaseV1Shape, text: PluginLocalizedStringV2Schema, tone: PluginDeclarativeToneV2Schema.optional() }).strict(),
-    z.object({ kind: z.literal('markdown'), ...ProjectedNodeBaseV1Shape, text: PluginLocalizedMarkdownV2Schema }).strict(),
-    z.object({
+export const PluginDeclarativeProjectedNodeV1Schema: z.ZodMiniType<PluginDeclarativeProjectedNodeV1> = z.lazy(
+  () => z.union([z.union(PluginDeclarativeChartNodeV1Schema._zod.def.options.map(schema => schema.extend(ProjectedNodeBaseV1Shape))), z.discriminatedUnion('kind', [
+    lazyZodSchema(() => z.extend(PluginDeclarativeMetricNodeV1Schema, ProjectedNodeBaseV1Shape)),
+    lazyZodSchema(() => z.extend(PluginDeclarativeTableNodeV1Schema, ProjectedNodeBaseV1Shape)),
+    lazyZodSchema(() => z.extend(PluginDeclarativeRowsNodeV1Schema, ProjectedNodeBaseV1Shape)),
+    z.strictObject({ kind: z.literal('dragSource'), ...ProjectedNodeBaseV1Shape, source: PluginDeclarativeProjectedQualifiedReferenceV1Schema, reference: PluginJsonValueV2Schema, organizing: z.optional(z.boolean()), children: z.array(PluginDeclarativeProjectedNodeV1Schema) }),
+    z.strictObject({ kind: z.literal('dropTarget'), ...ProjectedNodeBaseV1Shape, target: PluginDeclarativeProjectedQualifiedReferenceV1Schema, input: z.optional(PluginJsonValueV2Schema), children: z.array(PluginDeclarativeProjectedNodeV1Schema) }),
+    z.strictObject({ kind: z.literal('widgetArea'), ...ProjectedNodeBaseV1Shape, area: z.string().check(z.trim(), z.minLength(1)), context: z.optional(z.record(z.string(), PluginJsonValueV2Schema)) }),
+    z.strictObject({ kind: z.literal('text'), ...ProjectedNodeBaseV1Shape, text: PluginLocalizedStringV2Schema, tone: z.optional(PluginDeclarativeToneV2Schema) }),
+    z.strictObject({ kind: z.literal('markdown'), ...ProjectedNodeBaseV1Shape, text: PluginLocalizedMarkdownV2Schema }),
+    z.strictObject({
       kind: z.literal('stack'),
       ...ProjectedNodeBaseV1Shape,
-      direction: z.enum(['vertical', 'horizontal']).optional(),
-      gap: z.enum(['small', 'medium', 'large']).optional(),
+      direction: z.optional(z.enum(['vertical', 'horizontal'])),
+      gap: z.optional(z.enum(['small', 'medium', 'large'])),
       children: z.array(PluginDeclarativeProjectedNodeV1Schema),
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       kind: z.literal('group'),
       ...ProjectedNodeBaseV1Shape,
-      title: PluginLocalizedStringV2Schema.optional(),
-      description: PluginLocalizedStringV2Schema.optional(),
+      title: z.optional(PluginLocalizedStringV2Schema),
+      description: z.optional(PluginLocalizedStringV2Schema),
       children: z.array(PluginDeclarativeProjectedNodeV1Schema),
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       kind: z.literal('field'),
       ...ProjectedNodeBaseV1Shape,
       label: PluginLocalizedStringV2Schema,
-      description: PluginLocalizedStringV2Schema.optional(),
+      description: z.optional(PluginLocalizedStringV2Schema),
       control: PluginDeclarativeControlV2Schema,
       setting: PluginDeclarativeProjectedSettingsFieldV1Schema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       kind: z.literal('status'),
       ...ProjectedNodeBaseV1Shape,
       label: PluginLocalizedStringV2Schema,
       value: PluginLocalizedStringV2Schema,
-      tone: PluginDeclarativeToneV2Schema.optional(),
-    }).strict(),
-    z.object({
+      tone: z.optional(PluginDeclarativeToneV2Schema),
+    }),
+    z.strictObject({
       kind: z.literal('action'),
       ...ProjectedNodeBaseV1Shape,
       label: PluginLocalizedStringV2Schema,
-      variant: PluginDeclarativeActionVariantV2Schema.optional(),
-      action: PluginDeclarativeProjectedQualifiedReferenceV1Schema.optional(),
-      effect: PluginDeclarativeComposerApplyEffectV1Schema.optional(),
-      hostAction: ActionIdSchema.optional(),
-      input: PluginJsonValueV2Schema.optional(),
+      variant: z.optional(PluginDeclarativeActionVariantV2Schema),
+      action: z.optional(PluginDeclarativeProjectedQualifiedReferenceV1Schema),
+      effect: z.optional(PluginDeclarativeComposerApplyEffectV1Schema),
+      hostAction: z.optional(ActionIdSchema),
+      input: z.optional(PluginJsonValueV2Schema),
       enabled: z.boolean(),
-    }).strict().superRefine((node, context) => {
+    }).check(z.superRefine((node, context) => {
       if ([node.action, node.hostAction, node.effect].filter((value) => value !== undefined).length !== 1) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['action'],
           message: 'A projected action must name exactly one contributed Action, host Action, or effect.',
         });
       }
       if (node.effect !== undefined && node.input !== undefined) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['input'],
           message: 'A projected composerApply effect cannot carry Action input.',
         });
       }
-    }),
-    z.object({
+    })),
+    z.strictObject({
       kind: z.literal('collectionList'),
       ...ProjectedNodeBaseV1Shape,
-      label: PluginLocalizedStringV2Schema.optional(),
+      label: z.optional(PluginLocalizedStringV2Schema),
       source: PluginDeclarativeCollectionListSourceV1Schema,
       query: NormalizedPluginCollectionUiQueryDescriptorV1Schema,
       projection: PluginDeclarativeCollectionListProjectionV1Schema,
-      primaryCommand: PluginDeclarativeProjectedCollectionRowCommandV1Schema.optional(),
-      secondaryCommands: z.array(PluginDeclarativeProjectedCollectionRowCommandV1Schema).optional(),
-    }).strict(),
-    z.object({
+      primaryCommand: z.optional(PluginDeclarativeProjectedCollectionRowCommandV1Schema),
+      secondaryCommands: z.optional(z.array(PluginDeclarativeProjectedCollectionRowCommandV1Schema)),
+    }),
+    z.strictObject({
       kind: z.literal('list'),
       ...ProjectedNodeBaseV1Shape,
-      label: PluginLocalizedStringV2Schema.optional(),
+      label: z.optional(PluginLocalizedStringV2Schema),
       children: z.array(PluginDeclarativeProjectedNodeV1Schema),
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       kind: z.literal('section'),
       ...ProjectedNodeBaseV1Shape,
-      title: PluginLocalizedStringV2Schema.optional(),
-      footer: PluginLocalizedStringV2Schema.optional(),
+      title: z.optional(PluginLocalizedStringV2Schema),
+      footer: z.optional(PluginLocalizedStringV2Schema),
       children: z.array(PluginDeclarativeProjectedNodeV1Schema),
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       kind: z.literal('item'),
       ...ProjectedNodeBaseV1Shape,
       title: PluginLocalizedStringV2Schema,
-      subtitle: PluginLocalizedStringV2Schema.optional(),
-      detail: PluginLocalizedStringV2Schema.optional(),
-      icon: PluginUiIconTokenV1Schema.optional(),
-      tone: PluginDeclarativeToneV2Schema.optional(),
-      action: PluginDeclarativeProjectedQualifiedReferenceV1Schema.optional(),
-      input: PluginJsonValueV2Schema.optional(),
-      enabled: z.boolean().optional(),
-    }).strict().superRefine((node, context) => {
+      subtitle: z.optional(PluginLocalizedStringV2Schema),
+      detail: z.optional(PluginLocalizedStringV2Schema),
+      icon: z.optional(PluginUiIconTokenV1Schema),
+      tone: z.optional(PluginDeclarativeToneV2Schema),
+      action: z.optional(PluginDeclarativeProjectedQualifiedReferenceV1Schema),
+      input: z.optional(PluginJsonValueV2Schema),
+      enabled: z.optional(z.boolean()),
+    }).check(z.superRefine((node, context) => {
       if (node.action === undefined && (node.input !== undefined || node.enabled !== undefined)) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['action'],
           message: 'A projected item carries input/enabled only together with an Action.',
         });
       }
-    }),
+    })),
     PluginDeclarativeProjectedStateNodeV1Schema,
-    z.object({
+    z.strictObject({
       kind: z.literal('targetedSurface'),
       ...ProjectedNodeBaseV1Shape,
       surface: PluginUiTargetedContributionSurfaceV1Schema,
       input: PluginJsonValueV2Schema,
       instanceKey: PluginUiInstanceKeyV1Schema,
-      fallback: PluginDeclarativeProjectedStateNodeV1Schema.optional(),
-    }).strict(),
-    z.object({
+      fallback: z.optional(PluginDeclarativeProjectedStateNodeV1Schema),
+    }),
+    z.strictObject({
       kind: z.literal('metadata'),
       ...ProjectedNodeBaseV1Shape,
-      title: PluginLocalizedStringV2Schema.optional(),
-      entries: z.array(PluginDeclarativeMetadataEntryV2Schema)
-        .min(1)
-        .max(MAX_PLUGIN_DECLARATIVE_METADATA_ENTRIES_V2),
-    }).strict(),
-    z.object({
+      title: z.optional(PluginLocalizedStringV2Schema),
+      entries: z.array(PluginDeclarativeMetadataEntryV2Schema).check(z.minLength(1), z.maxLength(MAX_PLUGIN_DECLARATIVE_METADATA_ENTRIES_V2)),
+    }),
+    z.strictObject({
       kind: z.literal('actionPanel'),
       ...ProjectedNodeBaseV1Shape,
-      title: PluginLocalizedStringV2Schema.optional(),
+      title: z.optional(PluginLocalizedStringV2Schema),
       children: z.array(PluginDeclarativeProjectedNodeV1Schema),
-    }).strict(),
+    }),
   ])]),
 );
 
@@ -564,26 +562,26 @@ export function projectPluginDeclarativeModelComparisonV1(
   };
 }
 
-export const PluginDeclarativeProjectedModelV1Schema: z.ZodType<PluginDeclarativeProjectedModelV1> =
-  lazyZodSchema(() => z.object({
-    identity: z.object({
+export const PluginDeclarativeProjectedModelV1Schema: z.ZodMiniType<PluginDeclarativeProjectedModelV1> =
+  lazyZodSchema(() => z.strictObject({
+    identity: z.strictObject({
       pluginId: asProtocolZod(PluginIdSchema),
       localId: asProtocolZod(PluginContributionLocalIdSchema),
-      qualifiedId: z.string().trim().min(1).max(1_024),
-      occurrenceId: z.string().trim().min(1).max(MAX_PLUGIN_DECLARATIVE_DOCUMENT_OCCURRENCE_LENGTH_V1).optional(),
-    }).strict(),
+      qualifiedId: z.string().check(z.trim(), z.minLength(1), z.maxLength(1_024)),
+      occurrenceId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(MAX_PLUGIN_DECLARATIVE_DOCUMENT_OCCURRENCE_LENGTH_V1))),
+    }),
     visible: z.boolean(),
     requiredHostMethods: z.array(PluginUiHostMethodV1Schema),
-    declarativeInventory: z.object({
+    declarativeInventory: z.strictObject({
       actions: z.array(PluginDeclarativeProjectedActionBindingV1Schema),
       destinations: z.array(PluginDeclarativeProjectedQualifiedReferenceV1Schema),
       settings: z.array(PluginDeclarativeProjectedSettingsBindingV1Schema),
       uiQueries: z.array(NormalizedPluginCollectionUiQueryDescriptorV1Schema),
-      dragSources: z.array(PluginDeclarativeProjectedQualifiedReferenceV1Schema.extend({ referenceSchema: PluginJsonSchemaV2Schema })).optional(),
-      dropTargets: z.array(PluginDeclarativeProjectedQualifiedReferenceV1Schema).optional(),
-    }).strict(),
+      dragSources: z.optional(z.array(z.extend(PluginDeclarativeProjectedQualifiedReferenceV1Schema, { referenceSchema: PluginJsonSchemaV2Schema }))),
+      dropTargets: z.optional(z.array(PluginDeclarativeProjectedQualifiedReferenceV1Schema)),
+    }),
     root: PluginDeclarativeProjectedNodeV1Schema,
-  }).strict().superRefine((model, context) => {
+  }).check(z.superRefine((model, context) => {
     if (model.identity.occurrenceId !== undefined) return;
     const pending: PluginDeclarativeProjectedNodeV1[] = [model.root];
     let hasLiveEffect = model.declarativeInventory.actions.some((action) => action.enabled);
@@ -595,7 +593,7 @@ export const PluginDeclarativeProjectedModelV1Schema: z.ZodType<PluginDeclarativ
       if ('children' in node) pending.push(...node.children);
     }
     if (hasLiveEffect) context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'A declarative presentation without a runtime occurrence cannot enable effects or embed a current targeted Surface.',
     });
-  }));
+  })));

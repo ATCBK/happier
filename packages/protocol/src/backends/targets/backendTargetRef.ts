@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { hasLegacyCustomAcpConcreteBackendId } from './compat/customAcp.js';
 
 /**
@@ -13,33 +13,33 @@ export type LegacyBackendTargetKind = z.infer<typeof LegacyBackendTargetKindSche
 
 const LegacyBuiltInAgentTargetSchema = lazyZodSchema(() => z.object({
   kind: z.literal('builtInAgent'),
-  agentId: z.string().min(1),
-}).superRefine((value, ctx) => {
+  agentId: z.string().check(z.minLength(1)),
+}).check(z.superRefine((value, ctx) => {
   if (!hasLegacyCustomAcpConcreteBackendId({ backendId: value.agentId })) {
     return;
   }
 
   ctx.addIssue({
-    code: z.ZodIssueCode.custom,
+    code: "custom",
     path: ['agentId'],
     message: 'backendTarget must identify a concrete backend',
   });
-}));
+})));
 
 const LegacyConfiguredAcpBackendTargetSchema = lazyZodSchema(() => z.object({
   kind: z.literal('configuredAcpBackend'),
-  backendId: z.string().min(1),
-}).superRefine((value, ctx) => {
+  backendId: z.string().check(z.minLength(1)),
+}).check(z.superRefine((value, ctx) => {
   if (!hasLegacyCustomAcpConcreteBackendId({ configuredBackendId: value.backendId })) {
     return;
   }
 
   ctx.addIssue({
-    code: z.ZodIssueCode.custom,
+    code: "custom",
     path: ['backendId'],
     message: 'backendTarget must identify a concrete backend',
   });
-}));
+})));
 
 export const LegacyBackendTargetRefSchema = lazyZodSchema(() => z.union([
   LegacyBuiltInAgentTargetSchema,
@@ -48,9 +48,7 @@ export const LegacyBackendTargetRefSchema = lazyZodSchema(() => z.union([
 export type LegacyBackendTargetRefV1 = z.infer<typeof LegacyBackendTargetRefSchema>;
 
 export const LegacyBackendTargetKeySchema = lazyZodSchema(() => z
-  .string()
-  .regex(/^(agent|acpBackend):.+$/, 'Invalid backend target key')
-  .superRefine((value, ctx) => {
+  .string().check(z.regex(/^(agent|acpBackend):.+$/, 'Invalid backend target key'), z.superRefine((value, ctx) => {
     const rawId = value.startsWith('agent:')
       ? value.slice('agent:'.length)
       : value.startsWith('acpBackend:')
@@ -63,10 +61,10 @@ export const LegacyBackendTargetKeySchema = lazyZodSchema(() => z
     }
 
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'backendTarget must identify a concrete backend',
     });
-  }));
+  })));
 export type LegacyBackendTargetKey = z.infer<typeof LegacyBackendTargetKeySchema>;
 
 export function buildLegacyBackendTargetKey(target: LegacyBackendTargetRefV1): LegacyBackendTargetKey {

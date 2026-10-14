@@ -1,24 +1,24 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const NonNegativeTokenCountSchema = lazyZodSchema(() => z.number().finite().min(0));
+const NonNegativeTokenCountSchema = lazyZodSchema(() => z.number().check(z.minimum(0)));
 
-export const SessionContextUsageSnapshotV1Schema = lazyZodSchema(() => z.object({
+export const SessionContextUsageSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  modelId: z.string().trim().min(1).nullable(),
+  modelId: z.nullable(z.string().check(z.trim(), z.minLength(1))),
   usedTokens: NonNegativeTokenCountSchema,
-  windowTokens: NonNegativeTokenCountSchema.nullable(),
-  totalProcessedTokens: NonNegativeTokenCountSchema.nullable(),
-  baselineTokens: NonNegativeTokenCountSchema.nullable(),
-  isAutoCompactEnabled: z.boolean().nullable(),
-  categories: z.array(z.object({
-    key: z.string().trim().min(1),
-    label: z.string().trim().min(1).nullable(),
+  windowTokens: z.nullable(NonNegativeTokenCountSchema),
+  totalProcessedTokens: z.nullable(NonNegativeTokenCountSchema),
+  baselineTokens: z.nullable(NonNegativeTokenCountSchema),
+  isAutoCompactEnabled: z.nullable(z.boolean()),
+  categories: z.nullable(z.array(z.strictObject({
+    key: z.string().check(z.trim(), z.minLength(1)),
+    label: z.nullable(z.string().check(z.trim(), z.minLength(1))),
     tokens: NonNegativeTokenCountSchema,
-  }).strict()).nullable(),
-  observedAtMs: z.number().int().min(0),
+  }))),
+  observedAtMs: z.number().check(z.int(), z.minimum(0)),
   source: z.enum(['provider_live', 'provider_turn', 'derived_estimate']),
-}).strict());
+}));
 
 export type SessionContextUsageSnapshotV1 = z.infer<typeof SessionContextUsageSnapshotV1Schema>;
 

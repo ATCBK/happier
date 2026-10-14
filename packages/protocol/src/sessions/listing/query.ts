@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { decodeV2SessionListCursorV1, decodeV2SessionListCursorV2 } from './cursor.js';
 
 // Shared with the ordinary V2 HTTP page. Selector counts remain subject to the
@@ -19,13 +19,13 @@ export type SessionAttentionFilterV1 = z.infer<typeof SessionAttentionFilterV1Sc
 export const SessionBotFilterV1Schema = lazyZodSchema(() => z.enum(['bot', 'ordinary']));
 export type SessionBotFilterV1 = z.infer<typeof SessionBotFilterV1Schema>;
 
-const SelectorIdSchema = lazyZodSchema(() => z.string().trim().min(1));
+const SelectorIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 
 // Each identity/selection object is closed, independently of the query envelope.
 export const SessionAudienceSelectionV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('outside_teams') }).strict(),
-  z.object({ kind: z.literal('team'), teamId: SelectorIdSchema }).strict(),
-  z.object({ kind: z.literal('group'), teamId: SelectorIdSchema, groupId: SelectorIdSchema }).strict(),
+  z.strictObject({ kind: z.literal('outside_teams') }),
+  z.strictObject({ kind: z.literal('team'), teamId: SelectorIdSchema }),
+  z.strictObject({ kind: z.literal('group'), teamId: SelectorIdSchema, groupId: SelectorIdSchema }),
 ]));
 export type SessionAudienceSelectionV1 = Readonly<z.infer<typeof SessionAudienceSelectionV1Schema>>;
 
@@ -37,11 +37,9 @@ function audienceKey(audience: SessionAudienceSelectionV1): string {
   }
 }
 
-const AudienceSelectionsSchema = lazyZodSchema(() => z.array(SessionAudienceSelectionV1Schema)
-  .refine((values) => new Set(values.map(audienceKey)).size === values.length, {
+const AudienceSelectionsSchema = lazyZodSchema(() => z.pipe(z.array(SessionAudienceSelectionV1Schema).check(z.refine((values) => new Set(values.map(audienceKey)).size === values.length, {
     message: 'Duplicate audience selectors',
-  })
-  .transform((values) => {
+  })), z.transform((values) => {
     const teams = new Set(values.filter((value) => value.kind === 'team').map((value) => value.teamId));
     return values
       .filter((value) => value.kind !== 'group' || !teams.has(value.teamId))
@@ -50,23 +48,16 @@ const AudienceSelectionsSchema = lazyZodSchema(() => z.array(SessionAudienceSele
         const right = audienceKey(b);
         return left < right ? -1 : left > right ? 1 : 0;
       });
-  }));
+  })));
 
-const TagIdsSchema = lazyZodSchema(() => z.array(SelectorIdSchema)
-  .refine((values) => new Set(values).size === values.length, { message: 'Duplicate tag selectors' })
-  .transform((values) => values.sort()));
+const TagIdsSchema = lazyZodSchema(() => z.pipe(z.array(SelectorIdSchema).check(z.refine((values) => new Set(values).size === values.length, { message: 'Duplicate tag selectors' })), z.transform((values) => values.sort())));
 
-const FolderIdsSchema = lazyZodSchema(() => z.array(SelectorIdSchema)
-  .refine((values) => new Set(values).size === values.length, { message: 'Duplicate folder selectors' })
-  .transform((values) => values.sort()));
+const FolderIdsSchema = lazyZodSchema(() => z.pipe(z.array(SelectorIdSchema).check(z.refine((values) => new Set(values).size === values.length, { message: 'Duplicate folder selectors' })), z.transform((values) => values.sort())));
 
-const CursorSchema = lazyZodSchema(() => z.string().refine(
-  (value) => decodeV2SessionListCursorV2(value) !== null || decodeV2SessionListCursorV1(value) !== null,
-  { message: 'Invalid cursor format' },
-));
+const CursorSchema = lazyZodSchema(() => z.string().check(z.refine((value) => decodeV2SessionListCursorV2(value) !== null || decodeV2SessionListCursorV1(value) !== null, { message: 'Invalid cursor format' })));
 
 /** V1 is a closed Home-local selection contract, independent of package SemVer. */
-export const SessionListQueryV1Schema = lazyZodSchema(() => z.object({
+export const SessionListQueryV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   storage: z.enum(['active', 'archived']),
   includeInactive: z.boolean(),
@@ -74,19 +65,16 @@ export const SessionListQueryV1Schema = lazyZodSchema(() => z.object({
   attention: SessionAttentionFilterV1Schema,
   // The server returns the structural candidate corpus and its original cursors.
   // Clients apply this selection only after authorized metadata hydration.
-  bot: SessionBotFilterV1Schema.optional(),
+  bot: z.optional(SessionBotFilterV1Schema),
   audiences: AudienceSelectionsSchema,
   tagIds: TagIdsSchema,
-  folderIds: FolderIdsSchema.optional(),
-  underSessionId: SelectorIdSchema.optional(),
-  cursor: CursorSchema.optional(),
-  attentionCursor: CursorSchema.optional(),
-  limit: z.number().int().min(1).max(SESSION_LIST_PAGE_MAX_LIMIT).optional(),
-  includeAttention: z.boolean().optional(),
-}).strict().refine(
-  (value) => value.cursor === undefined || value.attentionCursor === undefined,
-  { message: 'cursor and attentionCursor cannot be combined', path: ['attentionCursor'] },
-));
+  folderIds: z.optional(FolderIdsSchema),
+  underSessionId: z.optional(SelectorIdSchema),
+  cursor: z.optional(CursorSchema),
+  attentionCursor: z.optional(CursorSchema),
+  limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(SESSION_LIST_PAGE_MAX_LIMIT))),
+  includeAttention: z.optional(z.boolean()),
+}).check(z.refine((value) => value.cursor === undefined || value.attentionCursor === undefined, { message: 'cursor and attentionCursor cannot be combined', path: ['attentionCursor'] })));
 
 export type SessionListQueryV1 = Readonly<Omit<z.infer<typeof SessionListQueryV1Schema>, 'audiences' | 'tagIds' | 'folderIds'> & {
   audiences: readonly SessionAudienceSelectionV1[];
@@ -101,10 +89,10 @@ export function buildSessionListServerQueryV1(query: SessionListQueryV1): Omit<S
   return structuralQuery;
 }
 
-export const SessionListUnavailableQueryV1Schema = lazyZodSchema(() => z.object({
+export const SessionListUnavailableQueryV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.literal('not_found'),
   code: z.literal('filtered_session_listing_unavailable'),
   reason: z.enum(['audience', 'scope', 'following']),
-}).strict());
+}));
 
 export type SessionListUnavailableQueryV1 = Readonly<z.infer<typeof SessionListUnavailableQueryV1Schema>>;

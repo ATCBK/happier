@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import * as protocol from './managedConfigurationV1.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
@@ -15,8 +15,8 @@ describe('managed preset executable selection', () => {
   });
   it('admits only the reviewed Home-qualified preset revision, never caller-supplied recipe or authority', () => {
     const schema: unknown = Reflect.get(protocol, 'ManagedPresetSelectionV1Schema');
-    expect(schema).toBeInstanceOf(z.ZodType);
-    if (!(schema instanceof z.ZodType)) throw new Error('The preset selection validator is missing');
+    expect(schema).toBeInstanceOf(z.ZodMiniType);
+    if (!(schema instanceof z.ZodMiniType)) throw new Error('The preset selection validator is missing');
 
     const selection = { kind: 'preset', homeId: 'home-a', id: 'preset-a', revision: 3 };
     expect(schema.parse(selection)).toEqual(selection);
@@ -38,7 +38,7 @@ describe('managed preset executable selection', () => {
 });
 
 describe('reviewed managed configuration facts', () => {
-  const choices = z.object({ cores: z.number().int().positive() }).strict();
+  const choices = z.strictObject({ cores: z.number().check(z.int(), z.positive()) });
   const launch = { provider: { pluginId: 'happier.machine.lima', localId: 'lima' }, schemaVersion: 1,
     name: 'guest', choices: { cores: 2 } };
   const controller = { machineId: 'host-a', installationId: 'installation-a' };

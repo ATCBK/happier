@@ -2,12 +2,12 @@ import { buildQualifiedPluginContributionKey, parseQualifiedPluginContributionKe
   type PluginContributionIdentityV1 } from '../plugins/contributionIdentity.js';
 import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 
 export const HostInputTypeReferenceV1Schema = lazyZodSchema(() => z.union([
-  z.object({ hostType: z.literal('usageQuery'), field: z.enum(['period', 'session']).optional() }).strict(),
-  z.object({ hostType: z.enum(['session', 'workspace', 'machine']) }).strict(),
+  z.strictObject({ hostType: z.literal('usageQuery'), field: z.optional(z.enum(['period', 'session'])) }),
+  z.strictObject({ hostType: z.enum(['session', 'workspace', 'machine']) }),
 ]));
 export type HostInputTypeReferenceV1 = z.infer<typeof HostInputTypeReferenceV1Schema>;
 export const InputTypeReferenceV1Schema = lazyZodSchema(() => z.union([HostInputTypeReferenceV1Schema, asProtocolZod(PluginContributionIdentityV1Schema)]));

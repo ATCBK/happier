@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { readSessionBotV1 } from '../identity/sessionBotV1.js';
 import type { QualifiedProjectKeyV1, WorkspaceRefV1 } from '../../workspaces/workspaceRefV1.js';
 import { projectWorkspaceRefV1, resolveWorkspaceRefV1, type WorkspaceRefResolutionContextV1 } from '../../workspaces/workspaceRefResolutionV1.js';
@@ -167,25 +167,24 @@ export function normalizeSessionListFilterV1(input: SessionListFilterDefaultsInp
     };
 }
 
-const SelectionIdSchema = lazyZodSchema(() => z.string().trim().min(1));
+const SelectionIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 const QualifiedAudienceSelectionSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-    SessionAudienceSelectionV1Schema.options[0].extend({ serverId: SelectionIdSchema }).strict(),
-    SessionAudienceSelectionV1Schema.options[1].extend({ serverId: SelectionIdSchema }).strict(),
-    SessionAudienceSelectionV1Schema.options[2].extend({ serverId: SelectionIdSchema }).strict(),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionAudienceSelectionV1Schema._zod.def.options[0], { serverId: SelectionIdSchema })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionAudienceSelectionV1Schema._zod.def.options[1], { serverId: SelectionIdSchema })),
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionAudienceSelectionV1Schema._zod.def.options[2], { serverId: SelectionIdSchema })),
 ]));
 
 /** V1 selection envelope and nested qualified identities are closed; UI state is never serialized. */
-export const SessionListFilterFieldsV1Schema = lazyZodSchema(() => z.object({
+export const SessionListFilterFieldsV1Schema = lazyZodSchema(() => z.strictObject({
     show: SessionListShowV1Schema,
     startedBy: z.array(SessionListStartedByV1Schema),
     scope: SessionListScopeV1Schema,
     attention: SessionAttentionFilterV1Schema,
-    bot: SessionBotFilterV1Schema.optional(),
+    bot: z.optional(SessionBotFilterV1Schema),
     homeServerIds: z.array(z.string()),
     audiences: z.array(QualifiedAudienceSelectionSchema),
-    tagIds: z.array(z.object({ serverId: SelectionIdSchema, tagId: SelectionIdSchema }).strict()),
+    tagIds: z.array(z.strictObject({ serverId: SelectionIdSchema, tagId: SelectionIdSchema })),
     source: z.enum(['all', 'persisted', 'direct']),
-}).strict());
+}));
 
-export const SessionListFilterV1Schema = lazyZodSchema(() => SessionListFilterFieldsV1Schema
-    .transform((value): SessionListFilterV1 => normalizeSessionListFilterV1(value)));
+export const SessionListFilterV1Schema = lazyZodSchema(() => z.pipe(SessionListFilterFieldsV1Schema, z.transform((value): SessionListFilterV1 => normalizeSessionListFilterV1(value))));

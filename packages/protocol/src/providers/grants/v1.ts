@@ -1,59 +1,59 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ProviderConnectionIdSchema, ProviderMachineIdSchema } from '../ids.js';
 import { ProviderProbeRequestFingerprintV1Schema } from '../fingerprints.js';
 
-const FingerprintSchema = lazyZodSchema(() => z.string().trim().min(1).max(256));
+const FingerprintSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 
-export const ProviderMachineGrantV1Schema = lazyZodSchema(() => z.object({
+export const ProviderMachineGrantV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   machineId: ProviderMachineIdSchema,
   connectionId: ProviderConnectionIdSchema,
   endpointSetFingerprint: FingerprintSchema,
   connectionSecurityFingerprint: FingerprintSchema,
-  confirmedAt: z.number().finite().nonnegative(),
-}).strict());
+  confirmedAt: z.number().check(z.nonnegative()),
+}));
 export type ProviderMachineGrantV1 = z.infer<typeof ProviderMachineGrantV1Schema>;
 
-export const ProviderAccountGrantV1Schema = lazyZodSchema(() => z.object({
+export const ProviderAccountGrantV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   connectionId: ProviderConnectionIdSchema,
   connectionSecurityFingerprint: FingerprintSchema,
-  confirmedAt: z.number().finite().nonnegative(),
-}).strict());
+  confirmedAt: z.number().check(z.nonnegative()),
+}));
 export type ProviderAccountGrantV1 = z.infer<typeof ProviderAccountGrantV1Schema>;
 
-export const ProviderProbeAuthorizationV1Schema = lazyZodSchema(() => z.object({
+export const ProviderProbeAuthorizationV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  id: z.string().trim().min(16).max(256),
+  id: z.string().check(z.trim(), z.minLength(16), z.maxLength(256)),
   machineId: ProviderMachineIdSchema,
   endpointSetFingerprint: FingerprintSchema,
   credentialDestinationFingerprint: FingerprintSchema,
   probeRequestFingerprint: ProviderProbeRequestFingerprintV1Schema,
-  selectedSecretBindingId: z.string().trim().min(1).max(256).nullable(),
-  selectedSecretRecordFingerprint: FingerprintSchema.nullable(),
+  selectedSecretBindingId: z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+  selectedSecretRecordFingerprint: z.nullable(FingerprintSchema),
   use: z.literal('probe'),
-  expiresAt: z.number().finite().nonnegative(),
-}).strict().superRefine((value, ctx) => {
+  expiresAt: z.number().check(z.nonnegative()),
+}).check(z.superRefine((value, ctx) => {
   if ((value.selectedSecretBindingId === null) !== (value.selectedSecretRecordFingerprint === null)) {
     ctx.addIssue({ code: 'custom', path: ['selectedSecretRecordFingerprint'], message: 'Secret id and record fingerprint must be present together' });
   }
-}));
+})));
 export type ProviderProbeAuthorizationV1 = z.infer<typeof ProviderProbeAuthorizationV1Schema>;
 
-export const ProviderBindingAuthorizationTicketV1Schema = lazyZodSchema(() => z.object({
+export const ProviderBindingAuthorizationTicketV1Schema = lazyZodSchema(() => z.strictObject({
   connectionId: ProviderConnectionIdSchema,
-  connectionRevision: z.number().int().nonnegative(),
+  connectionRevision: z.number().check(z.int(), z.nonnegative()),
   machineId: ProviderMachineIdSchema,
   connectionSecurityFingerprint: FingerprintSchema,
   bindingSecurityFingerprint: FingerprintSchema,
   grantFingerprint: FingerprintSchema,
-  selectedSecretBindingId: z.string().trim().min(1).max(256).nullable(),
-  selectedSecretRecordFingerprint: FingerprintSchema.nullable(),
-}).strict().superRefine((value, ctx) => {
+  selectedSecretBindingId: z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+  selectedSecretRecordFingerprint: z.nullable(FingerprintSchema),
+}).check(z.superRefine((value, ctx) => {
   if ((value.selectedSecretBindingId === null) !== (value.selectedSecretRecordFingerprint === null)) {
     ctx.addIssue({ code: 'custom', path: ['selectedSecretRecordFingerprint'], message: 'Secret id and record fingerprint must be present together' });
   }
-}));
+})));
 export type ProviderBindingAuthorizationTicketV1 = z.infer<typeof ProviderBindingAuthorizationTicketV1Schema>;

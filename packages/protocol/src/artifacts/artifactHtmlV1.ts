@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { encodeBase64, readCanonicalPaddedBase64DecodedLength } from '../crypto/base64.js';
 import { UiSurfaceCapabilityRequestV1Schema } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
@@ -7,22 +7,22 @@ import { UiSurfaceCapabilityRequestV1Schema } from '../plugins/contributions/ui/
 export const ARTIFACT_HTML_BUNDLE_MIME_V1 = 'application/vnd.happier.html-bundle+json';
 
 /** Executable declarations are closed. Assets share the existing single blob's custody. */
-const safePath = z.string().min(1).refine(path => !/[\\%?#:\u0000-\u001f\u007f]/u.test(path)
+const safePath = z.string().check(z.minLength(1), z.refine(path => !/[\\%?#:\u0000-\u001f\u007f]/u.test(path)
   && path.split('/').every(part => part.length > 0 && part !== '.' && part !== '..'
-    && part !== '__proto__' && part !== 'constructor' && part !== 'prototype'), 'Unsafe HTML bundle path');
-export const ArtifactHtmlBundleV1Schema = lazyZodSchema(() => z.object({
+    && part !== '__proto__' && part !== 'constructor' && part !== 'prototype'), 'Unsafe HTML bundle path'));
+export const ArtifactHtmlBundleV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1), entrypoint: safePath,
-  files: z.record(safePath, z.object({
-    mime: z.string().regex(/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/u),
-    contentBase64: z.string().refine(value => readCanonicalPaddedBase64DecodedLength(value) !== null, 'Invalid asset bytes'),
-  }).strict()),
+  files: z.record(safePath, z.strictObject({
+    mime: z.string().check(z.regex(/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/u)),
+    contentBase64: z.string().check(z.refine(value => readCanonicalPaddedBase64DecodedLength(value) !== null, 'Invalid asset bytes')),
+  })),
   /** Saved copies keep their admitted policy independently of viewer settings. */
-  requestedCapabilities: UiSurfaceCapabilityRequestV1Schema.optional(),
-}).strict().superRefine((bundle, context) => {
+  requestedCapabilities: z.optional(UiSurfaceCapabilityRequestV1Schema),
+}).check(z.superRefine((bundle, context) => {
   if (!Object.hasOwn(bundle.files, bundle.entrypoint) || bundle.files[bundle.entrypoint].mime.toLowerCase() !== 'text/html') {
     context.addIssue({ code: 'custom', message: 'HTML entrypoint is unavailable' });
   }
-}));
+})));
 export type ArtifactHtmlBundleV1 = z.infer<typeof ArtifactHtmlBundleV1Schema>;
 
 function readArtifactHtmlPreviewUrl(value: string): URL | null {
@@ -32,8 +32,7 @@ function readArtifactHtmlPreviewUrl(value: string): URL | null {
   } catch { return null; }
 }
 
-export const ArtifactHtmlPreviewResponseV1Schema = lazyZodSchema(() => z.object({ url: z.string().refine(value => readArtifactHtmlPreviewUrl(value) !== null,
-  'Invalid isolated HTML preview URL') }).strict());
+export const ArtifactHtmlPreviewResponseV1Schema = lazyZodSchema(() => z.strictObject({ url: z.string().check(z.refine(value => readArtifactHtmlPreviewUrl(value) !== null, 'Invalid isolated HTML preview URL')) }));
 
 export function isArtifactHtmlHeaderV1(header: unknown): boolean {
   return header !== null && typeof header === 'object' && !Array.isArray(header) && Reflect.get(header, 'kind') === 'html';

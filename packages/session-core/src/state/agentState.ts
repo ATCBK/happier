@@ -1,11 +1,12 @@
 import { z } from "zod";
+import * as zMini from "zod/mini";
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { SessionPermissionAnsweringClientCategoryV1Schema } from '@happier-dev/protocol/sessions/permissions/respondRpcParamsV1';
 import { ResolvedMcpToolIdentityV1Schema } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 import { CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY, CurrentSessionPresentationStateV1Schema } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 
 const AgentStateObjectSchema = z.object({
-    [CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]: CurrentSessionPresentationStateV1Schema.optional(),
+    [CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]: zMini.optional(CurrentSessionPresentationStateV1Schema),
     controlledByUser: z.boolean().nullish(),
     localControl: z.object({
         attached: z.boolean().nullish(),
@@ -27,7 +28,7 @@ const AgentStateObjectSchema = z.object({
          * (e.g. Claude Agent SDK `permission_suggestions`).
          */
         permissionSuggestions: z.any().optional(),
-        mcpTool: ResolvedMcpToolIdentityV1Schema.optional().catch(undefined),
+        mcpTool: zMini.catch(zMini.optional(ResolvedMcpToolIdentityV1Schema), undefined),
     })).nullish(),
     completedRequests: z.record(z.string(), z.object({
         tool: z.string(),
@@ -37,7 +38,7 @@ const AgentStateObjectSchema = z.object({
         createdAt: z.number().nullish(),
         completedAt: z.number().nullish(),
         turnId: z.string().trim().min(1).optional().catch(undefined),
-        answeringClientCategory: SessionPermissionAnsweringClientCategoryV1Schema.optional().catch(undefined),
+        answeringClientCategory: zMini.catch(zMini.optional(SessionPermissionAnsweringClientCategoryV1Schema), undefined),
         status: z.enum(['canceled', 'denied', 'approved']),
         reason: z.string().nullish(),
         mode: z.string().nullish(),
@@ -56,7 +57,7 @@ const AgentStateObjectSchema = z.object({
         subagentRef: z.unknown().optional(),
         sidechainId: z.unknown().optional(),
         permissionSuggestions: z.unknown().optional(),
-        mcpTool: ResolvedMcpToolIdentityV1Schema.optional().catch(undefined),
+        mcpTool: zMini.catch(zMini.optional(ResolvedMcpToolIdentityV1Schema), undefined),
         permissionDecisionActorV1: z.unknown().optional(),
         permissionDecisionClaimV1: z.unknown().optional(),
         remoteMediationSettlementId: z.unknown().optional(),

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const ReviewQuestionStatusSchema = lazyZodSchema(() => z.enum([
   'open',
@@ -8,10 +8,10 @@ export const ReviewQuestionStatusSchema = lazyZodSchema(() => z.enum([
 ]));
 export type ReviewQuestionStatus = z.infer<typeof ReviewQuestionStatusSchema>;
 
-export const ReviewQuestionSchema = lazyZodSchema(() => z.object({
-  id: z.string().min(1),
-  text: z.string().min(1),
-  findingIds: z.array(z.string().min(1)).optional(),
+export const ReviewQuestionSchema = lazyZodSchema(() => z.looseObject({
+  id: z.string().check(z.minLength(1)),
+  text: z.string().check(z.minLength(1)),
+  findingIds: z.optional(z.array(z.string().check(z.minLength(1)))),
   status: ReviewQuestionStatusSchema,
-}).passthrough());
+}));
 export type ReviewQuestion = z.infer<typeof ReviewQuestionSchema>;

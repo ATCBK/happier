@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const WorkspaceFaviconMimeTypeV1Schema = lazyZodSchema(() => z.enum([
   'image/gif',
@@ -12,7 +12,7 @@ export const WorkspaceFaviconMimeTypeV1Schema = lazyZodSchema(() => z.enum([
 export type WorkspaceFaviconMimeTypeV1 = z.infer<typeof WorkspaceFaviconMimeTypeV1Schema>;
 
 export const WorkspaceFaviconResolveRequestV1Schema = lazyZodSchema(() => z.object({
-  workspacePath: z.string().min(1),
+  workspacePath: z.string().check(z.minLength(1)),
 }));
 export type WorkspaceFaviconResolveRequestV1 = z.infer<typeof WorkspaceFaviconResolveRequestV1Schema>;
 
@@ -20,11 +20,11 @@ export const WorkspaceFaviconResolveResponseV1Schema = lazyZodSchema(() => z.uni
   z.object({
     success: z.literal(true),
     found: z.literal(true),
-    relativePath: z.string().min(1),
+    relativePath: z.string().check(z.minLength(1)),
     mimeType: WorkspaceFaviconMimeTypeV1Schema,
-    contentBase64: z.string().min(1),
-    sizeBytes: z.number().int().nonnegative(),
-    modifiedMs: z.number().nonnegative().optional(),
+    contentBase64: z.string().check(z.minLength(1)),
+    sizeBytes: z.number().check(z.int(), z.nonnegative()),
+    modifiedMs: z.optional(z.number().check(z.nonnegative())),
   }),
   z.object({
     success: z.literal(true),

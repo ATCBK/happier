@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const AGENT_SESSION_STARTUP_INSTRUCTIONS_V1_MAX_ID_CODE_UNITS = 128;
 export const AGENT_SESSION_STARTUP_INSTRUCTIONS_V1_MAX_REVISION = 2_147_483_647;
@@ -18,40 +18,26 @@ function isUnicodeScalarString(value: string): boolean {
   return true;
 }
 
-export const AgentSessionStartupInstructionsIdV1Schema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(AGENT_SESSION_STARTUP_INSTRUCTIONS_V1_MAX_ID_CODE_UNITS)
-  .regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u));
+export const AgentSessionStartupInstructionsIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(AGENT_SESSION_STARTUP_INSTRUCTIONS_V1_MAX_ID_CODE_UNITS), z.regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u)));
 
-export const AgentSessionStartupInstructionsTextV1Schema = lazyZodSchema(() => z.string()
-  .refine((value) => value.trim().length > 0, 'Instructions must be nonempty')
-  .refine(isUnicodeScalarString, 'Instructions must contain valid Unicode')
-  .refine(
-    (value) => value.normalize('NFC') === value,
-    'Instructions must be NFC-normalized',
-  ));
+export const AgentSessionStartupInstructionsTextV1Schema = lazyZodSchema(() => z.string().check(z.refine((value) => value.trim().length > 0, 'Instructions must be nonempty'), z.refine(isUnicodeScalarString, 'Instructions must contain valid Unicode'), z.refine((value) => value.normalize('NFC') === value, 'Instructions must be NFC-normalized')));
 
 const AgentSessionStartupInstructionsMarkerV1Shape = {
   v: z.literal(1),
   id: AgentSessionStartupInstructionsIdV1Schema,
-  revision: z.number()
-    .int()
-    .positive()
-    .max(AGENT_SESSION_STARTUP_INSTRUCTIONS_V1_MAX_REVISION),
+  revision: z.number().check(z.int(), z.positive(), z.maximum(AGENT_SESSION_STARTUP_INSTRUCTIONS_V1_MAX_REVISION)),
 } as const;
 
-export const AgentSessionStartupInstructionsMarkerV1Schema = lazyZodSchema(() => z.object(
-  AgentSessionStartupInstructionsMarkerV1Shape,
-).strict().readonly());
+export const AgentSessionStartupInstructionsMarkerV1Schema = lazyZodSchema(() => z.readonly(z.strictObject(AgentSessionStartupInstructionsMarkerV1Shape)));
 
 export type AgentSessionStartupInstructionsMarkerV1 = z.infer<
   typeof AgentSessionStartupInstructionsMarkerV1Schema
 >;
 
-export const AgentSessionStartupInstructionsV1Schema = lazyZodSchema(() => z.object({
+export const AgentSessionStartupInstructionsV1Schema = lazyZodSchema(() => z.readonly(z.strictObject({
   ...AgentSessionStartupInstructionsMarkerV1Shape,
   instructions: AgentSessionStartupInstructionsTextV1Schema,
-}).strict().readonly());
+})));
 
 export type AgentSessionStartupInstructionsV1 = z.infer<
   typeof AgentSessionStartupInstructionsV1Schema

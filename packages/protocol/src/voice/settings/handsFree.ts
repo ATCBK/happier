@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { MAX_VOICE_TIMER_DELAY_MS } from './timing.js';
 
 const LEGACY_HANDS_FREE_ENDPOINTING_DEFAULTS = {
@@ -38,23 +38,18 @@ function migrateLegacyHandsFreeDefaults(raw: unknown): unknown {
   };
 }
 
-export const VoiceHandsFreeSchema = z.preprocess(
-  migrateLegacyHandsFreeDefaults,
-  z
+export const VoiceHandsFreeSchema = z.pipe(z.transform(migrateLegacyHandsFreeDefaults), z._default(z
     .object({
-      enabled: z.boolean().default(false),
-      endpointing: z
+      enabled: z._default(z.boolean(), false),
+      endpointing: z.prefault(z
         .object({
-          silenceMs: z.number().int().min(0).max(MAX_VOICE_TIMER_DELAY_MS).default(VOICE_HANDS_FREE_ENDPOINTING_DEFAULTS.silenceMs),
-          minSpeechMs: z.number().int().min(0).max(MAX_VOICE_TIMER_DELAY_MS).default(VOICE_HANDS_FREE_ENDPOINTING_DEFAULTS.minSpeechMs),
-        })
-        .prefault({}),
-    })
-    .default({
+          silenceMs: z._default(z.number().check(z.int(), z.minimum(0), z.maximum(MAX_VOICE_TIMER_DELAY_MS)), VOICE_HANDS_FREE_ENDPOINTING_DEFAULTS.silenceMs),
+          minSpeechMs: z._default(z.number().check(z.int(), z.minimum(0), z.maximum(MAX_VOICE_TIMER_DELAY_MS)), VOICE_HANDS_FREE_ENDPOINTING_DEFAULTS.minSpeechMs),
+        }), {}),
+    }), {
       enabled: false,
       endpointing: {
         silenceMs: VOICE_HANDS_FREE_ENDPOINTING_DEFAULTS.silenceMs,
         minSpeechMs: VOICE_HANDS_FREE_ENDPOINTING_DEFAULTS.minSpeechMs,
       },
-    }),
-);
+    }));

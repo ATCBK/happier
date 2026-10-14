@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import type { PluginAgentVendorResumeSupportV2 } from '../plugins/contributions/v2.js';
 import { SessionRunnerRuntimeStateV1Schema } from '../sessions/control/sessionRunnerRuntimeV1.js';
@@ -6,11 +6,11 @@ import { isSessionRunnerWindowsHostedLaunchV1, readSessionRunnerDaemonLaunchRefu
 import { SessionTerminalMetadataSchema } from '../sessions/metadata/terminalMetadata.js';
 
 export const CapabilityApplyTimingV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('applied_now') }).strict(),
-  z.object({ t: z.literal('next_turn') }).strict(),
-  z.object({ t: z.literal('new_sessions_only') }).strict(),
-  z.object({ t: z.literal('session_not_running') }).strict(),
-  z.object({ t: z.literal('restart_to_apply'), restartBy: z.enum(['user', 'terminal']) }).strict(),
+  z.strictObject({ t: z.literal('applied_now') }),
+  z.strictObject({ t: z.literal('next_turn') }),
+  z.strictObject({ t: z.literal('new_sessions_only') }),
+  z.strictObject({ t: z.literal('session_not_running') }),
+  z.strictObject({ t: z.literal('restart_to_apply'), restartBy: z.enum(['user', 'terminal']) }),
 ]));
 export type CapabilityApplyTimingV1 = z.infer<typeof CapabilityApplyTimingV1Schema>;
 export type CapabilityLaunchRestartV1 = 'automatic' | Readonly<{
@@ -23,10 +23,10 @@ export type CapabilityApplyTimingInputV1 = Readonly<{
   launchRestart: CapabilityLaunchRestartV1;
 }>;
 /** Host-published facts for the actual admitted Agent runtime; safe to read while its Machine is offline. */
-export const SessionCapabilityAgentFactsV1Schema = lazyZodSchema(() => z.object({
+export const SessionCapabilityAgentFactsV1Schema = lazyZodSchema(() => z.strictObject({
   vendorResume: z.enum(['supported', 'experimental', 'unsupported']),
   skillsLiveReload: z.enum(['supported', 'unsupported']),
-}).strict());
+}));
 export function readSessionCapabilityAgentFactsV1(metadata: unknown): CapabilityApplyTimingInputV1['agent'] | null {
   const record = metadata !== null && typeof metadata === 'object' && !Array.isArray(metadata)
     ? metadata as Record<string, unknown> : null;

@@ -1,24 +1,24 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const IdSchema = lazyZodSchema(() => z.string().trim().min(1).max(256));
+const IdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 
 /** Durable reference only; the Session image reader verifies scope, digest and actual bytes. */
-export const SessionImageFileReferenceV1Schema = lazyZodSchema(() => z.object({
+export const SessionImageFileReferenceV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: IdSchema,
   storage: z.enum(['session', 'daemon']),
-  path: z.string().trim().min(1),
-  sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+  path: z.string().check(z.trim(), z.minLength(1)),
+  sha256: z.string().check(z.regex(/^[a-f0-9]{64}$/i)),
   mimeType: z.literal('image/png'),
-}).strict());
+}));
 export type SessionImageFileReferenceV1 = z.infer<typeof SessionImageFileReferenceV1Schema>;
 
-export const SessionImageMediaReferenceV1Schema = lazyZodSchema(() => z.object({
+export const SessionImageMediaReferenceV1Schema = lazyZodSchema(() => z.strictObject({
   mediaId: IdSchema,
   mediaKind: z.literal('image'),
-  width: z.number().int().positive(),
-  height: z.number().int().positive(),
-  sizeBytes: z.number().int().positive(),
-  file: SessionImageFileReferenceV1Schema.optional(),
-}).strict());
+  width: z.number().check(z.int(), z.positive()),
+  height: z.number().check(z.int(), z.positive()),
+  sizeBytes: z.number().check(z.int(), z.positive()),
+  file: z.optional(SessionImageFileReferenceV1Schema),
+}));
 export type SessionImageMediaReferenceV1 = z.infer<typeof SessionImageMediaReferenceV1Schema>;

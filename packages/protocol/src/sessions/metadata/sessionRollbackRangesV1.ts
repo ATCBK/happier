@@ -1,22 +1,20 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
 
 import { SessionRollbackTargetSchema } from '../rollback.js';
 
 export function createSessionRollbackRangeV1Schema(zod: typeof z) {
-  const schema = zod
+  const schema = (<T extends zod.ZodMiniObject>(schema: T) => zod.core.clone(schema, { ...schema._zod.def, catchall: zod.unknown() }) as zod.ZodMiniObject<T['shape'], zod.core.$loose>)(zod
     .object({
       target: SessionRollbackTargetSchema,
-      startSeqInclusive: zod.number().int().nonnegative(),
-      endSeqInclusive: zod.number().int().nonnegative(),
-      rolledBackAt: zod.number().finite(),
-    })
-    .refine((value) => value.endSeqInclusive >= value.startSeqInclusive, {
+      startSeqInclusive: zod.number().check(zod.int(), zod.nonnegative()),
+      endSeqInclusive: zod.number().check(zod.int(), zod.nonnegative()),
+      rolledBackAt: zod.number(),
+    }).check(zod.refine((value) => value.endSeqInclusive >= value.startSeqInclusive, {
       message: 'endSeqInclusive must be greater than or equal to startSeqInclusive',
       path: ['endSeqInclusive'],
-    })
-    .passthrough();
-  return defineStoredReadProjection(schema, () => schema.safeExtend({
+    })));
+  return defineStoredReadProjection(schema, () => zod.safeExtend(schema, {
     target: createStoredReadSchema(SessionRollbackTargetSchema),
   }));
 }
@@ -26,12 +24,12 @@ export type SessionRollbackRangeV1 = z.infer<typeof SessionRollbackRangeV1Schema
 
 export function createSessionRollbackRangesV1Schema(zod: typeof z) {
   const rangeSchema = createSessionRollbackRangeV1Schema(zod);
-  const schema = zod.object({
+  const schema = zod.looseObject({
     v: zod.literal(1),
-    updatedAt: zod.number().finite(),
+    updatedAt: zod.number(),
     ranges: zod.array(rangeSchema),
-  }).passthrough();
-  return defineStoredReadProjection(schema, () => schema.extend({
+  });
+  return defineStoredReadProjection(schema, () => zod.extend(schema, {
     ranges: zod.array(createStoredReadSchema(rangeSchema)),
   }));
 }

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { isUnsafeTelemetryDataKey } from '../../../../common/sensitiveKeys.js';
 import {
@@ -7,7 +7,7 @@ import {
   redactDiagnosticsUrl,
 } from '../../../../browser/diagnostics/egress/headers.js';
 
-const IdSchema = lazyZodSchema(() => z.string().trim().min(1).max(256));
+const IdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 
 export const LocalServicePreviewDiagnosticReasonCodeV1Schema = lazyZodSchema(() => z.enum([
   'invalid_preview_resource',
@@ -72,7 +72,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function rejectUnsafeDiagnosticDetails(
   value: unknown,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
   path: readonly (string | number)[] = [],
 ): void {
   if (Array.isArray(value)) {
@@ -84,7 +84,7 @@ function rejectUnsafeDiagnosticDetails(
   for (const [key, nested] of Object.entries(value)) {
     if (isUnsafeTelemetryDataKey(key)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: [...path, key],
         message: 'Local service preview diagnostics must not contain bodies, payloads, cookies, tokens, headers, or grant material.',
       });
@@ -95,24 +95,21 @@ function rejectUnsafeDiagnosticDetails(
 }
 
 export const LocalServicePreviewDiagnosticDetailsV1Schema = lazyZodSchema(() => z
-  .record(z.string(), z.unknown())
-  .superRefine(rejectUnsafeDiagnosticDetails));
+  .record(z.string(), z.unknown()).check(z.superRefine(rejectUnsafeDiagnosticDetails)));
 export type LocalServicePreviewDiagnosticDetailsV1 = z.infer<
   typeof LocalServicePreviewDiagnosticDetailsV1Schema
 >;
 
-export const LocalServicePreviewDiagnosticV1Schema = lazyZodSchema(() => z
-  .object({
+export const LocalServicePreviewDiagnosticV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     code: LocalServicePreviewDiagnosticReasonCodeV1Schema,
     severity: LocalServicePreviewDiagnosticSeverityV1Schema,
     scope: LocalServicePreviewDiagnosticScopeV1Schema,
-    previewId: IdSchema.optional(),
-    publicExposureId: IdSchema.optional(),
-    emittedAtMs: z.number().int().nonnegative().optional(),
-    details: LocalServicePreviewDiagnosticDetailsV1Schema.optional().default({}),
-  })
-  .strict());
+    previewId: z.optional(IdSchema),
+    publicExposureId: z.optional(IdSchema),
+    emittedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+    details: z._default(z.optional(LocalServicePreviewDiagnosticDetailsV1Schema), {}),
+  }));
 export type LocalServicePreviewDiagnosticV1 = z.infer<typeof LocalServicePreviewDiagnosticV1Schema>;
 
 export const LocalServicePreviewDiagnosticsV1Schema = lazyZodSchema(() => z.array(LocalServicePreviewDiagnosticV1Schema));

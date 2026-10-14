@@ -1,17 +1,17 @@
 import { lazyZodSchema } from '../../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { readCanonicalPaddedBase64DecodedLength } from '../../../../crypto/base64.js';
 
-const PositiveIntSchema = lazyZodSchema(() => z.number().int().positive());
-const NonNegativeIntSchema = lazyZodSchema(() => z.number().int().nonnegative());
-const Base64Schema = lazyZodSchema(() => z.string().superRefine((value, context) => {
+const PositiveIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.positive()));
+const NonNegativeIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
+const Base64Schema = lazyZodSchema(() => z.string().check(z.superRefine((value, context) => {
   if (readCanonicalPaddedBase64DecodedLength(value) !== null) return;
   context.addIssue({
-    code: z.ZodIssueCode.custom,
+    code: "custom",
     message: 'Invalid base64 payload',
   });
-}));
+})));
 
 export function getMachineLiveStreamPayloadDecodedByteLength(payloadBase64: string): number {
   return readCanonicalPaddedBase64DecodedLength(payloadBase64) ?? 0;
@@ -34,39 +34,32 @@ export const MACHINE_LIVE_STREAM_AVCC_ENVELOPE_TAGS_V1 = {
 
 export type MachineLiveStreamAvccChunkTypeV1 = keyof typeof MACHINE_LIVE_STREAM_AVCC_ENVELOPE_TAGS_V1;
 
-export const MachineLiveStreamCodecNegotiationRequestV1Schema = lazyZodSchema(() => z
-  .object({
+export const MachineLiveStreamCodecNegotiationRequestV1Schema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
-    streamId: z.string().min(1),
-    sourceCodecs: z.array(MachineLiveStreamCodecIdV1Schema).min(1),
-    viewerCodecs: z.array(MachineLiveStreamCodecIdV1Schema).min(1),
-    preferredCodec: MachineLiveStreamCodecIdV1Schema.optional(),
-    maxWidth: PositiveIntSchema.optional(),
-    maxHeight: PositiveIntSchema.optional(),
-    maxFramesPerSecond: PositiveIntSchema.optional(),
-  })
-  .passthrough());
+    streamId: z.string().check(z.minLength(1)),
+    sourceCodecs: z.array(MachineLiveStreamCodecIdV1Schema).check(z.minLength(1)),
+    viewerCodecs: z.array(MachineLiveStreamCodecIdV1Schema).check(z.minLength(1)),
+    preferredCodec: z.optional(MachineLiveStreamCodecIdV1Schema),
+    maxWidth: z.optional(PositiveIntSchema),
+    maxHeight: z.optional(PositiveIntSchema),
+    maxFramesPerSecond: z.optional(PositiveIntSchema),
+  }));
 
 export const MachineLiveStreamCodecNegotiationResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z
-    .object({
+  z.looseObject({
       ok: z.literal(true),
       codecId: MachineLiveStreamCodecIdV1Schema,
-      fallbackReason: z.enum(['preferred_codec_unavailable', 'baseline_selected']).optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      fallbackReason: z.optional(z.enum(['preferred_codec_unavailable', 'baseline_selected'])),
+    }),
+  z.looseObject({
       ok: z.literal(false),
       reasonCode: z.enum(['no_common_codec', 'invalid_codec_request']),
-    })
-    .passthrough(),
+    }),
 ]));
 
-export const MachineLiveStreamPayloadV2Schema = lazyZodSchema(() => z
-  .object({
+export const MachineLiveStreamPayloadV2Schema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
-    streamId: z.string().min(1),
+    streamId: z.string().check(z.minLength(1)),
     sequence: PositiveIntSchema,
     timestampMs: NonNegativeIntSchema,
     codecId: MachineLiveStreamCodecIdV1Schema,
@@ -74,39 +67,37 @@ export const MachineLiveStreamPayloadV2Schema = lazyZodSchema(() => z
     payloadEncoding: z.literal('binary_base64'),
     payloadBase64: Base64Schema,
     payloadSizeBytes: NonNegativeIntSchema,
-    keyframe: z.boolean().optional(),
-    width: PositiveIntSchema.optional(),
-    height: PositiveIntSchema.optional(),
-    orientation: z.enum(['portrait', 'portraitUpsideDown', 'landscapeLeft', 'landscapeRight']).optional(),
-    scale: z.number().positive().optional(),
-    pixelRatio: z.number().positive().optional(),
-    droppedFrames: NonNegativeIntSchema.optional(),
-  })
-  .passthrough()
-  .superRefine((payload, ctx) => {
+    keyframe: z.optional(z.boolean()),
+    width: z.optional(PositiveIntSchema),
+    height: z.optional(PositiveIntSchema),
+    orientation: z.optional(z.enum(['portrait', 'portraitUpsideDown', 'landscapeLeft', 'landscapeRight'])),
+    scale: z.optional(z.number().check(z.positive())),
+    pixelRatio: z.optional(z.number().check(z.positive())),
+    droppedFrames: z.optional(NonNegativeIntSchema),
+  }).check(z.superRefine((payload, ctx) => {
     const decodedBytes = getMachineLiveStreamPayloadDecodedByteLength(payload.payloadBase64);
     if (decodedBytes !== payload.payloadSizeBytes) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['payloadSizeBytes'],
         message: 'Live-stream payload advisory size must match decoded payload bytes',
       });
     }
     if (payload.codecId === 'h264.avcc' && payload.payloadKind !== 'h264_avcc') {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['payloadKind'],
         message: 'H.264 AVCC codec requires h264_avcc payloads',
       });
     }
     if (payload.payloadKind === 'h264_avcc' && payload.codecId !== 'h264.avcc') {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['codecId'],
         message: 'h264_avcc payloads require h264.avcc codec',
       });
     }
-  }));
+  })));
 
 export type MachineLiveStreamCodecIdV1 = z.infer<typeof MachineLiveStreamCodecIdV1Schema>;
 export type MachineLiveStreamCodecNegotiationRequestV1 = z.infer<

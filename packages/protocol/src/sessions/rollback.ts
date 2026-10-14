@@ -1,39 +1,31 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const SessionRollbackTargetSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
-  z.object({ type: z.literal('latest_turn') }).strict(),
-  z
-    .object({
+  z.strictObject({ type: z.literal('latest_turn') }),
+  z.strictObject({
       type: z.literal('before_user_message'),
-      userMessageSeq: z.number().int().nonnegative(),
-    })
-    .strict(),
+      userMessageSeq: z.number().check(z.int(), z.nonnegative()),
+    }),
 ]));
 export type SessionRollbackTarget = z.infer<typeof SessionRollbackTargetSchema>;
 
-export const SessionRollbackRpcParamsSchema = lazyZodSchema(() => z
-  .object({
+export const SessionRollbackRpcParamsSchema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    target: SessionRollbackTargetSchema.default({ type: 'latest_turn' }),
-  })
-  .strict());
+    target: z._default(SessionRollbackTargetSchema, { type: 'latest_turn' }),
+  }));
 export type SessionRollbackRpcParams = z.infer<typeof SessionRollbackRpcParamsSchema>;
 
 export const SessionRollbackRpcResultSchema = lazyZodSchema(() => z.union([
-  z
-    .object({
+  z.looseObject({
       ok: z.literal(true),
       target: SessionRollbackTargetSchema,
-      threadId: z.string().min(1).optional(),
-    })
-    .passthrough(),
-  z
-    .object({
+      threadId: z.optional(z.string().check(z.minLength(1))),
+    }),
+  z.looseObject({
       ok: z.literal(false),
-      errorCode: z.string().min(1),
-      errorMessage: z.string().min(1),
-    })
-    .passthrough(),
+      errorCode: z.string().check(z.minLength(1)),
+      errorMessage: z.string().check(z.minLength(1)),
+    }),
 ]));
 export type SessionRollbackRpcResult = z.infer<typeof SessionRollbackRpcResultSchema>;

@@ -1,12 +1,12 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export function createAcpConfiguredBackendV1Schema(zod: typeof z) {
-  return zod.object({
+  return zod.looseObject({
     v: zod.literal(1),
-    updatedAt: zod.number().finite(),
-    backendId: zod.string().min(1),
-    title: zod.string().min(1),
-  }).passthrough();
+    updatedAt: zod.number(),
+    backendId: zod.string().check(zod.minLength(1)),
+    title: zod.string().check(zod.minLength(1)),
+  });
 }
 
 export const AcpConfiguredBackendV1Schema = createAcpConfiguredBackendV1Schema(z);

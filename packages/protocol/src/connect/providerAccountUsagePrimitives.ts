@@ -1,7 +1,7 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { sha256 } from '@noble/hashes/sha2';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ProviderAccountSubscriptionV1Schema } from './accountSubscription.js';
 
 import { encodeBase64 } from '../crypto/base64.js';
@@ -23,22 +23,18 @@ export {
 
 const encoder = new TextEncoder();
 
-export const SealedProviderAccountUsageRecoveryCreditDetailsV1Schema = lazyZodSchema(() => z.object({ ciphertext: z.string().min(1) }).strict());
+export const SealedProviderAccountUsageRecoveryCreditDetailsV1Schema = lazyZodSchema(() => z.strictObject({ ciphertext: z.string().check(z.minLength(1)) }));
 
-export const ProviderAccountUsageRecordIdSchema = lazyZodSchema(() => z.string().regex(/^paug_v1_[A-Za-z0-9_-]{8,}$/));
+export const ProviderAccountUsageRecordIdSchema = lazyZodSchema(() => z.string().check(z.regex(/^paug_v1_[A-Za-z0-9_-]{8,}$/)));
 export type ProviderAccountUsageRecordId = z.infer<typeof ProviderAccountUsageRecordIdSchema>;
 
 /** Immutable accepted-entry reference; no protected cycle facts are exposed. */
-export const ProviderAccountUsageHistoryCursorV1Schema = lazyZodSchema(() => z.object({ observedAtMs: z.number().int().nonnegative(), id: z.string().min(1) }).strict());
+export const ProviderAccountUsageHistoryCursorV1Schema = lazyZodSchema(() => z.strictObject({ observedAtMs: z.number().check(z.int(), z.nonnegative()), id: z.string().check(z.minLength(1)) }));
 export const ProviderAccountUsageHistoryWitnessV1Schema = ProviderAccountUsageHistoryCursorV1Schema;
 export type ProviderAccountUsageHistoryWitnessV1 = z.infer<typeof ProviderAccountUsageHistoryWitnessV1Schema>;
 
 const PROVIDER_ACCOUNT_USAGE_OPAQUE_REF_PART_MAX_LENGTH = 102;
-const ProviderAccountUsageOpaqueRefPartSchema = lazyZodSchema(() => z.string()
-  .trim()
-  .min(1)
-  .max(PROVIDER_ACCOUNT_USAGE_OPAQUE_REF_PART_MAX_LENGTH)
-  .regex(/^[A-Za-z0-9_-]+$/));
+const ProviderAccountUsageOpaqueRefPartSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(PROVIDER_ACCOUNT_USAGE_OPAQUE_REF_PART_MAX_LENGTH), z.regex(/^[A-Za-z0-9_-]+$/)));
 
 export function buildProviderAccountUsageOpaqueLocalCredentialRef(params: Readonly<{
   providerId: string;
@@ -47,7 +43,7 @@ export function buildProviderAccountUsageOpaqueLocalCredentialRef(params: Readon
 }>): string {
   const providerId = ProviderAccountUsageOpaqueRefPartSchema.parse(params.providerId);
   const kind = ProviderAccountUsageOpaqueRefPartSchema.parse(params.kind);
-  const value = z.string().trim().min(1).max(4096).parse(params.value);
+  const value = z.string().check(z.trim(), z.minLength(1), z.maxLength(4096)).parse(params.value);
   const digest = sha256(encoder.encode(JSON.stringify({ providerId, kind, value })));
   return `opaque:${providerId}:${kind}:${encodeBase64(digest, 'base64url')}`;
 }
@@ -64,20 +60,20 @@ export const ProviderAccountUsageSubjectKindV1Schema = lazyZodSchema(() => z.enu
 ]));
 export type ProviderAccountUsageSubjectKindV1 = z.infer<typeof ProviderAccountUsageSubjectKindV1Schema>;
 
-export const ProviderAccountUsageRecordKeyV1Schema = lazyZodSchema(() => z.object({
-  providerId: z.string().trim().min(1).max(128),
-  accountSubjectId: z.string().trim().min(1).max(512),
+export const ProviderAccountUsageRecordKeyV1Schema = lazyZodSchema(() => z.strictObject({
+  providerId: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+  accountSubjectId: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
   subjectKind: ProviderAccountUsageSubjectKindV1Schema,
   quotaScope: ProviderAccountUsageQuotaScopeV1Schema,
-  quotaScopeId: z.string().trim().min(1).max(256).optional(),
-}).strict());
+  quotaScopeId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+}));
 export type ProviderAccountUsageRecordKeyV1 = z.infer<typeof ProviderAccountUsageRecordKeyV1Schema>;
 
-export const ProviderAccountSubjectRefV1Schema = lazyZodSchema(() => z.object({
+export const ProviderAccountSubjectRefV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.enum(['providerSubject', 'provisionalLocalSubject']),
-  id: z.string().trim().min(1).max(512),
-  mergeKey: z.string().trim().min(1).max(512).optional(),
-}).strict());
+  id: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+  mergeKey: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(512))),
+}));
 export type ProviderAccountSubjectRefV1 = z.infer<typeof ProviderAccountSubjectRefV1Schema>;
 
 export const ProviderAccountUsageSourceV1Schema = lazyZodSchema(() => z.enum([
@@ -121,48 +117,48 @@ export function buildProviderAccountUsageRecordId(
   return ProviderAccountUsageRecordIdSchema.parse(`paug_v1_${encodeBase64(digest, 'base64url')}`);
 }
 
-export const ProviderAccountUsageSnapshotV1Schema = lazyZodSchema(() => z.object({
+export const ProviderAccountUsageSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   recordId: ProviderAccountUsageRecordIdSchema,
   recordKey: ProviderAccountUsageRecordKeyV1Schema,
-  providerId: z.string().trim().min(1).max(128),
+  providerId: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
   accountSubject: ProviderAccountSubjectRefV1Schema,
-  observedAtMs: z.number().int().nonnegative(),
-  fetchedAtMs: z.number().int().nonnegative(),
-  staleAfterMs: z.number().int().min(1),
+  observedAtMs: z.number().check(z.int(), z.nonnegative()),
+  fetchedAtMs: z.number().check(z.int(), z.nonnegative()),
+  staleAfterMs: z.number().check(z.int(), z.minimum(1)),
   source: ProviderAccountUsageSourceV1Schema,
   confidence: ProviderAccountUsageConfidenceV1Schema,
-  state: ProviderAccountUsageStateV1Schema.default('loaded_data'),
-  planLabel: z.string().trim().min(1).max(256).nullable().optional(),
-  accountLabel: z.string().trim().min(1).max(256).nullable().optional(),
-  subscription: ProviderAccountSubscriptionV1Schema.optional(),
-  recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1Schema.optional(),
-  recoveryCreditDetails: ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema.optional(),
+  state: z._default(ProviderAccountUsageStateV1Schema, 'loaded_data'),
+  planLabel: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(256)))),
+  accountLabel: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(256)))),
+  subscription: z.optional(ProviderAccountSubscriptionV1Schema),
+  recoveryCredits: z.optional(ConnectedServiceQuotaRecoveryCreditsV1Schema),
+  recoveryCreditDetails: z.optional(ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema),
   meters: z.array(ConnectedServiceQuotaMeterV1Schema),
-  diagnostics: z.array(ProviderAccountUsageDiagnosticV1Schema).optional(),
-}).strict().superRefine((snapshot, ctx) => {
+  diagnostics: z.optional(z.array(ProviderAccountUsageDiagnosticV1Schema)),
+}).check(z.superRefine((snapshot, ctx) => {
   if (snapshot.recordId !== buildProviderAccountUsageRecordId(snapshot.recordKey)) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'Snapshot recordId must match recordKey',
       path: ['recordId'],
     });
   }
   if (snapshot.providerId !== snapshot.recordKey.providerId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'Snapshot providerId must match recordKey providerId',
       path: ['providerId'],
     });
   }
   if (snapshot.accountSubject.id !== snapshot.recordKey.accountSubjectId) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'Account subject id must match recordKey accountSubjectId',
       path: ['accountSubject', 'id'],
     });
   }
-}));
+})));
 export type ProviderAccountUsageSnapshotV1 = z.infer<typeof ProviderAccountUsageSnapshotV1Schema>;
 /** Typed projection after retained Account content has been opened. */
 export const ProviderAccountUsageSnapshotV1StoredSchema = createStoredReadSchema(ProviderAccountUsageSnapshotV1Schema);

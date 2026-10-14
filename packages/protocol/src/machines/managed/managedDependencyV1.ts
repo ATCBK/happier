@@ -1,9 +1,9 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { ManagedMachineV1Schema } from './managedMachineV1.js';
 
 /** Recovery facts only: launch choices and captured credentials never enter removal review. */
-export const ManagedResourceDependencyV1Schema = lazyZodSchema(() => z.object({
+export const ManagedResourceDependencyV1Schema = lazyZodSchema(() => z.strictObject({
   managedId: ManagedMachineV1Schema.shape.id,
   homeId: ManagedMachineV1Schema.shape.homeId,
   custodianAccountId: ManagedMachineV1Schema.shape.custodianAccountId,
@@ -16,11 +16,11 @@ export const ManagedResourceDependencyV1Schema = lazyZodSchema(() => z.object({
   recovery: ManagedMachineV1Schema.shape.recovery,
   observation: ManagedMachineV1Schema.shape.observation,
   cleanup: ManagedMachineV1Schema.shape.cleanup,
-}).strict());
+}));
 export type ManagedResourceDependencyV1 = z.infer<typeof ManagedResourceDependencyV1Schema>;
 
 /** Acknowledges the exact reviewed resource; this is not native cleanup authorization. */
-export const ManagedResourceDispositionV1Schema = lazyZodSchema(() => z.object({
+export const ManagedResourceDispositionV1Schema = lazyZodSchema(() => z.strictObject({
   managedId: ManagedMachineV1Schema.shape.id,
   expectedIntentRevision: ManagedMachineV1Schema.shape.intentRevision,
   expectedAllocation: ManagedMachineV1Schema.shape.allocation,
@@ -28,5 +28,5 @@ export const ManagedResourceDispositionV1Schema = lazyZodSchema(() => z.object({
   expectedNativeOperationRef: ManagedMachineV1Schema.shape.nativeOperationRef,
   expectedRecovery: ManagedMachineV1Schema.shape.recovery,
   responsibility: z.literal('manual'),
-}).strict());
+}));
 export type ManagedResourceDispositionV1 = z.infer<typeof ManagedResourceDispositionV1Schema>;

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * Every client- or plugin-supplied Automation integer persists as a 32-bit
@@ -21,5 +21,4 @@ export const AUTOMATION_INT_COLUMN_MAX = 2_147_483_647;
  * lets portable schemas consume it without importing the full Event
  * declaration graph.
  */
-export const AutomationEventPositiveSafeIntegerV1Schema = lazyZodSchema(() => z.number().int().positive()
-  .max(AUTOMATION_INT_COLUMN_MAX));
+export const AutomationEventPositiveSafeIntegerV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.positive(), z.maximum(AUTOMATION_INT_COLUMN_MAX)));

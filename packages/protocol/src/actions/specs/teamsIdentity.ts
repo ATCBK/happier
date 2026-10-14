@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   TeamIdentityConnectionCreateInputV1Schema,
@@ -64,7 +64,7 @@ export const TEAM_IDENTITY_ACTION_INPUT_SCHEMAS_V1 = Object.freeze({
   'teams.identity.workos.connection.create': TeamIdentityWorkosConnectionCreateInputV1Schema,
   'teams.identity.workos.reconcile': TeamIdentityWorkosReconcileInputV1Schema,
   'teams.identity.workos.connection.set': TeamIdentityWorkosConnectionSetInputV1Schema,
-} satisfies Record<TeamIdentityActionIdV1, z.ZodTypeAny>);
+} satisfies Record<TeamIdentityActionIdV1, z.ZodMiniType>);
 
 export const TEAM_IDENTITY_ACTION_OUTPUT_SCHEMAS_V1 = Object.freeze({
   'teams.identity.connections.list': TeamIdentityConnectionListResultV1Schema,
@@ -80,4 +80,4 @@ export const TEAM_IDENTITY_ACTION_OUTPUT_SCHEMAS_V1 = Object.freeze({
   'teams.identity.workos.connection.create': TeamIdentityWorkosConnectionCreateResultV1Schema,
   'teams.identity.workos.reconcile': TeamIdentityWorkosReconcileResultV1Schema,
   'teams.identity.workos.connection.set': TeamIdentityConnectionMutationResultV1Schema,
-} satisfies Record<TeamIdentityActionIdV1, z.ZodTypeAny>);
+} satisfies Record<TeamIdentityActionIdV1, z.ZodMiniType>);

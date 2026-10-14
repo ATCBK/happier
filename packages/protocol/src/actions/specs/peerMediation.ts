@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { RuntimeActionIdV1 } from '../actionIds.js';
 import {
@@ -9,27 +9,25 @@ import {
 } from '../../machines/peer/mediation/observability/v1.js';
 import type { RuntimeActionSpecFamily } from './common.js';
 
-const RuntimePeerMediationObservabilitySnapshotInputSchema = lazyZodSchema(() => z
-  .object({
-    sessionId: z.string().trim().min(1).max(256).optional(),
-    machineId: z.string().trim().min(1).max(256).optional(),
-  })
-  .passthrough());
+const RuntimePeerMediationObservabilitySnapshotInputSchema = lazyZodSchema(() => z.looseObject({
+    sessionId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    machineId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+  }));
 
-const PeerMediationObservabilitySnapshotActionResultV1Schema = lazyZodSchema(() => z.object({
+const PeerMediationObservabilitySnapshotActionResultV1Schema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(true),
   snapshot: PeerMediationObservabilitySnapshotV1Schema,
-}).strict());
+}));
 
-const PeerMediationObservabilitySubscribeActionResultV1Schema = lazyZodSchema(() => z.object({
+const PeerMediationObservabilitySubscribeActionResultV1Schema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(true),
   snapshot: PeerMediationObservabilitySnapshotV1Schema,
-  sequence: z.number().int().nonnegative(),
-}).strict());
+  sequence: z.number().check(z.int(), z.nonnegative()),
+}));
 
-const PeerMediationObservabilityUnsubscribeActionResultV1Schema = lazyZodSchema(() => z.object({
+const PeerMediationObservabilityUnsubscribeActionResultV1Schema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(true),
-}).strict());
+}));
 
 type PeerMediationRuntimeActionId = Extract<RuntimeActionIdV1, `peerMediation.${string}`>;
 
@@ -60,13 +58,13 @@ export const PEER_MEDIATION_RUNTIME_ACTION_INPUT_SCHEMAS = Object.freeze({
   'peerMediation.observability.snapshot': RuntimePeerMediationObservabilitySnapshotInputSchema,
   'peerMediation.observability.subscribe': PeerMediationObservabilitySubscribeRequestV1Schema,
   'peerMediation.observability.unsubscribe': PeerMediationObservabilityUnsubscribeRequestV1Schema,
-} as const satisfies Readonly<Record<PeerMediationRuntimeActionId, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<PeerMediationRuntimeActionId, z.ZodMiniType>>);
 
 export const PEER_MEDIATION_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
   'peerMediation.observability.snapshot': PeerMediationObservabilitySnapshotActionResultV1Schema,
   'peerMediation.observability.subscribe': PeerMediationObservabilitySubscribeActionResultV1Schema,
   'peerMediation.observability.unsubscribe': PeerMediationObservabilityUnsubscribeActionResultV1Schema,
-} as const satisfies Readonly<Record<PeerMediationRuntimeActionId, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<PeerMediationRuntimeActionId, z.ZodMiniType>>);
 
 export const PEER_MEDIATION_RUNTIME_ACTION_SPEC_FAMILY = Object.freeze({
   titles: PEER_MEDIATION_RUNTIME_ACTION_TITLES,

@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PluginUiWidgetAreaDeclarationsV1Schema, type PluginUiWidgetAreaDeclarationV1 } from './widgetAreas.js';
 export { PluginUiWidgetAreaDeclarationV1Schema, PluginUiWidgetAreaDeclarationsV1Schema } from './widgetAreas.js';
 export type { PluginUiWidgetAreaDeclarationV1 } from './widgetAreas.js';
@@ -78,11 +79,11 @@ export type { PluginUiIconTokenV1 } from './tokens.js';
  * name the same type rather than keeping a second copy of it.
  */
 export const PluginDeclarativeControlV2Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('text'), settingId: PluginSettingFieldIdV2Schema }).strict(),
-  z.object({ kind: z.literal('number'), settingId: PluginSettingFieldIdV2Schema }).strict(),
-  z.object({ kind: z.literal('toggle'), settingId: PluginSettingFieldIdV2Schema }).strict(),
-  z.object({ kind: z.literal('select'), settingId: PluginSettingFieldIdV2Schema, options: z.array(z.object({ value: PluginJsonValueV2Schema, label: PluginLocalizedStringV2Schema }).strict()) }).strict(),
-  z.object({ kind: z.literal('secret'), settingId: PluginSettingFieldIdV2Schema }).strict(),
+  z.strictObject({ kind: z.literal('text'), settingId: PluginSettingFieldIdV2Schema }),
+  z.strictObject({ kind: z.literal('number'), settingId: PluginSettingFieldIdV2Schema }),
+  z.strictObject({ kind: z.literal('toggle'), settingId: PluginSettingFieldIdV2Schema }),
+  z.strictObject({ kind: z.literal('select'), settingId: PluginSettingFieldIdV2Schema, options: z.array(z.strictObject({ value: PluginJsonValueV2Schema, label: PluginLocalizedStringV2Schema })) }),
+  z.strictObject({ kind: z.literal('secret'), settingId: PluginSettingFieldIdV2Schema }),
 ]));
 export type PluginDeclarativeControlV2 = z.infer<typeof PluginDeclarativeControlV2Schema>;
 /**
@@ -108,11 +109,11 @@ export type PluginDeclarativeStateV2 = z.infer<typeof PluginDeclarativeStateV2Sc
  * one `metadata` node costs one node no matter how many rows it declares.
  */
 export const MAX_PLUGIN_DECLARATIVE_METADATA_ENTRIES_V2 = 32;
-export const PluginDeclarativeMetadataEntryV2Schema = lazyZodSchema(() => z.object({
+export const PluginDeclarativeMetadataEntryV2Schema = lazyZodSchema(() => z.strictObject({
   label: PluginLocalizedStringV2Schema,
   value: PluginLocalizedStringV2Schema,
-  tone: PluginDeclarativeToneV2Schema.optional(),
-}).strict());
+  tone: z.optional(PluginDeclarativeToneV2Schema),
+}));
 export type PluginDeclarativeMetadataEntryV2 = z.infer<typeof PluginDeclarativeMetadataEntryV2Schema>;
 
 /**
@@ -134,70 +135,70 @@ export type PluginDeclarativeMetadataEntryV2 = z.infer<typeof PluginDeclarativeM
  * host supplies the Composer ref; author data can name only the exact CAS
  * transaction it wants applied through the incumbent Composer owner.
  */
-export const PluginDeclarativeComposerApplyEffectV1Schema = lazyZodSchema(() => ComposerTransactionV1Schema.extend({
+export const PluginDeclarativeComposerApplyEffectV1Schema = lazyZodSchema(() => (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(zMini.extend(ComposerTransactionV1Schema, {
   kind: z.literal('composerApply'),
-}).strict());
+})));
 export type PluginDeclarativeComposerApplyEffectV1 =
   ComposerTransactionV1 & Readonly<{ kind: 'composerApply' }>;
 
-const DeclarativeActionNodeSchema = lazyZodSchema(() => z.object({
+const DeclarativeActionNodeSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('action'),
-  action: asProtocolZod(PluginContributionReferenceV2Schema).optional(),
+  action: zMini.optional(asProtocolZod(PluginContributionReferenceV2Schema)),
   /** A request only: the mounted source adapter supplies current caller and Action policy. */
-  hostAction: z.lazy(() => PluginInvocableActionIdSchema).optional(),
-  effect: PluginDeclarativeComposerApplyEffectV1Schema.optional(),
+  hostAction: z.optional(z.lazy(() => PluginInvocableActionIdSchema)),
+  effect: zMini.optional(PluginDeclarativeComposerApplyEffectV1Schema),
   label: PluginLocalizedStringV2Schema,
-  variant: PluginDeclarativeActionVariantV2Schema.optional(),
-  input: PluginJsonValueV2Schema.optional(),
-}).strict().superRefine((node, ctx) => {
+  variant: z.optional(PluginDeclarativeActionVariantV2Schema),
+  input: zMini.optional(PluginJsonValueV2Schema),
+}).check(z.superRefine((node, ctx) => {
   if ([node.action, node.hostAction, node.effect].filter((value) => value !== undefined).length !== 1) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['action'],
       message: 'A declarative action must name exactly one contributed Action, host Action, or effect.',
     });
   }
   if (node.effect !== undefined && node.input !== undefined) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['input'],
       message: 'A declarative composerApply effect cannot carry Action input.',
     });
   }
-}));
-const DeclarativeItemNodeSchema = lazyZodSchema(() => z.object({ kind: z.literal('item'), title: PluginLocalizedStringV2Schema, subtitle: PluginLocalizedStringV2Schema.optional(), detail: PluginLocalizedStringV2Schema.optional(), icon: PluginUiIconTokenV1Schema.optional(), tone: PluginDeclarativeToneV2Schema.optional(), action: asProtocolZod(PluginContributionReferenceV2Schema).optional(), input: PluginJsonValueV2Schema.optional() }).strict());
-export const PluginDeclarativeStateNodeV2Schema = lazyZodSchema(() => z.object({ kind: z.literal('state'), state: PluginDeclarativeStateV2Schema, title: PluginLocalizedStringV2Schema, description: PluginLocalizedStringV2Schema.optional(), icon: PluginUiIconTokenV1Schema.optional() }).strict());
+})));
+const DeclarativeItemNodeSchema = lazyZodSchema(() => z.strictObject({ kind: z.literal('item'), title: PluginLocalizedStringV2Schema, subtitle: zMini.optional(PluginLocalizedStringV2Schema), detail: zMini.optional(PluginLocalizedStringV2Schema), icon: zMini.optional(PluginUiIconTokenV1Schema), tone: z.optional(PluginDeclarativeToneV2Schema), action: zMini.optional(asProtocolZod(PluginContributionReferenceV2Schema)), input: zMini.optional(PluginJsonValueV2Schema) }));
+export const PluginDeclarativeStateNodeV2Schema = lazyZodSchema(() => z.strictObject({ kind: z.literal('state'), state: PluginDeclarativeStateV2Schema, title: PluginLocalizedStringV2Schema, description: zMini.optional(PluginLocalizedStringV2Schema), icon: zMini.optional(PluginUiIconTokenV1Schema) }));
 /**
  * A symbolic target-local reference. The mounted target is ambient and the
  * normalizer later supplies the admitted contributor generation; authored
  * documents can never fabricate either fact.
  */
-export const PluginDeclarativeTargetedSurfaceReferenceV1Schema = lazyZodSchema(() => z.object({
+export const PluginDeclarativeTargetedSurfaceReferenceV1Schema = lazyZodSchema(() => z.strictObject({
   point: asProtocolZod(PluginUiTargetedContributionPointRefV1Schema),
-  contributor: z.object({
+  contributor: z.strictObject({
     pluginId: asProtocolZod(PluginIdSchema),
     contributionId: asProtocolZod(PluginContributionLocalIdSchema),
-  }).strict(),
+  }),
   role: asProtocolZod(PluginContributionLocalIdSchema),
-}).strict());
+}));
 export type PluginDeclarativeTargetedSurfaceReferenceV1 = z.infer<
   typeof PluginDeclarativeTargetedSurfaceReferenceV1Schema
 >;
-export const PluginDeclarativeTargetedSurfaceNodeV2Schema = lazyZodSchema(() => z.object({
+export const PluginDeclarativeTargetedSurfaceNodeV2Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('targetedSurface'),
   surface: PluginDeclarativeTargetedSurfaceReferenceV1Schema,
   input: PluginUiLaunchInputV1Schema,
   instanceKey: PluginUiInstanceKeyV1Schema,
-  fallback: PluginDeclarativeStateNodeV2Schema.optional(),
-}).strict());
+  fallback: z.optional(PluginDeclarativeStateNodeV2Schema),
+}));
 const DeclarativeRowNodeSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [DeclarativeItemNodeSchema, PluginDeclarativeStateNodeV2Schema]));
-const DeclarativeSectionNodeSchema = lazyZodSchema(() => z.object({ kind: z.literal('section'), title: PluginLocalizedStringV2Schema.optional(), footer: PluginLocalizedStringV2Schema.optional(), children: z.array(DeclarativeRowNodeSchema) }).strict());
-const DeclarativeListNodeSchema = lazyZodSchema(() => z.object({ kind: z.literal('list'), label: PluginLocalizedStringV2Schema.optional(), children: z.array(z.discriminatedUnion('kind', [DeclarativeSectionNodeSchema, DeclarativeItemNodeSchema, PluginDeclarativeStateNodeV2Schema])) }).strict());
-const DeclarativeActionPanelNodeSchema = lazyZodSchema(() => z.object({ kind: z.literal('actionPanel'), title: PluginLocalizedStringV2Schema.optional(), children: z.array(DeclarativeActionNodeSchema) }).strict());
-const DeclarativeMetadataNodeSchema = lazyZodSchema(() => z.object({ kind: z.literal('metadata'), title: PluginLocalizedStringV2Schema.optional(), entries: z.array(PluginDeclarativeMetadataEntryV2Schema).min(1).max(MAX_PLUGIN_DECLARATIVE_METADATA_ENTRIES_V2) }).strict());
+const DeclarativeSectionNodeSchema = lazyZodSchema(() => z.strictObject({ kind: z.literal('section'), title: zMini.optional(PluginLocalizedStringV2Schema), footer: zMini.optional(PluginLocalizedStringV2Schema), children: z.array(DeclarativeRowNodeSchema) }));
+const DeclarativeListNodeSchema = lazyZodSchema(() => z.strictObject({ kind: z.literal('list'), label: zMini.optional(PluginLocalizedStringV2Schema), children: z.array(z.discriminatedUnion('kind', [DeclarativeSectionNodeSchema, DeclarativeItemNodeSchema, PluginDeclarativeStateNodeV2Schema])) }));
+const DeclarativeActionPanelNodeSchema = lazyZodSchema(() => z.strictObject({ kind: z.literal('actionPanel'), title: zMini.optional(PluginLocalizedStringV2Schema), children: z.array(DeclarativeActionNodeSchema) }));
+const DeclarativeMetadataNodeSchema = lazyZodSchema(() => z.strictObject({ kind: z.literal('metadata'), title: zMini.optional(PluginLocalizedStringV2Schema), entries: z.array(PluginDeclarativeMetadataEntryV2Schema).check(z.minLength(1), z.maxLength(MAX_PLUGIN_DECLARATIVE_METADATA_ENTRIES_V2)) }));
 const PluginDeclarativeCollectionListParametersV1Schema = lazyZodSchema(() => z.record(
   PluginCollectionMemberNameV1Schema,
-  z.union([z.string(), z.number().finite(), z.boolean()]),
+  z.union([z.string(), z.number(), z.boolean()]),
 ));
 export type PluginDeclarativeCollectionListSourceV1 = Readonly<{
   collectionId: string;
@@ -205,18 +206,18 @@ export type PluginDeclarativeCollectionListSourceV1 = Readonly<{
   parameters?: Readonly<Record<string, string | number | boolean>>;
 }>;
 /** Shared verbatim by the authoring grammar and the final projected model. */
-export const PluginDeclarativeCollectionListSourceV1Schema = lazyZodSchema(() => z.object({
+export const PluginDeclarativeCollectionListSourceV1Schema = lazyZodSchema(() => z.strictObject({
   collectionId: asProtocolZod(PluginContributionLocalIdSchema),
   uiQueryId: PluginCollectionMemberNameV1Schema,
-  parameters: PluginDeclarativeCollectionListParametersV1Schema.optional(),
-}).strict());
-export const PluginDeclarativeCollectionListProjectionV1Schema = lazyZodSchema(() => z.object({
+  parameters: z.optional(PluginDeclarativeCollectionListParametersV1Schema),
+}));
+export const PluginDeclarativeCollectionListProjectionV1Schema = lazyZodSchema(() => z.strictObject({
   titleField: PluginCollectionProjectedScalarFieldRefV1Schema,
-  subtitleField: PluginCollectionProjectedScalarFieldRefV1Schema.optional(),
-  detailField: PluginCollectionProjectedScalarFieldRefV1Schema.optional(),
-  badgeField: PluginCollectionProjectedScalarFieldRefV1Schema.optional(),
-  statusField: PluginCollectionProjectedScalarFieldRefV1Schema.optional(),
-}).strict());
+  subtitleField: zMini.optional(PluginCollectionProjectedScalarFieldRefV1Schema),
+  detailField: zMini.optional(PluginCollectionProjectedScalarFieldRefV1Schema),
+  badgeField: zMini.optional(PluginCollectionProjectedScalarFieldRefV1Schema),
+  statusField: zMini.optional(PluginCollectionProjectedScalarFieldRefV1Schema),
+}));
 export type PluginDeclarativeCollectionListProjectionV1 = z.infer<
   typeof PluginDeclarativeCollectionListProjectionV1Schema
 >;
@@ -228,14 +229,14 @@ export type PluginDeclarativeCollectionListProjectionV1 = z.infer<
  * outside this grammar.
  */
 export const PluginCollectionRowCommandV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('action'),
     action: asProtocolZod(PluginContributionReferenceV2Schema),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('openSurface'),
     destination: asProtocolZod(PluginContributionReferenceV2Schema),
-  }).strict(),
+  }),
 ]));
 export type PluginCollectionRowCommandV1 = z.infer<typeof PluginCollectionRowCommandV1Schema>;
 
@@ -244,18 +245,15 @@ export type PluginCollectionRowCommandV1 = z.infer<typeof PluginCollectionRowCom
  * ceiling keeps one declarative node from expanding unbounded host chrome.
  */
 export const MAX_PLUGIN_DECLARATIVE_COLLECTION_ROW_SECONDARY_COMMANDS_V1 = 16;
-const DeclarativeCollectionListNodeSchema = lazyZodSchema(() => z.object({
+const DeclarativeCollectionListNodeSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('collectionList'),
   /** Optional accessible collection name; the renderer resolves it at its mounted localization owner. */
-  label: PluginLocalizedStringV2Schema.optional(),
+  label: zMini.optional(PluginLocalizedStringV2Schema),
   source: PluginDeclarativeCollectionListSourceV1Schema,
   projection: PluginDeclarativeCollectionListProjectionV1Schema,
-  primaryCommand: PluginCollectionRowCommandV1Schema.optional(),
-  secondaryCommands: z.array(PluginCollectionRowCommandV1Schema)
-    .min(1)
-    .max(MAX_PLUGIN_DECLARATIVE_COLLECTION_ROW_SECONDARY_COMMANDS_V1)
-    .optional(),
-}).strict());
+  primaryCommand: z.optional(PluginCollectionRowCommandV1Schema),
+  secondaryCommands: z.optional(z.array(PluginCollectionRowCommandV1Schema).check(z.minLength(1), z.maxLength(MAX_PLUGIN_DECLARATIVE_COLLECTION_ROW_SECONDARY_COMMANDS_V1))),
+}));
 
 export type PluginDeclarativeActionNodeV2 = z.infer<typeof DeclarativeActionNodeSchema>;
 export type PluginDeclarativeItemNodeV2 = z.infer<typeof DeclarativeItemNodeSchema>;
@@ -302,17 +300,17 @@ export type PluginDeclarativeNodeV2 =
   | PluginDeclarativeActionPanelNodeV2
   | PluginDeclarativeCollectionListNodeV2;
 
-export const PluginDeclarativeNodeV2Schema: z.ZodType<PluginDeclarativeNodeV2> = z.lazy(() => z.union([PluginDeclarativeChartNodeV1Schema, z.discriminatedUnion('kind', [
+export const PluginDeclarativeNodeV2Schema: z.ZodMiniType<PluginDeclarativeNodeV2> = z.lazy(() => z.union([PluginDeclarativeChartNodeV1Schema, z.discriminatedUnion('kind', [
   PluginDeclarativeMetricNodeV1Schema, PluginDeclarativeTableNodeV1Schema, PluginDeclarativeRowsNodeV1Schema,
-  z.object({ kind: z.literal('dragSource'), sourceId: asProtocolZod(PluginContributionReferenceV2Schema), reference: PluginJsonValueV2Schema, organizing: z.boolean().optional(), children: z.array(PluginDeclarativeNodeV2Schema) }).strict(),
-  z.object({ kind: z.literal('dropTarget'), targetId: asProtocolZod(PluginContributionReferenceV2Schema), input: PluginJsonValueV2Schema.optional(), children: z.array(PluginDeclarativeNodeV2Schema) }).strict(),
-  z.object({ kind: z.literal('widgetArea'), area: asProtocolZod(PluginContributionLocalIdSchema), context: z.record(z.string(), PluginJsonValueV2Schema).optional() }).strict(),
-  z.object({ kind: z.literal('text'), text: PluginLocalizedStringV2Schema, tone: PluginDeclarativeToneV2Schema.optional() }).strict(),
-  z.object({ kind: z.literal('markdown'), text: PluginLocalizedMarkdownV2Schema }).strict(),
-  z.object({ kind: z.literal('stack'), direction: z.enum(['vertical', 'horizontal']).optional(), gap: z.enum(['small', 'medium', 'large']).optional(), children: z.array(PluginDeclarativeNodeV2Schema) }).strict(),
-  z.object({ kind: z.literal('group'), title: PluginLocalizedStringV2Schema.optional(), description: PluginLocalizedStringV2Schema.optional(), children: z.array(PluginDeclarativeNodeV2Schema) }).strict(),
-  z.object({ kind: z.literal('field'), label: PluginLocalizedStringV2Schema, description: PluginLocalizedStringV2Schema.optional(), control: PluginDeclarativeControlV2Schema }).strict(),
-  z.object({ kind: z.literal('status'), label: PluginLocalizedStringV2Schema, value: PluginLocalizedStringV2Schema, tone: PluginDeclarativeToneV2Schema.optional() }).strict(),
+  z.strictObject({ kind: z.literal('dragSource'), sourceId: asProtocolZod(PluginContributionReferenceV2Schema), reference: PluginJsonValueV2Schema, organizing: z.optional(z.boolean()), children: z.array(PluginDeclarativeNodeV2Schema) }),
+  z.strictObject({ kind: z.literal('dropTarget'), targetId: asProtocolZod(PluginContributionReferenceV2Schema), input: zMini.optional(PluginJsonValueV2Schema), children: z.array(PluginDeclarativeNodeV2Schema) }),
+  z.strictObject({ kind: z.literal('widgetArea'), area: asProtocolZod(PluginContributionLocalIdSchema), context: z.optional(z.record(z.string(), PluginJsonValueV2Schema)) }),
+  z.strictObject({ kind: z.literal('text'), text: PluginLocalizedStringV2Schema, tone: z.optional(PluginDeclarativeToneV2Schema) }),
+  z.strictObject({ kind: z.literal('markdown'), text: PluginLocalizedMarkdownV2Schema }),
+  z.strictObject({ kind: z.literal('stack'), direction: z.optional(z.enum(['vertical', 'horizontal'])), gap: z.optional(z.enum(['small', 'medium', 'large'])), children: z.array(PluginDeclarativeNodeV2Schema) }),
+  z.strictObject({ kind: z.literal('group'), title: zMini.optional(PluginLocalizedStringV2Schema), description: zMini.optional(PluginLocalizedStringV2Schema), children: z.array(PluginDeclarativeNodeV2Schema) }),
+  z.strictObject({ kind: z.literal('field'), label: PluginLocalizedStringV2Schema, description: zMini.optional(PluginLocalizedStringV2Schema), control: PluginDeclarativeControlV2Schema }),
+  z.strictObject({ kind: z.literal('status'), label: PluginLocalizedStringV2Schema, value: PluginLocalizedStringV2Schema, tone: z.optional(PluginDeclarativeToneV2Schema) }),
   DeclarativeActionNodeSchema,
   DeclarativeListNodeSchema,
   DeclarativeSectionNodeSchema,
@@ -328,39 +326,37 @@ export const PluginDeclarativeNodeV2Schema: z.ZodType<PluginDeclarativeNodeV2> =
  * Static roots go through the same iterative document preflight as Resource
  * documents before this recursive grammar descends into their children.
  */
-const PluginDeclarativeRendererRootV2Schema: z.ZodType<PluginDeclarativeNodeV2> = lazyZodSchema(() => z.unknown()
-  .superRefine((root, context) => {
+const PluginDeclarativeRendererRootV2Schema: z.ZodMiniType<PluginDeclarativeNodeV2> = lazyZodSchema(() => z.pipe(z.unknown().check(z.superRefine((root, context) => {
     const preflight = preflightPluginDeclarativeDocumentV1({ version: 1, root });
     if (preflight.ok) return;
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: preflight.message,
     });
-  })
-  .pipe(PluginDeclarativeNodeV2Schema));
+  })), PluginDeclarativeNodeV2Schema));
 // The sole initial tuple contains only producer-backed methods, so a renderer
 // can require exactly the same vocabulary every adapter negotiates.
-const RequiredMethodsSchema = lazyZodSchema(() => z.array(PluginUiHostMethodV1Schema).optional());
+const RequiredMethodsSchema = lazyZodSchema(() => z.optional(z.array(PluginUiHostMethodV1Schema)));
 
 /**
  * The outer renderer alone selects the live document Resource. Dynamic bytes
  * can replace only the document envelope/root; they cannot redeclare a MIME
  * type, target, method ceiling, or execution origin.
  */
-export const PluginDeclarativeDocumentSourceV1Schema = lazyZodSchema(() => z.object({
+export const PluginDeclarativeDocumentSourceV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('resource'),
   resourceId: asProtocolZod(PluginContributionLocalIdSchema),
-}).strict());
+}));
 export type PluginDeclarativeDocumentSourceV1 = z.infer<typeof PluginDeclarativeDocumentSourceV1Schema>;
 
 export const PluginUiRendererV2Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   // Only the self-contained by-value document declares requested capabilities:
   // an Artifact-backed or host-rendered renderer resolves its reach through the
   // installed plugin's own manifest and grants.
-  z.object({ id: asProtocolZod(PluginContributionLocalIdSchema), kind: z.literal('hostedHtml'), source: PluginHostedHtmlSourceV1Schema, requiredHostMethods: RequiredMethodsSchema, requestedCapabilities: PluginUiHostedHtmlRequestedCapabilitiesV1Schema.optional() }).strict(),
-  z.object({ id: asProtocolZod(PluginContributionLocalIdSchema), kind: z.literal('reactNative'), artifact: asProtocolZod(PluginContributionLocalIdSchema), requiredHostMethods: RequiredMethodsSchema }).strict(),
-  z.object({ id: asProtocolZod(PluginContributionLocalIdSchema), kind: z.literal('hostedWeb'), source: z.object({ kind: z.literal('artifact'), artifact: asProtocolZod(PluginContributionLocalIdSchema) }).strict(), requiredHostMethods: RequiredMethodsSchema }).strict(),
-  z.object({ id: asProtocolZod(PluginContributionLocalIdSchema), kind: z.literal('declarative'), root: PluginDeclarativeRendererRootV2Schema, documentSource: PluginDeclarativeDocumentSourceV1Schema.optional() }).strict(),
+  z.strictObject({ id: asProtocolZod(PluginContributionLocalIdSchema), kind: z.literal('hostedHtml'), source: PluginHostedHtmlSourceV1Schema, requiredHostMethods: RequiredMethodsSchema, requestedCapabilities: zMini.optional(PluginUiHostedHtmlRequestedCapabilitiesV1Schema) }),
+  z.strictObject({ id: asProtocolZod(PluginContributionLocalIdSchema), kind: z.literal('reactNative'), artifact: asProtocolZod(PluginContributionLocalIdSchema), requiredHostMethods: RequiredMethodsSchema }),
+  z.strictObject({ id: asProtocolZod(PluginContributionLocalIdSchema), kind: z.literal('hostedWeb'), source: z.strictObject({ kind: z.literal('artifact'), artifact: asProtocolZod(PluginContributionLocalIdSchema) }), requiredHostMethods: RequiredMethodsSchema }),
+  z.strictObject({ id: asProtocolZod(PluginContributionLocalIdSchema), kind: z.literal('declarative'), root: PluginDeclarativeRendererRootV2Schema, documentSource: z.optional(PluginDeclarativeDocumentSourceV1Schema) }),
 ]));
 export type PluginUiRendererV2 = z.infer<typeof PluginUiRendererV2Schema>;
 export const MAX_PLUGIN_UI_PAGE_HEADER_ACTIONS_V1 = 16;
@@ -373,7 +369,7 @@ const PluginUiViewTargetSchemaByKindV1 = Object.freeze({
   project: PluginSurfaceProjectTargetV1Schema,
   browser: PluginSurfaceBrowserTargetV1Schema,
   services: PluginSurfaceServicesTargetV1Schema,
-} satisfies Readonly<Record<PluginUiViewDestinationTargetKindV1, z.ZodType<PluginSurfaceTargetV1>>>);
+} satisfies Readonly<Record<PluginUiViewDestinationTargetKindV1, z.ZodMiniType<PluginSurfaceTargetV1>>>);
 
 /** Static presentation defaults only; the host and user still own final placement. */
 export const MAX_PLUGIN_UI_DESTINATION_BADGE_UTF8_BYTES_V1 = 80;
@@ -385,7 +381,7 @@ function isWithinUtf8ByteLimit(value: string, limit: number): boolean {
 }
 
 function createBoundedLocalizedStringSchema(maximumUtf8Bytes: number, label: string) {
-  return PluginLocalizedStringV2Schema.superRefine((value, ctx) => {
+  return lazyZodSchema(() => PluginLocalizedStringV2Schema.check(zMini.superRefine((value, ctx) => {
     const strings = typeof value === 'string'
       ? [value]
       : [value.key, value.fallback];
@@ -393,51 +389,47 @@ function createBoundedLocalizedStringSchema(maximumUtf8Bytes: number, label: str
       return;
     }
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: `${label} exceeds the ${maximumUtf8Bytes}-byte UTF-8 limit.`,
     });
-  });
+  })));
 }
 
 const PluginUiDestinationBadgeLabelV1Schema = createBoundedLocalizedStringSchema(
   MAX_PLUGIN_UI_DESTINATION_BADGE_UTF8_BYTES_V1,
   'Plugin destination badge label',
 );
-export const PluginUiDestinationBadgeV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiDestinationBadgeV1Schema = lazyZodSchema(() => z.strictObject({
   label: PluginUiDestinationBadgeLabelV1Schema,
-  tone: PluginUiToneV1Schema.optional(),
-}).strict());
+  tone: zMini.optional(PluginUiToneV1Schema),
+}));
 export type PluginUiDestinationBadgeV1 = z.infer<typeof PluginUiDestinationBadgeV1Schema>;
 
 export const PluginUiDestinationPlacementV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('rail') }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('rail') }),
+  z.strictObject({
     kind: z.literal('column'),
     column: asProtocolZod(PluginContributionLocalIdSchema),
-  }).strict(),
+  }),
 ]));
 export type PluginUiDestinationPlacementV1 = z.infer<typeof PluginUiDestinationPlacementV1Schema>;
 
-export const PluginUiAppPageColumnV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiAppPageColumnV1Schema = lazyZodSchema(() => z.strictObject({
   renderer: asProtocolZod(PluginContributionLocalIdSchema),
-}).strict());
+}));
 export type PluginUiAppPageColumnV1 = z.infer<typeof PluginUiAppPageColumnV1Schema>;
 
-export const PluginUiDestinationRankHintV1Schema = lazyZodSchema(() => z.number().int().min(
-  MIN_PLUGIN_UI_DESTINATION_RANK_HINT_V1,
-).max(MAX_PLUGIN_UI_DESTINATION_RANK_HINT_V1).optional());
+export const PluginUiDestinationRankHintV1Schema = lazyZodSchema(() => z.optional(z.number().check(z.int(), z.minimum(MIN_PLUGIN_UI_DESTINATION_RANK_HINT_V1), z.maximum(MAX_PLUGIN_UI_DESTINATION_RANK_HINT_V1))));
 
 const PluginUiViewDestinationCommonShapeV2 = {
   id: asProtocolZod(PluginContributionLocalIdSchema),
   renderer: asProtocolZod(PluginContributionLocalIdSchema),
-  fallbackRenderers: z.array(asProtocolZod(PluginContributionLocalIdSchema))
-    .max(PLUGIN_UI_MAX_RENDERER_CHAIN_LENGTH - 1)
-    .optional(),
-  title: PluginLocalizedStringV2Schema.optional(),
-  icon: PluginUiIconTokenV1Schema.optional(),
-  badge: PluginUiDestinationBadgeV1Schema.optional(),
+  fallbackRenderers: z.optional(z.array(asProtocolZod(PluginContributionLocalIdSchema)).check(z.maxLength(PLUGIN_UI_MAX_RENDERER_CHAIN_LENGTH - 1))),
+  title: zMini.optional(PluginLocalizedStringV2Schema),
+  icon: zMini.optional(PluginUiIconTokenV1Schema),
+  badge: z.optional(PluginUiDestinationBadgeV1Schema),
   rankHint: PluginUiDestinationRankHintV1Schema,
-  instancePolicy: PluginUiDestinationInstancePolicyV1Schema.default('singleton'),
+  instancePolicy: zMini._default(PluginUiDestinationInstancePolicyV1Schema, 'singleton'),
 };
 
 /**
@@ -447,16 +439,14 @@ const PluginUiViewDestinationCommonShapeV2 = {
 const PluginUiViewInlineCommonShapeV2 = {
   id: asProtocolZod(PluginContributionLocalIdSchema),
   renderer: asProtocolZod(PluginContributionLocalIdSchema),
-  fallbackRenderers: z.array(asProtocolZod(PluginContributionLocalIdSchema))
-    .max(PLUGIN_UI_MAX_RENDERER_CHAIN_LENGTH - 1)
-    .optional(),
-  title: PluginLocalizedStringV2Schema.optional(),
-  icon: PluginUiIconTokenV1Schema.optional(),
+  fallbackRenderers: z.optional(z.array(asProtocolZod(PluginContributionLocalIdSchema)).check(z.maxLength(PLUGIN_UI_MAX_RENDERER_CHAIN_LENGTH - 1))),
+  title: zMini.optional(PluginLocalizedStringV2Schema),
+  icon: zMini.optional(PluginUiIconTokenV1Schema),
 };
 
-export const PluginUiWidgetHomeV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiWidgetHomeV1Schema = lazyZodSchema(() => z.strictObject({
   default: z.enum(['shown', 'available']),
-}).strict());
+}));
 export type PluginUiWidgetHomeV1 = z.infer<typeof PluginUiWidgetHomeV1Schema>;
 
 /**
@@ -467,10 +457,8 @@ export type PluginUiWidgetHomeV1 = z.infer<typeof PluginUiWidgetHomeV1Schema>;
  * `superRefine` here would be invisible to both other layers.
  */
 const PluginUiViewHeaderActionsSchemaV2 = Object.freeze({
-  appPage: z.array(PluginUiPageHeaderActionV1Schema)
-    .max(MAX_PLUGIN_UI_PAGE_HEADER_ACTIONS_V1)
-    .default([]),
-  unsupported: z.array(z.never()).max(0).default([]),
+  appPage: z._default(z.array(PluginUiPageHeaderActionV1Schema).check(z.maxLength(MAX_PLUGIN_UI_PAGE_HEADER_ACTIONS_V1)), []),
+  unsupported: z._default(z.array(z.never()).check(z.maxLength(0)), []),
 });
 
 /**
@@ -481,27 +469,27 @@ const PluginUiViewHeaderActionsSchemaV2 = Object.freeze({
 function createPluginUiViewBindingSchemaV2() {
   const destinationVariants = PLUGIN_UI_DESTINATION_BINDING_SLOTS_V1
     .filter((slot) => slot.container !== 'settingsPage')
-    .map((slot) => z.object({
+    .map((slot) => z.strictObject({
       ...PluginUiViewDestinationCommonShapeV2,
       // The generated authoring schema derives its policy from the same
       // registry row as parser/projection/wire validation. A singleton-only
       // host therefore cannot publish a declaration that no launcher can key.
       instancePolicy: (slot.instancePolicies as readonly PluginUiDestinationInstancePolicyV1[]).includes('multiple')
-        ? PluginUiDestinationInstancePolicyV1Schema.default('singleton')
-        : z.literal('singleton').default('singleton'),
+        ? zMini._default(PluginUiDestinationInstancePolicyV1Schema, 'singleton')
+        : z._default(z.literal('singleton'), 'singleton'),
       headerActions: slot.container === 'appPage'
         ? PluginUiViewHeaderActionsSchemaV2.appPage
         : PluginUiViewHeaderActionsSchemaV2.unsupported,
       ...(slot.targetKind === 'app'
         && (slot.container === 'appPage' || slot.container === 'rightSidebarTab')
-        ? { placement: PluginUiDestinationPlacementV1Schema.optional() }
+        ? { placement: z.optional(PluginUiDestinationPlacementV1Schema) }
         : {}),
       ...(slot.container === 'appPage'
-        ? { column: PluginUiAppPageColumnV1Schema.optional(), widgetAreas: PluginUiWidgetAreaDeclarationsV1Schema.optional() }
+        ? { column: z.optional(PluginUiAppPageColumnV1Schema), widgetAreas: zMini.optional(PluginUiWidgetAreaDeclarationsV1Schema) }
         : {}),
       container: z.literal(slot.container),
       target: PluginUiViewTargetSchemaByKindV1[slot.targetKind],
-    }).strict());
+    }));
   const inlineVariants = Object.values(PLUGIN_UI_INLINE_SURFACE_SLOTS_V1)
     .filter((slot) => isPluginUiAuthoredViewInlineSurfaceRoleV1(slot.role))
     .flatMap((slot) => Object.keys(slot.targets).map((targetKind) => {
@@ -510,11 +498,11 @@ function createPluginUiViewBindingSchemaV2() {
       container: z.literal(slot.role),
       target: PluginUiViewTargetSchemaByKindV1[targetKind as keyof typeof PluginUiViewTargetSchemaByKindV1],
       ...(slot.role === 'widget'
-        ? { home: PluginUiWidgetHomeV1Schema.optional(), sizeDeclaration: WidgetSizeDeclarationV1Schema }
+        ? { home: z.optional(PluginUiWidgetHomeV1Schema), sizeDeclaration: WidgetSizeDeclarationV1Schema }
         : {}),
       ...(slot.role === 'widget'
-        ? { connectedAccountPurposeBindings: z.array(WidgetConnectedAccountPurposeBindingV1Schema).optional(),
-            resources: z.array(asProtocolZod(PluginContributionIdentityV1Schema)).optional() }
+        ? { connectedAccountPurposeBindings: z.optional(z.array(WidgetConnectedAccountPurposeBindingV1Schema)),
+            resources: z.optional(z.array(asProtocolZod(PluginContributionIdentityV1Schema))) }
         : {}),
       ...(slot.role === 'widget' && targetKind === 'session'
         ? { inputs: InputHintsSchema, inputSchema: PluginJsonSchemaV2Schema, sessionInputPath: InputPathSchema }
@@ -524,11 +512,11 @@ function createPluginUiViewBindingSchemaV2() {
       // an App widget either has no inputs or declares inputs plus their schema.
       if (slot.role === 'widget' && targetKind === 'app') {
         return z.union([
-          z.object({ ...common, inputs: z.never().optional(), inputSchema: PluginJsonSchemaV2Schema.optional() }).strict(),
-          z.object({ ...common, inputs: InputHintsSchema, inputSchema: PluginJsonSchemaV2Schema }).strict(),
+          z.strictObject({ ...common, inputs: z.optional(z.never()), inputSchema: zMini.optional(PluginJsonSchemaV2Schema) }),
+          z.strictObject({ ...common, inputs: InputHintsSchema, inputSchema: PluginJsonSchemaV2Schema }),
         ]);
       }
-      return z.object(common).strict();
+      return z.strictObject(common);
     }));
   const variants = [...destinationVariants, ...inlineVariants];
   const [first, second, ...remaining] = variants;
@@ -538,7 +526,7 @@ function createPluginUiViewBindingSchemaV2() {
   return z.union([first, second, ...remaining]);
 }
 
-const PluginUiViewV2SchemaRaw = createPluginUiViewBindingSchemaV2().superRefine((view, ctx) => {
+const PluginUiViewV2SchemaRaw = createPluginUiViewBindingSchemaV2().check(z.superRefine((view, ctx) => {
   if (view.container === 'widget') {
     const inputs = 'inputs' in view ? InputHintsSchema.safeParse(view.inputs) : null;
     const inputSchema = 'inputSchema' in view ? PluginJsonSchemaV2Schema.safeParse(view.inputSchema) : null;
@@ -546,16 +534,16 @@ const PluginUiViewV2SchemaRaw = createPluginUiViewBindingSchemaV2().superRefine(
       ? z.array(WidgetConnectedAccountPurposeBindingV1Schema).safeParse(view.connectedAccountPurposeBindings ?? []) : null;
     if (purposeBindings?.success && (!hasValidPluginConnectedAccountPurposeBindingsV2(inputSchema?.success ? inputSchema.data : undefined, purposeBindings.data)
       || purposeBindings.data.some((binding) => !inputs?.success || !inputs.data.fields.some((field) => field.path === binding.path)))) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['connectedAccountPurposeBindings'], message: 'Widget viewer purposes must bind exact declared Connected Account input fields.' });
+      ctx.addIssue({ code: "custom", path: ['connectedAccountPurposeBindings'], message: 'Widget viewer purposes must bind exact declared Connected Account input fields.' });
     }
     const resources = 'resources' in view ? z.array(asProtocolZod(PluginContributionIdentityV1Schema)).safeParse(view.resources) : null;
     if (purposeBindings?.success && purposeBindings.data.some(binding => !resources?.success || !resources.data.some(resource =>
       resource.pluginId === binding.consumer.pluginId && resource.localId === binding.consumer.localId))) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['connectedAccountPurposeBindings'], message: 'Widget purposes must name a declared read Resource consumer.' });
+      ctx.addIssue({ code: "custom", path: ['connectedAccountPurposeBindings'], message: 'Widget purposes must name a declared read Resource consumer.' });
     }
     if ('sessionInputPath' in view && view.sessionInputPath !== undefined
       && (!inputs?.success || !inputs.data.fields.some((field) => field.path === view.sessionInputPath))) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['sessionInputPath'], message: 'The exact Session path must name a declared widget input.' });
+      ctx.addIssue({ code: "custom", path: ['sessionInputPath'], message: 'The exact Session path must name a declared widget input.' });
     }
   }
   const rendererChain = validatePluginUiRendererChainFieldsV1({
@@ -568,7 +556,7 @@ const PluginUiViewV2SchemaRaw = createPluginUiViewBindingSchemaV2().superRefine(
       path: issue.path,
     }));
   }
-});
+}));
 
 /**
  * `Array#map` necessarily widens the dynamic Zod union above: the mapped
@@ -673,8 +661,8 @@ export type PluginUiViewInlineBindingV2 = {
 export type PluginUiViewV2 = z.output<typeof PluginUiViewV2SchemaRaw> & (
   PluginUiViewDestinationBindingV2 | PluginUiViewInlineBindingV2
 );
-export const PluginUiViewV2Schema: z.ZodType<PluginUiViewV2, PluginUiViewV2Input> =
-  PluginUiViewV2SchemaRaw as z.ZodType<PluginUiViewV2, PluginUiViewV2Input>;
+export const PluginUiViewV2Schema: z.ZodMiniType<PluginUiViewV2, PluginUiViewV2Input> =
+  PluginUiViewV2SchemaRaw as z.ZodMiniType<PluginUiViewV2, PluginUiViewV2Input>;
 
 export const PluginUiSettingsHostGroupIdV1Schema = lazyZodSchema(() => z.enum([
   'general',
@@ -687,8 +675,8 @@ export type PluginUiSettingsHostGroupIdV1 =
   z.infer<typeof PluginUiSettingsHostGroupIdV1Schema>;
 
 export const PluginUiSettingsGroupReferenceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('host'), id: PluginUiSettingsHostGroupIdV1Schema }).strict(),
-  z.object({ kind: z.literal('plugin'), localId: asProtocolZod(PluginContributionLocalIdSchema) }).strict(),
+  z.strictObject({ kind: z.literal('host'), id: PluginUiSettingsHostGroupIdV1Schema }),
+  z.strictObject({ kind: z.literal('plugin'), localId: asProtocolZod(PluginContributionLocalIdSchema) }),
 ]));
 export type PluginUiSettingsGroupReferenceV1 =
   z.infer<typeof PluginUiSettingsGroupReferenceV1Schema>;
@@ -708,17 +696,15 @@ const PluginUiSettingsSubtitleV1Schema = lazyZodSchema(() => createBoundedLocali
   MAX_PLUGIN_UI_SETTINGS_SUBTITLE_UTF8_BYTES_V1,
   'Plugin Settings subtitle',
 ));
-const PluginUiSettingsDefaultRankV1Schema = lazyZodSchema(() => z.number().int().min(
-  MIN_PLUGIN_UI_SETTINGS_DEFAULT_RANK_V1,
-).max(MAX_PLUGIN_UI_SETTINGS_DEFAULT_RANK_V1).optional());
+const PluginUiSettingsDefaultRankV1Schema = lazyZodSchema(() => z.optional(z.number().check(z.int(), z.minimum(MIN_PLUGIN_UI_SETTINGS_DEFAULT_RANK_V1), z.maximum(MAX_PLUGIN_UI_SETTINGS_DEFAULT_RANK_V1))));
 
 /** A local plugin-qualified Settings group; empty groups are filtered by the host catalog. */
-export const PluginUiSettingsGroupV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiSettingsGroupV1Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   title: PluginUiSettingsTitleV1Schema,
-  icon: PluginUiIconTokenV1Schema.optional(),
+  icon: zMini.optional(PluginUiIconTokenV1Schema),
   defaultRank: PluginUiSettingsDefaultRankV1Schema,
-}).strict());
+}));
 export type PluginUiSettingsGroupV1 = z.infer<typeof PluginUiSettingsGroupV1Schema>;
 
 /**
@@ -726,37 +712,34 @@ export type PluginUiSettingsGroupV1 = z.infer<typeof PluginUiSettingsGroupV1Sche
  * group eligibility result, or availability assertion: the Registry derives its
  * fixed `settingsPage × app` binding and the Settings catalog owns those facts.
  */
-export const PluginUiSettingsPageV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiSettingsPageV1Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   group: PluginUiSettingsGroupReferenceV1Schema,
   title: PluginUiSettingsTitleV1Schema,
-  subtitle: PluginUiSettingsSubtitleV1Schema.optional(),
-  keywords: z.array(
-    z.string().trim().min(1).refine(
-      (value) => isWithinUtf8ByteLimit(value, MAX_PLUGIN_UI_SETTINGS_KEYWORD_UTF8_BYTES_V1),
-      `Plugin Settings keyword exceeds the ${MAX_PLUGIN_UI_SETTINGS_KEYWORD_UTF8_BYTES_V1}-byte UTF-8 limit.`,
-    ),
-  ).max(MAX_PLUGIN_UI_SETTINGS_KEYWORDS_V1).optional(),
-  icon: PluginUiIconTokenV1Schema.optional(),
+  subtitle: zMini.optional(PluginUiSettingsSubtitleV1Schema),
+  keywords: z.optional(z.array(
+    z.string().check(z.trim(), z.minLength(1), z.refine((value) => isWithinUtf8ByteLimit(value, MAX_PLUGIN_UI_SETTINGS_KEYWORD_UTF8_BYTES_V1), `Plugin Settings keyword exceeds the ${MAX_PLUGIN_UI_SETTINGS_KEYWORD_UTF8_BYTES_V1}-byte UTF-8 limit.`)),
+  ).check(z.maxLength(MAX_PLUGIN_UI_SETTINGS_KEYWORDS_V1))),
+  icon: zMini.optional(PluginUiIconTokenV1Schema),
   defaultRank: PluginUiSettingsDefaultRankV1Schema,
   renderer: asProtocolZod(PluginContributionLocalIdSchema),
-}).strict());
+}));
 export type PluginUiSettingsPageV1 = z.infer<typeof PluginUiSettingsPageV1Schema>;
 
-export const PluginUiTranslationBundleV2Schema = lazyZodSchema(() => z.object({
-  locale: z.string().min(2).refine((value) => {
+export const PluginUiTranslationBundleV2Schema = lazyZodSchema(() => z.strictObject({
+  locale: z.string().check(z.minLength(2), z.refine((value) => {
     try { return Intl.getCanonicalLocales(value)[0] === value; } catch { return false; }
-  }, 'Locale must be a canonical BCP 47 language tag.'),
+  }, 'Locale must be a canonical BCP 47 language tag.')),
   messages: z.record(z.string(), z.string()),
-}).strict());
+}));
 export type PluginUiTranslationBundleV2 = z.infer<typeof PluginUiTranslationBundleV2Schema>;
-export const PluginUiContributionsV2Schema = lazyZodSchema(() => z.object({
-  views: z.array(PluginUiViewV2Schema).default([]),
-  renderers: z.array(PluginUiRendererV2Schema).default([]),
-  settingsGroups: z.array(PluginUiSettingsGroupV1Schema).default([]),
-  settingsPages: z.array(PluginUiSettingsPageV1Schema).default([]),
-  translations: z.array(PluginUiTranslationBundleV2Schema).default([]),
-}).strict().superRefine((value, ctx) => {
+export const PluginUiContributionsV2Schema = lazyZodSchema(() => z._default(z.strictObject({
+  views: z._default(z.array(PluginUiViewV2Schema), []),
+  renderers: z._default(z.array(PluginUiRendererV2Schema), []),
+  settingsGroups: z._default(z.array(PluginUiSettingsGroupV1Schema), []),
+  settingsPages: z._default(z.array(PluginUiSettingsPageV1Schema), []),
+  translations: z._default(z.array(PluginUiTranslationBundleV2Schema), []),
+}).check(z.superRefine((value, ctx) => {
   // Contribution ids and cross-contribution references are owned by manifest
   // ingestion through the contribution catalog, which is the single owner of
   // the plugin-wide id namespace and of dangling vs wrong-family references.
@@ -766,5 +749,5 @@ export const PluginUiContributionsV2Schema = lazyZodSchema(() => z.object({
     if (seen.has(translation.locale)) ctx.addIssue({ code: 'custom', path: ['translations', index, 'locale'], message: 'Duplicate translation locale.' });
     seen.add(translation.locale);
   });
-}).default({ views: [], renderers: [], settingsGroups: [], settingsPages: [], translations: [] }));
+})), { views: [], renderers: [], settingsGroups: [], settingsPages: [], translations: [] }));
 export type PluginUiContributionsV2 = z.infer<typeof PluginUiContributionsV2Schema>;

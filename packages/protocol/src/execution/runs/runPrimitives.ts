@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const ExecutionRunIntentSchema = lazyZodSchema(() => z.enum([
   'review',
@@ -24,12 +24,12 @@ export const ExecutionRunIoModeSchema = lazyZodSchema(() => z.enum(['request_res
 export type ExecutionRunIoMode = z.infer<typeof ExecutionRunIoModeSchema>;
 
 // Action inputs share this request without importing Voice-dependent stream events.
-export const ExecutionRunTurnStreamReadRequestSchema = lazyZodSchema(() => z.object({
-  runId: z.string().min(1),
-  streamId: z.string().min(1),
-  cursor: z.number().int().min(0),
-  maxEvents: z.number().int().min(1).max(256).optional(),
+export const ExecutionRunTurnStreamReadRequestSchema = lazyZodSchema(() => z.looseObject({
+  runId: z.string().check(z.minLength(1)),
+  streamId: z.string().check(z.minLength(1)),
+  cursor: z.number().check(z.int(), z.minimum(0)),
+  maxEvents: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(256))),
   /** Hold an empty read until this cursor has events or the stream becomes terminal. */
-  waitForEvents: z.boolean().optional(),
-}).passthrough());
+  waitForEvents: z.optional(z.boolean()),
+}));
 export type ExecutionRunTurnStreamReadRequest = z.infer<typeof ExecutionRunTurnStreamReadRequestSchema>;

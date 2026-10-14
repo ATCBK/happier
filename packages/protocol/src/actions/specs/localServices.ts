@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { RuntimeActionIdV1 } from '../actionIds.js';
 import {
@@ -46,30 +46,28 @@ import { ProjectServiceRelocateInputV1Schema, ProjectServiceRelocateResultV1Sche
 import { RPC_METHODS } from '../../rpc/methods.js';
 import { actionCliDerivedDefault, type ActionCliProjection } from '../actionCliProjection.js';
 
-const RuntimeLocalServiceMachineInputSchema = lazyZodSchema(() => z
-  .object({
-    machineId: z.string().trim().min(1).max(256).optional(),
-    sessionId: z.string().trim().min(1).max(256).optional(),
-    workspaceId: z.string().trim().min(1).max(256).optional(),
-  })
-  .passthrough());
+const RuntimeLocalServiceMachineInputSchema = lazyZodSchema(() => z.looseObject({
+    machineId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    sessionId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    workspaceId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+  }));
 
-const RuntimeLocalServiceLauncherActionInputSchema = lazyZodSchema(() => RuntimeLocalServiceMachineInputSchema.extend({
-  targetId: z.string().trim().min(1).max(256).optional(),
+const RuntimeLocalServiceLauncherActionInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(RuntimeLocalServiceMachineInputSchema, {
+  targetId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
   scope: DaemonLocalServiceLauncherLeafRequestV1Schema.shape.scope,
   workspaceRoot: DaemonLocalServiceLauncherLeafRequestV1Schema.shape.workspaceRoot,
-}).passthrough());
+})));
 
-const RuntimeLocalServicePreviewActionInputSchema = lazyZodSchema(() => RuntimeLocalServiceMachineInputSchema.extend({
-  previewId: z.string().trim().min(1).max(256).optional(),
-  targetId: z.string().trim().min(1).max(256).optional(),
-}).passthrough());
+const RuntimeLocalServicePreviewActionInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(RuntimeLocalServiceMachineInputSchema, {
+  previewId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+  targetId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+})));
 
-const RuntimeLocalServicePublicPreviewActionInputSchema = lazyZodSchema(() => RuntimeLocalServicePreviewActionInputSchema.extend({
-  exposureId: z.string().trim().min(1).max(256).optional(),
-  mode: z.enum(['authenticated', 'secret_link', 'public']).optional(),
-  ttlMs: z.number().int().positive().optional(),
-}).passthrough());
+const RuntimeLocalServicePublicPreviewActionInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(RuntimeLocalServicePreviewActionInputSchema, {
+  exposureId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+  mode: z.optional(z.enum(['authenticated', 'secret_link', 'public'])),
+  ttlMs: z.optional(z.number().check(z.int(), z.positive())),
+})));
 
 type LocalServicesRuntimeActionId = Extract<RuntimeActionIdV1, `localServices.${string}` | 'projects.service.relocate'>;
 
@@ -172,8 +170,8 @@ export function createLocalServiceActionCliProjection(actionId: RuntimeActionIdV
   const base = { acceptsServerId: true as const, commands: [{ path: [...path], visibility: 'canonical' as const }] };
   const kind = resolveLocalServiceActionKindForRuntimeActionId(actionId);
   if (kind) return { ...base,
-    inputSchema: lazyZodSchema(() => z.object({ ...LocalServiceActionRequestV1Schema.shape,
-      action: z.literal(kind).optional(), requestId: LocalServiceActionRequestV1Schema.shape.requestId.optional() }).strict()),
+    inputSchema: lazyZodSchema(() => z.strictObject({ ...LocalServiceActionRequestV1Schema.shape,
+      action: z.optional(z.literal(kind)), requestId: z.optional(LocalServiceActionRequestV1Schema.shape.requestId) })),
     bindInput: (value, context) => ({ ...(value as Readonly<Record<string, unknown>>),
       action: actionCliDerivedDefault(kind),
       ...((value as Readonly<Record<string, unknown>>).requestId === undefined ? { requestId: actionCliDerivedDefault(context.invocationId) } : {}) }),
@@ -195,13 +193,10 @@ function localServiceActionRequestSchema(
   actionId: LocalServiceActionRuntimeActionId,
 ) {
   const expectedAction = LOCAL_SERVICE_ACTION_KINDS_BY_RUNTIME_ACTION[actionId];
-  return LocalServiceActionRequestV1Schema.refine(
-    (request) => request.action === expectedAction,
-    {
+  return lazyZodSchema(() => LocalServiceActionRequestV1Schema.check(z.refine((request) => request.action === expectedAction, {
       message: `Local service action must be ${expectedAction}.`,
       path: ['action'],
-    },
-  );
+    })));
 }
 
 export const LOCAL_SERVICES_RUNTIME_ACTION_TITLES: Readonly<Partial<Record<RuntimeActionIdV1, string>>> = Object.freeze({
@@ -280,7 +275,7 @@ export const LOCAL_SERVICES_RUNTIME_ACTION_INPUT_SCHEMAS = Object.freeze({
   'localServices.actions.stopManaged': localServiceActionRequestSchema('localServices.actions.stopManaged'),
   'localServices.actions.restartManaged': localServiceActionRequestSchema('localServices.actions.restartManaged'),
   'localServices.actions.terminateDetected': localServiceActionRequestSchema('localServices.actions.terminateDetected'),
-} as const satisfies Readonly<Record<LocalServicesRuntimeActionId, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<LocalServicesRuntimeActionId, z.ZodMiniType>>);
 
 export const LOCAL_SERVICES_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
   'projects.service.relocate': ProjectServiceRelocateResultV1Schema,
@@ -304,7 +299,7 @@ export const LOCAL_SERVICES_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
   'localServices.actions.stopManaged': LocalServiceActionResultV1Schema,
   'localServices.actions.restartManaged': LocalServiceActionResultV1Schema,
   'localServices.actions.terminateDetected': LocalServiceActionResultV1Schema,
-} as const satisfies Readonly<Record<LocalServicesRuntimeActionId, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<LocalServicesRuntimeActionId, z.ZodMiniType>>);
 
 export const LOCAL_SERVICES_RUNTIME_ACTION_SPEC_FAMILY = Object.freeze({
   approvalPolicies: {

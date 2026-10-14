@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { PreNormalizedActionSpec } from './actionSpecs.js';
 import { SessionVoicePreferenceV1Schema } from '../sessions/instructions/sessionVoicePreferenceV1.js';
 
@@ -28,31 +28,31 @@ export function voiceDictationOperation(actionId: VoiceDictationActionId): Voice
   return actionId.slice('ui.voice_global.dictation.'.length) as VoiceDictationOperation;
 }
 
-const IdSchema = lazyZodSchema(() => z.string().trim().min(1));
-const AddressSchema = lazyZodSchema(() => z.object({ serverId: IdSchema, sessionId: IdSchema }).strict());
+const IdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const AddressSchema = lazyZodSchema(() => z.strictObject({ serverId: IdSchema, sessionId: IdSchema }));
 export const VoiceConversationTargetSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('global') }).strict(),
-  z.object({ kind: z.literal('session'), sessionAddress: AddressSchema.nullable() }).strict(),
-  z.object({ kind: z.literal('default') }).strict(),
+  z.strictObject({ kind: z.literal('global') }),
+  z.strictObject({ kind: z.literal('session'), sessionAddress: z.nullable(AddressSchema) }),
+  z.strictObject({ kind: z.literal('default') }),
 ]));
-const AttemptInputSchema = lazyZodSchema(() => z.object({ expectedAttempt: IdSchema }).strict());
-const BriefInputSchema = lazyZodSchema(() => z.object({ expectedAttemptId: IdSchema.optional() }).strict());
-const DictationInputSchema = lazyZodSchema(() => z.object({ commandId: IdSchema }).strict());
+const AttemptInputSchema = lazyZodSchema(() => z.strictObject({ expectedAttempt: IdSchema }));
+const BriefInputSchema = lazyZodSchema(() => z.strictObject({ expectedAttemptId: z.optional(IdSchema) }));
+const DictationInputSchema = lazyZodSchema(() => z.strictObject({ commandId: IdSchema }));
 export const VoiceDictationActionResultSchema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('completed'), dictationStatus: z.enum(['idle', 'starting', 'listening', 'transcribing']), inserted: z.boolean() }).strict(),
-  z.object({ status: z.literal('unavailable'), code: z.enum(['dictation_field_unmounted', 'dictation_field_unavailable',
+  z.strictObject({ status: z.literal('completed'), dictationStatus: z.enum(['idle', 'starting', 'listening', 'transcribing']), inserted: z.boolean() }),
+  z.strictObject({ status: z.literal('unavailable'), code: z.enum(['dictation_field_unmounted', 'dictation_field_unavailable',
     'dictation_consent_required', 'dictation_microphone_unavailable', 'dictation_capture_unavailable', 'dictation_state_changed',
-    'dictation_cancelled', 'dictation_failed']) }).strict(),
+    'dictation_cancelled', 'dictation_failed']) }),
 ]));
 export type VoiceDictationActionResult = z.infer<typeof VoiceDictationActionResultSchema>;
 export const VoiceConversationActionInputSchemas = {
-  'ui.voice_global.get': z.object({ target: VoiceConversationTargetSchema.optional() }).strict(),
-  'ui.voice_global.start': z.object({ target: VoiceConversationTargetSchema, expectedAttempt: z.null() }).strict(),
+  'ui.voice_global.get': z.strictObject({ target: z.optional(VoiceConversationTargetSchema) }),
+  'ui.voice_global.start': z.strictObject({ target: VoiceConversationTargetSchema, expectedAttempt: z.null() }),
   'ui.voice_global.end': AttemptInputSchema,
-  'ui.voice_global.set_muted': AttemptInputSchema.extend({ muted: z.boolean() }).strict(),
+  'ui.voice_global.set_muted': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AttemptInputSchema, { muted: z.boolean() }))),
   'ui.voice_global.recover': AttemptInputSchema,
-  'ui.voice_global.dismiss': AttemptInputSchema.extend({ kind: z.enum(['failed', 'ended']) }).strict(),
-  'ui.voice_global.turn_control': AttemptInputSchema.extend({ control: z.enum(['commit_input', 'interrupt', 'cancel']) }).strict(),
+  'ui.voice_global.dismiss': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AttemptInputSchema, { kind: z.enum(['failed', 'ended']) }))),
+  'ui.voice_global.turn_control': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AttemptInputSchema, { control: z.enum(['commit_input', 'interrupt', 'cancel']) }))),
   'ui.voice_global.hold_begin': AttemptInputSchema,
   'ui.voice_global.hold_release': AttemptInputSchema,
   'ui.voice_global.hold_cancel': AttemptInputSchema,
@@ -60,13 +60,13 @@ export const VoiceConversationActionInputSchemas = {
   'ui.voice_global.brief.retry': BriefInputSchema,
   'ui.voice_global.brief.stop': BriefInputSchema,
   'ui.voice_global.brief.close': BriefInputSchema,
-  'ui.voice_global.glance.open': z.object({}).strict(),
-  'ui.voice_global.glance.close': z.object({}).strict(),
-  'ui.voice_global.transcript.set_visible': z.object({ visible: z.boolean() }).strict(),
-  'ui.voice_global.companion.reveal': z.object({}).strict(),
-  'ui.voice_global.position.set': z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) }).strict(),
-  'ui.voice_global.setup.open': z.object({}).strict(),
-  'ui.voice_global.setup.close': z.object({}).strict(),
+  'ui.voice_global.glance.open': z.strictObject({}),
+  'ui.voice_global.glance.close': z.strictObject({}),
+  'ui.voice_global.transcript.set_visible': z.strictObject({ visible: z.boolean() }),
+  'ui.voice_global.companion.reveal': z.strictObject({}),
+  'ui.voice_global.position.set': z.strictObject({ x: z.number().check(z.minimum(0), z.maximum(1)), y: z.number().check(z.minimum(0), z.maximum(1)) }),
+  'ui.voice_global.setup.open': z.strictObject({}),
+  'ui.voice_global.setup.close': z.strictObject({}),
   'ui.voice_global.open_conversation': AttemptInputSchema,
   'ui.voice_global.dictation.start': DictationInputSchema,
   'ui.voice_global.dictation.finish': DictationInputSchema,
@@ -75,30 +75,30 @@ export const VoiceConversationActionInputSchemas = {
 } as const;
 
 /** The adapter's accepted voice for this attempt, never its saved next-attempt preference. */
-export const VoiceConversationInUseVoiceSchema = lazyZodSchema(() => SessionVoicePreferenceV1Schema.extend({
-  displayName: z.string().trim().min(1),
-}).strict());
+export const VoiceConversationInUseVoiceSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SessionVoicePreferenceV1Schema, {
+  displayName: z.string().check(z.trim(), z.minLength(1)),
+})));
 export type VoiceConversationInUseVoice = z.infer<typeof VoiceConversationInUseVoiceSchema>;
 
-export const VoiceConversationStatusSchema = lazyZodSchema(() => z.object({
-  attemptId: IdSchema.nullable(), adapterId: IdSchema.nullable(), sessionId: IdSchema.nullable(),
+export const VoiceConversationStatusSchema = lazyZodSchema(() => z.strictObject({
+  attemptId: z.nullable(IdSchema), adapterId: z.nullable(IdSchema), sessionId: z.nullable(IdSchema),
   status: z.enum(['disconnected', 'connecting', 'connected', 'error']),
   mode: z.enum(['idle', 'listening', 'transcribing', 'thinking', 'speaking']),
   target: VoiceConversationTargetSchema,
-  conversationSessionAddress: AddressSchema.nullable(), targetSessionAddress: AddressSchema.nullable(),
+  conversationSessionAddress: z.nullable(AddressSchema), targetSessionAddress: z.nullable(AddressSchema),
   canStart: z.boolean(), canStop: z.boolean(), canMute: z.boolean(), canCommitInput: z.boolean(),
   canHoldToTalk: z.boolean(), muted: z.boolean(), canDismissFailedAttempt: z.boolean(), canDismissEnded: z.boolean(),
-  recoveryAction: IdSchema.nullable(), availability: z.enum(['ready', 'recoverable', 'setup', 'unavailable']),
-  inUseVoice: VoiceConversationInUseVoiceSchema.nullable(),
-}).strict());
+  recoveryAction: z.nullable(IdSchema), availability: z.enum(['ready', 'recoverable', 'setup', 'unavailable']),
+  inUseVoice: z.nullable(VoiceConversationInUseVoiceSchema),
+}));
 export type VoiceConversationStatus = z.infer<typeof VoiceConversationStatusSchema>;
 export const VoiceConversationActionResultSchema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('completed'), voice: VoiceConversationStatusSchema }).strict(),
-  z.object({ status: z.literal('unavailable'), code: IdSchema, voice: VoiceConversationStatusSchema }).strict(),
+  z.strictObject({ status: z.literal('completed'), voice: VoiceConversationStatusSchema }),
+  z.strictObject({ status: z.literal('unavailable'), code: IdSchema, voice: VoiceConversationStatusSchema }),
 ]));
-const BriefResultSchema = lazyZodSchema(() => z.object({
-  status: z.enum(['waiting', 'sent', 'refused', 'stopped', 'closed']), attemptId: IdSchema.nullable(),
-}).strict());
+const BriefResultSchema = lazyZodSchema(() => z.strictObject({
+  status: z.enum(['waiting', 'sent', 'refused', 'stopped', 'closed']), attemptId: z.nullable(IdSchema),
+}));
 export const VoiceConversationActionOutputSchemas = {
   'ui.voice_global.get': VoiceConversationActionResultSchema,
   'ui.voice_global.start': VoiceConversationActionResultSchema,

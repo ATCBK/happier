@@ -1,8 +1,8 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /** A server decision projected for presentation; mutation authority is always rechecked. */
-export const SessionAccessCapabilitiesV1Schema = lazyZodSchema(() => z.object({
+export const SessionAccessCapabilitiesV1Schema = lazyZodSchema(() => z.strictObject({
   readTranscript: z.boolean(),
   submitAgentInput: z.boolean(),
   editSessionRecords: z.boolean(),
@@ -15,33 +15,33 @@ export const SessionAccessCapabilitiesV1Schema = lazyZodSchema(() => z.object({
   assignResponsibility: z.boolean(),
   stopSession: z.boolean(),
   deleteSession: z.boolean(),
-}).strict());
+}));
 export type SessionAccessCapabilitiesV1 = z.infer<typeof SessionAccessCapabilitiesV1Schema>;
 
 export const SessionAccessSourceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('owner') }).strict(),
-  z.object({ kind: z.literal('direct'), shareId: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal('team'), teamId: z.string().min(1), requiredByTeamPolicy: z.boolean() }).strict(),
-  z.object({ kind: z.literal('group'), teamId: z.string().min(1), groupId: z.string().min(1) }).strict(),
+  z.strictObject({ kind: z.literal('owner') }),
+  z.strictObject({ kind: z.literal('direct'), shareId: z.string().check(z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('team'), teamId: z.string().check(z.minLength(1)), requiredByTeamPolicy: z.boolean() }),
+  z.strictObject({ kind: z.literal('group'), teamId: z.string().check(z.minLength(1)), groupId: z.string().check(z.minLength(1)) }),
 ]));
 export type SessionAccessSourceV1 = z.infer<typeof SessionAccessSourceV1Schema>;
 
 /** One safe display identity, not the complete audience or an authorization input. */
 export const SessionAudienceContextV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('team'), teamId: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal('group'), teamId: z.string().min(1), groupId: z.string().min(1) }).strict(),
+  z.strictObject({ kind: z.literal('team'), teamId: z.string().check(z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('group'), teamId: z.string().check(z.minLength(1)), groupId: z.string().check(z.minLength(1)) }),
 ]));
 export type SessionAudienceContextV1 = z.infer<typeof SessionAudienceContextV1Schema>;
 
-export const SessionEffectiveAccessV1Schema = lazyZodSchema(() => z.object({
+export const SessionEffectiveAccessV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   level: z.enum(['view', 'edit', 'admin', 'owner']),
   sources: z.array(SessionAccessSourceV1Schema),
   capabilities: SessionAccessCapabilitiesV1Schema,
-  audienceContext: SessionAudienceContextV1Schema.nullable().optional(),
+  audienceContext: z.optional(z.nullable(SessionAudienceContextV1Schema)),
   /** Authored organizational context never establishes a grant or audience match. */
-  primaryTeamId: z.string().min(1).nullable().optional(),
-}).strict());
+  primaryTeamId: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+}));
 export type SessionEffectiveAccessV1 = z.infer<typeof SessionEffectiveAccessV1Schema>;
 
 export type EffectiveSessionAccessLevelV1 = SessionEffectiveAccessV1['level'];

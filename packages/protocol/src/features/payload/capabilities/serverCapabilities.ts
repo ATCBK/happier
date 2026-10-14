@@ -1,18 +1,16 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ServerRetentionCapabilitiesSchema, type ServerRetentionCapabilities } from './serverRetentionCapabilities.js';
 import { ServerUsageAnalyticsCapabilitiesSchema, type ServerUsageAnalyticsCapabilities } from './serverUsageAnalyticsCapabilities.js';
 
-const OptionalNonEmptyString = z.string().trim().min(1).optional();
+const OptionalNonEmptyString = z.optional(z.string().check(z.trim(), z.minLength(1)));
 
-export const ServerCapabilitiesSchema = lazyZodSchema(() => z
-  .object({
+export const ServerCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
     canonicalServerUrl: OptionalNonEmptyString,
     webappUrl: OptionalNonEmptyString,
-    retention: ServerRetentionCapabilitiesSchema.optional(),
-    usageAnalytics: ServerUsageAnalyticsCapabilitiesSchema.optional(),
-  })
-  .strict());
+    retention: z.optional(ServerRetentionCapabilitiesSchema),
+    usageAnalytics: z.optional(ServerUsageAnalyticsCapabilitiesSchema),
+  }));
 
 export type ServerCapabilities = z.infer<typeof ServerCapabilitiesSchema>;
 export type { ServerRetentionCapabilities, ServerUsageAnalyticsCapabilities };

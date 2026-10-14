@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginContributionIdentityV1Schema, type PluginContributionIdentityV1 } from '../plugins/contributionIdentity.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
@@ -24,17 +24,17 @@ export function isCustomAcpAgentContributionIdentityV1(identity: unknown): ident
  * boundary, but persisted and author-facing Agent targets remain qualified
  * plugin contribution identities.
  */
-const CurrentAgentExecutionTargetV1Schema = lazyZodSchema(() => z.object({
+const CurrentAgentExecutionTargetV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('agent'),
   identity: asProtocolZod(PluginContributionIdentityV1Schema),
-  definitionId: z.string().min(1).optional(),
-}).strict().superRefine((target, ctx) => {
+  definitionId: z.optional(z.string().check(z.minLength(1))),
+}).check(z.superRefine((target, ctx) => {
   const isCustomAcp = isCustomAcpAgentContributionIdentityV1(target.identity);
   if (isCustomAcp !== (target.definitionId !== undefined)) {
     ctx.addIssue({ code: 'custom', path: ['definitionId'],
       message: isCustomAcp ? 'Custom ACP Agent requires a configured definition' : 'Agent does not accept a configured ACP definition' });
   }
-}));
+})));
 
 export const AgentExecutionTargetV1Schema = defineStoredReadProjection(
   lazyZodSchema(() => CurrentAgentExecutionTargetV1Schema),
@@ -53,10 +53,10 @@ export function listAgentExecutionTargetsV1(
 }
 
 /** Genuine 0.2 stored selection ingress, never request/write admission. */
-export const AgentExecutionTargetV1StoredSchema = lazyZodSchema(() => z.preprocess((value) => {
+export const AgentExecutionTargetV1StoredSchema = lazyZodSchema(() => z.pipe(z.transform((value) => {
   if (value && typeof value === 'object' && !Array.isArray(value)
     && 'kind' in value && value.kind === 'configuredAcpBackend' && 'backendId' in value) {
     return { kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: value.backendId };
   }
   return value;
-}, createStoredReadSchema(CurrentAgentExecutionTargetV1Schema)));
+}), createStoredReadSchema(CurrentAgentExecutionTargetV1Schema)));

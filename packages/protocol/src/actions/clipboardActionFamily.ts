@@ -1,10 +1,10 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { PreNormalizedActionSpec } from './actionSpecs.js';
 
 export const CLIPBOARD_ACTION_IDS = ['clipboard.write'] as const;
-export const ClipboardWriteInputSchema = z.object({ text: z.string() }).strict();
-export const ClipboardWriteResultSchema = z.object({ status: z.literal('copied') }).strict();
+export const ClipboardWriteInputSchema = z.strictObject({ text: z.string() });
+export const ClipboardWriteResultSchema = z.strictObject({ status: z.literal('copied') });
 
 export const CLIPBOARD_ACTION_SPECS = [{
   id: 'clipboard.write', approval: {result: 'required'},

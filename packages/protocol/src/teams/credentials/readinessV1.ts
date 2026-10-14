@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { IrohEndpointDescriptorV1Schema } from '../../connectivity/iroh/endpointDescriptorV1.js';
 import { RunnerCredentialSelectionBindingV1Schema } from '../../ephemeralRunner/review.js';
@@ -25,42 +25,42 @@ import {
   type RunnerBrokerReadinessRequestV1 as RunnerBrokerReadinessRequest,
 } from '../../ephemeralRunner/brokerReadinessRequestV1.js';
 
-export const RunnerBrokerProviderPresentationV1Schema = lazyZodSchema(() => z.object({
+export const RunnerBrokerProviderPresentationV1Schema = lazyZodSchema(() => z.strictObject({
   identity: asProtocolZod(PluginContributionIdentityV1Schema),
   definitionRevision: z.literal(1),
-}).strict());
+}));
 
 /** Safe, content-free readiness reported by the credential-resource owner. */
 export const TeamCredentialResourceReadinessV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('available') }).strict(),
-  z.object({ kind: z.literal('resource_corrupt') }).strict(),
-  z.object({ kind: z.literal('resource_unavailable') }).strict(),
-  z.object({ kind: z.literal('source_unavailable') }).strict(),
-  z.object({ kind: z.literal('broker_unavailable') }).strict(),
-  z.object({ kind: z.literal('update_required') }).strict(),
-  z.object({ kind: z.literal('policy_denied') }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('available') }),
+  z.strictObject({ kind: z.literal('resource_corrupt') }),
+  z.strictObject({ kind: z.literal('resource_unavailable') }),
+  z.strictObject({ kind: z.literal('source_unavailable') }),
+  z.strictObject({ kind: z.literal('broker_unavailable') }),
+  z.strictObject({ kind: z.literal('update_required') }),
+  z.strictObject({ kind: z.literal('policy_denied') }),
+  z.strictObject({
     kind: z.literal('limit_reached'),
     // The one metric vocabulary: the limit owner decides with it, the catalog
     // read copies the denial's metric into this readiness, and the picker
     // labels it. A second spelling here makes the whole catalog entry throw.
     metric: TeamCredentialUsageLimitMetricV1Schema,
-    resetsAtUtc: z.string().datetime(),
-  }).strict(),
+    resetsAtUtc: z.string().check(z.iso.datetime()),
+  }),
 ]));
 export type TeamCredentialResourceReadinessV1 = z.infer<typeof TeamCredentialResourceReadinessV1Schema>;
 
-const RunnerBrokerReadinessResponseBindingV1Schema = lazyZodSchema(() => RunnerBrokerReadinessFactsV1Schema.omit({
+const RunnerBrokerReadinessResponseBindingV1Schema = lazyZodSchema(() => z.omit(RunnerBrokerReadinessFactsV1Schema, {
   v: true,
   kind: true,
 }));
 
-export const RunnerBrokerReadinessResponseV1Schema = lazyZodSchema(() => z.object({
+export const RunnerBrokerReadinessResponseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   binding: RunnerBrokerReadinessResponseBindingV1Schema,
   credentialSelectionBinding: RunnerCredentialSelectionBindingV1Schema,
   readiness: TeamCredentialResourceReadinessV1Schema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   const selection = value.credentialSelectionBinding;
   if (
     selection.resourceId !== value.binding.resourceId
@@ -68,11 +68,11 @@ export const RunnerBrokerReadinessResponseV1Schema = lazyZodSchema(() => z.objec
     || selection.application.agentTargetKey !== value.binding.agentTargetKey
     || selection.application.protocol !== value.binding.protocol
   ) context.addIssue({
-    code: z.ZodIssueCode.custom,
+    code: "custom",
     path: ['credentialSelectionBinding'],
     message: 'Reviewed credential selection must match readiness facts',
   });
-}));
+})));
 export type RunnerBrokerReadinessResponseV1 = z.infer<typeof RunnerBrokerReadinessResponseV1Schema>;
 
 /**
@@ -100,10 +100,10 @@ export function doesRunnerBrokerReadinessResponseMatchRequestV1(
 }
 
 /** Exact content-free broker projection returned only to the proof-bound endpoint. */
-export const RunnerBrokerReadinessProjectionV1Schema = lazyZodSchema(() => z.object({
+export const RunnerBrokerReadinessProjectionV1Schema = lazyZodSchema(() => z.strictObject({
   credentialSelectionBinding: RunnerCredentialSelectionBindingV1Schema,
   target: IrohEndpointDescriptorV1Schema,
-  provider: RunnerBrokerProviderPresentationV1Schema.nullable(),
+  provider: z.nullable(RunnerBrokerProviderPresentationV1Schema),
   readiness: TeamCredentialResourceReadinessV1Schema,
-}).strict());
+}));
 export type RunnerBrokerReadinessProjectionV1 = z.infer<typeof RunnerBrokerReadinessProjectionV1Schema>;

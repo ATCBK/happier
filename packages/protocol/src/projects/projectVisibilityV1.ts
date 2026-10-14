@@ -1,19 +1,19 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { ProjectAccountOrganizationV1Schema, ProjectAccountRowExpectedRevisionV1Schema } from './projectAccountRowsV1.js';
 import { ProjectContextTargetV1Schema, type ProjectContextActionOwnerDepsV1 } from './projectContextV1.js';
 
-export const ProjectVisibilitySetInputV1Schema = lazyZodSchema(() => z.object({
+export const ProjectVisibilitySetInputV1Schema = lazyZodSchema(() => z.strictObject({
   target: ProjectContextTargetV1Schema,
   expectedRevision: ProjectAccountRowExpectedRevisionV1Schema,
   hidden: z.boolean(),
-}).strict());
+}));
 export type ProjectVisibilitySetInputV1 = z.infer<typeof ProjectVisibilitySetInputV1Schema>;
 export const ProjectVisibilitySetOutputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true), row: ProjectAccountOrganizationV1Schema, revision: z.number().int().nonnegative() }).strict(),
-  z.object({ ok: z.literal(false), errorCode: z.enum(['invalid_parameters', 'project_visibility_conflict',
+  z.strictObject({ ok: z.literal(true), row: ProjectAccountOrganizationV1Schema, revision: z.number().check(z.int(), z.nonnegative()) }),
+  z.strictObject({ ok: z.literal(false), errorCode: z.enum(['invalid_parameters', 'project_visibility_conflict',
     'project_visibility_access_denied', 'project_visibility_unavailable']),
-    currentRevision: z.optional(ProjectAccountRowExpectedRevisionV1Schema) }).strict(),
+    currentRevision: z.optional(ProjectAccountRowExpectedRevisionV1Schema) }),
 ]));
 export type ProjectVisibilitySetOutputV1 = z.infer<typeof ProjectVisibilitySetOutputV1Schema>;
 

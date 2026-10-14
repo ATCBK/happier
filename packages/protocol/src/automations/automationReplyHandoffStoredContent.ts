@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 import {
@@ -54,7 +54,7 @@ function openAutomationReplyHandoffStoredEnvelopeV1<TPayload>(params: Readonly<{
   material?: AccountScopedCryptoMaterial;
   envelope: unknown;
   kind: 'automation_run_result' | 'automation_conversation_reply_context';
-  payloadSchema: z.ZodType<TPayload>;
+  payloadSchema: z.ZodMiniType<TPayload>;
 }>): AutomationReplyHandoffStoredContentOpenResultV1<TPayload> {
   const outer = validateAutomationReplyHandoffStoredEnvelopeOuterForModeV1({
     content: params.kind === 'automation_run_result' ? 'result' : 'replyContext',

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
 import { BrowserContextMessageMetaV1Schema, BrowserContextMessagePayloadV1Schema } from '../../browser/context/v1.js';
 
@@ -358,7 +358,7 @@ function readComposerAttachmentEnvelopeRecords(value: unknown): readonly unknown
  */
 function rejectOversizedComposerAttachmentEnvelope(
   value: unknown,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   const attachmentRecords = readComposerAttachmentEnvelopeRecords(value);
   if (attachmentRecords.length === 0) return;
@@ -366,34 +366,31 @@ function rejectOversizedComposerAttachmentEnvelope(
   const encodedBytes = textEncoder.encode(createCanonicalJsonSigningInput(attachmentRecords)).byteLength;
   if (encodedBytes > MAX_COMPOSER_ATTACHMENT_ENVELOPE_JSON_BYTES_V1) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: 'Composer attachment envelopes must be at most '
         + `${MAX_COMPOSER_ATTACHMENT_ENVELOPE_JSON_BYTES_V1} canonical JSON bytes.`,
     });
   }
 }
 
-const HappierStructuredInputV1ObjectSchema = lazyZodSchema(() => z.object({
-  v: z.literal(1).default(1),
+const HappierStructuredInputV1ObjectSchema = lazyZodSchema(() => z.looseObject({
+  v: z._default(z.literal(1), 1),
   /**
    * The open, additive reference list (R-4). It carries every composer reference kind,
    * so a new kind never needs a new per-kind array and never needs an envelope version
    * bump. Readers apply D-4 precedence through `readStructuredInputMentionSourcesV1`.
    */
-  mentions: z.array(MentionRefV1Schema).optional(),
-  vendorPluginMentions: z.array(VendorPluginMentionV1Schema).optional(),
-  skillMentions: z.array(SkillMentionV1Schema).optional(),
-  imageInputs: z.array(StructuredImageInputV1Schema).optional(),
-  browserContext: BrowserContextMessagePayloadV1Schema.optional(),
-  composerAttachments: z.array(ComposerAttachmentInputV1Schema).max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1).optional(),
-  executionRunCompletion: ExecutionRunCompletionV1Schema.optional(),
-  sessionDiscussionSelectionSourceV1: SessionDiscussionSelectionSourceV1Schema
-    .omit({ draftCorrelationId: true })
-    .optional(),
-}).passthrough());
+  mentions: z.optional(z.array(MentionRefV1Schema)),
+  vendorPluginMentions: z.optional(z.array(VendorPluginMentionV1Schema)),
+  skillMentions: z.optional(z.array(SkillMentionV1Schema)),
+  imageInputs: z.optional(z.array(StructuredImageInputV1Schema)),
+  browserContext: z.optional(BrowserContextMessagePayloadV1Schema),
+  composerAttachments: z.optional(z.array(ComposerAttachmentInputV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1))),
+  executionRunCompletion: z.optional(ExecutionRunCompletionV1Schema),
+  sessionDiscussionSelectionSourceV1: z.optional(z.omit(SessionDiscussionSelectionSourceV1Schema, { draftCorrelationId: true })),
+}));
 
-export const HappierStructuredInputV1Schema = lazyZodSchema(() => HappierStructuredInputV1ObjectSchema
-  .superRefine(rejectOversizedComposerAttachmentEnvelope));
+export const HappierStructuredInputV1Schema = lazyZodSchema(() => HappierStructuredInputV1ObjectSchema.check(z.superRefine(rejectOversizedComposerAttachmentEnvelope)));
 
 export type HappierStructuredInputV1 = z.infer<typeof HappierStructuredInputV1Schema>;
 
@@ -407,21 +404,16 @@ export type HappierStructuredInputV1 = z.infer<typeof HappierStructuredInputV1Sc
  * the aggregate encoded attachment budget are the same refinement, so ingress
  * cannot bypass the bound the persisted envelope enforces.
  */
-export const RawIngressStructuredInputV1Schema = lazyZodSchema(() => HappierStructuredInputV1ObjectSchema
-  .omit({ composerAttachments: true })
-  .extend({
-    composerAttachments: z.array(ComposerAttachmentDraftV1Schema)
-      .max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)
-      .optional(),
-  })
-  .superRefine(rejectOversizedComposerAttachmentEnvelope));
+export const RawIngressStructuredInputV1Schema = lazyZodSchema(() => z.extend(z.omit(HappierStructuredInputV1ObjectSchema, { composerAttachments: true }), {
+    composerAttachments: z.optional(z.array(ComposerAttachmentDraftV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1))),
+  }).check(z.superRefine(rejectOversizedComposerAttachmentEnvelope)));
 export type RawIngressStructuredInputV1 = Readonly<
   Omit<HappierStructuredInputV1, 'composerAttachments'> & Readonly<{
     composerAttachments?: readonly ComposerAttachmentDraftV1[];
   }>
 >;
 
-function rejectPersistedDispatchAttachments(value: unknown, context: z.RefinementCtx): void {
+function rejectPersistedDispatchAttachments(value: unknown, context: z.core.$RefinementCtx): void {
   if (Object.hasOwn(value as object, 'resolvedComposerAttachments')) {
     context.addIssue({ code: 'custom', path: ['resolvedComposerAttachments'],
       message: 'Dispatch attachments are not persisted Message input.' });
@@ -430,17 +422,12 @@ function rejectPersistedDispatchAttachments(value: unknown, context: z.Refinemen
 }
 
 function createStoredStructuredInputV1Schema<T extends z.core.$ZodType>(attachments: T) {
-  return createStoredReadSchema(HappierStructuredInputV1ObjectSchema)
-    .omit({ composerAttachments: true })
-    .extend({
+  return lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(z.omit(createStoredReadSchema(HappierStructuredInputV1ObjectSchema), { composerAttachments: true }), {
       // These are intentionally additive native reference bags, not closed
       // typed fields. Preserve unknown kinds and their inert annotations.
-      mentions: z.array(MentionRefV1Schema).optional(),
-      composerAttachments: z.array(createStoredReadSchema(attachments))
-        .max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1).optional(),
-    })
-    .passthrough()
-    .superRefine(rejectPersistedDispatchAttachments);
+      mentions: z.optional(z.array(MentionRefV1Schema)),
+      composerAttachments: z.optional(z.array(createStoredReadSchema(attachments)).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1))),
+    })).check(z.superRefine(rejectPersistedDispatchAttachments)));
 }
 
 export const HappierStructuredInputV1StoredSchema = lazyZodSchema(() =>
@@ -491,23 +478,18 @@ export function readAdmittedHappierStructuredInputV1FromMeta(
  * composer attachments are intentionally rejected here, even though the
  * generic envelope keeps its additive-preserve behavior for Message ingress.
  */
-export const AgentDispatchStructuredInputV1Schema = lazyZodSchema(() => HappierStructuredInputV1ObjectSchema
-  .omit({ composerAttachments: true })
-  .extend({
-    resolvedComposerAttachments: z.array(ResolvedComposerAttachmentDispatchV1Schema)
-      .max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)
-      .optional(),
-  })
-  .superRefine((value, context) => {
+export const AgentDispatchStructuredInputV1Schema = lazyZodSchema(() => z.extend(z.omit(HappierStructuredInputV1ObjectSchema, { composerAttachments: true }), {
+    resolvedComposerAttachments: z.optional(z.array(ResolvedComposerAttachmentDispatchV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1))),
+  }).check(z.superRefine((value, context) => {
     rejectOversizedComposerAttachmentEnvelope(value, context);
     if (Object.prototype.hasOwnProperty.call(value, 'composerAttachments')) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['composerAttachments'],
         message: 'Agent dispatch structured input must not contain raw composer attachments.',
       });
     }
-  }));
+  })));
 export type AgentDispatchStructuredInputV1 = Readonly<
   Omit<HappierStructuredInputV1, 'composerAttachments'> & Readonly<{
     resolvedComposerAttachments?: readonly ResolvedComposerAttachmentDispatchV1[];

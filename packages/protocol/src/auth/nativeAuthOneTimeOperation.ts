@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { computeCanonicalDomainSeparatedDigest } from '../crypto/canonicalDigest.js';
 import { normalizeVerifiedEmail, VERIFIED_EMAIL_MAX_SCALARS } from './verifiedEmail.js';
@@ -15,7 +15,7 @@ export const NATIVE_AUTH_PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
 
 /** 32 random bytes, base64url, unpadded. Never stored and never logged. */
 export const NATIVE_AUTH_ONE_TIME_BEARER_BYTES = 32;
-export const NativeAuthOneTimeBearerV1Schema = lazyZodSchema(() => z.string().length(43).regex(/^[A-Za-z0-9_-]{43}$/));
+export const NativeAuthOneTimeBearerV1Schema = lazyZodSchema(() => z.string().check(z.length(43), z.regex(/^[A-Za-z0-9_-]{43}$/)));
 
 const NativeAuthOneTimePurposeSchema = lazyZodSchema(() => z.enum(['verify_native_email', 'reset_plain_password']));
 export type NativeAuthOneTimePurpose = z.infer<typeof NativeAuthOneTimePurposeSchema>;
@@ -25,51 +25,49 @@ const KEY_NAMESPACE_BY_PURPOSE = {
     reset_plain_password: 'auth_password_reset_v1',
 } as const satisfies Record<NativeAuthOneTimePurpose, string>;
 
-const AccountIdSchema = lazyZodSchema(() => z.string().min(1).max(256));
-const CredentialRevisionSchema = lazyZodSchema(() => z.number().int().min(1).max(2_147_483_647));
+const AccountIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(256)));
+const CredentialRevisionSchema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(1), z.maximum(2_147_483_647)));
 /** Opaque bounded reference into the existing server-scoped pending-auth owner. */
-const ContinuationIdSchema = lazyZodSchema(() => z.string().min(1).max(256));
-const TeamInvitationTokenHashSchema = lazyZodSchema(() => z.string().regex(/^[0-9a-f]{64}$/u));
-const NormalizedEmailSchema = lazyZodSchema(() => z.string().max(VERIFIED_EMAIL_MAX_SCALARS).refine(
-    (value) => normalizeVerifiedEmail(value)?.normalizedEmail === value,
-));
+const ContinuationIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(256)));
+const TeamInvitationTokenHashSchema = lazyZodSchema(() => z.string().check(z.regex(/^[0-9a-f]{64}$/u)));
+const NormalizedEmailSchema = lazyZodSchema(() => z.string().check(z.maxLength(VERIFIED_EMAIL_MAX_SCALARS), z.refine((value) => normalizeVerifiedEmail(value)?.normalizedEmail === value)));
 
 export const NativeAuthOneTimeOperationV1Schema = lazyZodSchema(() => z.discriminatedUnion('purpose', [
-    z.object({
+    z.strictObject({
         v: z.literal(1),
         purpose: z.literal('verify_native_email'),
         normalizedEmail: NormalizedEmailSchema,
         consumer: z.discriminatedUnion('kind', [
-            z.object({
+            z.strictObject({
                 kind: z.literal('fresh_account'),
-                continuationId: ContinuationIdSchema.nullable(),
-            }).strict(),
-            z.object({
+                continuationId: z.nullable(ContinuationIdSchema),
+            }),
+            z.strictObject({
                 kind: z.literal('team_invitation'),
                 invitationId: AccountIdSchema,
                 tokenHash: TeamInvitationTokenHashSchema,
                 teamId: AccountIdSchema,
-            }).strict(),
-            z.object({
+            }),
+            z.strictObject({
                 kind: z.literal('password_enrollment'),
                 accountId: AccountIdSchema,
-            }).strict(),
-            z.object({
+            }),
+            z.strictObject({
                 kind: z.literal('sign_in_email_change'),
                 accountId: AccountIdSchema,
                 nativeIdentityId: AccountIdSchema,
                 expectedNativeIdentity: NormalizedEmailSchema,
-            }).strict(),
+            }),
         ]),
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
         v: z.literal(1),
         purpose: z.literal('reset_plain_password'),
         accountId: AccountIdSchema,
         credentialRevision: CredentialRevisionSchema,
         nativeIdentityId: AccountIdSchema,
         expectedNativeIdentity: NormalizedEmailSchema,
-    }).strict(),
+    }),
 ]));
 export type NativeAuthOneTimeOperationV1 = z.infer<typeof NativeAuthOneTimeOperationV1Schema>;
 

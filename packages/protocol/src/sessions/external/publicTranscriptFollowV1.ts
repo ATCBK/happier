@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { measureSerializedValidatedStrictPluginJsonUtf8Bytes } from '../../plugins/contributions/strictJsonValue.js';
 import { AgentRuntimeJsonValueV1Schema } from '../../runtime/agentSessionV1.js';
@@ -26,13 +26,7 @@ export const MAX_EXTERNAL_SESSION_TRANSCRIPT_FOLLOW_CODE_CODE_UNITS = 256;
 export const MAX_EXTERNAL_SESSION_TRANSCRIPT_FOLLOW_EVENT_SERIALIZED_BYTES = 1_048_576;
 
 function canonicalBoundedString(maxCodeUnits: number, description: string) {
-  return z.string()
-    .min(1)
-    .max(maxCodeUnits)
-    .refine(
-      (value) => value === value.trim(),
-      `${description} must already be trimmed.`,
-    );
+  return z.string().check(z.minLength(1), z.maxLength(maxCodeUnits), z.refine((value) => value === value.trim(), `${description} must already be trimmed.`));
 }
 
 export const ExternalSessionTranscriptFollowCursorV1Schema = canonicalBoundedString(
@@ -55,12 +49,12 @@ export type ExternalSessionTranscriptFollowCodeV1 = z.infer<
  * Public Author projection of one External Session transcript item. Producer
  * routing and raw-record fields intentionally do not cross this boundary.
  */
-export const ExternalSessionTranscriptItemV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionTranscriptItemV1Schema = lazyZodSchema(() => z.strictObject({
   id: ExternalSessionTranscriptItemIdV1Schema,
-  timestampMs: ExternalSessionTranscriptSourceTimestampV1Schema.optional(),
+  timestampMs: z.optional(ExternalSessionTranscriptSourceTimestampV1Schema),
   kind: z.enum(['user', 'agent', 'system', 'event']),
   data: AgentRuntimeJsonValueV1Schema,
-}).strict());
+}));
 export type ExternalSessionTranscriptItemV1 = z.infer<
   typeof ExternalSessionTranscriptItemV1Schema
 >;
@@ -69,26 +63,26 @@ const ExternalSessionTranscriptFollowEventTooLargeIssueMessage =
   'External Session transcript follow event exceeds the serialized-byte limit.';
 
 export const ExternalSessionTranscriptFollowEventV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('data'),
     // Count is intentionally unbounded. The event byte ceiling below is the
     // public resource contract and admits any valid collection below it.
     items: z.array(ExternalSessionTranscriptItemV1Schema),
-    fromCursor: ExternalSessionTranscriptFollowCursorV1Schema.nullable(),
+    fromCursor: z.nullable(ExternalSessionTranscriptFollowCursorV1Schema),
     nextCursor: ExternalSessionTranscriptFollowCursorV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('resyncRequired'),
     reason: z.literal('cursorDiscontinuity'),
-    cursor: ExternalSessionTranscriptFollowCursorV1Schema.nullable(),
-  }).strict(),
-  z.object({
+    cursor: z.nullable(ExternalSessionTranscriptFollowCursorV1Schema),
+  }),
+  z.strictObject({
     kind: z.literal('terminated'),
     reason: z.enum(['disposed', 'aborted', 'retired', 'providerFailure', 'resyncRequired']),
-    cursor: ExternalSessionTranscriptFollowCursorV1Schema.nullable(),
-    code: ExternalSessionTranscriptFollowCodeV1Schema.optional(),
-  }).strict(),
-]).superRefine((event, context) => {
+    cursor: z.nullable(ExternalSessionTranscriptFollowCursorV1Schema),
+    code: z.optional(ExternalSessionTranscriptFollowCodeV1Schema),
+  }),
+]).check(z.superRefine((event, context) => {
   try {
     if (measureSerializedValidatedStrictPluginJsonUtf8Bytes(
       event,
@@ -108,7 +102,7 @@ export const ExternalSessionTranscriptFollowEventV1Schema = lazyZodSchema(() => 
         : 'External Session transcript follow event must contain strict JSON data.',
     });
   }
-}));
+})));
 export type ExternalSessionTranscriptFollowEventV1 = z.infer<
   typeof ExternalSessionTranscriptFollowEventV1Schema
 >;

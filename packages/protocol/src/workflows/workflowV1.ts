@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ConnectedServiceBindingsV2IngressSchema } from '../connect/connectedServiceBindings.js';
 import { ExecutionRunResultContractV1Schema } from '../execution/runs/resultContractV1.js';
@@ -45,16 +46,16 @@ export {
  * the same parser before any save or start effect.
  */
 
-export const WorkflowInputDefinitionSchema = lazyZodSchema(() => z.object({
+export const WorkflowInputDefinitionSchema = lazyZodSchema(() => z.strictObject({
   name: WorkflowInputNameSchema,
   valueType: z.enum(['string', 'number', 'boolean', 'json']),
-  enum: z.array(z.string()).min(1).optional(),
+  enum: z.optional(z.array(z.string()).check(z.minLength(1))),
   required: z.boolean(),
-  default: StrictJsonValueSchema.optional(),
-  description: z.string().optional(),
-  optionsSourceId: z.string().min(1).optional(),
-  inputType: InputTypeReferenceV1Schema.optional(),
-}).strict().superRefine((value, ctx) => {
+  default: zMini.optional(StrictJsonValueSchema),
+  description: z.optional(z.string()),
+  optionsSourceId: z.optional(z.string().check(z.minLength(1))),
+  inputType: zMini.optional(InputTypeReferenceV1Schema),
+}).check(z.superRefine((value, ctx) => {
   if (value.inputType && (value.optionsSourceId || value.enum)) {
     ctx.addIssue({ code: 'custom', path: ['inputType'], message: 'A typed input uses its declared options owner' });
   }
@@ -69,7 +70,7 @@ export const WorkflowInputDefinitionSchema = lazyZodSchema(() => z.object({
       message: 'required inputs cannot have defaults',
     });
   }
-}));
+})));
 export type WorkflowInputDefinition = z.infer<typeof WorkflowInputDefinitionSchema>;
 
 /**
@@ -133,31 +134,29 @@ export type WorkflowResultContract = z.infer<typeof WorkflowResultContractSchema
 const WORKFLOW_SESSION_AUTHORING_SELECTION_SHAPE = {
   allowedTools: SessionAuthoringSelectionFieldsV1.allowedTools,
   unlistedTools: SessionAuthoringSelectionFieldsV1.unlistedTools,
-  agentTarget: SessionAuthoringSelectionFieldsV1.agentTarget.optional(),
+  agentTarget: zMini.optional(SessionAuthoringSelectionFieldsV1.agentTarget),
   // The catalog entry carries a `.default(null)` for draft hydration. A workflow
   // definition must distinguish omission from an explicit null, so this consumes
   // the underlying selection schema without that default.
-  modelSelection: SessionModelSelectionV1Schema.nullable().optional(),
-  profileId: SessionAuthoringSelectionFieldsV1.profileId.optional(),
-  permissionMode: SessionAuthoringSelectionFieldsV1.permissionMode.optional(),
-  acpSessionModeId: SessionAuthoringSelectionFieldsV1.acpSessionModeId.optional(),
-  sessionConfigOptionOverrides: SessionAuthoringSelectionFieldsV1.sessionConfigOptionOverrides.optional(),
-  capabilitySelection: SessionAuthoringSelectionFieldsV1.capabilitySelection.optional(),
+  modelSelection: zMini.optional(zMini.nullable(SessionModelSelectionV1Schema)),
+  profileId: zMini.optional(SessionAuthoringSelectionFieldsV1.profileId),
+  permissionMode: zMini.optional(SessionAuthoringSelectionFieldsV1.permissionMode),
+  acpSessionModeId: zMini.optional(SessionAuthoringSelectionFieldsV1.acpSessionModeId),
+  sessionConfigOptionOverrides: zMini.optional(SessionAuthoringSelectionFieldsV1.sessionConfigOptionOverrides),
+  capabilitySelection: zMini.optional(SessionAuthoringSelectionFieldsV1.capabilitySelection),
   // Portable definitions normalize supported V1 persistence into the strict
   // current selection so native/profile/group/team-resource intent survives
   // without carrying unknown fields into exported JSON.
-  connectedServices: ConnectedServiceBindingsV2IngressSchema.nullable().optional(),
-  transcriptStorage: SessionAuthoringSelectionFieldsV1.transcriptStorage.optional(),
-  terminal: SessionAuthoringSelectionFieldsV1.terminal.optional(),
-  windowsRemoteSessionLaunchMode: SessionAuthoringSelectionFieldsV1.windowsRemoteSessionLaunchMode.optional(),
-  windowsRemoteSessionConsole: SessionAuthoringSelectionFieldsV1.windowsRemoteSessionConsole.optional(),
-  windowsTerminalWindowName: SessionAuthoringSelectionFieldsV1.windowsTerminalWindowName.optional(),
-  runtimeDescriptorV1: PortableRuntimeDescriptorV1Schema.nullable().optional(),
+  connectedServices: zMini.optional(zMini.nullable(ConnectedServiceBindingsV2IngressSchema)),
+  transcriptStorage: zMini.optional(SessionAuthoringSelectionFieldsV1.transcriptStorage),
+  terminal: zMini.optional(SessionAuthoringSelectionFieldsV1.terminal),
+  windowsRemoteSessionLaunchMode: zMini.optional(SessionAuthoringSelectionFieldsV1.windowsRemoteSessionLaunchMode),
+  windowsRemoteSessionConsole: zMini.optional(SessionAuthoringSelectionFieldsV1.windowsRemoteSessionConsole),
+  windowsTerminalWindowName: zMini.optional(SessionAuthoringSelectionFieldsV1.windowsTerminalWindowName),
+  runtimeDescriptorV1: zMini.optional(zMini.nullable(PortableRuntimeDescriptorV1Schema)),
 } as const;
 
-export const WorkflowSessionAuthoringSelectionSchema = lazyZodSchema(() => z
-  .object(WORKFLOW_SESSION_AUTHORING_SELECTION_SHAPE)
-  .strict());
+export const WorkflowSessionAuthoringSelectionSchema = lazyZodSchema(() => z.strictObject(WORKFLOW_SESSION_AUTHORING_SELECTION_SHAPE));
 export type WorkflowSessionAuthoringSelection = z.infer<typeof WorkflowSessionAuthoringSelectionSchema>;
 
 /** The Session-authoring field ids a workflow definition round-trips, in editor order. */
@@ -166,18 +165,18 @@ export const WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS = Object.freeze(
   Object.keys(WORKFLOW_SESSION_AUTHORING_SELECTION_SHAPE) as WorkflowSessionAuthoringSelectionFieldId[],
 );
 
-export const WorkflowStepExecutionSelectionSchema = lazyZodSchema(() => WorkflowSessionAuthoringSelectionSchema.extend({
+export const WorkflowStepExecutionSelectionSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(WorkflowSessionAuthoringSelectionSchema, {
   /** Incoming runtime intent; arbitration remains at the Session runtime snapshot owner. */
-  permissionModeUpdatedAt: z.number().int().optional(),
+  permissionModeUpdatedAt: z.optional(z.number().check(z.int())),
   /** Execution-only launch values, composed by the incumbent Session spawn owner. */
-  launchEnvironment: AgentLaunchEnvironmentV1Schema.refine((environment) => environment.unset.length === 0, {
+  launchEnvironment: zMini.optional(AgentLaunchEnvironmentV1Schema.check(zMini.refine((environment) => environment.unset.length === 0, {
     message: 'Workflow Session launches cannot unset inherited environment values',
-  }).optional(),
+  }))),
   /** Native Agent continuation; the Happier conversation may still be fresh. */
-  providerSessionResume: AgentSessionProviderResumeV1Schema.optional(),
-  conversation: WorkflowConversationSelectionSchema.optional(),
-  workspace: WorkflowWorkspaceSelectionSchema.optional(),
-}).strict());
+  providerSessionResume: zMini.optional(AgentSessionProviderResumeV1Schema),
+  conversation: zMini.optional(WorkflowConversationSelectionSchema),
+  workspace: zMini.optional(WorkflowWorkspaceSelectionSchema),
+})));
 export type WorkflowStepExecutionSelection = z.infer<typeof WorkflowStepExecutionSelectionSchema>;
 
 function projectStoredCapabilitySelection(raw: unknown): unknown {
@@ -190,28 +189,24 @@ function projectStoredCapabilitySelection(raw: unknown): unknown {
   };
 }
 
-defineStoredReadProjection(WorkflowSessionAuthoringSelectionSchema, () => z.preprocess(
-  projectStoredCapabilitySelection, createStoredReadSchema(WorkflowSessionAuthoringSelectionSchema.strip()),
-));
-defineStoredReadProjection(WorkflowStepExecutionSelectionSchema, () => z.preprocess(
-  projectStoredCapabilitySelection, createStoredReadSchema(WorkflowStepExecutionSelectionSchema.strip()),
-));
+defineStoredReadProjection(WorkflowSessionAuthoringSelectionSchema, () => z.pipe(z.transform(projectStoredCapabilitySelection), createStoredReadSchema(lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(WorkflowSessionAuthoringSelectionSchema)))));
+defineStoredReadProjection(WorkflowStepExecutionSelectionSchema, () => z.pipe(z.transform(projectStoredCapabilitySelection), createStoredReadSchema(lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(WorkflowStepExecutionSelectionSchema)))));
 
 export const WorkflowLeafExecutionTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('session') }).strict(),
-  z.object({ kind: z.literal('detached_run') }).strict(),
+  z.strictObject({ kind: z.literal('session') }),
+  z.strictObject({ kind: z.literal('detached_run') }),
 ]));
 export type WorkflowLeafExecutionTargetV1 = z.infer<typeof WorkflowLeafExecutionTargetV1Schema>;
 export const WorkflowEngineSelectionV1Schema = lazyZodSchema(() => z.union([
-  z.object({ role: z.string().min(1) }).strict(),
-  z.object({ agentTarget: AgentExecutionTargetV1Schema,
-    modelSelection: SessionModelSelectionV1Schema.nullable().optional(), effort: z.string().min(1).optional() }).strict(),
+  z.strictObject({ role: z.string().check(z.minLength(1)) }),
+  z.strictObject({ agentTarget: AgentExecutionTargetV1Schema,
+    modelSelection: zMini.optional(zMini.nullable(SessionModelSelectionV1Schema)), effort: z.optional(z.string().check(z.minLength(1))) }),
 ]));
 export type WorkflowEngineSelectionV1 = z.infer<typeof WorkflowEngineSelectionV1Schema>;
-export const WorkflowStepSelectionV1Schema = lazyZodSchema(() => WorkflowStepExecutionSelectionSchema.extend({
-  engine: WorkflowEngineSelectionV1Schema.optional(),
-  executionTarget: WorkflowLeafExecutionTargetV1Schema.optional(),
-}).strict().superRefine((selection, context) => {
+export const WorkflowStepSelectionV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(WorkflowStepExecutionSelectionSchema, {
+  engine: z.optional(WorkflowEngineSelectionV1Schema),
+  executionTarget: z.optional(WorkflowLeafExecutionTargetV1Schema),
+})).check(z.superRefine((selection, context) => {
   if (selection.engine === undefined) return;
   for (const field of ['agentTarget', 'modelSelection'] as const) {
     if (selection[field] !== undefined) context.addIssue({ code: 'custom', path: [field], message: 'An engine arm cannot also set a flat engine field' });
@@ -219,14 +214,12 @@ export const WorkflowStepSelectionV1Schema = lazyZodSchema(() => WorkflowStepExe
   if (selection.sessionConfigOptionOverrides?.overrides.reasoning_effort !== undefined) {
     context.addIssue({ code: 'custom', path: ['sessionConfigOptionOverrides', 'overrides', 'reasoning_effort'], message: 'Engine effort belongs to the engine arm' });
   }
-}));
+})));
 export type WorkflowStepSelectionV1 = z.infer<typeof WorkflowStepSelectionV1Schema>;
-defineStoredReadProjection(WorkflowStepSelectionV1Schema, () => z.preprocess(
-  projectStoredCapabilitySelection, createStoredReadSchema(WorkflowStepSelectionV1Schema.strip()),
-));
+defineStoredReadProjection(WorkflowStepSelectionV1Schema, () => z.pipe(z.transform(projectStoredCapabilitySelection), createStoredReadSchema(lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(WorkflowStepSelectionV1Schema)))));
 
 /** An authored block title; blank input restores the derived presentation label. */
-export const WorkflowBlockNameV1Schema = lazyZodSchema(() => z.string().trim().transform((name) => name || undefined).optional());
+export const WorkflowBlockNameV1Schema = lazyZodSchema(() => z.optional(z.pipe(z.string().check(z.trim()), z.transform((name) => name || undefined))));
 
 function omitEmptyWorkflowBlockName<T extends { name?: string }>(block: T): T {
   if (block.name === undefined) delete block.name;
@@ -237,72 +230,71 @@ function omitEmptyWorkflowBlockName<T extends { name?: string }>(block: T): T {
 export const WorkflowRunWhenV1Schema = lazyZodSchema(() => z.enum(['success', 'failure', 'always']));
 export type WorkflowRunWhenV1 = z.infer<typeof WorkflowRunWhenV1Schema>;
 
-export const WorkflowStepSchema = lazyZodSchema(() => z.object({
+export const WorkflowStepSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('step'),
   id: WorkflowBlockIdSchema,
   name: WorkflowBlockNameV1Schema,
-  document: WorkflowStepComposerDocumentSchema.extend({ text: z.string() }),
+  document: zMini.extend(WorkflowStepComposerDocumentSchema, { text: z.string() }),
   /** Create or acquire the Session without admitting a turn. */
-  inputMode: z.literal('none').optional(),
-  execution: WorkflowStepSelectionV1Schema.optional(),
-  input: z.array(WorkflowValueReferenceSchema).default([]),
-  result: WorkflowResultContractSchema.default({ kind: 'text' }),
-  timeoutMs: z.number().int().positive().safe().optional(),
-  pauseForReview: z.boolean().optional(),
-  onlyWhen: WorkflowConditionSchema.optional(),
-  runWhen: WorkflowRunWhenV1Schema.optional(),
-}).strict().refine((step) => step.inputMode === 'none' || step.document.text.length > 0, {
+  inputMode: z.optional(z.literal('none')),
+  execution: z.optional(WorkflowStepSelectionV1Schema),
+  input: z._default(z.array(WorkflowValueReferenceSchema), []),
+  result: zMini._default(WorkflowResultContractSchema, { kind: 'text' }),
+  timeoutMs: z.optional(z.number().check(z.int(), z.positive(), z.int())),
+  pauseForReview: z.optional(z.boolean()),
+  onlyWhen: zMini.optional(WorkflowConditionSchema),
+  runWhen: z.optional(WorkflowRunWhenV1Schema),
+}).check(z.refine((step) => step.inputMode === 'none' || step.document.text.length > 0, {
   path: ['document', 'text'], message: 'An Agent step needs a prompt or explicit inputless creation',
-}).overwrite(omitEmptyWorkflowBlockName));
+}), z.overwrite(omitEmptyWorkflowBlockName)));
 export type WorkflowStep = z.infer<typeof WorkflowStepSchema>;
 
 export const WorkflowAgentLeafV1Schema = WorkflowStepSchema;
 export type WorkflowAgentLeafV1 = WorkflowStep;
 export const WorkflowActionValueReferenceV1Schema = lazyZodSchema(() => z.union([
   WorkflowValueReferenceSchema,
-  z.object({ kind: z.literal('origin_session_id') }).strict(),
+  z.strictObject({ kind: z.literal('origin_session_id') }),
 ]));
 export type WorkflowActionValueReferenceV1 = z.infer<typeof WorkflowActionValueReferenceV1Schema>;
 export const WorkflowActionFieldBindingV1Schema = lazyZodSchema(() => z.union([
   WorkflowActionValueReferenceV1Schema,
-  z.object({ kind: z.literal('list'), items: z.array(WorkflowActionValueReferenceV1Schema) }).strict(),
+  z.strictObject({ kind: z.literal('list'), items: z.array(WorkflowActionValueReferenceV1Schema) }),
 ]));
 export type WorkflowActionFieldBindingV1 = z.infer<typeof WorkflowActionFieldBindingV1Schema>;
-const workflowLeafFields = { id: WorkflowBlockIdSchema, name: WorkflowBlockNameV1Schema, execution: WorkflowStepSelectionV1Schema.optional(), onlyWhen: WorkflowConditionSchema.optional(), runWhen: WorkflowRunWhenV1Schema.optional() };
-function refineWorkflowActionBindings(value: Readonly<{ actionId: string; input: Record<string, { kind: string }> }>, context: z.RefinementCtx) {
+const workflowLeafFields = { id: WorkflowBlockIdSchema, name: WorkflowBlockNameV1Schema, execution: zMini.optional(WorkflowStepSelectionV1Schema), onlyWhen: zMini.optional(WorkflowConditionSchema), runWhen: zMini.optional(WorkflowRunWhenV1Schema) };
+function refineWorkflowActionBindings(value: Readonly<{ actionId: string; input: Record<string, { kind: string }> }>, context: z.core.$RefinementCtx) {
   for (const [field, binding] of Object.entries(value.input)) {
     if (isWorkflowActionLiteralFieldV1(value.actionId, field) && binding.kind !== 'literal') {
       context.addIssue({ code: 'custom', path: ['input', field], message: 'Command text must be literal; bind dynamic values through env' });
     }
   }
 }
-export const WorkflowActionLeafV1Schema = lazyZodSchema(() => z.object({
+export const WorkflowActionLeafV1Schema = lazyZodSchema(() => z.strictObject({
   ...workflowLeafFields, kind: z.literal('action'),
-  actionId: z.string().min(1).refine((id) => !id.startsWith('workflow.run.'), 'Workflow composition uses a Workflow leaf'),
-  input: z.record(z.string().min(1), WorkflowActionFieldBindingV1Schema).default({}),
-  timeoutMs: z.number().int().positive().safe().optional(),
-  pauseForReview: z.boolean().optional(),
-}).strict().superRefine(refineWorkflowActionBindings).overwrite(omitEmptyWorkflowBlockName));
+  actionId: z.string().check(z.minLength(1), z.refine((id) => !id.startsWith('workflow.run.'), 'Workflow composition uses a Workflow leaf')),
+  input: z._default(z.record(z.string().check(z.minLength(1)), WorkflowActionFieldBindingV1Schema), {}),
+  timeoutMs: z.optional(z.number().check(z.int(), z.positive(), z.int())),
+  pauseForReview: z.optional(z.boolean()),
+}).check(z.superRefine(refineWorkflowActionBindings), z.overwrite(omitEmptyWorkflowBlockName)));
 export type WorkflowActionLeafV1 = z.infer<typeof WorkflowActionLeafV1Schema>;
-export const WorkflowNestedLeafV1Schema = lazyZodSchema(() => z.object({
+export const WorkflowNestedLeafV1Schema = lazyZodSchema(() => z.strictObject({
   ...workflowLeafFields, kind: z.literal('workflow'), workflowRef: WorkflowDefinitionRefV1StringSchema,
-  input: z.record(WorkflowInputNameSchema, WorkflowValueReferenceSchema).default({}),
-}).strict().overwrite(omitEmptyWorkflowBlockName));
+  input: z._default(z.record(WorkflowInputNameSchema, WorkflowValueReferenceSchema), {}),
+}).check(z.overwrite(omitEmptyWorkflowBlockName)));
 export type WorkflowNestedLeafV1 = z.infer<typeof WorkflowNestedLeafV1Schema>;
-export const WorkflowWaitLeafV1Schema = lazyZodSchema(() => z.object({
+export const WorkflowWaitLeafV1Schema = lazyZodSchema(() => z.strictObject({
   ...workflowLeafFields, kind: z.literal('wait'), document: WorkflowStepComposerDocumentSchema,
-  result: WorkflowResultContractSchema.optional(),
-}).strict().overwrite(omitEmptyWorkflowBlockName));
+  result: zMini.optional(WorkflowResultContractSchema),
+}).check(z.overwrite(omitEmptyWorkflowBlockName)));
 export type WorkflowWaitLeafV1 = z.infer<typeof WorkflowWaitLeafV1Schema>;
 export const WorkflowLeafV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [WorkflowAgentLeafV1Schema, WorkflowActionLeafV1Schema, WorkflowNestedLeafV1Schema, WorkflowWaitLeafV1Schema]));
 export type WorkflowLeafV1 = z.infer<typeof WorkflowLeafV1Schema>;
-function refineWorkflowEvaluatorRunWhen(value: Readonly<{ runWhen?: WorkflowRunWhenV1 }>, context: z.RefinementCtx) {
+function refineWorkflowEvaluatorRunWhen(value: Readonly<{ runWhen?: WorkflowRunWhenV1 }>, context: z.core.$RefinementCtx) {
   if (value.runWhen !== undefined && value.runWhen !== 'success') {
     context.addIssue({ code: 'custom', path: ['runWhen'], message: 'An evaluator must produce a decision every round' });
   }
 }
-export const WorkflowEvaluatorLeafV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [WorkflowAgentLeafV1Schema, WorkflowActionLeafV1Schema])
-  .superRefine(refineWorkflowEvaluatorRunWhen));
+export const WorkflowEvaluatorLeafV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [WorkflowAgentLeafV1Schema, WorkflowActionLeafV1Schema]).check(z.superRefine(refineWorkflowEvaluatorRunWhen)));
 export type WorkflowEvaluatorLeafV1 = z.infer<typeof WorkflowEvaluatorLeafV1Schema>;
 
 export const WORKFLOW_FAILURE_POLICIES = ['fail_stop', 'collect_outcomes'] as const;
@@ -318,8 +310,8 @@ export type WorkflowEvaluatorHistoryMode = (typeof WORKFLOW_EVALUATOR_HISTORY_MO
 export type WorkflowParallelBranch = Readonly<{ id: string; name?: string; blocks: readonly WorkflowBlock[] }>;
 
 export const WorkflowMaxIterationsV1Schema = lazyZodSchema(() => z.union([
-  z.number().int().positive().safe(),
-  z.object({ kind: z.literal('input'), name: WorkflowInputNameSchema }).strict(),
+  z.number().check(z.int(), z.positive(), z.int()),
+  z.strictObject({ kind: z.literal('input'), name: WorkflowInputNameSchema }),
 ]));
 export type WorkflowMaxIterationsV1 = z.infer<typeof WorkflowMaxIterationsV1Schema>;
 
@@ -371,33 +363,33 @@ export type WorkflowBlock =
     runWhen?: WorkflowRunWhenV1;
   }>;
 
-export const WorkflowEvaluateRepetitionFieldsSchema = lazyZodSchema(() => z.object({
+export const WorkflowEvaluateRepetitionFieldsSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('evaluate'),
   maxIterations: WorkflowMaxIterationsV1Schema,
   history: z.enum(WORKFLOW_EVALUATOR_HISTORY_MODES),
-}).strict());
+}));
 
-function createWorkflowRepetitionSchema(evaluator: z.ZodType) {
+function createWorkflowRepetitionSchema(evaluator: z.ZodMiniType) {
   return z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('count'), count: WorkflowValueReferenceSchema }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('count'), count: WorkflowValueReferenceSchema }),
+  z.strictObject({
     kind: z.literal('items'),
     items: WorkflowValueReferenceSchema,
     execution: z.enum(WORKFLOW_ITEM_EXECUTION_MODES),
     failurePolicy: z.enum(WORKFLOW_FAILURE_POLICIES),
-    maxConcurrent: z.number().int().positive().safe().optional(),
-  }).strict(),
-  z.object({
+    maxConcurrent: z.optional(z.number().check(z.int(), z.positive(), z.int())),
+  }),
+  z.strictObject({
     kind: z.literal('until'),
     maxIterations: WorkflowMaxIterationsV1Schema,
     stopWhen: WorkflowConditionSchema,
-  }).strict(),
-  WorkflowEvaluateRepetitionFieldsSchema.extend({
-    evaluator,
   }),
+  lazyZodSchema(() => z.extend(WorkflowEvaluateRepetitionFieldsSchema, {
+    evaluator,
+  })),
   ]);
 }
-export const WorkflowRepetitionSchema = createWorkflowRepetitionSchema(WorkflowEvaluatorLeafV1Schema) as z.ZodType<WorkflowRepetition>;
+export const WorkflowRepetitionSchema = createWorkflowRepetitionSchema(WorkflowEvaluatorLeafV1Schema) as z.ZodMiniType<WorkflowRepetition>;
 
 /** Insertion keeps canonical fields while allowing the edit owner to assign identities. */
 export type WorkflowInsertBlockV1 =
@@ -417,29 +409,29 @@ export type WorkflowInsertBlockV1 =
   });
 
 // Canonical non-recursive fields, also used by insertion's optional-id dialect.
-export const WorkflowParallelBlockFieldsSchema = lazyZodSchema(() => z.object({
+export const WorkflowParallelBlockFieldsSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('parallel'), id: WorkflowBlockIdSchema,
   name: WorkflowBlockNameV1Schema,
   failurePolicy: z.enum(WORKFLOW_FAILURE_POLICIES),
-  maxConcurrent: z.number().int().positive().safe().optional(),
-  onlyWhen: WorkflowConditionSchema.optional(),
-  runWhen: WorkflowRunWhenV1Schema.optional(),
-}).strict().overwrite(omitEmptyWorkflowBlockName));
-export const WorkflowLoopBlockFieldsSchema = lazyZodSchema(() => z.object({
+  maxConcurrent: z.optional(z.number().check(z.int(), z.positive(), z.int())),
+  onlyWhen: zMini.optional(WorkflowConditionSchema),
+  runWhen: z.optional(WorkflowRunWhenV1Schema),
+}).check(z.overwrite(omitEmptyWorkflowBlockName)));
+export const WorkflowLoopBlockFieldsSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('loop'), id: WorkflowBlockIdSchema,
   name: WorkflowBlockNameV1Schema,
   repetition: WorkflowRepetitionSchema,
-  onlyWhen: WorkflowConditionSchema.optional(),
-  runWhen: WorkflowRunWhenV1Schema.optional(),
-}).strict().overwrite(omitEmptyWorkflowBlockName));
-export const WorkflowIfBlockFieldsSchema = lazyZodSchema(() => z.object({
+  onlyWhen: zMini.optional(WorkflowConditionSchema),
+  runWhen: z.optional(WorkflowRunWhenV1Schema),
+}).check(z.overwrite(omitEmptyWorkflowBlockName)));
+export const WorkflowIfBlockFieldsSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('if'), id: WorkflowBlockIdSchema,
   name: WorkflowBlockNameV1Schema,
   when: WorkflowConditionSchema,
-  runWhen: WorkflowRunWhenV1Schema.optional(),
-}).strict().overwrite(omitEmptyWorkflowBlockName));
+  runWhen: z.optional(WorkflowRunWhenV1Schema),
+}).check(z.overwrite(omitEmptyWorkflowBlockName)));
 
-const WorkflowParallelBranchFieldsSchema = lazyZodSchema(() => z.object({ id: WorkflowBlockIdSchema, name: WorkflowBlockNameV1Schema }).strict());
+const WorkflowParallelBranchFieldsSchema = lazyZodSchema(() => z.strictObject({ id: WorkflowBlockIdSchema, name: WorkflowBlockNameV1Schema }));
 function isBlockRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -455,36 +447,34 @@ function workflowChildLists(value: unknown): { blocks: unknown[]; path: (string 
   return keys.flatMap((key) => Array.isArray(value[key]) ? [{ blocks: value[key], path: [key] }] : []);
 }
 
-function workflowFieldsWithOptionalId<T extends z.ZodRawShape>(schema: z.ZodObject<T>) {
+function workflowFieldsWithOptionalId<T extends z.core.$ZodShape>(schema: z.ZodMiniObject<T>) {
   // Rebuild the same strict field shape before changing id: Zod's partial()
   // rejects object overwrite checks. The variant retains the canonical fields.
-  return z.object(schema.shape).strict().extend({ id: WorkflowBlockIdSchema.optional() });
+  return z.extend(z.strictObject(schema.shape), { id: zMini.optional(WorkflowBlockIdSchema) });
 }
 
 /** One structural engine for canonical parsing, ingress and normalization. */
-function createWorkflowBlockSchema<T extends WorkflowIngressBlock | WorkflowInsertBlockV1>(dialect: 'canonical' | 'ingress' | 'insert' | 'stored'): z.ZodType<T> {
+function createWorkflowBlockSchema<T extends WorkflowIngressBlock | WorkflowInsertBlockV1>(dialect: 'canonical' | 'ingress' | 'insert' | 'stored'): z.ZodMiniType<T> {
   const allowShorthand = dialect === 'ingress';
   const optionalIds = dialect === 'insert';
-  const step = optionalIds ? workflowFieldsWithOptionalId(WorkflowStepSchema).overwrite(omitEmptyWorkflowBlockName) : WorkflowStepSchema;
-  const action = optionalIds ? workflowFieldsWithOptionalId(WorkflowActionLeafV1Schema)
-    .superRefine(refineWorkflowActionBindings).overwrite(omitEmptyWorkflowBlockName) : WorkflowActionLeafV1Schema;
-  const workflow = optionalIds ? workflowFieldsWithOptionalId(WorkflowNestedLeafV1Schema).overwrite(omitEmptyWorkflowBlockName) : WorkflowNestedLeafV1Schema;
-  const wait = optionalIds ? workflowFieldsWithOptionalId(WorkflowWaitLeafV1Schema).overwrite(omitEmptyWorkflowBlockName) : WorkflowWaitLeafV1Schema;
-  const parallel = optionalIds ? workflowFieldsWithOptionalId(WorkflowParallelBlockFieldsSchema).overwrite(omitEmptyWorkflowBlockName) : WorkflowParallelBlockFieldsSchema;
+  const step = optionalIds ? workflowFieldsWithOptionalId(WorkflowStepSchema).check(z.overwrite(omitEmptyWorkflowBlockName)) : WorkflowStepSchema;
+  const action = optionalIds ? workflowFieldsWithOptionalId(WorkflowActionLeafV1Schema).check(z.superRefine(refineWorkflowActionBindings), z.overwrite(omitEmptyWorkflowBlockName)) : WorkflowActionLeafV1Schema;
+  const workflow = optionalIds ? workflowFieldsWithOptionalId(WorkflowNestedLeafV1Schema).check(z.overwrite(omitEmptyWorkflowBlockName)) : WorkflowNestedLeafV1Schema;
+  const wait = optionalIds ? workflowFieldsWithOptionalId(WorkflowWaitLeafV1Schema).check(z.overwrite(omitEmptyWorkflowBlockName)) : WorkflowWaitLeafV1Schema;
+  const parallel = optionalIds ? workflowFieldsWithOptionalId(WorkflowParallelBlockFieldsSchema).check(z.overwrite(omitEmptyWorkflowBlockName)) : WorkflowParallelBlockFieldsSchema;
   // A lane's blank name is omitted, exactly as a block's (one canonical spelling).
-  const branch = (optionalIds ? WorkflowParallelBranchFieldsSchema.partial({ id: true }) : WorkflowParallelBranchFieldsSchema)
-    .overwrite(omitEmptyWorkflowBlockName);
-  const loop = optionalIds ? workflowFieldsWithOptionalId(WorkflowLoopBlockFieldsSchema).extend({
-    repetition: createWorkflowRepetitionSchema(z.discriminatedUnion('kind', [step, action]).superRefine(refineWorkflowEvaluatorRunWhen)),
-  }).overwrite(omitEmptyWorkflowBlockName) : WorkflowLoopBlockFieldsSchema;
-  const conditional = optionalIds ? workflowFieldsWithOptionalId(WorkflowIfBlockFieldsSchema).overwrite(omitEmptyWorkflowBlockName) : WorkflowIfBlockFieldsSchema;
+  const branch = (optionalIds ? lazyZodSchema(() => z.partial(WorkflowParallelBranchFieldsSchema, { id: true })) : WorkflowParallelBranchFieldsSchema).check(z.overwrite(omitEmptyWorkflowBlockName));
+  const loop = optionalIds ? z.extend(workflowFieldsWithOptionalId(WorkflowLoopBlockFieldsSchema), {
+    repetition: createWorkflowRepetitionSchema(z.discriminatedUnion('kind', [step, action]).check(z.superRefine(refineWorkflowEvaluatorRunWhen))),
+  }).check(z.overwrite(omitEmptyWorkflowBlockName)) : WorkflowLoopBlockFieldsSchema;
+  const conditional = optionalIds ? workflowFieldsWithOptionalId(WorkflowIfBlockFieldsSchema).check(z.overwrite(omitEmptyWorkflowBlockName)) : WorkflowIfBlockFieldsSchema;
   const canonicalShallow = z.discriminatedUnion('kind', [step, action, workflow, wait,
-    parallel.extend({ branches: z.array(branch.extend({ blocks: z.array(z.unknown()).min(1) })).min(1) }),
-    loop.extend({ body: z.array(z.unknown()).min(1) }),
-    conditional.extend({ then: z.array(z.unknown()).min(1), otherwise: z.array(z.unknown()).default([]) }),
+    z.extend(parallel, { branches: z.array(z.extend(branch, { blocks: z.array(z.unknown()).check(z.minLength(1)) })).check(z.minLength(1)) }),
+    z.extend(loop, { body: z.array(z.unknown()).check(z.minLength(1)) }),
+    z.extend(conditional, { then: z.array(z.unknown()).check(z.minLength(1)), otherwise: z._default(z.array(z.unknown()), []) }),
   ]);
   const shallow = dialect === 'stored' ? createStoredReadSchema(canonicalShallow) : canonicalShallow;
-  const schema = z.unknown().transform((value, context): T => {
+  const schema = z.pipe(z.unknown(), z.transform((value, context): T => {
     let output: unknown;
     let failed = false;
     const ancestors = new WeakSet<object>();
@@ -497,7 +487,7 @@ function createWorkflowBlockSchema<T extends WorkflowIngressBlock | WorkflowInse
       if ('finish' in task) { ancestors.delete(task.finish); continue; }
       if (task.value !== null && typeof task.value === 'object') {
         if (ancestors.has(task.value)) {
-          context.addIssue({ code: 'custom', path: task.path, message: 'Workflow blocks cannot contain cycles' });
+          context.issues.push({ code: 'custom', path: task.path, message: 'Workflow blocks cannot contain cycles', input: context.value });
           failed = true;
           continue;
         }
@@ -505,11 +495,11 @@ function createWorkflowBlockSchema<T extends WorkflowIngressBlock | WorkflowInse
         pending.push({ finish: task.value });
       }
       const parsed = allowShorthand && typeof task.value === 'string'
-        ? z.string().min(1).safeParse(task.value)
+        ? z.string().check(z.minLength(1)).safeParse(task.value)
         : shallow.safeParse(task.value);
       if (!parsed.success) {
         failed = true;
-        for (const issue of parsed.error.issues) context.addIssue({ ...issue, path: [...task.path, ...issue.path] });
+        for (const issue of parsed.error.issues) context.issues.push({ ...issue, path: [...task.path, ...issue.path], input: ('input' in issue ? issue.input ?? context.value : context.value) });
       } else {
         task.assign(parsed.data);
       }
@@ -526,20 +516,20 @@ function createWorkflowBlockSchema<T extends WorkflowIngressBlock | WorkflowInse
     }
     // Every returned leaf/field/list has passed its canonical shallow schema.
     return failed ? z.NEVER : output as T;
-  });
+  }));
 
   // Action/SDK exporters still need the recursive declaration graph. It is
   // derived from the same field owners and used only for JSON Schema projection,
   // never as a second runtime parser (the same bridge as internalProtocolZodAdapter).
   const projection = z.lazy(() => {
     const shapes = [step, action, workflow, wait,
-      parallel.extend({
-        branches: z.array(branch.extend({ blocks: z.array(schema).min(1) })).min(1),
+      z.extend(parallel, {
+        branches: z.array(z.extend(branch, { blocks: z.array(schema).check(z.minLength(1)) })).check(z.minLength(1)),
       }),
-      loop.extend({ body: z.array(schema).min(1) }),
-      conditional.extend({ then: z.array(schema).min(1), otherwise: z.array(schema).default([]) }),
+      z.extend(loop, { body: z.array(schema).check(z.minLength(1)) }),
+      z.extend(conditional, { then: z.array(schema).check(z.minLength(1)), otherwise: z._default(z.array(schema), []) }),
     ] as const;
-    return allowShorthand ? z.union([z.string().min(1), ...shapes]) : z.discriminatedUnion('kind', shapes);
+    return allowShorthand ? z.union([z.string().check(z.minLength(1)), ...shapes]) : z.discriminatedUnion('kind', shapes);
   });
   schema._zod.processJSONSchema = (context, _json, params) => {
     // Recursive blocks reuse the same rich execution/field declarations. Ref
@@ -556,14 +546,14 @@ export const WorkflowBlockSchema = defineStoredReadProjection(createWorkflowBloc
   () => createWorkflowBlockSchema<WorkflowBlock>('stored'));
 export const WorkflowInsertBlockV1Schema = createWorkflowBlockSchema<WorkflowInsertBlockV1>('insert');
 
-export const WorkflowDefinitionBaseSchema = lazyZodSchema(() => z.object({
+export const WorkflowDefinitionBaseSchema = lazyZodSchema(() => z.strictObject({
   version: z.literal(1),
-  inputs: z.array(WorkflowInputDefinitionSchema).default([]),
-  defaults: WorkflowStepSelectionV1Schema.default({}),
-  roles: z.array(WorkflowRoleV1Schema).optional(),
-  blocks: z.array(WorkflowBlockSchema).min(1),
-  finalOutput: WorkflowAuthoredResultReferenceSchema.optional(),
-}).strict());
+  inputs: z._default(z.array(WorkflowInputDefinitionSchema), []),
+  defaults: z._default(WorkflowStepSelectionV1Schema, {}),
+  roles: z.optional(z.array(WorkflowRoleV1Schema)),
+  blocks: z.array(WorkflowBlockSchema).check(z.minLength(1)),
+  finalOutput: zMini.optional(WorkflowAuthoredResultReferenceSchema),
+}));
 
 export type WorkflowDefinitionV1 = Readonly<{
   version: 1;
@@ -582,7 +572,7 @@ export type WorkflowDefinitionV1 = Readonly<{
  */
 // Author inputs carry the same canonical definition as parsed output. Keeping
 // this at the schema owner also preserves nested Action DTO correspondence.
-export const WorkflowDefinitionSchema = WorkflowDefinitionBaseSchema as unknown as z.ZodType<WorkflowDefinitionV1, WorkflowDefinitionV1>;
+export const WorkflowDefinitionSchema = WorkflowDefinitionBaseSchema as unknown as z.ZodMiniType<WorkflowDefinitionV1, WorkflowDefinitionV1>;
 /** Epoch-qualified public name; aliases the single executable owner above. */
 export const WorkflowDefinitionV1Schema = WorkflowDefinitionSchema;
 
@@ -611,14 +601,14 @@ export type WorkflowIngressBlock =
 
 export const WorkflowIngressBlockSchema = createWorkflowBlockSchema<WorkflowIngressBlock>('ingress');
 
-export const WorkflowIngressSchema = lazyZodSchema(() => z.object({
-  version: z.literal(1).optional(),
-  inputs: z.array(WorkflowInputDefinitionSchema).optional(),
-  defaults: WorkflowStepSelectionV1Schema.optional(),
-  roles: z.array(WorkflowRoleV1Schema).optional(),
-  blocks: z.array(WorkflowIngressBlockSchema).min(1),
-  finalOutput: WorkflowAuthoredResultReferenceSchema.optional(),
-}).strict());
+export const WorkflowIngressSchema = lazyZodSchema(() => z.strictObject({
+  version: z.optional(z.literal(1)),
+  inputs: z.optional(z.array(WorkflowInputDefinitionSchema)),
+  defaults: z.optional(WorkflowStepSelectionV1Schema),
+  roles: z.optional(z.array(WorkflowRoleV1Schema)),
+  blocks: z.array(WorkflowIngressBlockSchema).check(z.minLength(1)),
+  finalOutput: zMini.optional(WorkflowAuthoredResultReferenceSchema),
+}));
 export type WorkflowIngressV1 = z.infer<typeof WorkflowIngressSchema>;
 /** Epoch-neutral alias consumed by the workflow Action request schemas. */
 export type WorkflowIngress = WorkflowIngressV1;
@@ -630,11 +620,11 @@ export type WorkflowIngress = WorkflowIngressV1;
  * never persists them as caller-authored JSON. This is not wire content and
  * cannot be caller-forged.
  */
-export const WorkflowIngressContextV1Schema = lazyZodSchema(() => z.object({
-  agentTarget: SessionAuthoringSelectionFieldsV1.agentTarget.optional(),
-  machineId: z.string().min(1).optional(),
-  directory: z.string().min(1).optional(),
-}).strict());
+export const WorkflowIngressContextV1Schema = lazyZodSchema(() => z.strictObject({
+  agentTarget: zMini.optional(SessionAuthoringSelectionFieldsV1.agentTarget),
+  machineId: z.optional(z.string().check(z.minLength(1))),
+  directory: z.optional(z.string().check(z.minLength(1))),
+}));
 export type WorkflowIngressContextV1 = z.infer<typeof WorkflowIngressContextV1Schema>;
 
 export const WORKFLOW_VALIDATION_ISSUE_CODES = [
@@ -656,11 +646,11 @@ export const WORKFLOW_VALIDATION_ISSUE_CODES = [
 ] as const;
 export type WorkflowValidationIssueCode = (typeof WORKFLOW_VALIDATION_ISSUE_CODES)[number];
 
-export const WorkflowValidationIssueV1Schema = lazyZodSchema(() => z.object({
+export const WorkflowValidationIssueV1Schema = lazyZodSchema(() => z.strictObject({
   code: z.enum(WORKFLOW_VALIDATION_ISSUE_CODES),
-  path: z.string(), message: z.string(), blockId: z.string().optional(),
+  path: z.string(), message: z.string(), blockId: z.optional(z.string()),
   severity: z.enum(['error', 'warning']),
-}).strict());
+}));
 
 export type WorkflowValidationIssue = Readonly<{
   code: WorkflowValidationIssueCode;

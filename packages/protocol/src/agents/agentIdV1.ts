@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { MAX_PLUGIN_IDENTIFIER_BYTES } from '../plugins/pluginId.js';
 
@@ -22,11 +22,5 @@ export const MAX_AGENT_ROUTING_ID_BYTES =
  * fact" rather than "unsupported Agent". A closed enum at this boundary would
  * silently drop Agents instead, so this schema must stay open.
  */
-export const AgentIdV1Schema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(MAX_AGENT_ROUTING_ID_BYTES)
-  .refine(
-    (value) => value === value.trim(),
-    'Agent id must already be trimmed.',
-  ));
+export const AgentIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(MAX_AGENT_ROUTING_ID_BYTES), z.refine((value) => value === value.trim(), 'Agent id must already be trimmed.')));
 export type AgentIdV1 = z.infer<typeof AgentIdV1Schema>;

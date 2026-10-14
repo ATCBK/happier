@@ -1,4 +1,4 @@
-import { z, type output as ZodOutput, type ZodTypeAny } from 'zod';
+import { z, type output as ZodOutput, ZodMiniType as ZodTypeAny } from 'zod/mini';
 import { lazyDefinition, lazyZodSchema } from '../../lazyZodSchema.js';
 
 import type { SessionAuthoringFieldDefinitionMap } from './fieldDefinition.js';
@@ -24,11 +24,11 @@ type SyncedSessionAuthoringFieldShape<TDefinitions extends SessionAuthoringField
 export type SessionAuthoringFieldArtifacts<TDefinitions extends SessionAuthoringFieldDefinitionMap> = Readonly<{
   definitions: TDefinitions;
   shape: SessionAuthoringFieldShape<TDefinitions>;
-  valueSchema: z.ZodObject<SessionAuthoringFieldShape<TDefinitions>>;
+  valueSchema: z.ZodMiniObject<SessionAuthoringFieldShape<TDefinitions>>;
   defaults: SessionAuthoringFieldDefaults<TDefinitions>;
   syncedFieldIds: ReadonlyArray<SyncedSessionAuthoringFieldKey<TDefinitions>>;
   syncedShape: SyncedSessionAuthoringFieldShape<TDefinitions>;
-  syncedValueSchema: z.ZodObject<SyncedSessionAuthoringFieldShape<TDefinitions>>;
+  syncedValueSchema: z.ZodMiniObject<SyncedSessionAuthoringFieldShape<TDefinitions>>;
 }>;
 
 function parseFieldDefault<TDefinition extends SessionAuthoringFieldDefinitionMap[string]>(
@@ -77,10 +77,10 @@ export function buildSessionAuthoringFieldArtifacts<TDefinitions extends Session
   return {
     definitions,
     shape,
-    valueSchema: lazyZodSchema(() => z.object(shape).passthrough()),
+    valueSchema: lazyZodSchema(() => z.looseObject(shape)),
     defaults,
     syncedFieldIds,
     syncedShape,
-    syncedValueSchema: lazyZodSchema(() => z.object(syncedShape).strict()),
+    syncedValueSchema: lazyZodSchema(() => z.strictObject(syncedShape)),
   };
 }

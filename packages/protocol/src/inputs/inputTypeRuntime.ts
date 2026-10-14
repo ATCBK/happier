@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '../plugins/actions/jsonSchemaValidation.js';
 import { pluginJsonValuesEqual } from '../plugins/contributions/jsonSchemaValues.js';
 import { normalizeStrictJsonValue, type JsonValue } from '../json/strictJsonValue.js';

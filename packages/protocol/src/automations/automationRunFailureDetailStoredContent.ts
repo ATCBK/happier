@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 
@@ -24,19 +24,19 @@ export const AUTOMATION_RUN_FAILURE_DETAIL_ACCOUNT_SCOPED_BLOB_KIND_V1 =
 /** Structural error codes remain public; this bounded string is Run-private. */
 export const MAX_AUTOMATION_RUN_FAILURE_DETAIL_CODE_UNITS_V1 = 4_000;
 
-export const AutomationRunFailureDetailCorrespondenceV1Schema = lazyZodSchema(() => z.object({
+export const AutomationRunFailureDetailCorrespondenceV1Schema = lazyZodSchema(() => z.strictObject({
   automationId: asProtocolZod(AutomationIdV1Schema),
   runId: asProtocolZod(AutomationHostIdentifierV1Schema),
-}).strict());
+}));
 export type AutomationRunFailureDetailCorrespondenceV1 = z.infer<
   typeof AutomationRunFailureDetailCorrespondenceV1Schema
 >;
 
-export const AutomationRunFailureDetailStoredPayloadV1Schema = lazyZodSchema(() => z.object({
+export const AutomationRunFailureDetailStoredPayloadV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   correspondence: AutomationRunFailureDetailCorrespondenceV1Schema,
-  detail: z.string().min(1).max(MAX_AUTOMATION_RUN_FAILURE_DETAIL_CODE_UNITS_V1),
-}).strict());
+  detail: z.string().check(z.minLength(1), z.maxLength(MAX_AUTOMATION_RUN_FAILURE_DETAIL_CODE_UNITS_V1)),
+}));
 export type AutomationRunFailureDetailStoredPayloadV1 = z.infer<
   typeof AutomationRunFailureDetailStoredPayloadV1Schema
 >;
@@ -52,22 +52,22 @@ export const AUTOMATION_RUN_FAILURE_DETAIL_MAX_ENCRYPTED_CIPHERTEXT_UTF8_BYTES_V
  * material alone opens its detail and verifies its Run correspondence.
  */
 export const AutomationRunFailureDetailStoredEnvelopeV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({
+  z.strictObject({
     t: z.literal('plain'),
     v: AutomationRunFailureDetailStoredPayloadV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     t: z.literal('encrypted'),
-    c: z.string().min(1),
-  }).strict(),
-]).superRefine((value, context) => {
+    c: z.string().check(z.minLength(1)),
+  }),
+]).check(z.superRefine((value, context) => {
   if (value.t === 'encrypted') {
     if (
       utf8Encoder.encode(value.c).byteLength
       > AUTOMATION_RUN_FAILURE_DETAIL_MAX_ENCRYPTED_CIPHERTEXT_UTF8_BYTES_V1
     ) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['c'],
         message: 'Automation Run failure-detail ciphertext exceeds the maximum stored size',
       });
@@ -79,19 +79,19 @@ export const AutomationRunFailureDetailStoredEnvelopeV1Schema = lazyZodSchema(()
     const serialized = JSON.stringify(value);
     if (utf8Encoder.encode(serialized).byteLength > MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['v'],
         message: 'Automation Run failure detail exceeds the maximum stored size',
       });
     }
   } catch {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['v'],
       message: 'Automation Run failure detail is not serializable',
     });
   }
-}));
+})));
 export type AutomationRunFailureDetailStoredEnvelopeV1 = z.infer<
   typeof AutomationRunFailureDetailStoredEnvelopeV1Schema
 >;

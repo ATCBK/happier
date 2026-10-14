@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { WorkflowRunIdV1Schema } from '../workflows/workflowIdsV1.js';
 import { ProviderAccountUsageRecordIdSchema } from '../connect/providerAccountUsagePrimitives.js';
@@ -13,89 +13,89 @@ import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { getActionSpec } from '../actions/actionSpecs.js';
 import { MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS } from '../actions/specs/machineTerminal.js';
 
-const UsageResetNotificationEvidenceV1Schema = lazyZodSchema(() => ProviderAccountUsagePaceWindowV1Schema.extend({
-  observedAtMs: z.number().int().nonnegative(), previousObservedAtMs: z.number().int().nonnegative(),
-  witnessedAtMs: z.number().int().nonnegative().optional(),
-}).strict());
-const UsageWindowNotificationEvidenceV1Schema = lazyZodSchema(() => UsageResetNotificationEvidenceV1Schema.extend({
-  usedFraction: z.number().finite().nonnegative(), elapsedFraction: z.number().finite().positive().max(1),
-  pace: z.number().finite().nonnegative(), projectedResetUtilizationFraction: z.number().finite().nonnegative(),
-  qualification: z.enum(['confirmed', 'estimated']), sampleCount: z.number().int().positive(),
-}).strict());
-const UsageCreditNotificationEvidenceV1Schema = lazyZodSchema(() => z.object({
-  recordId: ProviderAccountUsageRecordIdSchema, creditId: z.string().min(1), expiresAtMs: z.number().int().nonnegative(),
-  observedAtMs: z.number().int().nonnegative(), previousObservedAtMs: z.number().int().nonnegative(),
-}).strict());
-export const ConnectedServiceUsageNotificationV1Schema = lazyZodSchema(() => z.object({
+const UsageResetNotificationEvidenceV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ProviderAccountUsagePaceWindowV1Schema, {
+  observedAtMs: z.number().check(z.int(), z.nonnegative()), previousObservedAtMs: z.number().check(z.int(), z.nonnegative()),
+  witnessedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+})));
+const UsageWindowNotificationEvidenceV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(UsageResetNotificationEvidenceV1Schema, {
+  usedFraction: z.number().check(z.nonnegative()), elapsedFraction: z.number().check(z.positive(), z.maximum(1)),
+  pace: z.number().check(z.nonnegative()), projectedResetUtilizationFraction: z.number().check(z.nonnegative()),
+  qualification: z.enum(['confirmed', 'estimated']), sampleCount: z.number().check(z.int(), z.positive()),
+})));
+const UsageCreditNotificationEvidenceV1Schema = lazyZodSchema(() => z.strictObject({
+  recordId: ProviderAccountUsageRecordIdSchema, creditId: z.string().check(z.minLength(1)), expiresAtMs: z.number().check(z.int(), z.nonnegative()),
+  observedAtMs: z.number().check(z.int(), z.nonnegative()), previousObservedAtMs: z.number().check(z.int(), z.nonnegative()),
+}));
+export const ConnectedServiceUsageNotificationV1Schema = lazyZodSchema(() => z.strictObject({
   topic: z.literal('connected_service_usage'), kind: UsageQuotaNotificationKindV1Schema,
-  serviceId: z.string().min(1), profileId: z.string().min(1), issueFingerprint: z.string().min(1),
+  serviceId: z.string().check(z.minLength(1)), profileId: z.string().check(z.minLength(1)), issueFingerprint: z.string().check(z.minLength(1)),
   evidence: z.union([UsageWindowNotificationEvidenceV1Schema, UsageResetNotificationEvidenceV1Schema, UsageCreditNotificationEvidenceV1Schema]),
-}).strict().superRefine((event, ctx) => {
+}).check(z.superRefine((event, ctx) => {
   if ((event.kind === 'credit_expiry') !== ('creditId' in event.evidence)
     || (event.kind !== 'reset' && !('creditId' in event.evidence) && !('pace' in event.evidence))) {
     ctx.addIssue({ code: 'custom', path: ['evidence'], message: 'Evidence must match notification kind' });
   }
-}));
+})));
 export type ConnectedServiceUsageNotificationV1 = z.infer<typeof ConnectedServiceUsageNotificationV1Schema>;
 
 /** Closed V1 evidence envelope; no process identities or private Session labels. */
 export const MachineVitalsNotificationV1Schema = lazyZodSchema(() => {
   const common = {
     topic: z.literal('resource_limit'), phase: z.enum(['started', 'recovered']),
-    machineId: z.string().min(1), machineName: z.string().min(1).optional(),
-    at: z.number().finite().nonnegative(), since: z.number().finite().nonnegative(),
-    workingSessionCount: z.number().int().nonnegative().optional(), guardEnabled: z.boolean(),
+    machineId: z.string().check(z.minLength(1)), machineName: z.optional(z.string().check(z.minLength(1))),
+    at: z.number().check(z.nonnegative()), since: z.number().check(z.nonnegative()),
+    workingSessionCount: z.optional(z.number().check(z.int(), z.nonnegative())), guardEnabled: z.boolean(),
   };
   return z.discriminatedUnion('kind', [
-    z.object({ ...common, kind: z.literal('memory_pressure'), evidence: z.object({
-      level: z.enum(['elevated', 'critical']), sustainMs: z.number().finite().positive(),
-      swapUsedBytes: z.number().finite().nonnegative().optional(), swapTotalBytes: z.number().finite().nonnegative().optional(),
-    }).strict() }).strict(),
-    z.object({ ...common, kind: z.literal('cpu_busy'), evidence: z.object({
-      abovePct: z.number().finite().min(1).max(100), sustainMs: z.number().finite().positive(),
-      busyPct: z.number().finite().min(0).max(100),
-    }).strict() }).strict(),
-    z.object({ ...common, kind: z.literal('disk_nearly_full'), volumeId: z.string().min(1),
-      volumeLabel: z.string().optional(), evidence: z.object({
-        freeBytes: z.number().finite().nonnegative(), totalBytes: z.number().finite().nonnegative(),
+    z.strictObject({ ...common, kind: z.literal('memory_pressure'), evidence: z.strictObject({
+      level: z.enum(['elevated', 'critical']), sustainMs: z.number().check(z.positive()),
+      swapUsedBytes: z.optional(z.number().check(z.nonnegative())), swapTotalBytes: z.optional(z.number().check(z.nonnegative())),
+    }) }),
+    z.strictObject({ ...common, kind: z.literal('cpu_busy'), evidence: z.strictObject({
+      abovePct: z.number().check(z.minimum(1), z.maximum(100)), sustainMs: z.number().check(z.positive()),
+      busyPct: z.number().check(z.minimum(0), z.maximum(100)),
+    }) }),
+    z.strictObject({ ...common, kind: z.literal('disk_nearly_full'), volumeId: z.string().check(z.minLength(1)),
+      volumeLabel: z.optional(z.string()), evidence: z.strictObject({
+        freeBytes: z.number().check(z.nonnegative()), totalBytes: z.number().check(z.nonnegative()),
         threshold: MachineVitalsDiskThresholdV1Schema,
-      }).strict() }).strict(),
-  ]).refine(notice => notice.since <= notice.at, { path: ['since'], message: 'Evidence window starts after occurrence' });
+      }) }),
+  ]).check(z.refine(notice => notice.since <= notice.at, { path: ['since'], message: 'Evidence window starts after occurrence' }));
 });
 export type MachineVitalsNotificationV1 = z.infer<typeof MachineVitalsNotificationV1Schema>;
 
 /** Closed routing envelope; the transport may add the known Home address. */
-export const MachineVitalsPushRoutingDataV1Schema = lazyZodSchema(() => z.object({
+export const MachineVitalsPushRoutingDataV1Schema = lazyZodSchema(() => z.strictObject({
   topic: z.literal('resource_limit'), kind: z.enum(['memory_pressure', 'disk_nearly_full', 'cpu_busy']),
-  phase: z.enum(['started', 'recovered']), machineId: z.string().min(1), notificationId: z.string().min(1),
+  phase: z.enum(['started', 'recovered']), machineId: z.string().check(z.minLength(1)), notificationId: z.string().check(z.minLength(1)),
   nextSteps: z.array(z.enum(['review_processes', 'turn_on_guard', 'free_up_space'])),
-  machineVitals: MachineVitalsNotificationV1Schema.optional(),
-  serverId: z.string().min(1).optional(), serverUrl: z.string().url().optional(),
-}).strict().superRefine((data, ctx) => {
+  machineVitals: z.optional(MachineVitalsNotificationV1Schema),
+  serverId: z.optional(z.string().check(z.minLength(1))), serverUrl: z.optional(z.string().check(z.url())),
+}).check(z.superRefine((data, ctx) => {
   const notice = data.machineVitals;
   if (notice && (notice.machineId !== data.machineId || notice.kind !== data.kind || notice.phase !== data.phase)) {
     ctx.addIssue({ code: 'custom', path: ['machineVitals'], message: 'Notice must match routing identity' });
   }
-}));
+})));
 export type MachineVitalsPushRoutingDataV1 = z.infer<typeof MachineVitalsPushRoutingDataV1Schema>;
 
 const guardWarningCommon = {
-  topic: z.literal('guard_stop_warning'), machineId: z.string().min(1),
-  stopAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  idleMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  topic: z.literal('guard_stop_warning'), machineId: z.string().check(z.minLength(1)),
+  stopAt: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+  idleMs: z.optional(z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER))),
 };
 export const GuardStopWarningNotificationV1Schema = lazyZodSchema(() => z.union([
-  z.object({ ...guardWarningCommon, sessionId: z.string().min(1), rule: z.enum(['idle_sessions', 'memory_guard']),
+  z.strictObject({ ...guardWarningCommon, sessionId: z.string().check(z.minLength(1)), rule: z.enum(['idle_sessions', 'memory_guard']),
     // Words for the notification's own text only; never part of its routing data.
-    sessionTitle: z.string().optional(), machineName: z.string().optional() }).strict(),
-  z.object({ ...guardWarningCommon, terminalId: z.string().min(1), terminalKey: z.string().min(1).max(2000),
-    rule: z.literal('idle_terminals') }).strict(),
+    sessionTitle: z.optional(z.string()), machineName: z.optional(z.string()) }),
+  z.strictObject({ ...guardWarningCommon, terminalId: z.string().check(z.minLength(1)), terminalKey: z.string().check(z.minLength(1), z.maxLength(2000)),
+    rule: z.literal('idle_terminals') }),
 ]));
 export type GuardStopWarningNotificationV1 = z.infer<typeof GuardStopWarningNotificationV1Schema>;
-export const GuardAttentionNotificationV1Schema = lazyZodSchema(() => z.object({
-  topic: z.literal('guard_attention'), machineId: z.string().min(1), sessionId: z.string().min(1),
+export const GuardAttentionNotificationV1Schema = lazyZodSchema(() => z.strictObject({
+  topic: z.literal('guard_attention'), machineId: z.string().check(z.minLength(1)), sessionId: z.string().check(z.minLength(1)),
   kind: z.enum(['ceiling_near', 'ceiling_reached']),
-}).strict());
+}));
 export type GuardAttentionNotificationV1 = z.infer<typeof GuardAttentionNotificationV1Schema>;
 
 /** One occurrence identifier is reused by push, desktop and state-change dismissal. */
@@ -126,29 +126,29 @@ export function buildGuardStopWarningPushDataV1(event: GuardStopWarningNotificat
 }
 
 const guardPushEnvelope = {
-  categoryId: z.literal(PUSH_NOTIFICATION_CATEGORY_IDS.guardStopWarningV1), notificationId: z.string().min(1),
-  serverId: z.string().min(1).optional(), serverUrl: z.string().url().optional(),
-  actions: z.object({
-    keepRunning: z.object({ actionId: z.literal('machines.guard.idleStop.keepRunning'),
-      input: z.lazy(() => getActionSpec('machines.guard.idleStop.keepRunning').inputSchema) }).strict(),
+  categoryId: z.literal(PUSH_NOTIFICATION_CATEGORY_IDS.guardStopWarningV1), notificationId: z.string().check(z.minLength(1)),
+  serverId: z.optional(z.string().check(z.minLength(1))), serverUrl: z.optional(z.string().check(z.url())),
+  actions: z.strictObject({
+    keepRunning: z.strictObject({ actionId: z.literal('machines.guard.idleStop.keepRunning'),
+      input: z.lazy(() => getActionSpec('machines.guard.idleStop.keepRunning').inputSchema) }),
     stopNow: z.union([
-      z.object({ actionId: z.literal('session.stop'), input: z.lazy(() => getActionSpec('session.stop').inputSchema) }).strict(),
+      z.strictObject({ actionId: z.literal('session.stop'), input: z.lazy(() => getActionSpec('session.stop').inputSchema) }),
       // Push carries a URL; its recipient resolves the device-local Home id before Action admission.
-      z.object({ actionId: z.literal('machines.terminal.close'),
-        input: z.lazy(() => MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS['machines.terminal.close'].omit({ serverId: true })) }).strict(),
+      z.strictObject({ actionId: z.literal('machines.terminal.close'),
+        input: z.lazy(() => MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS['machines.terminal.close'].omit({ serverId: true })) }),
     ]),
-  }).strict(),
+  }),
 };
 export const GuardStopWarningPushDataV1Schema = lazyZodSchema(() => z.union([
-  z.object({ ...guardWarningCommon, ...guardPushEnvelope, sessionId: z.string().min(1), rule: z.enum(['idle_sessions', 'memory_guard']) }).strict(),
-  z.object({ ...guardWarningCommon, ...guardPushEnvelope, terminalId: z.string().min(1), terminalKey: z.string().min(1).max(2000), rule: z.literal('idle_terminals') }).strict(),
-]).superRefine((data, context) => {
+  z.strictObject({ ...guardWarningCommon, ...guardPushEnvelope, sessionId: z.string().check(z.minLength(1)), rule: z.enum(['idle_sessions', 'memory_guard']) }),
+  z.strictObject({ ...guardWarningCommon, ...guardPushEnvelope, terminalId: z.string().check(z.minLength(1)), terminalKey: z.string().check(z.minLength(1), z.maxLength(2000)), rule: z.literal('idle_terminals') }),
+]).check(z.superRefine((data, context) => {
   const expected = buildGuardStopWarningActionsV1(data);
   if (data.notificationId !== guardStopWarningNotificationIdV1(data)
     || !sameStrictJsonValue(data.actions, expected)) {
     context.addIssue({ code: 'custom', message: 'Warning occurrence and actions must match the exact target' });
   }
-}));
+})));
 export type GuardStopWarningPushDataV1 = z.infer<typeof GuardStopWarningPushDataV1Schema>;
 
 /** Home is already admitted from notification routing, never substituted from the active Home. */
@@ -179,12 +179,12 @@ export function isGuardStopWarningCurrentV1(data: unknown, current: Readonly<{
 }
 
 /** The public episode summary deliberately excludes private activity rows and subject labels. */
-export const MachineGuardActivityNotificationV1Schema = lazyZodSchema(() => z.object({
-  topic: z.literal('machine_guard_activity'), machineId: z.string().min(1), episodeId: z.string().min(1),
-  freedBytes: z.number().finite().nonnegative(), outOfSteps: z.boolean(),
-  counts: z.object({ stoppedSessions: z.number().int().nonnegative(), closedBrowsers: z.number().int().nonnegative(),
-    stoppedServices: z.number().int().nonnegative(), stoppedLeftBehind: z.number().int().nonnegative() }).strict(),
-}).strict());
+export const MachineGuardActivityNotificationV1Schema = lazyZodSchema(() => z.strictObject({
+  topic: z.literal('machine_guard_activity'), machineId: z.string().check(z.minLength(1)), episodeId: z.string().check(z.minLength(1)),
+  freedBytes: z.number().check(z.nonnegative()), outOfSteps: z.boolean(),
+  counts: z.strictObject({ stoppedSessions: z.number().check(z.int(), z.nonnegative()), closedBrowsers: z.number().check(z.int(), z.nonnegative()),
+    stoppedServices: z.number().check(z.int(), z.nonnegative()), stoppedLeftBehind: z.number().check(z.int(), z.nonnegative()) }),
+}));
 export type MachineGuardActivityNotificationV1 = z.infer<typeof MachineGuardActivityNotificationV1Schema>;
 
 export const ActivityWebhookTopicSchema = lazyZodSchema(() => z.enum([
@@ -221,17 +221,17 @@ export type WorkflowRunUpdateKindV1 = z.infer<typeof WorkflowRunUpdateKindV1Sche
  * Safe outbound reason projection. Only the machine-readable code crosses the
  * notification boundary; private messages and diagnostics remain in Run detail.
  */
-export const WorkflowRunUpdateReasonV1Schema = lazyZodSchema(() => z.object({
-  code: z.string().min(1),
-}).strict());
+export const WorkflowRunUpdateReasonV1Schema = lazyZodSchema(() => z.strictObject({
+  code: z.string().check(z.minLength(1)),
+}));
 export type WorkflowRunUpdateReasonV1 = z.infer<typeof WorkflowRunUpdateReasonV1Schema>;
 
-export const WorkflowRunUpdateNotificationV1Schema = lazyZodSchema(() => z.object({
+export const WorkflowRunUpdateNotificationV1Schema = lazyZodSchema(() => z.strictObject({
   topic: z.literal('workflow_run_update'),
   runId: WorkflowRunIdV1Schema,
   updateKind: WorkflowRunUpdateKindV1Schema,
-  reason: WorkflowRunUpdateReasonV1Schema.optional(),
-}).strict());
+  reason: z.optional(WorkflowRunUpdateReasonV1Schema),
+}));
 export type WorkflowRunUpdateNotificationV1 = z.infer<typeof WorkflowRunUpdateNotificationV1Schema>;
 
 const ActivityWebhookContentV1Schema = lazyZodSchema(() => z.object({
@@ -239,52 +239,52 @@ const ActivityWebhookContentV1Schema = lazyZodSchema(() => z.object({
   body: z.string(),
 }));
 
-const WorkflowActivityWebhookContentV1Schema = lazyZodSchema(() => z.object({
+const WorkflowActivityWebhookContentV1Schema = lazyZodSchema(() => z.strictObject({
   title: z.string(),
   body: z.string(),
-}).strict());
+}));
 
 const ActivityWebhookSessionV1Schema = lazyZodSchema(() => z.object({
-  sessionId: z.string().trim().min(1),
-  title: z.string().nullable().optional(),
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
+  title: z.optional(z.nullable(z.string())),
 }));
 
 const ActivityWebhookRequestV1Schema = lazyZodSchema(() => z.object({
-  requestId: z.string().trim().min(1),
+  requestId: z.string().check(z.trim(), z.minLength(1)),
   kind: z.enum(['permission', 'user_action']),
-  toolName: z.string().trim().min(1),
-  toolDetails: z.string().nullable().optional(),
+  toolName: z.string().check(z.trim(), z.minLength(1)),
+  toolDetails: z.optional(z.nullable(z.string())),
 }));
 
-const ActivityWebhookOrdinaryTopicSchema = lazyZodSchema(() => ActivityWebhookTopicSchema.exclude(['workflow_run_update']));
+const ActivityWebhookOrdinaryTopicSchema = lazyZodSchema(() => z.enum(ActivityWebhookTopicSchema.options.filter((value): value is Exclude<(typeof ActivityWebhookTopicSchema.options)[number], 'workflow_run_update'> => !(['workflow_run_update'] as readonly string[]).includes(value))));
 
 const ActivityWebhookOrdinaryPayloadV1Schema = lazyZodSchema(() => z.object({
-  v: z.literal(1).default(1),
-  channelId: z.string().trim().min(1),
-  createdAt: z.number().int().nonnegative(),
+  v: z._default(z.literal(1), 1),
+  channelId: z.string().check(z.trim(), z.minLength(1)),
+  createdAt: z.number().check(z.int(), z.nonnegative()),
   topic: ActivityWebhookOrdinaryTopicSchema,
   content: ActivityWebhookContentV1Schema,
-  session: ActivityWebhookSessionV1Schema.optional(),
-  request: ActivityWebhookRequestV1Schema.optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  session: z.optional(ActivityWebhookSessionV1Schema),
+  request: z.optional(ActivityWebhookRequestV1Schema),
+  metadata: z.optional(z.record(z.string(), z.unknown())),
   navigation: z.object({
-    sessionId: z.string().trim().min(1).optional(),
-    requestId: z.string().trim().min(1).optional(),
-    runId: WorkflowRunIdV1Schema.optional(),
+    sessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    requestId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    runId: z.optional(WorkflowRunIdV1Schema),
   }),
 }));
 
-export const WorkflowRunUpdateWebhookPayloadV1Schema = lazyZodSchema(() => z.object({
-  v: z.literal(1).default(1),
-  channelId: z.string().trim().min(1),
-  createdAt: z.number().int().nonnegative(),
+export const WorkflowRunUpdateWebhookPayloadV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z._default(z.literal(1), 1),
+  channelId: z.string().check(z.trim(), z.minLength(1)),
+  createdAt: z.number().check(z.int(), z.nonnegative()),
   topic: z.literal('workflow_run_update'),
   content: WorkflowActivityWebhookContentV1Schema,
-  workflowRun: WorkflowRunUpdateNotificationV1Schema.omit({ topic: true }),
-  navigation: z.object({
+  workflowRun: z.omit(WorkflowRunUpdateNotificationV1Schema, { topic: true }),
+  navigation: z.strictObject({
     runId: WorkflowRunIdV1Schema,
-  }).strict(),
-}).strict());
+  }),
+}));
 
 export const ActivityWebhookPayloadV1Schema = lazyZodSchema(() => z.discriminatedUnion('topic', [
   ActivityWebhookOrdinaryPayloadV1Schema,

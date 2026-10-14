@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { TeamIdSchema } from "../membership.js";
 import { IdentityConnectionTestDiagnosticsV1Schema } from "../../identity/testDiagnostics.js";
@@ -7,9 +7,9 @@ import { HOME_IDENTITY_CONNECTION_USER_ACTION_IDS_V1, TEAM_IDENTITY_CONNECTION_U
 import { TeamIdentityConnectionIdSchema } from "./ids.js";
 import { TeamAdmissionModeApplicabilityV1Schema } from "./admission.js";
 
-const ExactIdSchema = lazyZodSchema(() => z.string().min(1).max(512));
-const BoundedLabelSchema = lazyZodSchema(() => z.string().min(1).max(256));
-const StringListSchema = lazyZodSchema(() => z.array(z.string().min(1).max(512)).max(500));
+const ExactIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(512)));
+const BoundedLabelSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(256)));
+const StringListSchema = lazyZodSchema(() => z.array(z.string().check(z.minLength(1), z.maxLength(512))).check(z.maxLength(500)));
 
 export const TeamIdentityProviderKindV1Schema = lazyZodSchema(() => z.enum([
   "oidc",
@@ -21,19 +21,19 @@ export type TeamIdentityProviderKindV1 = z.infer<typeof TeamIdentityProviderKind
 export { TeamIdentityConnectionIdSchema } from "./ids.js";
 
 export const TeamIdentityConnectionExternalReferenceV1Schema = lazyZodSchema(() => z.discriminatedUnion("kind", [
-  z.object({ v: z.literal(1), kind: z.literal("oidc") }).strict(),
-  z.object({
+  z.strictObject({ v: z.literal(1), kind: z.literal("oidc") }),
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal("workos_sso"),
-    organizationId: ExactIdSchema.nullable(),
-    connectionId: ExactIdSchema.nullable(),
-  }).strict(),
-  z.object({
+    organizationId: z.nullable(ExactIdSchema),
+    connectionId: z.nullable(ExactIdSchema),
+  }),
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal("github_app_identity"),
     installationId: ExactIdSchema,
-  }).strict(),
-]).superRefine((reference, ctx) => {
+  }),
+]).check(z.superRefine((reference, ctx) => {
   if (
     reference.kind === "workos_sso"
     && reference.connectionId !== null
@@ -41,27 +41,27 @@ export const TeamIdentityConnectionExternalReferenceV1Schema = lazyZodSchema(() 
   ) {
     ctx.addIssue({ code: "custom", message: "A WorkOS SSO connection requires its organization" });
   }
-}));
+})));
 export type TeamIdentityConnectionExternalReferenceV1 = z.infer<typeof TeamIdentityConnectionExternalReferenceV1Schema>;
 
-export const TeamIdentityOidcConnectionSettingsV1Schema = lazyZodSchema(() => z.object({
+export const TeamIdentityOidcConnectionSettingsV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: z.literal("oidc"),
   allowedUsers: StringListSchema,
   allowedEmailDomains: StringListSchema,
   groupsAny: StringListSchema,
   groupsAll: StringListSchema,
-}).strict());
+}));
 export type TeamIdentityOidcConnectionSettingsV1 = z.infer<typeof TeamIdentityOidcConnectionSettingsV1Schema>;
 
 export const TeamIdentityConnectionSettingsV1Schema = lazyZodSchema(() => z.discriminatedUnion("kind", [
   TeamIdentityOidcConnectionSettingsV1Schema,
-  z.object({ v: z.literal(1), kind: z.literal("workos_sso") }).strict(),
-  z.object({
+  z.strictObject({ v: z.literal(1), kind: z.literal("workos_sso") }),
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal("github_app_identity"),
     organizationLogin: BoundedLabelSchema,
-  }).strict(),
+  }),
 ]));
 export type TeamIdentityConnectionSettingsV1 = z.infer<typeof TeamIdentityConnectionSettingsV1Schema>;
 
@@ -76,53 +76,51 @@ export const TeamIdentityConnectionStateV1Schema = lazyZodSchema(() => z.enum([
 ]));
 export type TeamIdentityConnectionStateV1 = z.infer<typeof TeamIdentityConnectionStateV1Schema>;
 
-export const TeamIdentityWorkosPresentationV1Schema = lazyZodSchema(() => z.object({
+export const TeamIdentityWorkosPresentationV1Schema = lazyZodSchema(() => z.strictObject({
   displayName: BoundedLabelSchema,
   strategy: BoundedLabelSchema,
   status: BoundedLabelSchema,
-  lastCheckedAt: z.number().int(),
-}).strict());
+  lastCheckedAt: z.number().check(z.int()),
+}));
 
 export const TeamIdentityConnectionObservationV1Schema = lazyZodSchema(() => z.discriminatedUnion("kind", [
-  z.object({ v: z.literal(1), kind: z.literal("oidc") }).strict(),
-  z.object({
+  z.strictObject({ v: z.literal(1), kind: z.literal("oidc") }),
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal("workos_sso"),
-    presentation: TeamIdentityWorkosPresentationV1Schema.nullable(),
-  }).strict(),
-  z.object({ v: z.literal(1), kind: z.literal("github_app_identity") }).strict(),
+    presentation: z.nullable(TeamIdentityWorkosPresentationV1Schema),
+  }),
+  z.strictObject({ v: z.literal(1), kind: z.literal("github_app_identity") }),
 ]));
 export type TeamIdentityConnectionObservationV1 = z.infer<typeof TeamIdentityConnectionObservationV1Schema>;
 
-export const IdentityConnectionV1Schema = lazyZodSchema(() => z.object({
+export const IdentityConnectionV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   id: TeamIdentityConnectionIdSchema,
-  teamId: TeamIdSchema.nullable(),
-  provider: z.object({
+  teamId: z.nullable(TeamIdSchema),
+  provider: z.strictObject({
     id: ExactIdSchema,
     kind: TeamIdentityProviderKindV1Schema,
     displayName: BoundedLabelSchema,
-  }).strict(),
+  }),
   externalReference: TeamIdentityConnectionExternalReferenceV1Schema,
   settings: TeamIdentityConnectionSettingsV1Schema,
   enabled: z.boolean(),
-  firstEnabledAt: z.number().int().nullable(),
-  revision: z.number().int().positive(),
+  firstEnabledAt: z.nullable(z.number().check(z.int())),
+  revision: z.number().check(z.int(), z.positive()),
   state: TeamIdentityConnectionStateV1Schema,
-  allowedActions: z.array(z.enum([...TEAM_IDENTITY_CONNECTION_USER_ACTION_IDS_V1, ...HOME_IDENTITY_CONNECTION_USER_ACTION_IDS_V1]))
-    .max(TEAM_IDENTITY_CONNECTION_USER_ACTION_IDS_V1.length)
-    .refine((actions) => new Set(actions).size === actions.length, {
+  allowedActions: z.array(z.enum([...TEAM_IDENTITY_CONNECTION_USER_ACTION_IDS_V1, ...HOME_IDENTITY_CONNECTION_USER_ACTION_IDS_V1])).check(z.maxLength(TEAM_IDENTITY_CONNECTION_USER_ACTION_IDS_V1.length), z.refine((actions) => new Set(actions).size === actions.length, {
       message: "Connection allowed actions must be unique",
-    }),
-  lastObservation: TeamIdentityConnectionObservationV1Schema.nullable(),
-  lastSuccessfulTest: z.object({
-    at: z.number().int(),
-    runtimeFingerprint: z.string().min(1).max(1024),
+    })),
+  lastObservation: z.nullable(TeamIdentityConnectionObservationV1Schema),
+  lastSuccessfulTest: z.nullable(z.strictObject({
+    at: z.number().check(z.int()),
+    runtimeFingerprint: z.string().check(z.minLength(1), z.maxLength(1024)),
     current: z.boolean(),
-  }).strict().nullable(),
-  createdAt: z.number().int(),
-  updatedAt: z.number().int(),
-}).strict().superRefine((value, ctx) => {
+  })),
+  createdAt: z.number().check(z.int()),
+  updatedAt: z.number().check(z.int()),
+}).check(z.superRefine((value, ctx) => {
   if (
     value.externalReference.kind !== value.provider.kind
     || value.settings.kind !== value.provider.kind
@@ -133,43 +131,41 @@ export const IdentityConnectionV1Schema = lazyZodSchema(() => z.object({
   if (value.allowedActions.some((id) => id.startsWith(value.teamId === null ? 'teams.' : 'home.'))) {
     ctx.addIssue({ code: 'custom', message: 'Connection actions must match the owning scope' });
   }
-}));
+})));
 export type IdentityConnectionV1 = z.infer<typeof IdentityConnectionV1Schema>;
-export const TeamIdentityConnectionV1Schema = lazyZodSchema(() => IdentityConnectionV1Schema.safeExtend({
+export const TeamIdentityConnectionV1Schema = lazyZodSchema(() => z.safeExtend(IdentityConnectionV1Schema, {
   teamId: TeamIdSchema,
-  allowedActions: z.array(z.enum(TEAM_IDENTITY_CONNECTION_USER_ACTION_IDS_V1))
-    .max(TEAM_IDENTITY_CONNECTION_USER_ACTION_IDS_V1.length)
-    .refine((actions) => new Set(actions).size === actions.length),
+  allowedActions: z.array(z.enum(TEAM_IDENTITY_CONNECTION_USER_ACTION_IDS_V1)).check(z.maxLength(TEAM_IDENTITY_CONNECTION_USER_ACTION_IDS_V1.length), z.refine((actions) => new Set(actions).size === actions.length)),
 }));
 export type TeamIdentityConnectionV1 = z.infer<typeof TeamIdentityConnectionV1Schema>;
 
-export const TeamIdentityConnectionRefInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamIdentityConnectionRefInputV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   teamId: TeamIdSchema,
   connectionId: TeamIdentityConnectionIdSchema,
-  expectedRevision: z.number().int().positive(),
-}).strict());
+  expectedRevision: z.number().check(z.int(), z.positive()),
+}));
 export type TeamIdentityConnectionRefInputV1 = z.infer<typeof TeamIdentityConnectionRefInputV1Schema>;
 
-export const TeamIdentityConnectionListInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamIdentityConnectionListInputV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   teamId: TeamIdSchema,
-}).strict());
+}));
 export type TeamIdentityConnectionListInputV1 = z.infer<typeof TeamIdentityConnectionListInputV1Schema>;
 
 export const IdentityEligibleProviderAvailabilityV1Schema = lazyZodSchema(() => z.discriminatedUnion("status", [
-  z.object({
+  z.strictObject({
     status: z.literal("available"),
     setupChoice: z.discriminatedUnion("kind", [
-      z.object({
+      z.strictObject({
         kind: z.literal("use_existing"),
         providerInstanceId: ExactIdSchema,
-        connectionDraft: z.object({
+        connectionDraft: z.strictObject({
           externalReference: TeamIdentityConnectionExternalReferenceV1Schema,
           settings: TeamIdentityConnectionSettingsV1Schema,
-        }).strict(),
-      }).strict(),
-      z.object({
+        }),
+      }),
+      z.strictObject({
         kind: z.literal("create_managed"),
         actionId: z.enum([
           "identity.providers.create",
@@ -177,11 +173,11 @@ export const IdentityEligibleProviderAvailabilityV1Schema = lazyZodSchema(() => 
           "home.identity.workos.connection.create",
           "identity.githubApps.manifestSetup.start",
         ]),
-      }).strict(),
-      z.object({ kind: z.literal("contact_home_admin") }).strict(),
+      }),
+      z.strictObject({ kind: z.literal("contact_home_admin") }),
     ]),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal("unavailable"),
     code: z.enum([
       "home_policy_unavailable",
@@ -190,22 +186,20 @@ export const IdentityEligibleProviderAvailabilityV1Schema = lazyZodSchema(() => 
       "workos_platform_unavailable",
       "provider_setup_unavailable",
     ]),
-  }).strict(),
+  }),
 ]));
 export type TeamIdentityEligibleProviderAvailabilityV1 = z.infer<typeof TeamIdentityEligibleProviderAvailabilityV1Schema>;
-export const TeamIdentityEligibleProviderAvailabilityV1Schema = lazyZodSchema(() => IdentityEligibleProviderAvailabilityV1Schema.refine(
-  (value) => !(value.status === 'available' && value.setupChoice.kind === 'create_managed'
-    && value.setupChoice.actionId === 'home.identity.workos.connection.create'),
-));
+export const TeamIdentityEligibleProviderAvailabilityV1Schema = lazyZodSchema(() => IdentityEligibleProviderAvailabilityV1Schema.check(z.refine((value) => !(value.status === 'available' && value.setupChoice.kind === 'create_managed'
+    && value.setupChoice.actionId === 'home.identity.workos.connection.create'))));
 
-export const IdentityEligibleProviderV1Schema = lazyZodSchema(() => z.object({
+export const IdentityEligibleProviderV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  providerId: ExactIdSchema.nullable(),
+  providerId: z.nullable(ExactIdSchema),
   providerKind: TeamIdentityProviderKindV1Schema,
   owner: z.enum(["home", "team"]),
-  displayName: BoundedLabelSchema.nullable(),
+  displayName: z.nullable(BoundedLabelSchema),
   availability: IdentityEligibleProviderAvailabilityV1Schema,
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   if (value.availability.status !== "available") return;
   if (value.availability.setupChoice.kind === "use_existing") {
     if (value.providerId !== value.availability.setupChoice.providerInstanceId) {
@@ -234,16 +228,14 @@ export const IdentityEligibleProviderV1Schema = lazyZodSchema(() => z.object({
   if (value.providerId !== null) {
     ctx.addIssue({ code: "custom", message: "Managed provider setup choices cannot identify an existing provider" });
   }
-}));
+})));
 export type IdentityEligibleProviderV1 = z.infer<typeof IdentityEligibleProviderV1Schema>;
-export const TeamIdentityEligibleProviderV1Schema = lazyZodSchema(() => IdentityEligibleProviderV1Schema.refine(
-  (value) => !(value.availability.status === 'available'
+export const TeamIdentityEligibleProviderV1Schema = lazyZodSchema(() => IdentityEligibleProviderV1Schema.check(z.refine((value) => !(value.availability.status === 'available'
     && value.availability.setupChoice.kind === 'create_managed'
-    && value.availability.setupChoice.actionId === 'home.identity.workos.connection.create'),
-));
+    && value.availability.setupChoice.actionId === 'home.identity.workos.connection.create'))));
 export type TeamIdentityEligibleProviderV1 = z.infer<typeof TeamIdentityEligibleProviderV1Schema>;
 
-export const TeamIdentityConnectionListResultV1Schema = lazyZodSchema(() => z.object({
+export const TeamIdentityConnectionListResultV1Schema = lazyZodSchema(() => z.strictObject({
   // This endpoint intentionally returns the complete Team administration
   // projection. There is no pagination lifecycle for either collection, so an
   // arbitrary row-count validator would turn a valid 101st row into a response
@@ -257,41 +249,41 @@ export const TeamIdentityConnectionListResultV1Schema = lazyZodSchema(() => z.ob
    * carries no bearer. `null` means this Home publishes neither, so no portable
    * link exists to hand a member — not that the Team refuses sign-in.
    */
-  memberSignInUrl: z.string().url().nullable(),
-}).strict());
+  memberSignInUrl: z.nullable(z.string().check(z.url())),
+}));
 export type TeamIdentityConnectionListResultV1 = z.infer<typeof TeamIdentityConnectionListResultV1Schema>;
 
-export const IdentityConnectionCreateInputV1Schema = lazyZodSchema(() => z.object({
+export const IdentityConnectionCreateInputV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   providerInstanceId: ExactIdSchema,
   externalReference: TeamIdentityConnectionExternalReferenceV1Schema,
   settings: TeamIdentityConnectionSettingsV1Schema,
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   if (value.externalReference.kind !== value.settings.kind) {
     ctx.addIssue({ code: "custom", message: "Connection documents must have the same kind" });
   }
-}));
-export const TeamIdentityConnectionCreateInputV1Schema = lazyZodSchema(() => IdentityConnectionCreateInputV1Schema.safeExtend({ teamId: TeamIdSchema }));
+})));
+export const TeamIdentityConnectionCreateInputV1Schema = lazyZodSchema(() => z.safeExtend(IdentityConnectionCreateInputV1Schema, { teamId: TeamIdSchema }));
 export type TeamIdentityConnectionCreateInputV1 = z.infer<typeof TeamIdentityConnectionCreateInputV1Schema>;
 
-export const TeamIdentityConnectionSettingsUpdateInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamIdentityConnectionSettingsUpdateInputV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   teamId: TeamIdSchema,
   connectionId: TeamIdentityConnectionIdSchema,
-  expectedRevision: z.number().int().positive(),
+  expectedRevision: z.number().check(z.int(), z.positive()),
   settings: TeamIdentityConnectionSettingsV1Schema,
-}).strict());
+}));
 export type TeamIdentityConnectionSettingsUpdateInputV1 = z.infer<typeof TeamIdentityConnectionSettingsUpdateInputV1Schema>;
 
-export const IdentityConnectionMutationResultV1Schema = lazyZodSchema(() => z.object({
+export const IdentityConnectionMutationResultV1Schema = lazyZodSchema(() => z.strictObject({
   connection: IdentityConnectionV1Schema,
-}).strict());
-export const TeamIdentityConnectionMutationResultV1Schema = lazyZodSchema(() => IdentityConnectionMutationResultV1Schema.safeExtend({ connection: TeamIdentityConnectionV1Schema }));
+}));
+export const TeamIdentityConnectionMutationResultV1Schema = lazyZodSchema(() => z.safeExtend(IdentityConnectionMutationResultV1Schema, { connection: TeamIdentityConnectionV1Schema }));
 export type TeamIdentityConnectionMutationResultV1 = z.infer<typeof TeamIdentityConnectionMutationResultV1Schema>;
 
-export const TeamIdentityConnectionRemoveResultV1Schema = lazyZodSchema(() => z.object({
+export const TeamIdentityConnectionRemoveResultV1Schema = lazyZodSchema(() => z.strictObject({
   outcome: z.enum(["removed", "already_absent"]),
-}).strict());
+}));
 export type TeamIdentityConnectionRemoveResultV1 = z.infer<typeof TeamIdentityConnectionRemoveResultV1Schema>;
 
 export const TeamIdentityConnectionRemovalBlockerV1Schema = lazyZodSchema(() => z.enum([
@@ -306,23 +298,21 @@ export const TeamIdentityConnectionRemovalBlockerV1Schema = lazyZodSchema(() => 
 ]));
 export type TeamIdentityConnectionRemovalBlockerV1 = z.infer<typeof TeamIdentityConnectionRemovalBlockerV1Schema>;
 
-export const IdentityConnectionRemovalPreflightV1Schema = lazyZodSchema(() => z.object({
+export const IdentityConnectionRemovalPreflightV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   canRemove: z.boolean(),
   connection: IdentityConnectionV1Schema,
-  impact: z.object({
-    linkedAccounts: z.number().int().min(0),
-    accountsRequiringAlternateLogin: z.number().int().min(0),
-    directorySources: z.number().int().min(0),
-    externalGroupBindings: z.number().int().min(0),
-    managedMemberships: z.number().int().min(0),
-  }).strict(),
-  blockers: z.array(TeamIdentityConnectionRemovalBlockerV1Schema)
-    .max(TeamIdentityConnectionRemovalBlockerV1Schema.options.length)
-    .refine((blockers) => new Set(blockers).size === blockers.length, {
+  impact: z.strictObject({
+    linkedAccounts: z.number().check(z.int(), z.minimum(0)),
+    accountsRequiringAlternateLogin: z.number().check(z.int(), z.minimum(0)),
+    directorySources: z.number().check(z.int(), z.minimum(0)),
+    externalGroupBindings: z.number().check(z.int(), z.minimum(0)),
+    managedMemberships: z.number().check(z.int(), z.minimum(0)),
+  }),
+  blockers: z.array(TeamIdentityConnectionRemovalBlockerV1Schema).check(z.maxLength(TeamIdentityConnectionRemovalBlockerV1Schema.options.length), z.refine((blockers) => new Set(blockers).size === blockers.length, {
       message: "Connection removal blockers must be unique",
-    }),
-}).strict().superRefine((value, ctx) => {
+    })),
+}).check(z.superRefine((value, ctx) => {
   if (value.canRemove !== (value.blockers.length === 0)) {
     ctx.addIssue({ code: "custom", message: "Removal availability must match blockers" });
   }
@@ -331,34 +321,34 @@ export const IdentityConnectionRemovalPreflightV1Schema = lazyZodSchema(() => z.
   ) {
     ctx.addIssue({ code: "custom", message: "Alternate-login impact cannot exceed linked Accounts" });
   }
-}));
+})));
 export type IdentityConnectionRemovalPreflightV1 = z.infer<typeof IdentityConnectionRemovalPreflightV1Schema>;
-export const TeamIdentityConnectionRemovalPreflightV1Schema = lazyZodSchema(() => IdentityConnectionRemovalPreflightV1Schema.safeExtend({ connection: TeamIdentityConnectionV1Schema }));
+export const TeamIdentityConnectionRemovalPreflightV1Schema = lazyZodSchema(() => z.safeExtend(IdentityConnectionRemovalPreflightV1Schema, { connection: TeamIdentityConnectionV1Schema }));
 export type TeamIdentityConnectionRemovalPreflightV1 = z.infer<typeof TeamIdentityConnectionRemovalPreflightV1Schema>;
 
 export const TeamIdentityConnectionTestStartInputV1Schema = TeamIdentityConnectionRefInputV1Schema;
 export type TeamIdentityConnectionTestStartInputV1 = z.infer<typeof TeamIdentityConnectionTestStartInputV1Schema>;
 
-export const TeamIdentityConnectionTestStartResultV1Schema = lazyZodSchema(() => z.object({
+export const TeamIdentityConnectionTestStartResultV1Schema = lazyZodSchema(() => z.strictObject({
   authorizeUrl: z.url(),
   attemptId: ExactIdSchema,
-}).strict());
+}));
 export type TeamIdentityConnectionTestStartResultV1 = z.infer<typeof TeamIdentityConnectionTestStartResultV1Schema>;
 
-export const TeamIdentityConnectionTestConsumeInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamIdentityConnectionTestConsumeInputV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   teamId: TeamIdSchema,
   connectionId: TeamIdentityConnectionIdSchema,
   resultHandle: ExactIdSchema,
-}).strict());
+}));
 export type TeamIdentityConnectionTestConsumeInputV1 = z.infer<typeof TeamIdentityConnectionTestConsumeInputV1Schema>;
 
-export const IdentityConnectionTestConsumeResultV1Schema = lazyZodSchema(() => z.object({
+export const IdentityConnectionTestConsumeResultV1Schema = lazyZodSchema(() => z.strictObject({
   connection: IdentityConnectionV1Schema,
   /** Absent when the tested connection's provider produced no sanitized diagnostics. */
-  diagnostics: IdentityConnectionTestDiagnosticsV1Schema.optional(),
-}).strict());
+  diagnostics: z.optional(IdentityConnectionTestDiagnosticsV1Schema),
+}));
 export type IdentityConnectionTestConsumeResultV1 = z.infer<typeof IdentityConnectionTestConsumeResultV1Schema>;
-export const TeamIdentityConnectionTestConsumeResultV1Schema = lazyZodSchema(() => IdentityConnectionTestConsumeResultV1Schema.safeExtend({ connection: TeamIdentityConnectionV1Schema }));
+export const TeamIdentityConnectionTestConsumeResultV1Schema = lazyZodSchema(() => z.safeExtend(IdentityConnectionTestConsumeResultV1Schema, { connection: TeamIdentityConnectionV1Schema }));
 export type TeamIdentityConnectionTestConsumeResultV1 =
   z.infer<typeof TeamIdentityConnectionTestConsumeResultV1Schema>;

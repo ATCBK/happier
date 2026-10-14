@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const SESSION_MESSAGE_ROLES = ['user', 'agent', 'event', 'unknown'] as const;
 

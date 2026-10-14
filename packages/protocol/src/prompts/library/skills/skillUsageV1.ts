@@ -1,13 +1,13 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../../json/storedReadSchema.js';
 
 /** Consumers rank and describe usage in days; this is the sole write interval. */
 export const SKILL_USAGE_WRITE_INTERVAL_MS_V1 = 86_400_000;
-export const SkillUsageRowV1Schema = lazyZodSchema(() => z.object({
+export const SkillUsageRowV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  lastUsedAt: z.record(z.string().min(1), z.number().int().nonnegative().safe()),
-}).strict());
+  lastUsedAt: z.record(z.string().check(z.minLength(1)), z.number().check(z.int(), z.nonnegative(), z.int())),
+}));
 export type SkillUsageRowV1 = z.infer<typeof SkillUsageRowV1Schema>;
 const stored = createStoredReadSchema(SkillUsageRowV1Schema);
 

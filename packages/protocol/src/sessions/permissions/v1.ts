@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginContributionLocalIdSchema } from '../../plugins/contributionIdentity.js';
 import { PluginIdSchema } from '../../plugins/pluginId.js';
@@ -13,17 +13,11 @@ const UTF8_ENCODER = new TextEncoder();
 export const NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE = 'native_tool_approval_once';
 
 function boundedNfcIdentifier(maxBytes: number, label: string) {
-  return z.string()
-    .refine((value) => value === value.normalize('NFC'), `${label} must be NFC-normalized`)
-    .refine((value) => value === value.trim() && value.length > 0, `${label} must be trimmed and nonempty`)
-    .refine((value) => UTF8_ENCODER.encode(value).byteLength <= maxBytes, `${label} exceeds its UTF-8 byte limit`);
+  return z.string().check(z.refine((value) => value === value.normalize('NFC'), `${label} must be NFC-normalized`), z.refine((value) => value === value.trim() && value.length > 0, `${label} must be trimmed and nonempty`), z.refine((value) => UTF8_ENCODER.encode(value).byteLength <= maxBytes, `${label} exceeds its UTF-8 byte limit`));
 }
 
 function boundedNfcText(maxBytes: number, label: string) {
-  return z.string()
-    .refine((value) => value === value.normalize('NFC'), `${label} must be NFC-normalized`)
-    .refine((value) => value.trim().length > 0, `${label} must be nonempty`)
-    .refine((value) => UTF8_ENCODER.encode(value).byteLength <= maxBytes, `${label} exceeds its UTF-8 byte limit`);
+  return z.string().check(z.refine((value) => value === value.normalize('NFC'), `${label} must be NFC-normalized`), z.refine((value) => value.trim().length > 0, `${label} must be nonempty`), z.refine((value) => UTF8_ENCODER.encode(value).byteLength <= maxBytes, `${label} exceeds its UTF-8 byte limit`));
 }
 
 export const SessionPermissionRequestIdV1Schema = boundedNfcIdentifier(256, 'Permission request ids');
@@ -38,41 +32,41 @@ export const SessionPermissionExternalPrincipalIdV1Schema = boundedNfcIdentifier
 export const SessionPermissionAccountIdV1Schema = boundedNfcIdentifier(191, 'Account ids');
 const SessionPermissionCursorV1Schema = boundedNfcIdentifier(1_024, 'Permission cursors');
 
-export const SessionPermissionAccountUserDecisionActorV1Schema = lazyZodSchema(() => z.object({
+export const SessionPermissionAccountUserDecisionActorV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('accountUser'),
   accountId: SessionPermissionAccountIdV1Schema,
   relationship: z.enum(['owner', 'sharedApprover']),
-}).strict());
+}));
 export type SessionPermissionAccountUserDecisionActorV1 = z.infer<
   typeof SessionPermissionAccountUserDecisionActorV1Schema
 >;
 
-export const SessionPermissionExternalHumanDecisionActorV1Schema = lazyZodSchema(() => z.object({
+export const SessionPermissionExternalHumanDecisionActorV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('externalHuman'),
   assurance: z.literal('pluginAsserted'),
   namespace: SessionPermissionExternalPrincipalNamespaceV1Schema,
   principalId: SessionPermissionExternalPrincipalIdV1Schema,
-  assertedBy: z.object({
+  assertedBy: z.strictObject({
     pluginId: asProtocolZod(PluginIdSchema),
     contributionLocalId: asProtocolZod(PluginContributionLocalIdSchema),
-  }).strict(),
-}).strict());
+  }),
+}));
 export type SessionPermissionExternalHumanDecisionActorV1 = z.infer<
   typeof SessionPermissionExternalHumanDecisionActorV1Schema
 >;
 
-export const SessionPermissionApprovalReviewerDecisionActorV1Schema = lazyZodSchema(() => z.object({
+export const SessionPermissionApprovalReviewerDecisionActorV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('approvalReviewer'),
-}).strict());
+}));
 
 /** A reviewer may answer this request once; it cannot grant future authority. */
-export const SessionPermissionApprovalReviewerClaimV1Schema = lazyZodSchema(() => z.object({
+export const SessionPermissionApprovalReviewerClaimV1Schema = lazyZodSchema(() => z.strictObject({
   version: z.literal(1),
   origin: z.literal('approvalReviewer'),
-  turnId: TurnIdSchema.optional(),
+  turnId: z.optional(TurnIdSchema),
   decision: z.literal('approved'),
   scope: z.literal('request'),
-}).strict());
+}));
 export type SessionPermissionApprovalReviewerClaimV1 = z.infer<typeof SessionPermissionApprovalReviewerClaimV1Schema>;
 
 export const SessionPermissionDecisionActorV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
@@ -82,10 +76,10 @@ export const SessionPermissionDecisionActorV1Schema = lazyZodSchema(() => z.disc
 ]));
 export type SessionPermissionDecisionActorV1 = z.infer<typeof SessionPermissionDecisionActorV1Schema>;
 
-export const SessionPermissionRemoteActorInputV1Schema = lazyZodSchema(() => z.object({
+export const SessionPermissionRemoteActorInputV1Schema = lazyZodSchema(() => z.strictObject({
   namespace: SessionPermissionExternalPrincipalNamespaceV1Schema,
   principalId: SessionPermissionExternalPrincipalIdV1Schema,
-}).strict());
+}));
 export type SessionPermissionRemoteActorInputV1 = z.infer<typeof SessionPermissionRemoteActorInputV1Schema>;
 
 const SessionPermissionRemoteAllowedScopesV1Schema = lazyZodSchema(() => z.union([
@@ -109,7 +103,7 @@ export const SESSION_PERMISSION_REMOTE_QUESTION_CHOICE_UTF8_BYTES = 256;
 export const SESSION_PERMISSION_REMOTE_SUMMARY_MAX_QUESTIONS = 4;
 export const SESSION_PERMISSION_REMOTE_SUMMARY_MAX_CHOICES_PER_QUESTION = 8;
 
-const SessionPermissionRemoteQuestionSummaryV1Schema = lazyZodSchema(() => z.object({
+const SessionPermissionRemoteQuestionSummaryV1Schema = lazyZodSchema(() => z.strictObject({
   question: boundedNfcText(
     SESSION_PERMISSION_REMOTE_QUESTION_TEXT_UTF8_BYTES,
     'Remote question text',
@@ -120,10 +114,10 @@ const SessionPermissionRemoteQuestionSummaryV1Schema = lazyZodSchema(() => z.obj
   choices: z.array(boundedNfcText(
     SESSION_PERMISSION_REMOTE_QUESTION_CHOICE_UTF8_BYTES,
     'Remote question choices',
-  )).max(SESSION_PERMISSION_REMOTE_SUMMARY_MAX_CHOICES_PER_QUESTION),
-}).strict());
+  )).check(z.maxLength(SESSION_PERMISSION_REMOTE_SUMMARY_MAX_CHOICES_PER_QUESTION)),
+}));
 
-const SessionPermissionRemotePermissionSummaryV1Schema = lazyZodSchema(() => z.object({
+const SessionPermissionRemotePermissionSummaryV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('permission'),
   toolLabel: boundedNfcText(
     SESSION_PERMISSION_REMOTE_SUMMARY_TOOL_LABEL_UTF8_BYTES,
@@ -137,14 +131,12 @@ const SessionPermissionRemotePermissionSummaryV1Schema = lazyZodSchema(() => z.o
     SESSION_PERMISSION_REMOTE_SUMMARY_DETAIL_UTF8_BYTES,
     'Remote permission details',
   ),
-}).strict());
+}));
 
-const SessionPermissionRemoteUserActionSummaryV1Schema = lazyZodSchema(() => z.object({
+const SessionPermissionRemoteUserActionSummaryV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('user_action'),
-  questions: z.array(SessionPermissionRemoteQuestionSummaryV1Schema)
-    .min(1)
-    .max(SESSION_PERMISSION_REMOTE_SUMMARY_MAX_QUESTIONS),
-}).strict());
+  questions: z.array(SessionPermissionRemoteQuestionSummaryV1Schema).check(z.minLength(1), z.maxLength(SESSION_PERMISSION_REMOTE_SUMMARY_MAX_QUESTIONS)),
+}));
 
 const SessionPermissionRemoteAgentRequestSummaryV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   SessionPermissionRemotePermissionSummaryV1Schema,
@@ -154,7 +146,7 @@ export type SessionPermissionRemoteAgentRequestSummaryV1 = z.infer<
   typeof SessionPermissionRemoteAgentRequestSummaryV1Schema
 >;
 
-export const SessionPermissionRemotePendingListInputV1Schema = lazyZodSchema(() => z.object({
+export const SessionPermissionRemotePendingListInputV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: asProtocolZod(SessionIdSchema),
   sourceRef: SessionPermissionSourceRefV1Schema,
   sourceRevisionOrEpoch: SessionPermissionSourceRevisionOrEpochV1Schema,
@@ -164,11 +156,11 @@ export const SessionPermissionRemotePendingListInputV1Schema = lazyZodSchema(() 
    * mediator holding custody for a request beyond the first page continues
    * here rather than waiting for older requests to settle.
    */
-  cursor: SessionPermissionCursorV1Schema.nullable().optional(),
-}).strict());
+  cursor: z.optional(z.nullable(SessionPermissionCursorV1Schema)),
+}));
 export type SessionPermissionRemotePendingListInputV1 = z.infer<typeof SessionPermissionRemotePendingListInputV1Schema>;
 
-const SessionPermissionRemotePendingPermissionRequestV1Schema = lazyZodSchema(() => z.object({
+const SessionPermissionRemotePendingPermissionRequestV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('permission'),
   requestId: SessionPermissionRequestIdV1Schema,
   /**
@@ -176,24 +168,24 @@ const SessionPermissionRemotePendingPermissionRequestV1Schema = lazyZodSchema(()
    * permission by (sessionId, turnId, requestId), never by requestId alone.
    */
   turnId: TurnIdSchema,
-  createdAtMs: z.number().int().nonnegative(),
+  createdAtMs: z.number().check(z.int(), z.nonnegative()),
   allowedScopes: SessionPermissionRemoteAllowedScopesV1Schema,
   agentRequestSummary: SessionPermissionRemotePermissionSummaryV1Schema,
-}).strict());
+}));
 
-const SessionPermissionRemotePendingUserActionRequestV1Schema = lazyZodSchema(() => z.object({
+const SessionPermissionRemotePendingUserActionRequestV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('user_action'),
   requestId: SessionPermissionRequestIdV1Schema,
   turnId: TurnIdSchema,
-  createdAtMs: z.number().int().nonnegative(),
+  createdAtMs: z.number().check(z.int(), z.nonnegative()),
   agentRequestSummary: SessionPermissionRemoteUserActionSummaryV1Schema,
-}).strict());
+}));
 
-export const SessionPermissionRemotePendingListOutputV1Schema = lazyZodSchema(() => z.object({
+export const SessionPermissionRemotePendingListOutputV1Schema = lazyZodSchema(() => z.strictObject({
   requests: z.array(z.discriminatedUnion('kind', [
     SessionPermissionRemotePendingPermissionRequestV1Schema,
     SessionPermissionRemotePendingUserActionRequestV1Schema,
-  ])).max(32),
+  ])).check(z.maxLength(32)),
   /**
    * `true` means the host is withholding a durable source-matched request
    * until its live permission waiter has reattached. Callers must not infer
@@ -207,11 +199,11 @@ export const SessionPermissionRemotePendingListOutputV1Schema = lazyZodSchema(()
    * projection. An undecodable continuation returns an empty `truncated` page
    * so a caller can never read it as a proof of absence.
    */
-  nextCursor: SessionPermissionCursorV1Schema.nullable(),
-}).strict());
+  nextCursor: z.nullable(SessionPermissionCursorV1Schema),
+}));
 export type SessionPermissionRemotePendingListOutputV1 = z.infer<typeof SessionPermissionRemotePendingListOutputV1Schema>;
 
-export const SessionPermissionRemoteRespondInputV1Schema = lazyZodSchema(() => z.object({
+export const SessionPermissionRemoteRespondInputV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: asProtocolZod(SessionIdSchema),
   turnId: TurnIdSchema,
   requestId: SessionPermissionRequestIdV1Schema,
@@ -221,7 +213,7 @@ export const SessionPermissionRemoteRespondInputV1Schema = lazyZodSchema(() => z
   actor: SessionPermissionRemoteActorInputV1Schema,
   decision: z.enum(['allow', 'deny']),
   scope: z.enum(['request', 'session']),
-}).strict());
+}));
 export type SessionPermissionRemoteRespondInputV1 = z.infer<typeof SessionPermissionRemoteRespondInputV1Schema>;
 
 const SessionUserActionRemoteAnswerValueV1Schema = boundedNfcText(
@@ -229,7 +221,7 @@ const SessionUserActionRemoteAnswerValueV1Schema = boundedNfcText(
   'Remote user-action answer values',
 );
 
-export const SessionUserActionRemoteAnswerInputV1Schema = lazyZodSchema(() => z.object({
+export const SessionUserActionRemoteAnswerInputV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: asProtocolZod(SessionIdSchema),
   turnId: TurnIdSchema,
   requestId: SessionPermissionRequestIdV1Schema,
@@ -241,29 +233,28 @@ export const SessionUserActionRemoteAnswerInputV1Schema = lazyZodSchema(() => z.
    * against its live request before delegating completion to the incumbent
    * `session.user_action.answer` path.
    */
-  answers: z.array(z.object({
-    questionIndex: z.number().int().min(0).max(SESSION_PERMISSION_REMOTE_SUMMARY_MAX_QUESTIONS - 1),
-    values: z.array(SessionUserActionRemoteAnswerValueV1Schema).min(1).max(32),
-  }).strict()).min(1).max(SESSION_PERMISSION_REMOTE_SUMMARY_MAX_QUESTIONS)
-    .superRefine((answers, context) => {
+  answers: z.array(z.strictObject({
+    questionIndex: z.number().check(z.int(), z.minimum(0), z.maximum(SESSION_PERMISSION_REMOTE_SUMMARY_MAX_QUESTIONS - 1)),
+    values: z.array(SessionUserActionRemoteAnswerValueV1Schema).check(z.minLength(1), z.maxLength(32)),
+  })).check(z.minLength(1), z.maxLength(SESSION_PERMISSION_REMOTE_SUMMARY_MAX_QUESTIONS), z.superRefine((answers, context) => {
       const indexes = new Set<number>();
       for (const [index, answer] of answers.entries()) {
         if (indexes.has(answer.questionIndex)) {
           context.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: [index, 'questionIndex'],
             message: 'Remote user-action answers must not repeat a question index',
           });
         }
         indexes.add(answer.questionIndex);
       }
-    }),
-}).strict());
+    })),
+}));
 export type SessionUserActionRemoteAnswerInputV1 = z.infer<typeof SessionUserActionRemoteAnswerInputV1Schema>;
 
 export const SessionUserActionRemoteAnswerOutputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ status: z.literal('applied'), requestId: SessionPermissionRequestIdV1Schema }).strict(),
-  z.object({
+  z.strictObject({ status: z.literal('applied'), requestId: SessionPermissionRequestIdV1Schema }),
+  z.strictObject({
     status: z.literal('rejected'),
     code: z.enum([
       'requestNotFound',
@@ -274,39 +265,39 @@ export const SessionUserActionRemoteAnswerOutputV1Schema = lazyZodSchema(() => z
       'ownerMachineUnavailable',
       'canceled',
     ]),
-  }).strict(),
+  }),
 ]));
 export type SessionUserActionRemoteAnswerOutputV1 = z.infer<typeof SessionUserActionRemoteAnswerOutputV1Schema>;
 
 const SessionPermissionRemoteRespondSuccessV1Schema = lazyZodSchema(() => z.discriminatedUnion('decision', [
-  z.object({
+  z.strictObject({
     status: z.enum(['applied', 'alreadyApplied']),
     settlementId: SessionPermissionSettlementIdV1Schema,
     requestId: SessionPermissionRequestIdV1Schema,
     decision: z.literal('allow'),
     effect: z.union([
-      z.object({ kind: z.literal('allowOnce') }).strict(),
-      z.object({
+      z.strictObject({ kind: z.literal('allowOnce') }),
+      z.strictObject({
         kind: z.literal('sessionGrant'),
         grantId: SessionPermissionGrantIdV1Schema,
         sourceRef: SessionPermissionSourceRefV1Schema,
         sourceRevisionOrEpoch: SessionPermissionSourceRevisionOrEpochV1Schema,
         admittedPermissionCeiling: asProtocolZod(AgentPermissionIntentV1Schema),
-      }).strict(),
+      }),
     ]),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.enum(['applied', 'alreadyApplied']),
     settlementId: SessionPermissionSettlementIdV1Schema,
     requestId: SessionPermissionRequestIdV1Schema,
     decision: z.literal('deny'),
-    effect: z.object({ kind: z.literal('deny') }).strict(),
-  }).strict(),
+    effect: z.strictObject({ kind: z.literal('deny') }),
+  }),
 ]));
 
 export const SessionPermissionRemoteRespondOutputV1Schema = lazyZodSchema(() => z.union([
   SessionPermissionRemoteRespondSuccessV1Schema,
-  z.object({
+  z.strictObject({
     status: z.literal('rejected'),
     code: z.enum([
       'requestNotFound',
@@ -323,33 +314,33 @@ export const SessionPermissionRemoteRespondOutputV1Schema = lazyZodSchema(() => 
       'ownerMachineUnavailable',
       'canceled',
     ]),
-  }).strict(),
+  }),
 ]));
 export type SessionPermissionRemoteRespondOutputV1 = z.infer<typeof SessionPermissionRemoteRespondOutputV1Schema>;
 
-export const SessionPermissionRemoteGrantsListInputV1Schema = lazyZodSchema(() => z.object({
+export const SessionPermissionRemoteGrantsListInputV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: asProtocolZod(SessionIdSchema),
-  limit: z.number().int().min(1).max(200).default(50),
-  cursor: SessionPermissionCursorV1Schema.nullable().optional(),
-}).strict());
+  limit: z._default(z.number().check(z.int(), z.minimum(1), z.maximum(200)), 50),
+  cursor: z.optional(z.nullable(SessionPermissionCursorV1Schema)),
+}));
 export type SessionPermissionRemoteGrantsListInputV1 = z.infer<typeof SessionPermissionRemoteGrantsListInputV1Schema>;
 
 const SessionPermissionRemoteGrantProjectionV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('mediator') }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('mediator') }),
+  z.strictObject({
     kind: z.literal('owner'),
-    rule: z.object({
+    rule: z.strictObject({
       kind: z.literal('exactTool'),
       identifier: boundedNfcIdentifier(1_024, 'Permission tool identifiers'),
-    }).strict(),
-    revocationActor: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('accountUser'), accountId: SessionPermissionAccountIdV1Schema }).strict(),
-      z.object({ kind: z.literal('mediatorPlugin'), pluginId: asProtocolZod(PluginIdSchema) }).strict(),
-    ]).optional(),
-  }).strict(),
+    }),
+    revocationActor: z.optional(z.discriminatedUnion('kind', [
+      z.strictObject({ kind: z.literal('accountUser'), accountId: SessionPermissionAccountIdV1Schema }),
+      z.strictObject({ kind: z.literal('mediatorPlugin'), pluginId: asProtocolZod(PluginIdSchema) }),
+    ])),
+  }),
 ]));
 
-export const SessionPermissionRemoteGrantSummaryV1Schema = lazyZodSchema(() => z.object({
+export const SessionPermissionRemoteGrantSummaryV1Schema = lazyZodSchema(() => z.strictObject({
   turnId: TurnIdSchema,
   requestId: SessionPermissionRequestIdV1Schema,
   settlementId: SessionPermissionSettlementIdV1Schema,
@@ -358,31 +349,31 @@ export const SessionPermissionRemoteGrantSummaryV1Schema = lazyZodSchema(() => z
   sourceRevisionOrEpoch: SessionPermissionSourceRevisionOrEpochV1Schema,
   admittedPermissionCeiling: asProtocolZod(AgentPermissionIntentV1Schema),
   actor: SessionPermissionRemoteActorInputV1Schema,
-  createdAtMs: z.number().int().nonnegative(),
-  revokedAtMs: z.number().int().nonnegative().optional(),
+  createdAtMs: z.number().check(z.int(), z.nonnegative()),
+  revokedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
   projection: SessionPermissionRemoteGrantProjectionV1Schema,
-}).strict());
+}));
 export type SessionPermissionRemoteGrantSummaryV1 = z.infer<typeof SessionPermissionRemoteGrantSummaryV1Schema>;
 
-export const SessionPermissionRemoteGrantsListOutputV1Schema = lazyZodSchema(() => z.object({
-  grants: z.array(SessionPermissionRemoteGrantSummaryV1Schema).max(200),
-  nextCursor: SessionPermissionCursorV1Schema.nullable(),
-}).strict());
+export const SessionPermissionRemoteGrantsListOutputV1Schema = lazyZodSchema(() => z.strictObject({
+  grants: z.array(SessionPermissionRemoteGrantSummaryV1Schema).check(z.maxLength(200)),
+  nextCursor: z.nullable(SessionPermissionCursorV1Schema),
+}));
 export type SessionPermissionRemoteGrantsListOutputV1 = z.infer<typeof SessionPermissionRemoteGrantsListOutputV1Schema>;
 
-export const SessionPermissionRemoteGrantRevokeInputV1Schema = lazyZodSchema(() => z.object({
+export const SessionPermissionRemoteGrantRevokeInputV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: asProtocolZod(SessionIdSchema),
   turnId: TurnIdSchema,
   requestId: SessionPermissionRequestIdV1Schema,
   grantId: SessionPermissionGrantIdV1Schema,
-}).strict());
+}));
 export type SessionPermissionRemoteGrantRevokeInputV1 = z.infer<typeof SessionPermissionRemoteGrantRevokeInputV1Schema>;
 
 export const SessionPermissionRemoteGrantRevokeOutputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ status: z.enum(['revoked', 'alreadyRevoked']), grantId: SessionPermissionGrantIdV1Schema }).strict(),
-  z.object({
+  z.strictObject({ status: z.enum(['revoked', 'alreadyRevoked']), grantId: SessionPermissionGrantIdV1Schema }),
+  z.strictObject({
     status: z.literal('rejected'),
     code: z.enum(['notFound', 'sessionUnavailable', 'ownerMachineUnavailable', 'mediationStateUnavailable', 'canceled']),
-  }).strict(),
+  }),
 ]));
 export type SessionPermissionRemoteGrantRevokeOutputV1 = z.infer<typeof SessionPermissionRemoteGrantRevokeOutputV1Schema>;

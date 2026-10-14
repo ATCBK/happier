@@ -1,4 +1,6 @@
-import { z } from 'zod';
+import { lazyZodSchema } from '../../lazyZodSchema.js';
+import * as zMini from 'zod/mini';
+import { z } from 'zod/mini';
 import {
   FrameBridgeEnvelopeBaseV1Schema,
   FrameBridgeHostToFrameEnvelopeBaseV1Schema,
@@ -25,7 +27,7 @@ import { PluginUiLaunchInputV1Schema, PluginUiSubPathV1Schema } from './hostApiR
 import { ComposerRefV1Schema } from './composer.js';
 import { asProtocolZod } from '../actions/internalProtocolZodAdapter.js';
 
-const BridgeIdSchema = z.string().trim().min(1);
+const BridgeIdSchema = z.string().check(z.trim(), z.minLength(1));
 const ComposerRefV1ZodSchema = asProtocolZod(ComposerRefV1Schema);
 const HOSTED_WEB_NATIVE_ARTIFACT_PARTITION_PATTERN = /^hpa_[a-f0-9]{64}$/u;
 const HOSTED_WEB_ANDROID_ARTIFACT_FRAME_HOST_SUFFIX = '.plugins.happier.dev';
@@ -107,47 +109,47 @@ export function readPluginHostedWebBridgeFrameOriginV1(url: URL): string | null 
   return null;
 }
 
-const BridgeOriginSchema = z.union([z.literal('null'), z.string().trim().url().refine(isExactPluginHostedWebBridgeOriginV1, {
+const BridgeOriginSchema = z.union([z.literal('null'), z.string().check(z.trim(), z.url(), z.refine(isExactPluginHostedWebBridgeOriginV1, {
   message: 'Hosted-web bridge origins must be exact absolute origins.',
-})]);
+}))]);
 
 /** Source adapters supply these transport facts before the common ready handshake. */
-export const PluginHostedWebBridgeBootstrapConfigV1Schema = z.object({
+export const PluginHostedWebBridgeBootstrapConfigV1Schema = z.strictObject({
   identity: PluginUiHostApiWireIdentityV1Schema,
   frameOrigin: BridgeOriginSchema,
-  hostOrigin: z.string().refine((value) => {
+  hostOrigin: z.string().check(z.refine((value) => {
     try {
       const url = new URL(value);
       return (url.protocol === 'http:' || url.protocol === 'https:') && url.origin === value;
     } catch {
       return false;
     }
-  }, 'Expected an exact HTTP(S) host origin.'),
-}).strict();
+  }, 'Expected an exact HTTP(S) host origin.')),
+});
 export type PluginHostedWebBridgeBootstrapConfigV1 = z.infer<typeof PluginHostedWebBridgeBootstrapConfigV1Schema>;
 
 const PluginHostedWebBridgeEnvelopeBaseV1Schema = FrameBridgeEnvelopeBaseV1Schema;
 
 export const PluginHostedWebBridgeEnvelopeV1Schema =
-  PluginHostedWebBridgeEnvelopeBaseV1Schema.extend({
+  lazyZodSchema(() => (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(zMini.extend(PluginHostedWebBridgeEnvelopeBaseV1Schema, {
     kind: PluginHostedWebBridgeMessageKindV1Schema,
     payload: PluginUiJsonValueV1Schema,
-  }).strict();
+  })));
 export type PluginHostedWebBridgeEnvelopeV1 =
   z.infer<typeof PluginHostedWebBridgeEnvelopeV1Schema>;
 
-export const PluginHostedFrameOpenExternalPayloadV1Schema = z.object({
-  url: z.string().trim().min(1),
-}).strict();
+export const PluginHostedFrameOpenExternalPayloadV1Schema = z.strictObject({
+  url: z.string().check(z.trim(), z.minLength(1)),
+});
 
 export const PluginHostedWebBridgeResponseKindV1Schema = FrameBridgeResponseKindV1Schema;
 export type PluginHostedWebBridgeResponseKindV1 =
   z.infer<typeof PluginHostedWebBridgeResponseKindV1Schema>;
 
 export const PluginHostedWebBridgeResponseEnvelopeV1Schema =
-  FrameBridgeResponseEnvelopeBaseV1Schema.extend({
+  lazyZodSchema(() => (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(zMini.extend(FrameBridgeResponseEnvelopeBaseV1Schema, {
     payload: PluginUiJsonValueV1Schema,
-  }).strict();
+  })));
 export type PluginHostedWebBridgeResponseEnvelopeV1 =
   z.infer<typeof PluginHostedWebBridgeResponseEnvelopeV1Schema>;
 
@@ -191,10 +193,10 @@ export type PluginHostedWebBridgeHostMessageKindV1 =
  * two apart.
  */
 export const PluginHostedWebBridgeHostApiMessageEnvelopeV1Schema =
-  FrameBridgeHostToFrameEnvelopeBaseV1Schema.extend({
+  lazyZodSchema(() => (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(zMini.extend(FrameBridgeHostToFrameEnvelopeBaseV1Schema, {
     kind: z.literal('hostApi'),
     payload: PluginUiHostApiWireEnvelopeV1Schema,
-  }).strict();
+  })));
 
 /**
  * Frame bootstrap is limited to facts a hosted renderer needs to create the
@@ -205,25 +207,25 @@ export const PluginHostedWebBridgeHostApiMessageEnvelopeV1Schema =
  * Account, runtime target, lifecycle currentness and host-installed methods
  * are intentionally absent.
  */
-export const PluginHostedWebBridgeBootstrapPayloadV1Schema = z.object({
+export const PluginHostedWebBridgeBootstrapPayloadV1Schema = z.strictObject({
   apiVersion: z.literal(PLUGIN_UI_HOST_API_VERSION_V1),
   wireVersion: z.literal(PLUGIN_UI_HOST_API_WIRE_VERSION_V1),
   identity: PluginUiHostApiWireIdentityV1Schema,
   /** Installed source metadata for SDK authoring, never wire authority. */
-  authorPlugin: z.object({ id: BridgeIdSchema, version: BridgeIdSchema }).strict().optional(),
-  subPath: PluginUiSubPathV1Schema.optional(),
-  launchInput: PluginUiLaunchInputV1Schema.optional(),
-  composerRef: ComposerRefV1ZodSchema.optional(),
-}).strict();
+  authorPlugin: z.optional(z.strictObject({ id: BridgeIdSchema, version: BridgeIdSchema })),
+  subPath: zMini.optional(PluginUiSubPathV1Schema),
+  launchInput: zMini.optional(PluginUiLaunchInputV1Schema),
+  composerRef: zMini.optional(ComposerRefV1ZodSchema),
+});
 export type PluginHostedWebBridgeBootstrapPayloadV1 =
   z.infer<typeof PluginHostedWebBridgeBootstrapPayloadV1Schema>;
 
 export const PluginHostedWebBridgeBootstrapEnvelopeV1Schema =
-  FrameBridgeHostToFrameEnvelopeBaseV1Schema.extend({
+  lazyZodSchema(() => (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(zMini.extend(FrameBridgeHostToFrameEnvelopeBaseV1Schema, {
     origin: BridgeOriginSchema,
     kind: z.literal('bootstrap'),
     payload: PluginHostedWebBridgeBootstrapPayloadV1Schema,
-  }).strict();
+  })));
 export type PluginHostedWebBridgeBootstrapEnvelopeV1 =
   z.infer<typeof PluginHostedWebBridgeBootstrapEnvelopeV1Schema>;
 
@@ -233,10 +235,10 @@ export type PluginHostedWebBridgeBootstrapEnvelopeV1 =
  * strict Data payload rather than borrowing the host-API wire envelope.
  */
 export const PluginHostedWebBridgeAccountDataMessageEnvelopeV1Schema =
-  FrameBridgeHostToFrameEnvelopeBaseV1Schema.extend({
+  lazyZodSchema(() => (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(zMini.extend(FrameBridgeHostToFrameEnvelopeBaseV1Schema, {
     kind: z.literal(PLUGIN_HOSTED_WEB_ACCOUNT_DATA_BRIDGE_KIND_V1),
     payload: PluginHostedWebAccountDataBridgeChangeV1Schema,
-  }).strict();
+  })));
 export type PluginHostedWebBridgeAccountDataMessageEnvelopeV1 =
   z.infer<typeof PluginHostedWebBridgeAccountDataMessageEnvelopeV1Schema>;
 

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import type { z } from 'zod';
+import { z } from 'zod';
 
 import { BrowserAutomationActionKindV1Schema } from './v1.js';
 
@@ -29,7 +29,7 @@ export const BROWSER_AUTOMATION_NOT_IMPLEMENTED_ACTION_KINDS = [
  * to the union is published automatically and a verb removed from it stops being published.
  */
 export const BrowserAutomationImplementedActionKindV1Schema =
-  lazyZodSchema(() => BrowserAutomationActionKindV1Schema.exclude(BROWSER_AUTOMATION_NOT_IMPLEMENTED_ACTION_KINDS));
+  lazyZodSchema(() => z.enum(BrowserAutomationActionKindV1Schema.options).exclude(BROWSER_AUTOMATION_NOT_IMPLEMENTED_ACTION_KINDS));
 export type BrowserAutomationImplementedActionKindV1 = z.infer<
   typeof BrowserAutomationImplementedActionKindV1Schema
 >;

@@ -1,9 +1,9 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const SocialFriendsCapabilitiesSchema = lazyZodSchema(() => z.object({
   allowUsername: z.boolean(),
-  requiredIdentityProviderId: z.string().nullable(),
+  requiredIdentityProviderId: z.nullable(z.string()),
 }));
 
 export type SocialFriendsCapabilities = z.infer<typeof SocialFriendsCapabilitiesSchema>;

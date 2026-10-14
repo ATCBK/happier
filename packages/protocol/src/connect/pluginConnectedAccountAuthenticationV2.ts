@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { CanonicalHttpOriginSchema } from '../http/canonicalHttpOrigin.js';
 import { PluginContributionLocalIdSchema } from '../plugins/contributionIdentity.js';
@@ -14,82 +14,74 @@ import {
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 
 const PluginConnectedAccountAuthenticationFieldV2Schema =
-  lazyZodSchema(() => PluginSettingFieldV2Schema.transform((field) => ({
+  lazyZodSchema(() => z.pipe(PluginSettingFieldV2Schema, z.transform((field) => ({
     ...field,
     secret: field.secret === true,
-  })));
+  }))));
 
 const [
   PluginSecretConfigurationSettingFieldV2Schema,
   PluginPublicConfigurationSettingFieldV2Schema,
-] = PluginConfigurationSettingFieldV2Schema.options;
+] = PluginConfigurationSettingFieldV2Schema._zod.def.options;
 
-const PluginConnectedAccountOriginValueSchemaV2Schema = lazyZodSchema(() => z.object({
+const PluginConnectedAccountOriginValueSchemaV2Schema = lazyZodSchema(() => z.strictObject({
   type: z.literal('string'),
-  title: z.string().optional(),
-  description: z.string().optional(),
-  minLength: z.number().int().min(1),
-  maxLength: z.number().int().nonnegative().optional(),
-}).strict());
+  title: z.optional(z.string()),
+  description: z.optional(z.string()),
+  minLength: z.number().check(z.int(), z.minimum(1)),
+  maxLength: z.optional(z.number().check(z.int(), z.nonnegative())),
+}));
 
 /**
  * The closed choice set of a fixed-origin field. Its persisted value is the
  * choice, never the origin: a user picking a named deployment is not asked to
  * retype a URL the descriptor already knows.
  */
-const PluginConnectedAccountFixedOriginChoiceSchemaV2Schema = lazyZodSchema(() => z.object({
+const PluginConnectedAccountFixedOriginChoiceSchemaV2Schema = lazyZodSchema(() => z.strictObject({
   type: z.literal('string'),
-  title: z.string().optional(),
-  description: z.string().optional(),
-  enum: z.array(z.string().min(1)).min(1),
-}).strict());
+  title: z.optional(z.string()),
+  description: z.optional(z.string()),
+  enum: z.array(z.string().check(z.minLength(1))).check(z.minLength(1)),
+}));
 
 export const PluginConnectedAccountConfigurationFieldV2Schema =
   lazyZodSchema(() => z.union([
-    PluginSecretConfigurationSettingFieldV2Schema.extend({
-      semantic: z.never().optional(),
-    }).strict().transform((field) => ({
+    z.pipe(z.extend(PluginSecretConfigurationSettingFieldV2Schema, {
+      semantic: z.optional(z.never()),
+    }), z.transform((field) => ({
       ...field,
       secret: true as const,
-    })),
-    PluginPublicConfigurationSettingFieldV2Schema.extend({
-      semantic: z.never().optional(),
-    }).strict().transform((field) => ({
+    }))),
+    z.pipe(z.extend(PluginPublicConfigurationSettingFieldV2Schema, {
+      semantic: z.optional(z.never()),
+    }), z.transform((field) => ({
       ...field,
       secret: false as const,
-    })),
-    PluginPublicConfigurationSettingFieldV2Schema
-      .omit({
+    }))),
+    z.pipe(z.extend(z.omit(PluginPublicConfigurationSettingFieldV2Schema, {
         schema: true,
         default: true,
         required: true,
-      })
-      .extend({
+      }), {
         semantic: z.literal('connectedAccountOrigin'),
         schema: PluginConnectedAccountOriginValueSchemaV2Schema,
-        default: z.never().optional(),
+        default: z.optional(z.never()),
         required: z.literal(true),
-      })
-      .strict()
-      .transform((field) => ({
+      }), z.transform((field) => ({
         ...field,
         secret: false as const,
-      })),
-    PluginPublicConfigurationSettingFieldV2Schema
-      .omit({
+      }))),
+    z.pipe(z.extend(z.omit(PluginPublicConfigurationSettingFieldV2Schema, {
         schema: true,
         default: true,
         required: true,
-      })
-      .extend({
+      }), {
         semantic: z.literal('connectedAccountFixedOrigin'),
         schema: PluginConnectedAccountFixedOriginChoiceSchemaV2Schema,
-        originByValue: z.record(z.string().min(1), CanonicalHttpOriginSchema),
-        default: z.never().optional(),
+        originByValue: z.record(z.string().check(z.minLength(1)), CanonicalHttpOriginSchema),
+        default: z.optional(z.never()),
         required: z.literal(true),
-      })
-      .strict()
-      .superRefine((field, context) => {
+      }).check(z.superRefine((field, context) => {
         // The choice set and the route table are one declaration seen from two
         // sides. Letting them disagree would leave a pickable value with no
         // route, or a route no user can select.
@@ -106,36 +98,30 @@ export const PluginConnectedAccountConfigurationFieldV2Schema =
             message: 'Fixed-origin choices must declare exactly one origin per distinct choice.',
           });
         }
-      })
-      .transform((field) => ({
+      })), z.transform((field) => ({
         ...field,
         secret: false as const,
-      })),
+      }))),
     // A configured *service base* is a second, distinct fact from the network
     // origin: a deployment reached beneath a path segment — an Azure DevOps
     // organization or collection, a path-prefixed self-hosted GitLab or Sentry —
     // routes by the base while HostAccess keeps governing by the origin the
     // host derives from it. `connectedAccountOrigin` is deliberately not
     // loosened to carry a path, so `origin` keeps meaning scheme://host[:port].
-    PluginPublicConfigurationSettingFieldV2Schema
-      .omit({
+    z.pipe(z.extend(z.omit(PluginPublicConfigurationSettingFieldV2Schema, {
         schema: true,
         default: true,
         required: true,
-      })
-      .extend({
+      }), {
         semantic: z.literal('connectedAccountBase'),
         schema: PluginConnectedAccountOriginValueSchemaV2Schema,
-        default: z.never().optional(),
+        default: z.optional(z.never()),
         required: z.literal(true),
-      })
-      .strict()
-      .transform((field) => ({
+      }), z.transform((field) => ({
         ...field,
         secret: false as const,
-      })),
-  ])
-    .superRefine((field, context) => {
+      }))),
+  ]).check(z.superRefine((field, context) => {
       if (field.presentation?.binding !== undefined) {
         context.addIssue({
           code: 'custom',
@@ -143,13 +129,13 @@ export const PluginConnectedAccountConfigurationFieldV2Schema =
           message: 'Connected Account configuration fields are already bound to their service or account target.',
         });
       }
-    }));
+    })));
 export type PluginConnectedAccountConfigurationFieldV2 =
   z.infer<typeof PluginConnectedAccountConfigurationFieldV2Schema>;
 
 function rejectDuplicateFieldIds(
   fields: readonly Readonly<{ id: string }>[],
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   const fieldIds = new Set<string>();
   fields.forEach((field, fieldIndex) => {
@@ -165,19 +151,16 @@ function rejectDuplicateFieldIds(
 }
 
 const PluginConnectedAccountAuthenticationFieldsV2Schema =
-  lazyZodSchema(() => z.array(PluginConnectedAccountAuthenticationFieldV2Schema)
-    .superRefine(rejectDuplicateFieldIds));
+  lazyZodSchema(() => z.array(PluginConnectedAccountAuthenticationFieldV2Schema).check(z.superRefine(rejectDuplicateFieldIds)));
 
 const PluginConnectedAccountConfigurationFieldsV2Schema =
-  lazyZodSchema(() => z.array(PluginConnectedAccountConfigurationFieldV2Schema)
-    .min(1)
-    .superRefine(rejectDuplicateFieldIds));
+  lazyZodSchema(() => z.array(PluginConnectedAccountConfigurationFieldV2Schema).check(z.minLength(1), z.superRefine(rejectDuplicateFieldIds)));
 
-export const PluginConnectedAccountConfigurationV2Schema = lazyZodSchema(() => z.object({
+export const PluginConnectedAccountConfigurationV2Schema = lazyZodSchema(() => z.strictObject({
   scope: z.enum(['service', 'account']),
   changeBehavior: z.enum(['refresh', 'reconnect']),
   fields: PluginConnectedAccountConfigurationFieldsV2Schema,
-}).strict());
+}));
 export type PluginConnectedAccountConfigurationV2 =
   z.infer<typeof PluginConnectedAccountConfigurationV2Schema>;
 
@@ -187,35 +170,35 @@ const PluginConnectedAccountOutcomeReconciliationV2Schema =
 export const CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1 =
   'happier.team-credential-manual-connected-account-direct.v1' as const;
 
-export const PluginConnectedAccountDirectExportV2Schema = lazyZodSchema(() => z.object({
+export const PluginConnectedAccountDirectExportV2Schema = lazyZodSchema(() => z.strictObject({
   contractVersion: z.literal(CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1),
-}).strict());
+}));
 export type PluginConnectedAccountDirectExportV2 = z.infer<
   typeof PluginConnectedAccountDirectExportV2Schema
 >;
 
 export const PluginConnectedAccountAuthenticationModeV2Schema =
   lazyZodSchema(() => z.discriminatedUnion('kind', [
-    z.object({
+    z.strictObject({
       id: asProtocolZod(PluginContributionLocalIdSchema),
       kind: z.literal('manual'),
-      title: PluginLocalizedStringV2Schema.optional(),
+      title: z.optional(PluginLocalizedStringV2Schema),
       outcomeReconciliation: z.literal('none'),
       fields: PluginConnectedAccountAuthenticationFieldsV2Schema,
-      configuration: PluginConnectedAccountConfigurationV2Schema.optional(),
-      directExport: PluginConnectedAccountDirectExportV2Schema.optional(),
-    }).strict(),
-    z.object({
+      configuration: z.optional(PluginConnectedAccountConfigurationV2Schema),
+      directExport: z.optional(PluginConnectedAccountDirectExportV2Schema),
+    }),
+    z.strictObject({
       id: asProtocolZod(PluginContributionLocalIdSchema),
       kind: z.literal('oauthAuthorizationCode'),
-      title: PluginLocalizedStringV2Schema.optional(),
-      callbackUrl: z.url().max(2_048).optional(),
-      scopes: z.array(z.string().trim().min(1)).optional(),
+      title: z.optional(PluginLocalizedStringV2Schema),
+      callbackUrl: z.optional(z.url().check(z.maxLength(2_048))),
+      scopes: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
       pkce: z.literal('required'),
-      allowRawAuthorizationCode: z.boolean().optional(),
+      allowRawAuthorizationCode: z.optional(z.boolean()),
       outcomeReconciliation: PluginConnectedAccountOutcomeReconciliationV2Schema,
-      configuration: PluginConnectedAccountConfigurationV2Schema.optional(),
-    }).strict().superRefine((mode, context) => {
+      configuration: z.optional(PluginConnectedAccountConfigurationV2Schema),
+    }).check(z.superRefine((mode, context) => {
       if (mode.callbackUrl === undefined) {
         context.addIssue({
           code: 'custom',
@@ -223,24 +206,24 @@ export const PluginConnectedAccountAuthenticationModeV2Schema =
           message: 'Authorization-code authentication requires a declared callback URL.',
         });
       }
-    }),
-    z.object({
+    })),
+    z.strictObject({
       id: asProtocolZod(PluginContributionLocalIdSchema),
       kind: z.literal('oauthDeviceCode'),
-      title: PluginLocalizedStringV2Schema.optional(),
-      scopes: z.array(z.string().trim().min(1)).optional(),
+      title: z.optional(PluginLocalizedStringV2Schema),
+      scopes: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
       outcomeReconciliation: PluginConnectedAccountOutcomeReconciliationV2Schema,
-      configuration: PluginConnectedAccountConfigurationV2Schema.optional(),
-    }).strict(),
+      configuration: z.optional(PluginConnectedAccountConfigurationV2Schema),
+    }),
   ]));
 export type PluginConnectedAccountAuthenticationModeV2 =
   z.infer<typeof PluginConnectedAccountAuthenticationModeV2Schema>;
 
-export const PluginConnectedAccountAuthenticationV2Schema = lazyZodSchema(() => z.object({
+export const PluginConnectedAccountAuthenticationV2Schema = lazyZodSchema(() => z.strictObject({
   defaultModeId: asProtocolZod(PluginContributionLocalIdSchema),
-  modes: z.array(PluginConnectedAccountAuthenticationModeV2Schema).min(1),
-  native: z.object({ systemTool: z.literal('gh') }).strict().optional(),
-}).strict().superRefine((authentication, context) => {
+  modes: z.array(PluginConnectedAccountAuthenticationModeV2Schema).check(z.minLength(1)),
+  native: z.optional(z.strictObject({ systemTool: z.literal('gh') })),
+}).check(z.superRefine((authentication, context) => {
   const modeIds = new Set<string>();
   authentication.modes.forEach((mode, modeIndex) => {
     if (modeIds.has(mode.id)) {
@@ -259,7 +242,7 @@ export const PluginConnectedAccountAuthenticationV2Schema = lazyZodSchema(() => 
       message: `Default Connected Account authentication mode '${authentication.defaultModeId}' is not declared.`,
     });
   }
-}));
+})));
 export type PluginConnectedAccountAuthenticationV2 =
   z.infer<typeof PluginConnectedAccountAuthenticationV2Schema>;
 
@@ -270,20 +253,20 @@ export type PluginConnectedAccountAuthenticationV2 =
  * catalog re-exports it for family registration.
  */
 /** Authored provider navigation only; callers never supply or substitute this destination. */
-export const ConnectedAccountBillingUrlSchema = lazyZodSchema(() => z.string().url().refine(value => {
+export const ConnectedAccountBillingUrlSchema = lazyZodSchema(() => z.string().check(z.url(), z.refine(value => {
   const url = new URL(value);
   return url.protocol === 'https:' && !url.username && !url.password;
-}, 'Billing destinations must be credential-free HTTPS URLs'));
+}, 'Billing destinations must be credential-free HTTPS URLs')));
 
-export const PluginConnectedAccountDescriptorContributionV2Schema = lazyZodSchema(() => z.object({
+export const PluginConnectedAccountDescriptorContributionV2Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   title: PluginLocalizedStringV2Schema,
-  description: PluginLocalizedStringV2Schema.optional(),
+  description: z.optional(PluginLocalizedStringV2Schema),
   authentication: PluginConnectedAccountAuthenticationV2Schema,
-  recoveryCredits: z.object({ supported: z.literal(true) }).strict().optional(),
-  billingUrl: ConnectedAccountBillingUrlSchema.optional(),
-  capabilities: z.array(z.string().trim().min(1)).optional(),
-  metadata: z.record(z.string(), PluginJsonValueV2Schema).optional(),
-}).strict());
+  recoveryCredits: z.optional(z.strictObject({ supported: z.literal(true) })),
+  billingUrl: z.optional(ConnectedAccountBillingUrlSchema),
+  capabilities: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  metadata: z.optional(z.record(z.string(), PluginJsonValueV2Schema)),
+}));
 export type PluginConnectedAccountDescriptorContributionV2 =
   z.infer<typeof PluginConnectedAccountDescriptorContributionV2Schema>;

@@ -1,13 +1,13 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const ServerRetentionDomainPolicyV2Schema = z.discriminatedUnion('mode', [
   z.strictObject({ mode: z.literal('keep_forever') }),
-  z.strictObject({ mode: z.literal('delete_older_than'), days: z.number().int().min(1) }),
-  z.strictObject({ mode: z.literal('delete_inactive'), inactivityDays: z.number().int().min(1) }),
+  z.strictObject({ mode: z.literal('delete_older_than'), days: z.number().check(z.int(), z.minimum(1)) }),
+  z.strictObject({ mode: z.literal('delete_inactive'), inactivityDays: z.number().check(z.int(), z.minimum(1)) }),
 ]);
 
 export const ServerRetentionDomainV2Schema = z.strictObject({
-  id: z.string().trim().min(1),
+  id: z.string().check(z.trim(), z.minLength(1)),
   policy: ServerRetentionDomainPolicyV2Schema,
 });
 

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import type { PreNormalizedActionSpec } from './actionSpecs.js';
 import { InstallableCapabilityIdSchema } from '../installables/descriptor.js';
@@ -8,8 +8,8 @@ export type UpdatesActionId = typeof UPDATES_ACTION_IDS[number];
 export function isUpdatesActionId(value: string): value is UpdatesActionId {
   return (UPDATES_ACTION_IDS as readonly string[]).includes(value);
 }
-const id = z.string().trim().min(1);
-const EmptyInputSchema = lazyZodSchema(() => z.object({}).strict());
+const id = z.string().check(z.trim(), z.minLength(1));
+const EmptyInputSchema = lazyZodSchema(() => z.strictObject({}));
 export const UpdateItemStateSchema = lazyZodSchema(() => z.enum([
   'unchecked', 'checking', 'upToDate', 'available', 'required', 'running', 'ready', 'failed', 'unknown', 'offline',
 ]));
@@ -17,39 +17,38 @@ export type UpdateItemState = z.infer<typeof UpdateItemStateSchema>;
 export const UpdateItemActionVerbSchema = lazyZodSchema(() => z.enum(['update', 'retry', 'restart', 'reload', 'store']));
 export type UpdateItemActionVerb = z.infer<typeof UpdateItemActionVerbSchema>;
 export const UpdateSubjectSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('app') }).strict(), z.object({ kind: z.literal('happier-cli') }).strict(),
-  z.object({ kind: z.literal('agent-cli'), agentId: id }).strict(),
-  z.object({ kind: z.literal('installable'), key: id }).strict(),
+  z.strictObject({ kind: z.literal('app') }), z.strictObject({ kind: z.literal('happier-cli') }),
+  z.strictObject({ kind: z.literal('agent-cli'), agentId: id }),
+  z.strictObject({ kind: z.literal('installable'), key: id }),
 ]));
 export type UpdateSubject = Readonly<z.infer<typeof UpdateSubjectSchema>>;
 export const UpdatesActionInputSchemas = {
   'updates.get': EmptyInputSchema,
-  'machines.cli.update': lazyZodSchema(() => z.object({ target: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('local') }).strict(),
-    z.object({ kind: z.literal('machine'), machineId: id }).strict(),
-  ]) }).strict()),
+  'machines.cli.update': lazyZodSchema(() => z.strictObject({ target: z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('local') }),
+    z.strictObject({ kind: z.literal('machine'), machineId: id }),
+  ]) })),
   'updates.check': EmptyInputSchema,
-  'updates.batch.start': lazyZodSchema(() => z.object({ groupId: id.nullable(), itemIds: z.array(id).min(1)
-    .refine(items => new Set(items).size === items.length) }).strict()),
+  'updates.batch.start': lazyZodSchema(() => z.strictObject({ groupId: z.nullable(id), itemIds: z.array(id).check(z.minLength(1), z.refine(items => new Set(items).size === items.length)) })),
   'updates.batch.stop': EmptyInputSchema,
 } as const;
-const OperationResultSchema = lazyZodSchema(() => z.object({ status: z.literal('requested') }).strict());
-export const UpdatesSnapshotResultSchema = lazyZodSchema(() => z.object({
-  groups: z.array(z.object({
-    groupId: id, machineName: z.string().nullable(), online: z.boolean(),
+const OperationResultSchema = lazyZodSchema(() => z.strictObject({ status: z.literal('requested') }));
+export const UpdatesSnapshotResultSchema = lazyZodSchema(() => z.strictObject({
+  groups: z.array(z.strictObject({
+    groupId: id, machineName: z.nullable(z.string()), online: z.boolean(),
     target: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('app') }).strict(), z.object({ kind: z.literal('local') }).strict(),
-      z.object({ kind: z.literal('machine'), machineId: id }).strict(),
+      z.strictObject({ kind: z.literal('app') }), z.strictObject({ kind: z.literal('local') }),
+      z.strictObject({ kind: z.literal('machine'), machineId: id }),
     ]),
-    items: z.array(z.object({
+    items: z.array(z.strictObject({
       itemId: id, title: z.string(), subject: UpdateSubjectSchema, state: UpdateItemStateSchema,
-      currentVersion: z.string().nullable(), latestVersion: z.string().nullable(),
-      managedBy: z.enum(['happier', 'user']), action: UpdateItemActionVerbSchema.nullable(), batchEligible: z.boolean(),
-      capabilityId: InstallableCapabilityIdSchema.nullable(), manualCommand: z.string().nullable(), logPath: z.string().nullable(),
-    }).strict()),
-  }).strict()),
-  batch: z.object({ done: z.number().int().nonnegative(), total: z.number().int().nonnegative(), stopping: z.boolean() }).strict().nullable(),
-}).strict());
+      currentVersion: z.nullable(z.string()), latestVersion: z.nullable(z.string()),
+      managedBy: z.enum(['happier', 'user']), action: z.nullable(UpdateItemActionVerbSchema), batchEligible: z.boolean(),
+      capabilityId: z.nullable(InstallableCapabilityIdSchema), manualCommand: z.nullable(z.string()), logPath: z.nullable(z.string()),
+    })),
+  })),
+  batch: z.nullable(z.strictObject({ done: z.number().check(z.int(), z.nonnegative()), total: z.number().check(z.int(), z.nonnegative()), stopping: z.boolean() })),
+}));
 export const UpdatesActionOutputSchemas = {
   'updates.get': UpdatesSnapshotResultSchema,
   'machines.cli.update': OperationResultSchema, 'updates.check': OperationResultSchema,

@@ -1,11 +1,11 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { githubRegistryAdapterV1, readGitHubRepositoryV1, registryRelativePathV1 } from './github.js';
 import type { RegistryFetchContextV1, RegistrySkillFormatAdapterV1 } from './registryFormatAdapterV1.js';
 import type { RegistrySourceV1 } from '../registrySourcesV1.js';
 import type { RegistryContentRefV1, RegistryProvenanceV1 } from '../registryItemsV1.js';
 import { RegistryFetchErrorV1 } from '../registryListV1.js';
-const pluginSchema=z.object({name:z.string().min(1),source:z.union([z.string(),z.object({source:z.string(),repo:z.string().optional(),path:z.string().optional(),ref:z.string().optional()})]),
-  hooks:z.unknown().optional(),commands:z.unknown().optional(),mcpServers:z.unknown().optional(),agents:z.unknown().optional()});
+const pluginSchema=z.object({name:z.string().check(z.minLength(1)),source:z.union([z.string(),z.object({source:z.string(),repo:z.optional(z.string()),path:z.optional(z.string()),ref:z.optional(z.string())})]),
+  hooks:z.optional(z.unknown()),commands:z.optional(z.unknown()),mcpServers:z.optional(z.unknown()),agents:z.optional(z.unknown())});
 async function plugins(ctx:RegistryFetchContextV1,source:RegistrySourceV1) {
   const raw=/^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.*?)\.claude-plugin\/marketplace\.json$/.exec(source.url);
   const github=readGitHubRepositoryV1(source.url);

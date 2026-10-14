@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * Host-authored control lifecycle for one exact Execution Run occurrence.
@@ -9,7 +9,7 @@ import { z } from 'zod';
  * new prompt. `recoverable_with_input` is the bounded counterpart: recovery
  * must be coupled to the next input so it cannot create an idle bounded Run.
  */
-export const ExecutionRunLifecycleV1Schema = lazyZodSchema(() => z.object({
+export const ExecutionRunLifecycleV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   state: z.enum([
     'current',
@@ -18,6 +18,6 @@ export const ExecutionRunLifecycleV1Schema = lazyZodSchema(() => z.object({
     'recoverable_with_input',
     'unavailable',
   ]),
-}).strict());
+}));
 
 export type ExecutionRunLifecycleV1 = z.infer<typeof ExecutionRunLifecycleV1Schema>;

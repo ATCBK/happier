@@ -1,9 +1,9 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { BrowserHttpOriginV1Schema } from '../url.js';
 
-const IdSchema = lazyZodSchema(() => z.string().trim().min(1).max(256));
+const IdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 
 export const BrowserPermissionKindV1Schema = lazyZodSchema(() => z.enum([
   'origin',
@@ -24,41 +24,38 @@ export type BrowserPermissionStateV1 = z.infer<typeof BrowserPermissionStateV1Sc
 export const BrowserPermissionScopeV1Schema = lazyZodSchema(() => z.enum(['profile', 'session', 'target']));
 export type BrowserPermissionScopeV1 = z.infer<typeof BrowserPermissionScopeV1Schema>;
 
-export const BrowserPermissionGrantV1Schema = lazyZodSchema(() => z
-  .object({
+export const BrowserPermissionGrantV1Schema = lazyZodSchema(() => z.strictObject({
     id: IdSchema,
-    profileId: IdSchema.optional(),
-    browserSessionId: IdSchema.optional(),
+    profileId: z.optional(IdSchema),
+    browserSessionId: z.optional(IdSchema),
     origin: BrowserHttpOriginV1Schema,
     permission: BrowserPermissionKindV1Schema,
     state: BrowserPermissionStateV1Schema,
     scope: BrowserPermissionScopeV1Schema,
-    targetId: IdSchema.optional(),
-    updatedAt: z.number().int().nonnegative(),
-    expiresAt: z.number().int().nonnegative().optional(),
-  })
-  .strict()
-  .superRefine((grant, context) => {
+    targetId: z.optional(IdSchema),
+    updatedAt: z.number().check(z.int(), z.nonnegative()),
+    expiresAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+  }).check(z.superRefine((grant, context) => {
     if (grant.scope === 'profile' && grant.profileId == null) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['profileId'],
         message: 'Profile-scoped browser permission grants require a profileId.',
       });
     }
     if (grant.scope === 'target' && grant.targetId == null) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['targetId'],
         message: 'Target-scoped browser permission grants require a targetId.',
       });
     }
     if (grant.scope === 'session' && grant.browserSessionId == null) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['browserSessionId'],
         message: 'Session-scoped browser permission grants require a browserSessionId.',
       });
     }
-  }));
+  })));
 export type BrowserPermissionGrantV1 = z.infer<typeof BrowserPermissionGrantV1Schema>;

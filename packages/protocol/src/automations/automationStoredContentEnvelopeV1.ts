@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
@@ -16,30 +16,30 @@ const UTF8_ENCODER = new TextEncoder();
 export const MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES = 256 * 1024;
 export const MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES = 512 * 1024;
 
-export const ENCRYPTED_STORED_CONTENT_SCHEMA = z.object({
+export const ENCRYPTED_STORED_CONTENT_SCHEMA = z.strictObject({
   t: z.literal('encrypted'),
-  c: z.string().min(1),
-}).strict();
+  c: z.string().check(z.minLength(1)),
+});
 
 export function addAutomationStoredEnvelopeUtf8LimitIssue(
   value: unknown,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
   message: string,
 ): void {
   if (UTF8_ENCODER.encode(createCanonicalJsonSigningInput(value)).byteLength > MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message });
+    context.addIssue({ code: "custom", message });
   }
 }
 
 export const AutomationStoredContentEnvelopeV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('plain'), v: PluginJsonValueV2Schema }).strict(),
+  z.strictObject({ t: z.literal('plain'), v: PluginJsonValueV2Schema }),
   ENCRYPTED_STORED_CONTENT_SCHEMA,
-]).superRefine((value, context) => {
+]).check(z.superRefine((value, context) => {
   addAutomationStoredEnvelopeUtf8LimitIssue(
     value,
     context,
     'Stored Automation envelope exceeds its UTF-8 byte limit',
   );
-}));
+})));
 export type AutomationStoredContentEnvelopeV1 = z.infer<typeof AutomationStoredContentEnvelopeV1Schema>;
 export const AutomationStoredContentEnvelopeV1ReadSchema = createStoredReadSchema(AutomationStoredContentEnvelopeV1Schema);

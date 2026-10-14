@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
 import { defineProtocolString } from '../../plugins/actions/protocolComposableSchema.js';
 
@@ -42,18 +42,18 @@ function codePointLength(value: string): number {
   return Array.from(value).length;
 }
 
-function boundedText(maxCodePoints: number, message: string): z.ZodString {
-  return z.string().min(1).superRefine((value, context) => {
+function boundedText(maxCodePoints: number, message: string): z.ZodMiniString {
+  return z.string().check(z.minLength(1), z.superRefine((value, context) => {
     if (value !== value.trim()) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'Composer attachment text must not have surrounding whitespace.',
       });
     }
     if (codePointLength(value) > maxCodePoints) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message });
+      context.addIssue({ code: "custom", message });
     }
-  });
+  }));
 }
 
 function canonicalJsonByteLength(value: unknown): number {
@@ -62,13 +62,13 @@ function canonicalJsonByteLength(value: unknown): number {
 
 function rejectOversizedCanonicalJson(
   value: unknown,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
   maxBytes: number,
   label: string,
 ): void {
   if (canonicalJsonByteLength(value) > maxBytes) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: `${label} must be at most ${maxBytes} canonical JSON bytes.`,
     });
   }
@@ -85,12 +85,9 @@ export {
 } from './composerInstanceId.js';
 
 /** Host-created opaque identity for one attachment instance in one composer. */
-export const ComposerInstanceIdSchema = lazyZodSchema(() => z.string()
-  .min(1)
-  .max(MAX_COMPOSER_INSTANCE_ID_CODE_POINTS_V1)
-  .refine((value) => ComposerInstanceIdProtocolSchema.safeParse(value).success, {
+export const ComposerInstanceIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(MAX_COMPOSER_INSTANCE_ID_CODE_POINTS_V1), z.refine((value) => ComposerInstanceIdProtocolSchema.safeParse(value).success, {
     message: 'Composer instance ids must not have surrounding whitespace.',
-  }));
+  })));
 export type ComposerInstanceId = z.infer<typeof ComposerInstanceIdSchema>;
 export const ComposerAttachmentInstanceIdV1Schema = ComposerInstanceIdSchema;
 export type ComposerAttachmentInstanceIdV1 = ComposerInstanceId;
@@ -109,23 +106,23 @@ export const ComposerAttachmentKeyV1Schema = boundedText(
 );
 export type ComposerAttachmentKeyV1 = z.infer<typeof ComposerAttachmentKeyV1Schema>;
 
-export const ComposerAttachmentAuthorPresentationV1Schema = lazyZodSchema(() => z.object({
+export const ComposerAttachmentAuthorPresentationV1Schema = lazyZodSchema(() => z.strictObject({
   label: boundedText(
     MAX_COMPOSER_ATTACHMENT_LABEL_CODE_POINTS_V1,
     `Composer attachment labels must be at most ${MAX_COMPOSER_ATTACHMENT_LABEL_CODE_POINTS_V1} code points.`,
   ),
-  description: boundedText(
+  description: z.optional(boundedText(
     MAX_COMPOSER_ATTACHMENT_DESCRIPTION_CODE_POINTS_V1,
     `Composer attachment descriptions must be at most ${MAX_COMPOSER_ATTACHMENT_DESCRIPTION_CODE_POINTS_V1} code points.`,
-  ).optional(),
-  icon: PluginUiIconTokenV1Schema.optional(),
-  tone: PluginUiToneV1Schema.exclude(['accent']).optional(),
-}).strict());
+  )),
+  icon: z.optional(PluginUiIconTokenV1Schema),
+  tone: z.optional(z.enum(PluginUiToneV1Schema.options.filter((value): value is Exclude<(typeof PluginUiToneV1Schema.options)[number], 'accent'> => !(['accent'] as readonly string[]).includes(value)))),
+}));
 export type ComposerAttachmentAuthorPresentationV1 = DeepReadonly<
   z.infer<typeof ComposerAttachmentAuthorPresentationV1Schema>
 >;
 
-export const ComposerAttachmentPresentationV1Schema = lazyZodSchema(() => ComposerAttachmentAuthorPresentationV1Schema.extend({
+export const ComposerAttachmentPresentationV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(z.extend(ComposerAttachmentAuthorPresentationV1Schema, {
   typeLabel: boundedText(
     MAX_COMPOSER_ATTACHMENT_LABEL_CODE_POINTS_V1,
     `Composer attachment type labels must be at most ${MAX_COMPOSER_ATTACHMENT_LABEL_CODE_POINTS_V1} code points.`,
@@ -134,39 +131,39 @@ export const ComposerAttachmentPresentationV1Schema = lazyZodSchema(() => Compos
 // retain the known immutable fallback while dropping an unknown future display
 // field. Identity, routing, values, content, and every enclosing record remain
 // closed schemas.
-}).strip());
+})));
 export type ComposerAttachmentPresentationV1 = DeepReadonly<
   z.infer<typeof ComposerAttachmentPresentationV1Schema>
 >;
 
-export const ComposerAttachmentValueV1Schema = lazyZodSchema(() => PluginJsonValueV2Schema.superRefine((value, context) => {
+export const ComposerAttachmentValueV1Schema = lazyZodSchema(() => PluginJsonValueV2Schema.check(z.superRefine((value, context) => {
   rejectOversizedCanonicalJson(
     value,
     context,
     MAX_COMPOSER_ATTACHMENT_VALUE_JSON_BYTES_V1,
     'Composer attachment values',
   );
-}));
+})));
 export type ComposerAttachmentValueV1 = DeepReadonly<z.infer<typeof ComposerAttachmentValueV1Schema>>;
 
-const ComposerAttachmentRecordBaseV1Schema = lazyZodSchema(() => z.object({
+const ComposerAttachmentRecordBaseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   instanceId: ComposerAttachmentInstanceIdV1Schema,
   attachment: asProtocolZod(PluginContributionIdentityV1Schema),
   key: ComposerAttachmentKeyV1Schema,
   value: ComposerAttachmentValueV1Schema,
   presentation: ComposerAttachmentPresentationV1Schema,
-}).strict());
+}));
 
-function withComposerAttachmentRecordSizeLimit<TSchema extends z.ZodTypeAny>(schema: TSchema): TSchema {
-  return schema.superRefine((value, context) => {
+function withComposerAttachmentRecordSizeLimit<TSchema extends z.ZodMiniType>(schema: TSchema): TSchema {
+  return schema.check(z.superRefine((value, context) => {
   rejectOversizedCanonicalJson(
     value,
     context,
     MAX_COMPOSER_ATTACHMENT_RECORD_JSON_BYTES_V1,
     'Composer attachment records',
   );
-  }) as TSchema;
+  })) as TSchema;
 }
 
 /**
@@ -184,17 +181,17 @@ export type PortableComposerAttachmentV1 = DeepReadonly<z.infer<typeof PortableC
 
 /** A draft may retain only a transfer-owned opaque staged-media claim. */
 export const ComposerAttachmentDraftV1Schema = withComposerAttachmentRecordSizeLimit(
-  ComposerAttachmentRecordBaseV1Schema.extend({
-    content: ComposerStagedMediaContentV1Schema.optional(),
-  }).strict(),
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ComposerAttachmentRecordBaseV1Schema, {
+    content: z.optional(ComposerStagedMediaContentV1Schema),
+  }))),
 );
 export type ComposerAttachmentDraftV1 = DeepReadonly<z.infer<typeof ComposerAttachmentDraftV1Schema>>;
 
 /** Admission replaces a staged claim with the one durable SessionMedia reference. */
 export const ComposerAttachmentInputV1Schema = withComposerAttachmentRecordSizeLimit(
-  ComposerAttachmentRecordBaseV1Schema.extend({
-    content: ComposerSessionMediaContentV1Schema.optional(),
-  }).strict(),
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ComposerAttachmentRecordBaseV1Schema, {
+    content: z.optional(ComposerSessionMediaContentV1Schema),
+  }))),
 );
 export type ComposerAttachmentInputV1 = DeepReadonly<z.infer<typeof ComposerAttachmentInputV1Schema>>;
 
@@ -203,50 +200,50 @@ export type ComposerAttachmentInputV1 = DeepReadonly<z.infer<typeof ComposerAtta
  * the prepared value plus optional fresh provider-neutral data; model-visible
  * context remains in the one host-rendered context block.
  */
-export const ResolvedComposerAttachmentDispatchV1Schema = lazyZodSchema(() => ComposerAttachmentRecordBaseV1Schema.extend({
-  data: ComposerAttachmentValueV1Schema.optional(),
-}).strict().superRefine((value, context) => {
+export const ResolvedComposerAttachmentDispatchV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ComposerAttachmentRecordBaseV1Schema, {
+  data: z.optional(ComposerAttachmentValueV1Schema),
+})).check(z.superRefine((value, context) => {
   rejectOversizedCanonicalJson(
     value,
     context,
     MAX_COMPOSER_ATTACHMENT_RECORD_JSON_BYTES_V1,
     'Resolved composer attachment dispatch records',
   );
-}));
+})));
 export type ResolvedComposerAttachmentDispatchV1 = DeepReadonly<z.infer<
   typeof ResolvedComposerAttachmentDispatchV1Schema
 >>;
 
-export const ComposerAttachmentAuthorValueV1Schema = lazyZodSchema(() => z.object({
+export const ComposerAttachmentAuthorValueV1Schema = lazyZodSchema(() => z.strictObject({
   key: ComposerAttachmentKeyV1Schema,
   value: ComposerAttachmentValueV1Schema,
   presentation: ComposerAttachmentAuthorPresentationV1Schema,
-}).strict());
+}));
 export type ComposerAttachmentAuthorValueV1 = DeepReadonly<
   z.infer<typeof ComposerAttachmentAuthorValueV1Schema>
 >;
 
-export const ComposerAttachmentUpdateV1Schema = lazyZodSchema(() => z.object({
+export const ComposerAttachmentUpdateV1Schema = lazyZodSchema(() => z.strictObject({
   value: ComposerAttachmentValueV1Schema,
-  presentation: ComposerAttachmentAuthorPresentationV1Schema.optional(),
-}).strict());
+  presentation: z.optional(ComposerAttachmentAuthorPresentationV1Schema),
+}));
 export type ComposerAttachmentUpdateV1 = DeepReadonly<z.infer<typeof ComposerAttachmentUpdateV1Schema>>;
 
 export const ComposerAttachmentAvailabilityV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('ready') }).strict(),
-  z.object({
+  z.strictObject({ status: z.literal('ready') }),
+  z.strictObject({
     status: z.enum(['unavailable', 'invalid']),
-    reason: boundedText(512, 'Composer attachment availability reasons must be at most 512 code points.').optional(),
-  }).strict(),
+    reason: z.optional(boundedText(512, 'Composer attachment availability reasons must be at most 512 code points.')),
+  }),
 ]));
 export type ComposerAttachmentAvailabilityV1 = DeepReadonly<
   z.infer<typeof ComposerAttachmentAvailabilityV1Schema>
 >;
 
-export const ComposerAttachmentViewV1Schema = lazyZodSchema(() => ComposerAttachmentRecordBaseV1Schema.extend({
+export const ComposerAttachmentViewV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ComposerAttachmentRecordBaseV1Schema, {
   availability: ComposerAttachmentAvailabilityV1Schema,
   // A draft snapshot may expose only the opaque stage; durable SessionMedia
   // references begin at canonical admission and never re-enter Composer UI.
-  content: ComposerStagedMediaContentV1Schema.optional(),
-}).strict());
+  content: z.optional(ComposerStagedMediaContentV1Schema),
+})));
 export type ComposerAttachmentViewV1 = DeepReadonly<z.infer<typeof ComposerAttachmentViewV1Schema>>;

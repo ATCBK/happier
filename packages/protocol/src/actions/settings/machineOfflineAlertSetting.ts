@@ -1,8 +1,8 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ACCOUNT_SETTING_DEFINITIONS, type AccountSettings } from '../../account/settings/accountSettings.js';
 import { MachineOfflineAlertsV1Schema } from '../../account/settings/machineOfflineAlertsV1.js';
 
-export const MachineOfflineAlertSettingKeySchema = z.string().trim().min(1);
+export const MachineOfflineAlertSettingKeySchema = z.string().check(z.trim(), z.minLength(1));
 export const MachineOfflineAlertSettingChangeSchema = z.boolean();
 
 export function readMachineOfflineAlertSetting(settings: Pick<AccountSettings, 'machineOfflineAlertsV1'>, machineId: string): boolean {

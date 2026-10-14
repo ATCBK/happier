@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   SessionHandoffRecoveryActionSchema,
@@ -25,10 +25,10 @@ export type SessionHandoffPrepareTargetFailureCode = z.infer<
   typeof SessionHandoffPrepareTargetFailureCodeSchema
 >;
 
-export const SessionHandoffPrepareTargetFailureSchema = lazyZodSchema(() => z.object({
+export const SessionHandoffPrepareTargetFailureSchema = lazyZodSchema(() => z.strictObject({
   code: SessionHandoffPrepareTargetFailureCodeSchema,
-  message: z.string().min(1).max(SESSION_HANDOFF_PREPARE_TARGET_FAILURE_MESSAGE_MAX_LENGTH).optional(),
-}).strict());
+  message: z.optional(z.string().check(z.minLength(1), z.maxLength(SESSION_HANDOFF_PREPARE_TARGET_FAILURE_MESSAGE_MAX_LENGTH))),
+}));
 export type SessionHandoffPrepareTargetFailure = z.infer<
   typeof SessionHandoffPrepareTargetFailureSchema
 >;
@@ -125,67 +125,56 @@ export const SessionHandoffProgressWarningCodeSchema = lazyZodSchema(() => z.enu
 ]));
 export type SessionHandoffProgressWarningCode = z.infer<typeof SessionHandoffProgressWarningCodeSchema>;
 
-const SessionHandoffProgressCountsSchema = lazyZodSchema(() => z
-  .object({
-    files: z.number().int().min(0).optional(),
-    bytes: z.number().int().min(0).optional(),
-  })
-  .passthrough());
+const SessionHandoffProgressCountsSchema = lazyZodSchema(() => z.looseObject({
+    files: z.optional(z.number().check(z.int(), z.minimum(0))),
+    bytes: z.optional(z.number().check(z.int(), z.minimum(0))),
+  }));
 
-export const SessionHandoffProgressSchema = lazyZodSchema(() => z
-  .object({
-    updatedAtMs: z.number().int().min(0),
+export const SessionHandoffProgressSchema = lazyZodSchema(() => z.looseObject({
+    updatedAtMs: z.number().check(z.int(), z.minimum(0)),
     checkpoint: SessionHandoffProgressCheckpointSchema,
-    planned: z.object({
-      totalFiles: z.number().int().min(0).optional(),
-      totalBytes: z.number().int().min(0).optional(),
-      added: z.number().int().min(0).optional(),
-      changed: z.number().int().min(0).optional(),
-      removed: z.number().int().min(0).optional(),
-    }).passthrough(),
-    transferred: z.object({
-      files: z.number().int().min(0).optional(),
-      bytes: z.number().int().min(0).optional(),
-      blobs: z.number().int().min(0).optional(),
-    }).passthrough(),
-    applied: SessionHandoffProgressCountsSchema.optional(),
-    remaining: SessionHandoffProgressCountsSchema.optional(),
-    current: z.object({
-      relativePath: z.string().min(1).max(MAX_PATH_LENGTH).optional(),
-      digest: z.string().min(1).max(MAX_DIGEST_LENGTH).optional(),
-      phaseDetail: z.string().min(1).max(MAX_PHASE_DETAIL_LENGTH).optional(),
-    }).passthrough().optional(),
+    planned: z.looseObject({
+      totalFiles: z.optional(z.number().check(z.int(), z.minimum(0))),
+      totalBytes: z.optional(z.number().check(z.int(), z.minimum(0))),
+      added: z.optional(z.number().check(z.int(), z.minimum(0))),
+      changed: z.optional(z.number().check(z.int(), z.minimum(0))),
+      removed: z.optional(z.number().check(z.int(), z.minimum(0))),
+    }),
+    transferred: z.looseObject({
+      files: z.optional(z.number().check(z.int(), z.minimum(0))),
+      bytes: z.optional(z.number().check(z.int(), z.minimum(0))),
+      blobs: z.optional(z.number().check(z.int(), z.minimum(0))),
+    }),
+    applied: z.optional(SessionHandoffProgressCountsSchema),
+    remaining: z.optional(SessionHandoffProgressCountsSchema),
+    current: z.optional(z.looseObject({
+      relativePath: z.optional(z.string().check(z.minLength(1), z.maxLength(MAX_PATH_LENGTH))),
+      digest: z.optional(z.string().check(z.minLength(1), z.maxLength(MAX_DIGEST_LENGTH))),
+      phaseDetail: z.optional(z.string().check(z.minLength(1), z.maxLength(MAX_PHASE_DETAIL_LENGTH))),
+    })),
     resumable: z.boolean(),
-    warnings: z.array(SessionHandoffProgressWarningCodeSchema).max(MAX_PROGRESS_WARNINGS).readonly().optional(),
-  })
-  .passthrough());
+    warnings: z.optional(z.readonly(z.array(SessionHandoffProgressWarningCodeSchema).check(z.maxLength(MAX_PROGRESS_WARNINGS)))),
+  }));
 export type SessionHandoffProgress = z.infer<typeof SessionHandoffProgressSchema>;
 
-export const SessionHandoffWorkspacePreflightSummarySchema = lazyZodSchema(() => z
-  .object({
-    addedPathsCount: z.number().int().min(0),
-    changedPathsCount: z.number().int().min(0),
-    removedPathsCount: z.number().int().min(0),
-    totalBytes: z.number().int().min(0).optional(),
-  })
-  .passthrough());
+export const SessionHandoffWorkspacePreflightSummarySchema = lazyZodSchema(() => z.looseObject({
+    addedPathsCount: z.number().check(z.int(), z.minimum(0)),
+    changedPathsCount: z.number().check(z.int(), z.minimum(0)),
+    removedPathsCount: z.number().check(z.int(), z.minimum(0)),
+    totalBytes: z.optional(z.number().check(z.int(), z.minimum(0))),
+  }));
 export type SessionHandoffWorkspacePreflightSummary = z.infer<typeof SessionHandoffWorkspacePreflightSummarySchema>;
 
-export const SessionHandoffStatusSchema = lazyZodSchema(() => z
-  .object({
-    handoffId: z.string().min(1).max(MAX_HANDOFF_ID_LENGTH),
+export const SessionHandoffStatusSchema = lazyZodSchema(() => z.looseObject({
+    handoffId: z.string().check(z.minLength(1), z.maxLength(MAX_HANDOFF_ID_LENGTH)),
     status: SessionHandoffStatusCodeSchema,
     phase: SessionHandoffPhaseSchema,
-    jobId: z.string().min(1).max(MAX_JOB_ID_LENGTH).optional(),
-    progress: SessionHandoffProgressSchema.optional(),
-    workspacePreflightSummary: SessionHandoffWorkspacePreflightSummarySchema.optional(),
-    transportStrategy: SessionHandoffTransportStrategySchema.nullable().optional(),
-    recoveryActions: z
-      .array(SessionHandoffRecoveryActionSchema)
-      .max(MAX_RECOVERY_ACTIONS)
-      .readonly()
-      .default(() => []),
-    failure: SessionHandoffPrepareTargetFailureSchema.optional(),
-  })
-  .passthrough());
+    jobId: z.optional(z.string().check(z.minLength(1), z.maxLength(MAX_JOB_ID_LENGTH))),
+    progress: z.optional(SessionHandoffProgressSchema),
+    workspacePreflightSummary: z.optional(SessionHandoffWorkspacePreflightSummarySchema),
+    transportStrategy: z.optional(z.nullable(SessionHandoffTransportStrategySchema)),
+    recoveryActions: z._default(z.readonly(z
+      .array(SessionHandoffRecoveryActionSchema).check(z.maxLength(MAX_RECOVERY_ACTIONS))), () => []),
+    failure: z.optional(SessionHandoffPrepareTargetFailureSchema),
+  }));
 export type SessionHandoffStatus = z.infer<typeof SessionHandoffStatusSchema>;

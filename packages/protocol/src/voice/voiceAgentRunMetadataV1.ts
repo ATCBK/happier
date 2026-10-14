@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   BackendTargetRefSchema,
@@ -33,7 +33,7 @@ export type VoiceAgentRunMetadataV1 = Readonly<{
   welcomedEpoch?: number;
 }>;
 
-const NonNegativeIntSchema = lazyZodSchema(() => z.number().int().nonnegative());
+const NonNegativeIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
 
 /**
  * Resume handle parsing stays tolerant: a structurally invalid handle must not
@@ -41,44 +41,39 @@ const NonNegativeIntSchema = lazyZodSchema(() => z.number().int().nonnegative())
  * supported predecessor shapes and drop an invalid hint instead of exposing
  * unvalidated data as a typed execution-run handle.
  */
-const TolerantResumeHandleSchema = lazyZodSchema(() => z
-  .unknown()
-  .transform((value) => {
+const TolerantResumeHandleSchema = lazyZodSchema(() => z.pipe(z
+  .unknown(), z.transform((value) => {
     if (value == null) return null;
     const parsed = ExecutionRunResumeHandleSchema.safeParse(value);
     return parsed.success ? parsed.data : null;
-  }));
+  })));
 
 /**
  * Backend target parsing stays tolerant: an invalid stored target is dropped
  * (callers fall back to the load-bearing `backendId`) rather than invalidating
  * the whole record.
  */
-const TolerantBackendTargetSchema = lazyZodSchema(() => z
-  .unknown()
-  .optional()
-  .transform((value) => {
+const TolerantBackendTargetSchema = lazyZodSchema(() => z.pipe(z.optional(z
+  .unknown()), z.transform((value) => {
     if (value == null) return undefined;
     const parsed = BackendTargetRefSchema.safeParse(value);
     return parsed.success ? parsed.data : undefined;
-  }));
+  })));
 
 /**
  * Tolerant parse schema. Accepts legacy/extra fields (including `streamId`) but only
  * surfaces canonical write fields. `streamId` is intentionally absent from the output.
  */
-const VoiceAgentRunMetadataV1ParseSchema = lazyZodSchema(() => z
-  .object({
+const VoiceAgentRunMetadataV1ParseSchema = lazyZodSchema(() => z.looseObject({
     v: z.literal(1),
-    runId: z.string().trim().min(1),
-    backendId: z.string().trim().min(1),
+    runId: z.string().check(z.trim(), z.minLength(1)),
+    backendId: z.string().check(z.trim(), z.minLength(1)),
     backendTarget: TolerantBackendTargetSchema,
     resumeHandle: TolerantResumeHandleSchema,
     updatedAtMs: NonNegativeIntSchema,
-    transcriptContractVersion: NonNegativeIntSchema.optional(),
-    welcomedEpoch: NonNegativeIntSchema.optional(),
-  })
-  .passthrough());
+    transcriptContractVersion: z.optional(NonNegativeIntSchema),
+    welcomedEpoch: z.optional(NonNegativeIntSchema),
+  }));
 
 function toCanonical(parsed: z.infer<typeof VoiceAgentRunMetadataV1ParseSchema>): VoiceAgentRunMetadataV1 {
   return {

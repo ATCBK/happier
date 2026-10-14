@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   type SessionFollowFactsV1,
@@ -42,23 +42,19 @@ export type SessionPersonalEventEligibilityReasonV1 = z.infer<
   typeof SessionPersonalEventEligibilityReasonV1Schema
 >;
 
-export const SessionPersonalEventEligibilityV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionPersonalEventEligibilityV1Schema = lazyZodSchema(() => z.strictObject({
     eligible: z.boolean(),
-    reason: SessionPersonalEventEligibilityReasonV1Schema.optional(),
-  })
-  .strict());
+    reason: z.optional(SessionPersonalEventEligibilityReasonV1Schema),
+  }));
 export type SessionPersonalEventEligibilityV1 = Readonly<{
   eligible: boolean;
   reason?: SessionPersonalEventEligibilityReasonV1;
 }>;
 
-export const SessionEffectiveNotificationV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionEffectiveNotificationV1Schema = lazyZodSchema(() => z.strictObject({
     level: SessionFollowNotificationLevelSchema,
     source: z.enum(['preference', 'owner', 'none']),
-  })
-  .strict());
+  }));
 export type SessionEffectiveNotificationV1 = Readonly<{
   level: SessionFollowNotificationLevel;
   source: 'preference' | 'owner' | 'none';

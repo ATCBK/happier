@@ -1,5 +1,6 @@
+import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import tweetnacl from 'tweetnacl';
 import { encodeBase64 } from '../../../crypto/base64.js';
 
@@ -72,49 +73,49 @@ describe('workspace sync protocol schemas', () => {
   });
 
   it('preserves classic JSON Schema projection and fluent request composition', () => {
-    const request = z.object({
-      relationshipId: z.string().trim().min(1).max(256),
-      cursor: z.string().trim().min(1).max(256).optional(),
-      limit: z.number().int().positive().max(WORKSPACE_SYNC_CONFLICT_PAGE_MAX_ITEMS),
-    }).strict();
+    const request = z.strictObject({
+      relationshipId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+      cursor: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+      limit: z.number().check(z.int(), z.positive(), z.maximum(WORKSPACE_SYNC_CONFLICT_PAGE_MAX_ITEMS)),
+    });
     const fileResult = z.discriminatedUnion('status', [
-      z.object({
+      z.strictObject({
         status: z.literal('text'),
-        text: z.string().max(1024 * 1024),
-        digest: z.string().regex(/^[a-f0-9]{40}$/u),
-        size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-      }).strict(),
-      z.object({
+        text: z.string().check(z.maxLength(1024 * 1024)),
+        digest: z.string().check(z.regex(/^[a-f0-9]{40}$/u)),
+        size: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+      }),
+      z.strictObject({
         status: z.literal('binary'),
-        digest: z.string().regex(/^[a-f0-9]{40}$/u),
-        size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-      }).strict(),
-      z.object({
+        digest: z.string().check(z.regex(/^[a-f0-9]{40}$/u)),
+        size: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+      }),
+      z.strictObject({
         status: z.literal('too_large'),
-        digest: z.string().regex(/^[a-f0-9]{40}$/u).optional(),
-        size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-      }).strict(),
-      z.object({ status: z.literal('missing') }).strict(),
-      z.object({
+        digest: z.optional(z.string().check(z.regex(/^[a-f0-9]{40}$/u))),
+        size: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+      }),
+      z.strictObject({ status: z.literal('missing') }),
+      z.strictObject({
         status: z.literal('changed'),
-        actualDigest: z.string().regex(/^[a-f0-9]{40}$/u).optional(),
-      }).strict(),
+        actualDigest: z.optional(z.string().check(z.regex(/^[a-f0-9]{40}$/u))),
+      }),
     ]);
     for (const target of ['draft-2020-12', 'draft-7'] as const) {
       expect(zodSchemaToJsonSchemaObject(WorkspaceSyncConflictPageRequestV1Schema, { target }))
         .toEqual(zodSchemaToJsonSchemaObject(request, { target }));
-      expect(zodSchemaToJsonSchemaObject(z.object({
-        request: WorkspaceSyncConflictPageRequestV1Schema.optional(),
+      expect(zodSchemaToJsonSchemaObject(z.strictObject({
+        request: z.optional(WorkspaceSyncConflictPageRequestV1Schema),
         results: z.array(ReadWorkspaceSyncFileResultV1Schema),
-      }).strict(), { target })).toEqual(zodSchemaToJsonSchemaObject(z.object({
-        request: request.optional(), results: z.array(fileResult),
-      }).strict(), { target }));
+      }), { target })).toEqual(zodSchemaToJsonSchemaObject(z.strictObject({
+        request: z.optional(request), results: z.array(fileResult),
+      }), { target }));
     }
-    expect(WorkspaceSyncConflictPageRequestV1Schema.extend({ enabled: z.boolean().default(true) })
+    expect(lazyZodSchema(() => z.extend(WorkspaceSyncConflictPageRequestV1Schema, { enabled: z._default(z.boolean(), true) }))
       .parse({ relationshipId: ' rel-1 ', limit: 10 }))
       .toEqual({ relationshipId: 'rel-1', limit: 10, enabled: true });
     expect(WorkspaceSyncConflictPageRequestV1Schema.shape.cursor.parse(undefined)).toBeUndefined();
-    expect(ReadWorkspaceSyncFileResultV1Schema.options[3].nullable().parse(null)).toBeNull();
+    expect(z.nullable(ReadWorkspaceSyncFileResultV1Schema._zod.def.options[3]).parse(null)).toBeNull();
   });
 
   it('preserves classic errors for structural and content-policy refinement failures', () => {
@@ -123,20 +124,20 @@ describe('workspace sync protocol schemas', () => {
     });
     expect(structural.success).toBe(false);
     if (!structural.success) {
-      expect(structural.error).toBeInstanceOf(z.ZodError);
+      expect(structural.error).toBeInstanceOf(z.core.$ZodError);
       expect(structural.error.issues).toMatchObject([
         { code: 'too_small', path: ['limit'] },
         { code: 'unrecognized_keys', path: [], keys: ['extra'] },
       ]);
     }
     expect(() => WorkspaceSyncConflictPageRequestV1Schema.parse({ relationshipId: 'rel-1', limit: 0 }))
-      .toThrow(z.ZodError);
+      .toThrow(z.core.$ZodError);
     const refined = WorkspaceContentPolicyV1Schema.safeParse({
       ...contentPolicy, policyDigest: '0'.repeat(64),
     });
     expect(refined.success).toBe(false);
     if (!refined.success) {
-      expect(refined.error).toBeInstanceOf(z.ZodError);
+      expect(refined.error).toBeInstanceOf(z.core.$ZodError);
       expect(refined.error.issues).toMatchObject([{ code: 'custom', path: ['policyDigest'] }]);
     }
   });

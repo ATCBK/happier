@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PrincipalRefV1Schema } from '../teams/principal.js';
 import { AccountEncryptionModeSchema } from '../features/payload/capabilities/encryptionCapabilities.js';
@@ -21,39 +21,39 @@ export type ArtifactAccessLevelV1 = z.infer<typeof ArtifactAccessLevelV1Schema>;
 export const ArtifactCallerAccessV1Schema = lazyZodSchema(() => z.enum(['owner', 'view', 'edit', 'admin']));
 export type ArtifactCallerAccessV1 = z.infer<typeof ArtifactCallerAccessV1Schema>;
 
-export const ArtifactAccessGrantsListInputV1Schema = lazyZodSchema(() => z.object({ artifactId: z.string().min(1) }).strict());
-export const ArtifactAccessGrantSetInputV1Schema = lazyZodSchema(() => ArtifactAccessGrantsListInputV1Schema.extend({
+export const ArtifactAccessGrantsListInputV1Schema = lazyZodSchema(() => z.strictObject({ artifactId: z.string().check(z.minLength(1)) }));
+export const ArtifactAccessGrantSetInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ArtifactAccessGrantsListInputV1Schema, {
   principal: PrincipalRefV1Schema,
   accessLevel: ArtifactAccessLevelV1Schema,
-}).strict());
-export const ArtifactAccessGrantRemoveInputV1Schema = lazyZodSchema(() => ArtifactAccessGrantsListInputV1Schema.extend({
+})));
+export const ArtifactAccessGrantRemoveInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ArtifactAccessGrantsListInputV1Schema, {
   principal: PrincipalRefV1Schema,
-}).strict());
+})));
 export type ArtifactAccessGrantsListInputV1 = z.infer<typeof ArtifactAccessGrantsListInputV1Schema>;
 export type ArtifactAccessGrantSetInputV1 = z.infer<typeof ArtifactAccessGrantSetInputV1Schema>;
 export type ArtifactAccessGrantRemoveInputV1 = z.infer<typeof ArtifactAccessGrantRemoveInputV1Schema>;
 
-export const ArtifactAccessGrantRowV1Schema = lazyZodSchema(() => z.object({
+export const ArtifactAccessGrantRowV1Schema = lazyZodSchema(() => z.strictObject({
   principal: PrincipalRefV1Schema,
   accessLevel: ArtifactAccessLevelV1Schema,
-  createdByAccountId: z.string().min(1),
-  createdAt: z.number().int().nonnegative(),
-  display: z.object({ name: z.string().nullable(), username: z.string().nullable().optional() }).strict(),
-}).strict());
+  createdByAccountId: z.string().check(z.minLength(1)),
+  createdAt: z.number().check(z.int(), z.nonnegative()),
+  display: z.strictObject({ name: z.nullable(z.string()), username: z.optional(z.nullable(z.string())) }),
+}));
 export type ArtifactAccessGrantRowV1 = z.infer<typeof ArtifactAccessGrantRowV1Schema>;
 
-export const ArtifactAccessGrantsListResponseV1Schema = lazyZodSchema(() => z.object({
-  artifactId: z.string().min(1),
-  ownerAccountId: z.string().min(1),
+export const ArtifactAccessGrantsListResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  artifactId: z.string().check(z.minLength(1)),
+  ownerAccountId: z.string().check(z.minLength(1)),
   access: ArtifactCallerAccessV1Schema,
   grants: z.array(ArtifactAccessGrantRowV1Schema),
-}).strict());
-export const ArtifactAccessGrantMutationResponseV1Schema = lazyZodSchema(() => ArtifactAccessGrantsListResponseV1Schema.extend({
-  access: ArtifactCallerAccessV1Schema.nullable(),
-  changed: z.boolean(),
-}).strict().refine((response) => response.access !== null || response.grants.length === 0, {
-  message: 'A revoked caller cannot receive the grant roster', path: ['grants'],
 }));
+export const ArtifactAccessGrantMutationResponseV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ArtifactAccessGrantsListResponseV1Schema, {
+  access: z.nullable(ArtifactCallerAccessV1Schema),
+  changed: z.boolean(),
+})).check(z.refine((response) => response.access !== null || response.grants.length === 0, {
+  message: 'A revoked caller cannot receive the grant roster', path: ['grants'],
+})));
 export type ArtifactAccessGrantsListResponseV1 = z.infer<typeof ArtifactAccessGrantsListResponseV1Schema>;
 export type ArtifactAccessGrantMutationResponseV1 = z.infer<typeof ArtifactAccessGrantMutationResponseV1Schema>;
 
@@ -68,54 +68,51 @@ export const ArtifactAccessActionOutputSchemasV1 = {
   'artifact.access.grants.remove': ArtifactAccessGrantMutationResponseV1Schema,
 } as const;
 
-export const ArtifactRecipientKeyEnvelopeInputV1Schema = lazyZodSchema(() => z.object({
-  recipientAccountId: z.string().min(1),
+export const ArtifactRecipientKeyEnvelopeInputV1Schema = lazyZodSchema(() => z.strictObject({
+  recipientAccountId: z.string().check(z.minLength(1)),
   encryptedDataKey: SessionDataKeyEnvelopeBytesV1Schema,
-  encryptedProvenanceDataKey: SessionDataKeyEnvelopeBytesV1Schema.optional(),
+  encryptedProvenanceDataKey: z.optional(SessionDataKeyEnvelopeBytesV1Schema),
   recipientContentPublicKeyFingerprint: ContentPublicKeyFingerprintSchema,
-}).strict());
+}));
 export type ArtifactRecipientKeyEnvelopeInputV1 = z.infer<typeof ArtifactRecipientKeyEnvelopeInputV1Schema>;
-export const ArtifactRecipientKeyEnvelopesV1Schema = lazyZodSchema(() => z.array(ArtifactRecipientKeyEnvelopeInputV1Schema).refine(
-  (items) => new Set(items.map((item) => item.recipientAccountId)).size === items.length,
-  { message: 'Duplicate recipientAccountId' },
-));
+export const ArtifactRecipientKeyEnvelopesV1Schema = lazyZodSchema(() => z.array(ArtifactRecipientKeyEnvelopeInputV1Schema).check(z.refine((items) => new Set(items.map((item) => item.recipientAccountId)).size === items.length, { message: 'Duplicate recipientAccountId' })));
 
 /** Grant writes are semantic; prepared keys use only the fenced envelope commit owner. */
 export const ArtifactAccessGrantSetStorageInputV1Schema = ArtifactAccessGrantSetInputV1Schema;
 export type ArtifactAccessGrantSetStorageInputV1 = z.infer<typeof ArtifactAccessGrantSetStorageInputV1Schema>;
 
-export const ArtifactAccessRecipientCensusResponseV1Schema = lazyZodSchema(() => z.object({
-  artifactId: z.string().min(1),
-  ownerAccountId: z.string().min(1),
+export const ArtifactAccessRecipientCensusResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  artifactId: z.string().check(z.minLength(1)),
+  ownerAccountId: z.string().check(z.minLength(1)),
   encryptionMode: AccountEncryptionModeSchema,
   access: ArtifactCallerAccessV1Schema,
   /** Owner-column envelope bytes: a commit compares these before preparing the current audience. */
-  dataEncryptionKey: SessionDataKeyEnvelopeBytesV1Schema.nullable(),
+  dataEncryptionKey: z.nullable(SessionDataKeyEnvelopeBytesV1Schema),
   /** Exact caller envelope used to open the key; prevents preparing a stale key under a new owner token. */
-  callerDataEncryptionKey: SessionDataKeyEnvelopeBytesV1Schema.nullable(),
-  provenanceDataEncryptionKey: SessionDataKeyEnvelopeBytesV1Schema.nullable().optional(),
-  callerProvenanceDataEncryptionKey: SessionDataKeyEnvelopeBytesV1Schema.nullable().optional(),
-  recipients: z.array(z.object({
-    recipientAccountId: z.string().min(1),
+  callerDataEncryptionKey: z.nullable(SessionDataKeyEnvelopeBytesV1Schema),
+  provenanceDataEncryptionKey: z.optional(z.nullable(SessionDataKeyEnvelopeBytesV1Schema)),
+  callerProvenanceDataEncryptionKey: z.optional(z.nullable(SessionDataKeyEnvelopeBytesV1Schema)),
+  recipients: z.array(z.strictObject({
+    recipientAccountId: z.string().check(z.minLength(1)),
     contentKey: SessionDataKeyRecipientContentKeyV1Schema,
-    contentPublicKeyFingerprint: ContentPublicKeyFingerprintSchema.nullable(),
-    encryptedDataKey: SessionDataKeyEnvelopeBytesV1Schema.nullable(),
-    encryptedProvenanceDataKey: SessionDataKeyEnvelopeBytesV1Schema.nullable().optional(),
-    recipientContentPublicKeyFingerprint: ContentPublicKeyFingerprintSchema.nullable(),
-  }).strict()),
-}).strict());
+    contentPublicKeyFingerprint: z.nullable(ContentPublicKeyFingerprintSchema),
+    encryptedDataKey: z.nullable(SessionDataKeyEnvelopeBytesV1Schema),
+    encryptedProvenanceDataKey: z.optional(z.nullable(SessionDataKeyEnvelopeBytesV1Schema)),
+    recipientContentPublicKeyFingerprint: z.nullable(ContentPublicKeyFingerprintSchema),
+  })),
+}));
 export type ArtifactAccessRecipientCensusResponseV1 = z.infer<typeof ArtifactAccessRecipientCensusResponseV1Schema>;
 
-export const ArtifactRecipientKeyEnvelopeCommitInputV1Schema = lazyZodSchema(() => ArtifactAccessGrantsListInputV1Schema.extend({
+export const ArtifactRecipientKeyEnvelopeCommitInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ArtifactAccessGrantsListInputV1Schema, {
   expectedDataEncryptionKey: SessionDataKeyEnvelopeBytesV1Schema,
-  expectedProvenanceDataEncryptionKey: SessionDataKeyEnvelopeBytesV1Schema.nullable().optional(),
+  expectedProvenanceDataEncryptionKey: z.optional(z.nullable(SessionDataKeyEnvelopeBytesV1Schema)),
   recipientKeyEnvelopes: ArtifactRecipientKeyEnvelopesV1Schema,
-}).strict());
+})));
 export type ArtifactRecipientKeyEnvelopeCommitInputV1 = z.infer<typeof ArtifactRecipientKeyEnvelopeCommitInputV1Schema>;
-export const ArtifactRecipientKeyEnvelopeCommitResponseV1Schema = lazyZodSchema(() => z.object({
-  appliedRecipientAccountIds: z.array(z.string().min(1)),
-  skippedRecipientAccountIds: z.array(z.string().min(1)),
-}).strict());
+export const ArtifactRecipientKeyEnvelopeCommitResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  appliedRecipientAccountIds: z.array(z.string().check(z.minLength(1))),
+  skippedRecipientAccountIds: z.array(z.string().check(z.minLength(1))),
+}));
 export type ArtifactRecipientKeyEnvelopeCommitResponseV1 = z.infer<typeof ArtifactRecipientKeyEnvelopeCommitResponseV1Schema>;
 
 export const ArtifactAccessErrorCodeV1Schema = lazyZodSchema(() => z.enum([
@@ -129,35 +126,35 @@ export type ArtifactAccessErrorCodeV1 = z.infer<typeof ArtifactAccessErrorCodeV1
 
 /** Exact authenticated HTTP read, shared by single and selected batch reads. Closed V1 objects;
  * header/body/provenance strings remain opaque content owned by their existing codecs. */
-export const ArtifactHttpReadV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().min(1), ownerAccountId: z.string().min(1), access: ArtifactCallerAccessV1Schema,
+export const ArtifactHttpReadV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.minLength(1)), ownerAccountId: z.string().check(z.minLength(1)), access: ArtifactCallerAccessV1Schema,
   encryptionMode: AccountEncryptionModeSchema,
   header: z.string(), headerVersion: z.number(), body: z.string(), bodyVersion: z.number(),
   publicAudience: z.enum(['retained', 'none']),
-  provenance: z.string().nullable().optional(), provenanceDataEncryptionKey: z.string().nullable().optional(),
+  provenance: z.optional(z.nullable(z.string())), provenanceDataEncryptionKey: z.optional(z.nullable(z.string())),
   dataEncryptionKey: z.string(), seq: z.number(), createdAt: z.number(), updatedAt: z.number(),
-}).strict());
+}));
 
 /** V1 selected read: one result for every requested identity, in request order. */
-export const ArtifactReadBatchInputV1Schema = lazyZodSchema(() => z.object({
-  artifactIds: z.array(z.string().min(1)).refine(ids => new Set(ids).size === ids.length, {
+export const ArtifactReadBatchInputV1Schema = lazyZodSchema(() => z.strictObject({
+  artifactIds: z.array(z.string().check(z.minLength(1))).check(z.refine(ids => new Set(ids).size === ids.length, {
     message: 'Duplicate Artifact identity',
-  }),
-}).strict());
-export const ArtifactReadBatchResponseV1Schema = lazyZodSchema(() => z.object({
+  })),
+}));
+export const ArtifactReadBatchResponseV1Schema = lazyZodSchema(() => z.strictObject({
   items: z.array(z.discriminatedUnion('ok', [
-    z.object({ artifactId: z.string().min(1), ok: z.literal(true), artifact: ArtifactHttpReadV1Schema,
-      recipientCensus: ArtifactAccessRecipientCensusResponseV1Schema.nullable() }).strict(),
-    z.object({ artifactId: z.string().min(1), ok: z.literal(false), error: ArtifactAccessErrorCodeV1Schema,
+    z.strictObject({ artifactId: z.string().check(z.minLength(1)), ok: z.literal(true), artifact: ArtifactHttpReadV1Schema,
+      recipientCensus: z.nullable(ArtifactAccessRecipientCensusResponseV1Schema) }),
+    z.strictObject({ artifactId: z.string().check(z.minLength(1)), ok: z.literal(false), error: ArtifactAccessErrorCodeV1Schema,
       status: z.union([z.literal(400), z.literal(403), z.literal(404), z.literal(409), z.literal(500)]),
-      retryable: z.boolean() }).strict(),
-  ])).refine(items => items.every(item => !item.ok || (item.artifactId === item.artifact.id
+      retryable: z.boolean() }),
+  ])).check(z.refine(items => items.every(item => !item.ok || (item.artifactId === item.artifact.id
     && (item.artifact.encryptionMode === 'plain' ? item.recipientCensus === null
       : item.recipientCensus !== null && item.recipientCensus.artifactId === item.artifactId
         && item.recipientCensus.ownerAccountId === item.artifact.ownerAccountId
         && item.recipientCensus.access === item.artifact.access
         && item.recipientCensus.encryptionMode === item.artifact.encryptionMode))), {
     message: 'Artifact detail and recipient census do not agree',
-  }),
-}).strict());
+  })),
+}));
 export type ArtifactReadBatchResponseV1 = z.infer<typeof ArtifactReadBatchResponseV1Schema>;

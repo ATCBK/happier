@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import tweetnacl from 'tweetnacl';
 
 import { RunnerPublicKeySchema, RunnerResourceIdSchema, RunnerSignatureSchema } from './activation.js';
@@ -8,21 +8,21 @@ import { encodeBase64 } from '../crypto/base64.js';
 import { verifyEd25519Signature } from '../crypto/ed25519.js';
 import { decodeCanonicalBase64UrlFixedLength } from '../machines/peer/mediation/strictBase64Url.js';
 
-export const RunnerActivationProgressPayloadV1Schema = z.object({
+export const RunnerActivationProgressPayloadV1Schema = z.strictObject({
   v: z.literal(1),
   purpose: z.literal('happier.ephemeral-session-runner.activation-progress'),
-  activationId: z.string().uuid(),
+  activationId: z.string().check(z.uuid()),
   sessionId: RunnerResourceIdSchema,
   machineId: RunnerResourceIdSchema,
-  creatorTokenEpoch: z.number().int().nonnegative().safe(),
+  creatorTokenEpoch: z.number().check(z.int(), z.nonnegative(), z.int()),
   phase: RunnerActivationProgressPhaseV1Schema,
-}).strict();
+});
 
-export const RunnerActivationProgressUpdateV1Schema = z.object({
+export const RunnerActivationProgressUpdateV1Schema = z.strictObject({
   payload: RunnerActivationProgressPayloadV1Schema,
   activationSignature: RunnerSignatureSchema,
   installationSignature: RunnerSignatureSchema,
-}).strict();
+});
 export type RunnerActivationProgressUpdateV1 = z.infer<typeof RunnerActivationProgressUpdateV1Schema>;
 
 export function signRunnerActivationProgressUpdateV1(params: Readonly<{

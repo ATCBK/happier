@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { InputFieldHintSchema, InputPathSchema } from '../inputs/inputFields.js';
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
 import { ArtifactRevisionV1Schema, type ArtifactRevisionV1 } from '../artifacts/artifactActionsV1.js';
@@ -64,129 +64,128 @@ export function readWidgetActionDestinationV1(input: unknown): WidgetSurfaceRefV
   const parsed = WidgetSurfaceRefV1Schema.safeParse(Reflect.get(to, 'surface'));
   return parsed.success ? parsed.data : null;
 }
-const index = z.number().int().nonnegative().safe().describe('Zero-based configured-widget ordinal in the destination view; omitted destination reorders only the current surface and view.');
-const nativeIndex = z.number().int().nonnegative().safe().describe('Owner-native mixed-content insertion index in the destination view, with the moving item excluded. Session Board requires an existing explicit tab for cross-surface moves.');
+const index = z.number().check(z.int(), z.nonnegative(), z.int(), z.describe('Zero-based configured-widget ordinal in the destination view; omitted destination reorders only the current surface and view.'));
+const nativeIndex = z.number().check(z.int(), z.nonnegative(), z.int(), z.describe('Owner-native mixed-content insertion index in the destination view, with the moving item excluded. Session Board requires an existing explicit tab for cross-surface moves.'));
 export { WidgetSizeV1Schema, WidgetFrameStyleV1Schema, WidgetExpectedPresentationV1Schema } from './widgetPresentationV1.js';
 export type { WidgetExpectedPresentationV1 } from './widgetPresentationV1.js';
 /** Ephemeral native-owner facts, never a persisted receipt or a public Action result. */
-export const WidgetMoveCaptureV1Schema = lazyZodSchema(() => z.object({
-  expectedInstance: WidgetInstanceV1Schema, expectedPresentation: WidgetExpectedPresentationV1Schema.optional(),
-  boardRevisions: z.object({ itemRevision: SessionSystemRecordRevisionSchema, layoutRevision: SessionSystemRecordRevisionSchema }).strict().optional(),
-}).strict().refine(value => value.expectedPresentation !== undefined || value.boardRevisions !== undefined, 'Native presentation or exact Board revisions required'));
+export const WidgetMoveCaptureV1Schema = lazyZodSchema(() => z.strictObject({
+  expectedInstance: WidgetInstanceV1Schema, expectedPresentation: z.optional(WidgetExpectedPresentationV1Schema),
+  boardRevisions: z.optional(z.strictObject({ itemRevision: SessionSystemRecordRevisionSchema, layoutRevision: SessionSystemRecordRevisionSchema })),
+}).check(z.refine(value => value.expectedPresentation !== undefined || value.boardRevisions !== undefined, 'Native presentation or exact Board revisions required')));
 export type WidgetMoveCaptureV1 = z.infer<typeof WidgetMoveCaptureV1Schema>;
-export const WidgetMoveDestinationV1Schema = lazyZodSchema(() => z.object({ surface: WidgetSurfaceRefV1Schema, tabId: SessionBoardTabIdSchema.optional(), area: WidgetProjectAreaV1Schema.optional(), index: nativeIndex, groupId: z.string().trim().min(1).nullable().optional() }).strict());
-export const WidgetTransferFailureDetailsV1Schema = lazyZodSchema(() => z.object({
+export const WidgetMoveDestinationV1Schema = lazyZodSchema(() => z.strictObject({ surface: WidgetSurfaceRefV1Schema, tabId: z.optional(SessionBoardTabIdSchema), area: z.optional(WidgetProjectAreaV1Schema), index: nativeIndex, groupId: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))) }));
+export const WidgetTransferFailureDetailsV1Schema = lazyZodSchema(() => z.strictObject({
   fromRef: WidgetInstanceRefV1Schema, toRef: WidgetInstanceRefV1Schema,
   phase: z.enum(['preflight', 'destination_add', 'source_remove', 'compensation']),
   source: z.enum(['present', 'absent', 'unknown']), destination: z.enum(['present', 'absent', 'unknown']),
-  reasonCode: z.string().trim().min(1),
-  instance: WidgetInstanceV1Schema.optional(),
-}).strict().refine(value => value.instance === undefined || value.phase !== 'preflight' && value.source === 'absent' && value.destination === 'absent',
-  'Recovery instance requires current absent facts from both owners after a write phase'));
+  reasonCode: z.string().check(z.trim(), z.minLength(1)),
+  instance: z.optional(WidgetInstanceV1Schema),
+}).check(z.refine(value => value.instance === undefined || value.phase !== 'preflight' && value.source === 'absent' && value.destination === 'absent', 'Recovery instance requires current absent facts from both owners after a write phase')));
 export type WidgetTransferFailureDetailsV1 = z.infer<typeof WidgetTransferFailureDetailsV1Schema>;
-const surfaceInput = z.object({ surface: WidgetSurfaceRefV1Schema }).strict();
-const refInput = z.object({ ref: WidgetInstanceRefV1Schema }).strict();
-const groupSurface = WidgetSurfaceRefV1Schema.refine(surface => supportsWidgetGroupsV1(surface.owner.kind), 'Group-capable surface required');
-const groupRef = lazyZodSchema(() => InstanceRefSchema.extend({ surface: groupSurface }).strict());
-const groupRefInput = z.object({ ref: groupRef }).strict();
-const bindingsInput = z.object({ ref: WidgetInstanceRefV1Schema, bindings: WidgetInputBindingsV1Schema }).strict();
-const areaSurface = WidgetSurfaceRefV1Schema.refine(surface => surface.owner.kind === 'project' || surface.owner.kind === 'pluginArea' || surface.owner.kind === 'corePage', 'Area surface required');
+const surfaceInput = z.strictObject({ surface: WidgetSurfaceRefV1Schema });
+const refInput = z.strictObject({ ref: WidgetInstanceRefV1Schema });
+const groupSurface = WidgetSurfaceRefV1Schema.check(z.refine(surface => supportsWidgetGroupsV1(surface.owner.kind), 'Group-capable surface required'));
+const groupRef = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(InstanceRefSchema, { surface: groupSurface })));
+const groupRefInput = z.strictObject({ ref: groupRef });
+const bindingsInput = z.strictObject({ ref: WidgetInstanceRefV1Schema, bindings: WidgetInputBindingsV1Schema });
+const areaSurface = WidgetSurfaceRefV1Schema.check(z.refine(surface => surface.owner.kind === 'project' || surface.owner.kind === 'pluginArea' || surface.owner.kind === 'corePage', 'Area surface required'));
 const layoutSurface = areaSurface;
-const layoutInput = z.object({ surface: layoutSurface }).strict();
-const layoutMutationInput = layoutInput.extend({ expectedRevision: ArtifactRevisionV1Schema.nullable() }).strict();
-const layoutName = z.string().trim().min(1);
+const layoutInput = z.strictObject({ surface: layoutSurface });
+const layoutMutationInput = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(layoutInput, { expectedRevision: z.nullable(ArtifactRevisionV1Schema) }));
+const layoutName = z.string().check(z.trim(), z.minLength(1));
 export const WidgetInstanceActionInputSchemasV1 = {
-  'widgets.area.layout.reset': z.object({ surface: areaSurface, expectedRevision: ArtifactRevisionV1Schema.nullable() }).strict(),
-  'widgets.area.layout.undo': z.object({ capture: WidgetAreaPresetUndoV1Schema }).strict(),
-  'widgets.group.add': z.object({ surface: groupSurface, group: WidgetLayoutGroupV1Schema, toIndex: index.optional() }).strict(),
-  'widgets.group.create': z.object({ surface: groupSurface, groupId: z.string().trim().min(1), instanceIds: z.array(z.string().trim().min(1)).min(1), width: WidgetGroupWidthV1Schema.optional(), title: z.string().trim().min(1).optional(), context: WidgetInputBindingsV1Schema.optional() }).strict(),
+  'widgets.area.layout.reset': z.strictObject({ surface: areaSurface, expectedRevision: z.nullable(ArtifactRevisionV1Schema) }),
+  'widgets.area.layout.undo': z.strictObject({ capture: WidgetAreaPresetUndoV1Schema }),
+  'widgets.group.add': z.strictObject({ surface: groupSurface, group: WidgetLayoutGroupV1Schema, toIndex: z.optional(index) }),
+  'widgets.group.create': z.strictObject({ surface: groupSurface, groupId: z.string().check(z.trim(), z.minLength(1)), instanceIds: z.array(z.string().check(z.trim(), z.minLength(1))).check(z.minLength(1)), width: z.optional(WidgetGroupWidthV1Schema), title: z.optional(z.string().check(z.trim(), z.minLength(1))), context: z.optional(WidgetInputBindingsV1Schema) }),
   'widgets.group.ungroup': groupRefInput,
-  'widgets.group.set': groupRefInput.extend({ width: WidgetGroupWidthV1Schema.optional(), dividers: z.enum(['hairline', 'none']).optional() }).strict(),
-  'widgets.group.inputs.set': groupRefInput.extend({ bindings: WidgetInputBindingsV1Schema }).strict(),
+  'widgets.group.set': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(groupRefInput, { width: z.optional(WidgetGroupWidthV1Schema), dividers: z.optional(z.enum(['hairline', 'none'])) })),
+  'widgets.group.inputs.set': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(groupRefInput, { bindings: WidgetInputBindingsV1Schema })),
   'widgets.area.layout.list': layoutInput,
-  'widgets.area.layout.create': layoutInput.extend({ layoutId: z.string().trim().min(1), name: layoutName, fromSurface: areaSurface.optional() }).strict(),
-  'widgets.area.layout.rename': layoutMutationInput.extend({ name: layoutName }).strict(),
+  'widgets.area.layout.create': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(layoutInput, { layoutId: z.string().check(z.trim(), z.minLength(1)), name: layoutName, fromSurface: z.optional(areaSurface) })),
+  'widgets.area.layout.rename': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(layoutMutationInput, { name: layoutName })),
   'widgets.area.layout.delete': layoutMutationInput,
-  'widgets.area.layout.reorder': layoutMutationInput.extend({ position: AnchoredListPositionV1Schema }).strict(),
-  'widgets.area.layout.select': z.object({ surface: areaSurface }).strict(),
-  'widgets.catalog.list': surfaceInput.extend({ boundSession: VoiceTrackedSessionAddressV1Schema.optional() }).strict(),
+  'widgets.area.layout.reorder': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(layoutMutationInput, { position: AnchoredListPositionV1Schema })),
+  'widgets.area.layout.select': z.strictObject({ surface: areaSurface }),
+  'widgets.catalog.list': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(surfaceInput, { boundSession: z.optional(VoiceTrackedSessionAddressV1Schema) })),
   'widgets.item.list': surfaceInput,
   // `groupId` places the new widget into that group of the layout (a group's empty slot).
-  'widgets.item.add': z.object({ surface: WidgetSurfaceRefV1Schema, instance: WidgetInstanceV1Schema, area: WidgetProjectAreaV1Schema.optional(), size: WidgetSizeV1Schema.optional(), toIndex: index.optional(), placement: SessionBoardItemPlacementV1Schema.optional(), groupId: z.string().trim().min(1).optional() }).strict(),
+  'widgets.item.add': z.strictObject({ surface: WidgetSurfaceRefV1Schema, instance: WidgetInstanceV1Schema, area: z.optional(WidgetProjectAreaV1Schema), size: z.optional(WidgetSizeV1Schema), toIndex: z.optional(index), placement: z.optional(SessionBoardItemPlacementV1Schema), groupId: z.optional(z.string().check(z.trim(), z.minLength(1))) }),
   'widgets.item.remove': refInput,
   'widgets.item.move': z.union([
-    z.object({ ref: WidgetInstanceRefV1Schema, toIndex: index, area: WidgetProjectAreaV1Schema.optional(), groupId: z.string().trim().min(1).nullable().optional() }).strict(),
-    z.object({ ref: WidgetInstanceRefV1Schema, to: WidgetMoveDestinationV1Schema }).strict(),
+    z.strictObject({ ref: WidgetInstanceRefV1Schema, toIndex: index, area: z.optional(WidgetProjectAreaV1Schema), groupId: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))) }),
+    z.strictObject({ ref: WidgetInstanceRefV1Schema, to: WidgetMoveDestinationV1Schema }),
   ]),
-  'widgets.item.rename': z.object({ ref: WidgetInstanceRefV1Schema, displayName: z.string().trim().min(1).nullable() }).strict(),
+  'widgets.item.rename': z.strictObject({ ref: WidgetInstanceRefV1Schema, displayName: z.nullable(z.string().check(z.trim(), z.minLength(1))) }),
   'widgets.item.size.set': z.union([
-    z.object({ ref: WidgetInstanceRefV1Schema, size: WidgetSizeV1Schema }).strict(),
-    z.object({ ref: groupRef, width: WidgetGroupWidthV1Schema }).strict(),
+    z.strictObject({ ref: WidgetInstanceRefV1Schema, size: WidgetSizeV1Schema }),
+    z.strictObject({ ref: groupRef, width: WidgetGroupWidthV1Schema }),
   ]),
-  'widgets.item.frame.set': z.object({ ref: WidgetInstanceRefV1Schema, frameStyle: WidgetFrameStyleV1Schema.nullable() }).strict(),
-  'widgets.item.network.set': z.object({ ref: WidgetInstanceRefV1Schema, network: UiSurfaceNetworkRequestV1Schema }).strict(),
+  'widgets.item.frame.set': z.strictObject({ ref: WidgetInstanceRefV1Schema, frameStyle: z.nullable(WidgetFrameStyleV1Schema) }),
+  'widgets.item.network.set': z.strictObject({ ref: WidgetInstanceRefV1Schema, network: UiSurfaceNetworkRequestV1Schema }),
   'widgets.item.inputs.get': refInput,
   'widgets.item.inputs.validate': bindingsInput,
-  'widgets.item.inputs.set': bindingsInput.extend({ paths: z.array(InputPathSchema).optional() }).strict(),
-  'widgets.item.inputs.reset': refInput.extend({ paths: z.array(InputPathSchema).optional() }).strict(),
+  'widgets.item.inputs.set': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(bindingsInput, { paths: z.optional(z.array(InputPathSchema)) })),
+  'widgets.item.inputs.reset': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(refInput, { paths: z.optional(z.array(InputPathSchema)) })),
   'widgets.item.refresh': refInput,
 } as const;
 
-export const WidgetPlacementV1Schema = lazyZodSchema(() => z.object({
-  instance: WidgetInstanceV1Schema, area: WidgetProjectAreaV1Schema.optional(), size: WidgetSizeV1Schema.optional(), frameStyle: WidgetFrameStyleV1Schema.optional(),
-}).strict());
-export type WidgetPlacementV1 = z.infer<typeof WidgetPlacementV1Schema>;
-export const WidgetSurfaceReadV1Schema = lazyZodSchema(() => z.object({
-  surface: WidgetSurfaceRefV1Schema, instances: z.array(WidgetPlacementV1Schema), canEdit: z.boolean(),
-  items: WidgetLayoutItemsV1Schema.optional(),
-  preset: WidgetAreaPresetStateV1Schema.optional(),
-  state: z.enum(['missing', 'present']).optional(), isShared: z.boolean().optional(),
-  revision: ArtifactRevisionV1Schema.nullable().optional(),
-  /** Admitted selected-document facts, independent of Source membership and acting viewer. */
-  dashboard: z.object({ name: z.string().trim().min(1), ownerAccountId: z.string().min(1), access: ArtifactCallerAccessV1Schema }).strict().optional(),
-}).strict().superRefine((value, context) => {
-  if (new Set(value.instances.map(entry => entry.instance.id)).size !== value.instances.length) context.addIssue({ code: 'custom', path: ['instances'], message: 'Duplicate widget instance identity' });
+export const WidgetPlacementV1Schema = lazyZodSchema(() => z.strictObject({
+  instance: WidgetInstanceV1Schema, area: z.optional(WidgetProjectAreaV1Schema), size: z.optional(WidgetSizeV1Schema), frameStyle: z.optional(WidgetFrameStyleV1Schema),
 }));
+export type WidgetPlacementV1 = z.infer<typeof WidgetPlacementV1Schema>;
+export const WidgetSurfaceReadV1Schema = lazyZodSchema(() => z.strictObject({
+  surface: WidgetSurfaceRefV1Schema, instances: z.array(WidgetPlacementV1Schema), canEdit: z.boolean(),
+  items: z.optional(WidgetLayoutItemsV1Schema),
+  preset: z.optional(WidgetAreaPresetStateV1Schema),
+  state: z.optional(z.enum(['missing', 'present'])), isShared: z.optional(z.boolean()),
+  revision: z.optional(z.nullable(ArtifactRevisionV1Schema)),
+  /** Admitted selected-document facts, independent of Source membership and acting viewer. */
+  dashboard: z.optional(z.strictObject({ name: z.string().check(z.trim(), z.minLength(1)), ownerAccountId: z.string().check(z.minLength(1)), access: ArtifactCallerAccessV1Schema })),
+}).check(z.superRefine((value, context) => {
+  if (new Set(value.instances.map(entry => entry.instance.id)).size !== value.instances.length) context.addIssue({ code: 'custom', path: ['instances'], message: 'Duplicate widget instance identity' });
+})));
 export type WidgetSurfaceReadV1 = z.infer<typeof WidgetSurfaceReadV1Schema>;
-export const WidgetCatalogEntryV1Schema = lazyZodSchema(() => z.object({
+export const WidgetCatalogEntryV1Schema = lazyZodSchema(() => z.strictObject({
   sizeDeclaration: WidgetSizeDeclarationV1Schema, presentation: WidgetSurfacePresentationV1Schema,
-  definition: WidgetDefinitionRefV1Schema, title: z.string().trim().min(1),
+  definition: WidgetDefinitionRefV1Schema, title: z.string().check(z.trim(), z.minLength(1)),
   fields: z.array(InputFieldHintSchema), availability: z.enum(['available', 'unavailable', 'denied']),
-  instanceCount: z.number().int().nonnegative().safe(),
-}).strict());
+  instanceCount: z.number().check(z.int(), z.nonnegative(), z.int()),
+}));
 export type WidgetCatalogEntryV1 = z.infer<typeof WidgetCatalogEntryV1Schema>;
 export type WidgetCatalogSourceEntryV1 = Omit<WidgetCatalogEntryV1, 'presentation'>;
 export const WidgetBindingResolutionV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('ready'), input: z.record(z.string(), StrictJsonValueSchema) }).strict(),
-  ...(['selection_required', 'invalid', 'unavailable', 'denied'] as const).map(status => z.object({
-    status: z.literal(status), fields: z.array(z.object({
-      path: InputPathSchema, status: z.enum(['selection_required', 'invalid', 'unavailable', 'denied']), reasonCode: z.string().trim().min(1),
-    }).strict()),
-  }).strict()),
+  z.strictObject({ status: z.literal('ready'), input: z.record(z.string(), StrictJsonValueSchema) }),
+  ...(['selection_required', 'invalid', 'unavailable', 'denied'] as const).map(status => z.strictObject({
+    status: z.literal(status), fields: z.array(z.strictObject({
+      path: InputPathSchema, status: z.enum(['selection_required', 'invalid', 'unavailable', 'denied']), reasonCode: z.string().check(z.trim(), z.minLength(1)),
+    })),
+  })),
 ]));
-const mutationResult = z.object({ ref: WidgetInstanceRefV1Schema, instance: WidgetInstanceV1Schema.nullable(), item: WidgetLayoutItemV1Schema.nullable().optional(), area: WidgetProjectAreaV1Schema.optional() }).strict();
-const inputsResult = z.object({ ref: WidgetInstanceRefV1Schema, bindings: WidgetInputBindingsV1Schema }).strict();
+const mutationResult = z.strictObject({ ref: WidgetInstanceRefV1Schema, instance: z.nullable(WidgetInstanceV1Schema), item: z.optional(z.nullable(WidgetLayoutItemV1Schema)), area: z.optional(WidgetProjectAreaV1Schema) });
+const inputsResult = z.strictObject({ ref: WidgetInstanceRefV1Schema, bindings: WidgetInputBindingsV1Schema });
 export const WidgetInstanceActionOutputSchemasV1 = {
   'widgets.area.layout.reset': WidgetAreaPresetResultV1Schema,
   'widgets.area.layout.undo': WidgetAreaPresetResultV1Schema,
   'widgets.group.add': mutationResult,
   'widgets.group.create': mutationResult, 'widgets.group.ungroup': mutationResult,
   'widgets.group.set': mutationResult, 'widgets.group.inputs.set': mutationResult,
-  'widgets.area.layout.list': z.object({ surface: layoutSurface, layouts: z.array(WidgetAreaLayoutSummaryV1Schema) }).strict(),
+  'widgets.area.layout.list': z.strictObject({ surface: layoutSurface, layouts: z.array(WidgetAreaLayoutSummaryV1Schema) }),
   'widgets.area.layout.create': WidgetAreaLayoutSummaryV1Schema,
   'widgets.area.layout.rename': WidgetAreaLayoutSummaryV1Schema,
-  'widgets.area.layout.delete': z.object({ surface: layoutSurface, artifactId: z.string().min(1) }).strict(),
+  'widgets.area.layout.delete': z.strictObject({ surface: layoutSurface, artifactId: z.string().check(z.minLength(1)) }),
   'widgets.area.layout.reorder': WidgetAreaLayoutSummaryV1Schema,
   'widgets.area.layout.select': WidgetSurfaceReadV1Schema,
-  'widgets.catalog.list': z.object({ surface: WidgetSurfaceRefV1Schema, entries: z.array(WidgetCatalogEntryV1Schema), presentation: WidgetSurfacePresentationV1Schema }).strict(),
+  'widgets.catalog.list': z.strictObject({ surface: WidgetSurfaceRefV1Schema, entries: z.array(WidgetCatalogEntryV1Schema), presentation: WidgetSurfacePresentationV1Schema }),
   'widgets.item.list': WidgetSurfaceReadV1Schema,
   'widgets.item.add': mutationResult, 'widgets.item.remove': mutationResult,
-  'widgets.item.move': mutationResult.extend({ fromRef: WidgetInstanceRefV1Schema.optional(), status: z.literal('moved').optional() }).strict(), 'widgets.item.rename': mutationResult,
+  'widgets.item.move': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(mutationResult, { fromRef: z.optional(WidgetInstanceRefV1Schema), status: z.optional(z.literal('moved')) })), 'widgets.item.rename': mutationResult,
   'widgets.item.size.set': mutationResult, 'widgets.item.frame.set': mutationResult,
   'widgets.item.network.set': mutationResult,
   'widgets.item.inputs.get': inputsResult, 'widgets.item.inputs.validate': WidgetBindingResolutionV1Schema,
   'widgets.item.inputs.set': mutationResult, 'widgets.item.inputs.reset': mutationResult,
-  'widgets.item.refresh': z.object({ ref: WidgetInstanceRefV1Schema, status: z.literal('refreshed') }).strict(),
+  'widgets.item.refresh': z.strictObject({ ref: WidgetInstanceRefV1Schema, status: z.literal('refreshed') }),
 } as const;
 
 /** Adapters translate into existing domain intents; they do not persist or reduce a parallel layout. */

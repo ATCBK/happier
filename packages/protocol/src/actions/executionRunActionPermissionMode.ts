@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   SESSION_PERMISSION_INTENT_INPUTS,
@@ -40,8 +40,4 @@ function normalizeExecutionRunActionPermissionMode(value: unknown): unknown {
   }
 }
 
-export const ExecutionRunActionPermissionModeSchema = z.preprocess(
-  normalizeExecutionRunActionPermissionMode,
-  z.enum(EXECUTION_RUN_ACTION_PERMISSION_MODES),
-)
-  .describe(EXECUTION_RUN_ACTION_PERMISSION_MODE_DESCRIPTION);
+export const ExecutionRunActionPermissionModeSchema = z.pipe(z.transform(normalizeExecutionRunActionPermissionMode), z.enum(EXECUTION_RUN_ACTION_PERMISSION_MODES)).check(z.describe(EXECUTION_RUN_ACTION_PERMISSION_MODE_DESCRIPTION));

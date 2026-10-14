@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { hmac } from '@noble/hashes/hmac';
 import { sha256 } from '@noble/hashes/sha2';
 import tweetnacl from 'tweetnacl';
@@ -64,65 +64,62 @@ const UTF8_DECODER = new TextDecoder('utf-8', { fatal: true });
 const HomeQrInviteV2CommonShape = {
   v: z.literal(2),
   intent: z.literal('home_device'),
-  pairId: z.string().min(1).max(128).superRefine((value, context) => {
+  pairId: z.string().check(z.minLength(1), z.maxLength(128), z.superRefine((value, context) => {
     if (UTF8_ENCODER.encode(value).byteLength > 128) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Pair ID exceeds its UTF-8 byte limit' });
+      context.addIssue({ code: "custom", message: 'Pair ID exceeds its UTF-8 byte limit' });
     }
-  }),
+  })),
   home: HomeConnectionDescriptorV1Schema,
-  qrSecretBase64Url: z.string().regex(/^[A-Za-z0-9_-]+$/u).max(64),
-  issuedAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  expiresAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  requestedDeviceLabel: z.string().min(1).superRefine((value, context) => {
+  qrSecretBase64Url: z.string().check(z.regex(/^[A-Za-z0-9_-]+$/u), z.maxLength(64)),
+  issuedAtMs: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+  expiresAtMs: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+  requestedDeviceLabel: z.optional(z.string().check(z.minLength(1), z.superRefine((value, context) => {
     if (UTF8_ENCODER.encode(value).byteLength > ACCOUNT_DIRECTORY_MAX_LABEL_UTF8_BYTES) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Requested device label exceeds its UTF-8 byte limit' });
+      context.addIssue({ code: "custom", message: 'Requested device label exceeds its UTF-8 byte limit' });
     }
-  }).optional(),
+  }))),
 } as const;
 
-const HomeQrRequesterPublicKeyBase64UrlV2Schema = lazyZodSchema(() => z.string()
-  .regex(/^[A-Za-z0-9_-]+$/u)
-  .max(64)
-  .superRefine((value, context) => {
+const HomeQrRequesterPublicKeyBase64UrlV2Schema = lazyZodSchema(() => z.string().check(z.regex(/^[A-Za-z0-9_-]+$/u), z.maxLength(64), z.superRefine((value, context) => {
     try {
       const publicKeyBytes = decodeBase64(value, 'base64url');
       if (publicKeyBytes.length !== HOME_QR_REQUESTER_PUBLIC_KEY_V2_BYTES) {
-        context.addIssue({ code: z.ZodIssueCode.custom, message: 'Requester public key must be 32 bytes' });
+        context.addIssue({ code: "custom", message: 'Requester public key must be 32 bytes' });
       } else if (encodeBase64(publicKeyBytes, 'base64url') !== value) {
-        context.addIssue({ code: z.ZodIssueCode.custom, message: 'Requester public key must be canonical base64url' });
+        context.addIssue({ code: "custom", message: 'Requester public key must be canonical base64url' });
       }
     } catch {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid requester public key' });
+      context.addIssue({ code: "custom", message: 'Invalid requester public key' });
     }
-  }));
+  })));
 
 export const HomeQrInviteV2Schema = lazyZodSchema(() => z.discriminatedUnion('direction', [
-  z.object({
+  z.strictObject({
     ...HomeQrInviteV2CommonShape,
     direction: z.literal('trusted_home_displays'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ...HomeQrInviteV2CommonShape,
     direction: z.literal('requester_displays'),
     requesterPublicKeyBase64Url: HomeQrRequesterPublicKeyBase64UrlV2Schema,
-  }).strict(),
-]).superRefine((value, context) => {
+  }),
+]).check(z.superRefine((value, context) => {
   try {
     const secretBytes = decodeBase64(value.qrSecretBase64Url, 'base64url');
     if (secretBytes.length !== HOME_QR_SECRET_V2_BYTES) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'QR secret must be 32 bytes' });
+      context.addIssue({ code: "custom", message: 'QR secret must be 32 bytes' });
     } else if (encodeBase64(secretBytes, 'base64url') !== value.qrSecretBase64Url) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'QR secret must be canonical base64url' });
+      context.addIssue({ code: "custom", message: 'QR secret must be canonical base64url' });
     }
   } catch {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid QR secret' });
+    context.addIssue({ code: "custom", message: 'Invalid QR secret' });
   }
   if (value.expiresAtMs <= value.issuedAtMs) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid invite expiry' });
+    context.addIssue({ code: "custom", message: 'Invalid invite expiry' });
   } else if (value.expiresAtMs - value.issuedAtMs > HOME_QR_INVITE_V2_MAX_TTL_MS) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Invite TTL exceeds the pairing maximum' });
+    context.addIssue({ code: "custom", message: 'Invite TTL exceeds the pairing maximum' });
   }
-}));
+})));
 export type HomeQrInviteV2 = z.infer<typeof HomeQrInviteV2Schema>;
 
 export type HomeQrBindingContextV2 = Readonly<{
@@ -137,60 +134,60 @@ export type HomeQrBindingParamsV2 = Readonly<HomeQrBindingContextV2 & {
   qrSecret: Uint8Array;
 }>;
 
-const CanonicalHomeQrPairingExpiryV2Schema = lazyZodSchema(() => z.string().superRefine((value, context) => {
+const CanonicalHomeQrPairingExpiryV2Schema = lazyZodSchema(() => z.string().check(z.superRefine((value, context) => {
   const timestamp = Date.parse(value);
   if (!Number.isSafeInteger(timestamp) || new Date(timestamp).toISOString() !== value) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Pairing expiry must be a canonical ISO timestamp' });
+    context.addIssue({ code: "custom", message: 'Pairing expiry must be a canonical ISO timestamp' });
   }
-}));
+})));
 
-const CanonicalHomeQrRequesterPublicKeyV2Schema = lazyZodSchema(() => z.string().superRefine((value, context) => {
+const CanonicalHomeQrRequesterPublicKeyV2Schema = lazyZodSchema(() => z.string().check(z.superRefine((value, context) => {
   try {
     const bytes = decodeBase64(value, 'base64');
     if (bytes.length !== HOME_QR_REQUESTER_PUBLIC_KEY_V2_BYTES || encodeBase64(bytes, 'base64') !== value) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Requester public key must be canonical padded base64 for 32 bytes' });
+      context.addIssue({ code: "custom", message: 'Requester public key must be canonical padded base64 for 32 bytes' });
     }
   } catch {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid requester public key' });
+    context.addIssue({ code: "custom", message: 'Invalid requester public key' });
   }
-}));
+})));
 
-const CanonicalHomeQrBindingProofV2Schema = lazyZodSchema(() => z.string().superRefine((value, context) => {
+const CanonicalHomeQrBindingProofV2Schema = lazyZodSchema(() => z.string().check(z.superRefine((value, context) => {
   if (!/^[A-Za-z0-9_-]+$/u.test(value)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid binding proof' });
+    context.addIssue({ code: "custom", message: 'Invalid binding proof' });
     return;
   }
   try {
     const bytes = decodeBase64(value, 'base64url');
     if (bytes.length !== 32 || encodeBase64(bytes, 'base64url') !== value) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Binding proof must be canonical base64url for 32 bytes' });
+      context.addIssue({ code: "custom", message: 'Binding proof must be canonical base64url for 32 bytes' });
     }
   } catch {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid binding proof' });
+    context.addIssue({ code: "custom", message: 'Invalid binding proof' });
   }
-}));
+})));
 
-const HomeQrPairingStatusPairIdV2Schema = lazyZodSchema(() => z.string().min(1).max(128).superRefine((value, context) => {
+const HomeQrPairingStatusPairIdV2Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(128), z.superRefine((value, context) => {
   if (UTF8_ENCODER.encode(value).byteLength > 128) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Pair ID exceeds its UTF-8 byte limit' });
+    context.addIssue({ code: "custom", message: 'Pair ID exceeds its UTF-8 byte limit' });
   }
-}));
+})));
 
 export const HomeQrPairingStatusV2Schema = lazyZodSchema(() => z.discriminatedUnion('state', [
-  z.object({
+  z.strictObject({
     state: z.literal('pending'),
     pairId: HomeQrPairingStatusPairIdV2Schema,
     expiresAt: CanonicalHomeQrPairingExpiryV2Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     state: z.literal('requested'),
     pairId: HomeQrPairingStatusPairIdV2Schema,
     expiresAt: CanonicalHomeQrPairingExpiryV2Schema,
     requestedPublicKey: CanonicalHomeQrRequesterPublicKeyV2Schema,
-    requestedDeviceLabel: z.string().max(256).nullable(),
+    requestedDeviceLabel: z.nullable(z.string().check(z.maxLength(256))),
     bindingProof: CanonicalHomeQrBindingProofV2Schema,
-    homeServerIdentityId: z.string().min(1).max(256),
-  }).strict(),
+    homeServerIdentityId: z.string().check(z.minLength(1), z.maxLength(256)),
+  }),
 ]));
 export type HomeQrPairingStatusV2 = z.infer<typeof HomeQrPairingStatusV2Schema>;
 

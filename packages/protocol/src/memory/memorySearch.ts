@@ -1,42 +1,42 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ArtifactRevisionV1Schema } from '../artifacts/artifactActionsV1.js';
 import { PromptDocArtifactRefV1Schema } from '../prompts/library/promptArtifactRefsV1.js';
 import { MemoryTopicSummaryV1Schema } from '../prompts/library/memoryDocV1.js';
 import { RPC_ERROR_CODES, readRpcErrorCode } from '../rpc/errors.js';
 
 export const MemorySearchScopeSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
-  z.object({ type: z.literal('global') }).passthrough(),
-  z.object({ type: z.literal('session'), sessionId: z.string().min(1) }).passthrough(),
+  z.looseObject({ type: z.literal('global') }),
+  z.looseObject({ type: z.literal('session'), sessionId: z.string().check(z.minLength(1)) }),
 ]));
 export type MemorySearchScope = z.infer<typeof MemorySearchScopeSchema>;
 
 /** Native identity is independent of any imported Happier Session or seq. */
-export const MemoryExternalTranscriptSourceV1Schema = lazyZodSchema(() => z.object({
+export const MemoryExternalTranscriptSourceV1Schema = lazyZodSchema(() => z.strictObject({
   type: z.literal('external_transcript'),
-  agentId: z.string().min(1),
-  sourceKey: z.string().min(1),
-  nativeSessionId: z.string().min(1),
-}).strict());
+  agentId: z.string().check(z.minLength(1)),
+  sourceKey: z.string().check(z.minLength(1)),
+  nativeSessionId: z.string().check(z.minLength(1)),
+}));
 export const MemorySourceV1Schema = lazyZodSchema(() => z.discriminatedUnion('type', [
-  z.object({ type: z.literal('happier_session'), sessionId: z.string().min(1) }).strict(),
+  z.strictObject({ type: z.literal('happier_session'), sessionId: z.string().check(z.minLength(1)) }),
   MemoryExternalTranscriptSourceV1Schema,
 ]));
 export type MemorySourceV1 = z.infer<typeof MemorySourceV1Schema>;
 export type MemoryExternalTranscriptSourceV1 = z.infer<typeof MemoryExternalTranscriptSourceV1Schema>;
 
-export const MemoryExternalTranscriptSearchHitV1Schema = lazyZodSchema(() => z.object({
+export const MemoryExternalTranscriptSearchHitV1Schema = lazyZodSchema(() => z.strictObject({
   type: z.literal('external_transcript'),
   source: MemoryExternalTranscriptSourceV1Schema,
-  sourceItemId: z.string().min(1),
-  cursor: z.string().min(1).optional(),
-  createdAtFromMs: z.number().int().nonnegative(),
-  createdAtToMs: z.number().int().nonnegative(),
-  summary: z.string().min(1),
-  score: z.number().min(0).max(1),
-}).strict().refine(value => value.createdAtFromMs <= value.createdAtToMs, {
+  sourceItemId: z.string().check(z.minLength(1)),
+  cursor: z.optional(z.string().check(z.minLength(1))),
+  createdAtFromMs: z.number().check(z.int(), z.nonnegative()),
+  createdAtToMs: z.number().check(z.int(), z.nonnegative()),
+  summary: z.string().check(z.minLength(1)),
+  score: z.number().check(z.minimum(0), z.maximum(1)),
+}).check(z.refine(value => value.createdAtFromMs <= value.createdAtToMs, {
   path: ['createdAtFromMs'], message: 'createdAtFromMs must be <= createdAtToMs',
-}));
+})));
 export type MemoryExternalTranscriptSearchHitV1 = z.infer<typeof MemoryExternalTranscriptSearchHitV1Schema>;
 
 export const MemorySearchModeSchema = lazyZodSchema(() => z.enum(['hints', 'deep', 'auto']));
@@ -52,51 +52,51 @@ export const MemorySearchErrorCodeSchema = lazyZodSchema(() => z.enum([
 ]));
 export type MemorySearchErrorCode = z.infer<typeof MemorySearchErrorCodeSchema>;
 
-export const MemoryCitationV1Schema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
-  seqFrom: z.number().int().min(0),
-  seqTo: z.number().int().min(0),
-}).passthrough().superRefine((value, ctx) => {
+export const MemoryCitationV1Schema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.string().check(z.minLength(1)),
+  seqFrom: z.number().check(z.int(), z.minimum(0)),
+  seqTo: z.number().check(z.int(), z.minimum(0)),
+}).check(z.superRefine((value, ctx) => {
   if (value.seqFrom > value.seqTo) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'seqFrom must be <= seqTo', path: ['seqFrom'] });
+    ctx.addIssue({ code: "custom", message: 'seqFrom must be <= seqTo', path: ['seqFrom'] });
   }
-}));
+})));
 export type MemoryCitationV1 = z.infer<typeof MemoryCitationV1Schema>;
 
-export const MemorySearchHitV1Schema = lazyZodSchema(() => z.object({
+export const MemorySearchHitV1Schema = lazyZodSchema(() => z.looseObject({
   // Released transcript hits are untagged. Never admit an artifact discriminator
   // as a passthrough annotation on an otherwise transcript-shaped row.
-  type: z.never().optional(),
-  sessionId: z.string().min(1),
-  seqFrom: z.number().int().min(0),
-  seqTo: z.number().int().min(0),
-  createdAtFromMs: z.number().int().min(0),
-  createdAtToMs: z.number().int().min(0),
-  summary: z.string().min(1),
-  score: z.number().min(0).max(1),
-}).passthrough().superRefine((value, ctx) => {
+  type: z.optional(z.never()),
+  sessionId: z.string().check(z.minLength(1)),
+  seqFrom: z.number().check(z.int(), z.minimum(0)),
+  seqTo: z.number().check(z.int(), z.minimum(0)),
+  createdAtFromMs: z.number().check(z.int(), z.minimum(0)),
+  createdAtToMs: z.number().check(z.int(), z.minimum(0)),
+  summary: z.string().check(z.minLength(1)),
+  score: z.number().check(z.minimum(0), z.maximum(1)),
+}).check(z.superRefine((value, ctx) => {
   if (value.seqFrom > value.seqTo) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'seqFrom must be <= seqTo', path: ['seqFrom'] });
+    ctx.addIssue({ code: "custom", message: 'seqFrom must be <= seqTo', path: ['seqFrom'] });
   }
   if (value.createdAtFromMs > value.createdAtToMs) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'createdAtFromMs must be <= createdAtToMs', path: ['createdAtFromMs'] });
+    ctx.addIssue({ code: "custom", message: 'createdAtFromMs must be <= createdAtToMs', path: ['createdAtFromMs'] });
   }
-}));
+})));
 export type MemorySearchHitV1 = z.infer<typeof MemorySearchHitV1Schema>;
 
 /** Document navigation uses the Artifact revision and qualified address owners. */
-export const MemoryDocumentSearchHitV1Schema = lazyZodSchema(() => z.object({
+export const MemoryDocumentSearchHitV1Schema = lazyZodSchema(() => z.strictObject({
   type: z.literal('artifact'),
-  ref: PromptDocArtifactRefV1Schema.extend({ serverId: z.string().min(1) }).strict(),
+  ref: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PromptDocArtifactRefV1Schema, { serverId: z.string().check(z.minLength(1)) })),
   revision: ArtifactRevisionV1Schema,
   location: z.union([
     z.enum(['facts', 'archive', 'document']),
-    z.object({ type: z.literal('topic'), title: MemoryTopicSummaryV1Schema.shape.title }).strict(),
+    z.strictObject({ type: z.literal('topic'), title: MemoryTopicSummaryV1Schema.shape.title }),
   ]),
-  factId: z.string().min(1).optional(),
-  summary: z.string().min(1),
-  score: z.number().min(0).max(1),
-}).strict());
+  factId: z.optional(z.string().check(z.minLength(1))),
+  summary: z.string().check(z.minLength(1)),
+  score: z.number().check(z.minimum(0), z.maximum(1)),
+}));
 export type MemoryDocumentSearchHitV1 = z.infer<typeof MemoryDocumentSearchHitV1Schema>;
 
 export const MemorySearchResultHitV1Schema = lazyZodSchema(() => z.union([
@@ -121,9 +121,9 @@ export function isMemorySessionSearchHitV1(hit: MemorySearchResultHitV1): hit is
 export const MemorySearchCorpusV1Schema = lazyZodSchema(() => z.enum(['sessions', 'documents', 'external_transcripts']));
 export type MemorySearchCorpusV1 = z.infer<typeof MemorySearchCorpusV1Schema>;
 
-export const MemoryDocumentSearchCoverageV1Schema = lazyZodSchema(() => z.object({
+export const MemoryDocumentSearchCoverageV1Schema = lazyZodSchema(() => z.strictObject({
   state: z.enum(['ready', 'pending', 'unavailable']),
-}).strict());
+}));
 export type MemoryDocumentSearchCoverageV1 = z.infer<typeof MemoryDocumentSearchCoverageV1Schema>;
 
 /**
@@ -141,9 +141,9 @@ export type MemoryDocumentSearchCoverageV1 = z.infer<typeof MemoryDocumentSearch
  */
 export const MEMORY_SEARCH_QUERY_MAX_LENGTH = 1024;
 
-export const MemorySearchQueryV1Schema = lazyZodSchema(() => z.object({
+export const MemorySearchQueryV1Schema = lazyZodSchema(() => z.looseObject({
   v: z.literal(1),
-  query: z.string().min(1).max(MEMORY_SEARCH_QUERY_MAX_LENGTH),
+  query: z.string().check(z.minLength(1), z.maxLength(MEMORY_SEARCH_QUERY_MAX_LENGTH)),
   scope: MemorySearchScopeSchema,
   mode: MemorySearchModeSchema,
   /**
@@ -151,42 +151,42 @@ export const MemorySearchQueryV1Schema = lazyZodSchema(() => z.object({
    * safely ignorable: callers first require documentSearchSupported === true
    * from this exact daemon, or report explicit unavailable document coverage.
    */
-  corpora: z.array(MemorySearchCorpusV1Schema).min(1).optional(),
+  corpora: z.optional(z.array(MemorySearchCorpusV1Schema).check(z.minLength(1))),
   /**
    * Optional caller-owned contextual eligibility. Current providers apply it
    * before their result limit. Absence preserves the released global/session
    * request semantics; older tolerant readers may ignore the additive field.
    */
-  eligibleSessionIds: z.array(z.string().min(1)).optional(),
+  eligibleSessionIds: z.optional(z.array(z.string().check(z.minLength(1)))),
   /** Exact native History scope; the index applies it before ranking and paging. */
-  externalSource: z.object({ agentId: z.string().min(1), sourceKey: z.string().min(1) }).strict().optional(),
-  maxResults: z.number().int().min(1).max(100).optional(),
-  minScore: z.number().min(0).max(1).optional(),
-  cursor: z.string().min(1).optional(),
-  createdAfterMs: z.number().int().nonnegative().optional(),
-  createdBeforeMs: z.number().int().nonnegative().optional(),
-}).passthrough().superRefine((value, ctx) => {
+  externalSource: z.optional(z.strictObject({ agentId: z.string().check(z.minLength(1)), sourceKey: z.string().check(z.minLength(1)) })),
+  maxResults: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(100))),
+  minScore: z.optional(z.number().check(z.minimum(0), z.maximum(1))),
+  cursor: z.optional(z.string().check(z.minLength(1))),
+  createdAfterMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+  createdBeforeMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+}).check(z.superRefine((value, ctx) => {
   if (value.createdAfterMs !== undefined && value.createdBeforeMs !== undefined && value.createdAfterMs > value.createdBeforeMs) {
     ctx.addIssue({ code: 'custom', path: ['createdAfterMs'], message: 'createdAfterMs must be <= createdBeforeMs' });
   }
-}));
+})));
 export type MemorySearchQueryV1 = z.infer<typeof MemorySearchQueryV1Schema>;
 
 export const MemorySearchResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.looseObject({
     v: z.literal(1),
     ok: z.literal(true),
     hits: z.array(MemorySearchResultHitV1Schema),
-    documents: MemoryDocumentSearchCoverageV1Schema.optional(),
-    nextCursor: z.string().min(1).optional(),
-    hasMore: z.boolean().optional(),
-  }).passthrough(),
-  z.object({
+    documents: z.optional(MemoryDocumentSearchCoverageV1Schema),
+    nextCursor: z.optional(z.string().check(z.minLength(1))),
+    hasMore: z.optional(z.boolean()),
+  }),
+  z.looseObject({
     v: z.literal(1),
     ok: z.literal(false),
     errorCode: MemorySearchErrorCodeSchema,
-    error: z.string().min(1),
-  }).passthrough(),
+    error: z.string().check(z.minLength(1)),
+  }),
 ]));
 export type MemorySearchResultV1 = z.infer<typeof MemorySearchResultV1Schema>;
 

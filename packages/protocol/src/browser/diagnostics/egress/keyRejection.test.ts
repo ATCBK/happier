@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { isForbiddenBrowserEgressKey, rejectUnsafeBrowserEgressKeys } from './keyRejection.js';
 
@@ -51,7 +51,7 @@ function countMatches(files: readonly string[], pattern: RegExp): number {
 }
 
 function collectIssuePaths(value: unknown): string[] {
-  const schema = z.unknown().superRefine((v, ctx) => rejectUnsafeBrowserEgressKeys(v, ctx));
+  const schema = z.unknown().check(z.superRefine((v, ctx) => rejectUnsafeBrowserEgressKeys(v, ctx)));
   const result = schema.safeParse(value);
   if (result.success) return [];
   return result.error.issues.map((issue) => issue.path.join('.'));
@@ -96,8 +96,8 @@ describe('rejectUnsafeBrowserEgressKeys', () => {
   });
 
   it('carries the caller-supplied message', () => {
-    const schema = z.unknown().superRefine((v, ctx) =>
-      rejectUnsafeBrowserEgressKeys(v, ctx, { message: 'custom-rejection' }));
+    const schema = z.unknown().check(z.superRefine((v, ctx) =>
+      rejectUnsafeBrowserEgressKeys(v, ctx, { message: 'custom-rejection' })));
     const result = schema.safeParse({ token: 'x' });
     expect(result.success).toBe(false);
     if (!result.success) {

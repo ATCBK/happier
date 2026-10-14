@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionIdSchema } from '../idsV1.js';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
@@ -10,23 +10,20 @@ export const EXTERNAL_SESSION_STATUS_DEMAND_EVENT_V1 = 'external-session-status-
 // This ceiling admits that existing collector shape while bounding work independently of history size.
 export const EXTERNAL_SESSION_STATUS_DEMAND_MAX_ENTRIES_V1 = 256;
 
-const ExternalSessionStatusDemandRevisionV1Schema = lazyZodSchema(() => z.number()
-  .int()
-  .nonnegative()
-  .max(Number.MAX_SAFE_INTEGER));
-const ExternalSessionStatusDemandMachineIdV1Schema = lazyZodSchema(() => z.string().trim().min(1).max(256));
-const ExternalSessionStatusDemandLinkGenerationV1Schema = lazyZodSchema(() => z.string().trim().min(1).max(256));
-const ExternalSessionStatusDemandClientConnectionIdV1Schema = lazyZodSchema(() => z.string().trim().min(1).max(256));
+const ExternalSessionStatusDemandRevisionV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
+const ExternalSessionStatusDemandMachineIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
+const ExternalSessionStatusDemandLinkGenerationV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
+const ExternalSessionStatusDemandClientConnectionIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 
 export const ExternalSessionStatusDemandLevelV1Schema = lazyZodSchema(() => z.enum(['loaded', 'visible', 'open']));
 export type ExternalSessionStatusDemandLevelV1 = z.infer<typeof ExternalSessionStatusDemandLevelV1Schema>;
 
-export const ExternalSessionStatusDemandEntryV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionStatusDemandEntryV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: asProtocolZod(SessionIdSchema),
   machineId: ExternalSessionStatusDemandMachineIdV1Schema,
   linkGeneration: ExternalSessionStatusDemandLinkGenerationV1Schema,
   demand: ExternalSessionStatusDemandLevelV1Schema,
-}).strict());
+}));
 export type ExternalSessionStatusDemandEntryV1 = z.infer<typeof ExternalSessionStatusDemandEntryV1Schema>;
 
 function statusDemandEntryKey(entry: ExternalSessionStatusDemandEntryV1): string {
@@ -35,7 +32,7 @@ function statusDemandEntryKey(entry: ExternalSessionStatusDemandEntryV1): string
 
 function rejectDuplicateStatusDemandEntries(
   value: Readonly<{ entries: ReadonlyArray<ExternalSessionStatusDemandEntryV1> }>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   const keys = new Set<string>();
   value.entries.forEach((entry, index) => {
@@ -52,13 +49,12 @@ function rejectDuplicateStatusDemandEntries(
   });
 }
 
-export const ExternalSessionStatusDemandReplaceV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionStatusDemandReplaceV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   type: z.literal('replace'),
   revision: ExternalSessionStatusDemandRevisionV1Schema,
-  entries: z.array(ExternalSessionStatusDemandEntryV1Schema)
-    .max(EXTERNAL_SESSION_STATUS_DEMAND_MAX_ENTRIES_V1),
-}).strict().superRefine(rejectDuplicateStatusDemandEntries));
+  entries: z.array(ExternalSessionStatusDemandEntryV1Schema).check(z.maxLength(EXTERNAL_SESSION_STATUS_DEMAND_MAX_ENTRIES_V1)),
+}).check(z.superRefine(rejectDuplicateStatusDemandEntries)));
 export type ExternalSessionStatusDemandReplaceV1 = z.infer<typeof ExternalSessionStatusDemandReplaceV1Schema>;
 
 const EXTERNAL_SESSION_STATUS_DEMAND_PRIORITY_V1 = {
@@ -97,24 +93,23 @@ export function buildExternalSessionStatusDemandReplaceV1(input: Readonly<{
   });
 }
 
-const ExternalSessionStatusDemandDaemonEntryV1Schema = lazyZodSchema(() => ExternalSessionStatusDemandEntryV1Schema.omit({
+const ExternalSessionStatusDemandDaemonEntryV1Schema = lazyZodSchema(() => z.omit(ExternalSessionStatusDemandEntryV1Schema, {
   machineId: true,
 }));
 
-const ExternalSessionStatusDemandDaemonReplaceV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionStatusDemandDaemonReplaceV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   type: z.literal('replace'),
   clientConnectionId: ExternalSessionStatusDemandClientConnectionIdV1Schema,
   revision: ExternalSessionStatusDemandRevisionV1Schema,
-  entries: z.array(ExternalSessionStatusDemandDaemonEntryV1Schema)
-    .max(EXTERNAL_SESSION_STATUS_DEMAND_MAX_ENTRIES_V1),
-}).strict());
+  entries: z.array(ExternalSessionStatusDemandDaemonEntryV1Schema).check(z.maxLength(EXTERNAL_SESSION_STATUS_DEMAND_MAX_ENTRIES_V1)),
+}));
 
-const ExternalSessionStatusDemandDaemonDisconnectV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionStatusDemandDaemonDisconnectV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   type: z.literal('disconnect'),
   clientConnectionId: ExternalSessionStatusDemandClientConnectionIdV1Schema,
-}).strict());
+}));
 
 export const ExternalSessionStatusDemandDaemonMessageV1Schema = lazyZodSchema(() => z.discriminatedUnion('type', [
   ExternalSessionStatusDemandDaemonReplaceV1Schema,

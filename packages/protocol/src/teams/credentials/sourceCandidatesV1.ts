@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { TeamCredentialSourceBindingV1Schema } from './sourceBindingV1.js';
 import {
@@ -23,29 +23,29 @@ import { ProviderConnectionIdSchema } from '../../providers/ids.js';
  * source-detail surface owns its withdrawal controls.
  */
 export const TeamCredentialSourceLocatorV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal('connected_account'),
     target: QualifiedConnectedAccountPurposeBindingAccountTargetV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal('connected_pool'),
     target: QualifiedConnectedAccountPurposeBindingGroupTargetV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     v: z.literal(1),
     kind: z.literal('provider_connection'),
     connectionId: ProviderConnectionIdSchema,
-  }).strict(),
+  }),
 ]));
 export type TeamCredentialSourceLocatorV1 = z.infer<typeof TeamCredentialSourceLocatorV1Schema>;
 
-export const TeamCredentialSourceResourceListInputV1Schema = lazyZodSchema(() => z.object({
+export const TeamCredentialSourceResourceListInputV1Schema = lazyZodSchema(() => z.strictObject({
   source: TeamCredentialSourceLocatorV1Schema,
-  cursor: z.string().min(1).max(512).optional(),
-  limit: z.number().int().min(1).max(100).default(50),
-}).strict());
+  cursor: z.optional(z.string().check(z.minLength(1), z.maxLength(512))),
+  limit: z._default(z.number().check(z.int(), z.minimum(1), z.maximum(100)), 50),
+}));
 export type TeamCredentialSourceResourceListInputV1 = z.infer<
   typeof TeamCredentialSourceResourceListInputV1Schema
 >;
@@ -54,28 +54,28 @@ export type TeamCredentialSourceResourceListInputV1 = z.infer<
  * Least-privilege source-detail administration row. Team directory, audience,
  * policy, limits, source binding, and custodian identity never cross this seam.
  */
-export const TeamCredentialSourceResourceAdministrationV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().min(1).max(256),
-  displayName: z.string().trim().min(1).max(120),
+export const TeamCredentialSourceResourceAdministrationV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.minLength(1), z.maxLength(256)),
+  displayName: z.string().check(z.trim(), z.minLength(1), z.maxLength(120)),
   enabled: z.boolean(),
-  revision: z.number().int().nonnegative(),
+  revision: z.number().check(z.int(), z.nonnegative()),
   disclosureCeiling: TeamCredentialDisclosureCeilingV1Schema,
-  brokerPlacement: TeamCredentialBrokerPlacementV1Schema.nullable(),
+  brokerPlacement: z.nullable(TeamCredentialBrokerPlacementV1Schema),
   brokerPresentation: TeamCredentialBrokerPresentationV1Schema,
   readiness: TeamCredentialResourceReadinessV1Schema,
-  recoveryAction: TeamCredentialResourceRecoveryActionV1Schema.nullable(),
+  recoveryAction: z.nullable(TeamCredentialResourceRecoveryActionV1Schema),
   capabilities: TeamCredentialResourceAdministrationCapabilitiesV1Schema,
   createdAt: z.string(),
   updatedAt: z.string(),
-}).strict());
+}));
 export type TeamCredentialSourceResourceAdministrationV1 = z.infer<
   typeof TeamCredentialSourceResourceAdministrationV1Schema
 >;
 
-export const TeamCredentialSourceResourceListOutputV1Schema = lazyZodSchema(() => z.object({
-  resources: z.array(TeamCredentialSourceResourceAdministrationV1Schema).max(100),
-  nextCursor: z.string().min(1).max(512).nullable().default(null),
-}).strict());
+export const TeamCredentialSourceResourceListOutputV1Schema = lazyZodSchema(() => z.strictObject({
+  resources: z.array(TeamCredentialSourceResourceAdministrationV1Schema).check(z.maxLength(100)),
+  nextCursor: z._default(z.nullable(z.string().check(z.minLength(1), z.maxLength(512))), null),
+}));
 export type TeamCredentialSourceResourceListOutputV1 = z.infer<
   typeof TeamCredentialSourceResourceListOutputV1Schema
 >;
@@ -123,7 +123,7 @@ export function teamCredentialSourceLocatorKeyV1(source: TeamCredentialSourceLoc
  * already the requesting Account's own, because only a source's own custodian
  * may offer it.
  */
-export const TeamCredentialSourceCandidateV1Schema = lazyZodSchema(() => z.object({
+export const TeamCredentialSourceCandidateV1Schema = lazyZodSchema(() => z.strictObject({
   /**
    * The exact binding the create intent sends back unchanged. The client never
    * assembles one: assembling it is what would let a stale or invented pin
@@ -135,7 +135,7 @@ export const TeamCredentialSourceCandidateV1Schema = lazyZodSchema(() => z.objec
    * derived from the binding by the Home so two candidates that differ only in
    * their pin remain distinguishable.
    */
-  candidateId: z.string().min(1).max(512),
+  candidateId: z.string().check(z.minLength(1), z.maxLength(512)),
   /**
    * What this source is called where its owner already manages it.
    *
@@ -144,29 +144,29 @@ export const TeamCredentialSourceCandidateV1Schema = lazyZodSchema(() => z.objec
    * provider email; rows without either remain absent from the chooser instead
    * of leaking an opaque account id as copy.
    */
-  label: z.string().trim().min(1).max(512),
+  label: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
   /**
    * Enabled Pool members, so the chooser can say "3 accounts" without a second
    * request per row. `null` for a source that is not a Pool — which is a
    * different fact from a Pool with no members.
    */
-  memberCount: z.number().int().nonnegative().nullable(),
+  memberCount: z.nullable(z.number().check(z.int(), z.nonnegative())),
   /** Whether this exact source can safely export recipient-owned direct material. */
-  directExportSupport: z.enum(['supported', 'mixed', 'unsupported']).default('unsupported'),
+  directExportSupport: z._default(z.enum(['supported', 'mixed', 'unsupported']), 'unsupported'),
   /**
    * The resource in this Team that already offers this exact source, if one
    * does. Offering the same source twice would give the Team two competing
    * policies over one credential, so the chooser shows it and does not offer it
    * again.
    */
-  offeredByResourceId: z.string().min(1).nullable(),
-}).strict());
+  offeredByResourceId: z.nullable(z.string().check(z.minLength(1))),
+}));
 
 export type TeamCredentialSourceCandidateV1 = z.infer<typeof TeamCredentialSourceCandidateV1Schema>;
 
-export const TeamCredentialSourceCandidateListInputV1Schema = lazyZodSchema(() => z.object({
-  teamId: z.string().min(1),
-}).strict());
+export const TeamCredentialSourceCandidateListInputV1Schema = lazyZodSchema(() => z.strictObject({
+  teamId: z.string().check(z.minLength(1)),
+}));
 
 export type TeamCredentialSourceCandidateListInputV1 = z.infer<
   typeof TeamCredentialSourceCandidateListInputV1Schema
@@ -180,16 +180,16 @@ export type TeamCredentialSourceCandidateListInputV1 = z.infer<
  * cannot offer these yet" rather than as "you own none", which are different
  * answers and imply different next actions.
  */
-export const TeamCredentialSourceCandidateListOutputV1Schema = lazyZodSchema(() => z.object({
+export const TeamCredentialSourceCandidateListOutputV1Schema = lazyZodSchema(() => z.strictObject({
   candidates: z.array(TeamCredentialSourceCandidateV1Schema),
   supportedKinds: z.array(z.enum(['connected_account', 'connected_pool', 'provider_connection'])),
-  brokerPresentation: TeamCredentialBrokerPresentationV1Schema.default({
+  brokerPresentation: z._default(TeamCredentialBrokerPresentationV1Schema, {
     selectedTarget: null,
     eligibleTargets: [],
     selectedPool: null,
     eligiblePools: [],
   }),
-}).strict());
+}));
 
 export type TeamCredentialSourceCandidateListOutputV1 = z.infer<
   typeof TeamCredentialSourceCandidateListOutputV1Schema

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { StructuredQuestionAnswersV1Schema } from '../../tools/structuredQuestionAnswersV1.js';
 
 export const SessionPermissionRespondDecisionV1Schema = lazyZodSchema(() => z.enum([
@@ -18,18 +18,18 @@ export const SessionPermissionAnsweringClientCategoryV1Schema = lazyZodSchema(()
 export type SessionPermissionAnsweringClientCategoryV1 = z.infer<typeof SessionPermissionAnsweringClientCategoryV1Schema>;
 
 const common = {
-  id: z.string(), turnId: z.string().optional(), reason: z.string().optional(),
-  answeringClientCategory: SessionPermissionAnsweringClientCategoryV1Schema.optional(),
-  mode: z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan']).optional(),
-  allowedTools: z.array(z.string()).optional(),
-  decision: SessionPermissionRespondDecisionV1Schema.optional(),
-  execPolicyAmendment: z.object({ command: z.array(z.string()) }).strict().optional(),
-  updatedPermissions: z.unknown().optional(), answers: StructuredQuestionAnswersV1Schema.optional(),
+  id: z.string(), turnId: z.optional(z.string()), reason: z.optional(z.string()),
+  answeringClientCategory: z.optional(SessionPermissionAnsweringClientCategoryV1Schema),
+  mode: z.optional(z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan'])),
+  allowedTools: z.optional(z.array(z.string())),
+  decision: z.optional(SessionPermissionRespondDecisionV1Schema),
+  execPolicyAmendment: z.optional(z.strictObject({ command: z.array(z.string()) })),
+  updatedPermissions: z.optional(z.unknown()), answers: z.optional(StructuredQuestionAnswersV1Schema),
 };
 /** Closed mutation carrier; approval authority remains with admission and the runtime. */
 export const SessionPermissionRespondRpcParamsV1Schema = lazyZodSchema(() => z.discriminatedUnion('approved', [
-  z.object({ ...common, approved: z.literal(true) }).strict(),
-  z.object({ ...common, approved: z.literal(false) }).strict(),
+  z.strictObject({ ...common, approved: z.literal(true) }),
+  z.strictObject({ ...common, approved: z.literal(false) }),
 ]));
 export type SessionPermissionRespondRpcParamsV1 = z.infer<typeof SessionPermissionRespondRpcParamsV1Schema>;
 

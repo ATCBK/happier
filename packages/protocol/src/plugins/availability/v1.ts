@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ManagedResourceDependencyV1Schema } from '../../machines/managed/managedDependencyV1.js';
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 
@@ -43,12 +44,12 @@ export {
   type PluginMachineMaterializationRefV1,
 } from './materializationRefV1.js';
 
-const ServerIdentityIdSchema = lazyZodSchema(() => z.string().trim().regex(SERVER_IDENTITY_ID_PATTERN));
-const ContributionIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(256));
+const ServerIdentityIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.regex(SERVER_IDENTITY_ID_PATTERN)));
+const ContributionIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 const ArtifactTierSchema = lazyZodSchema(() => z.enum(['declarative', 'hostedWeb', 'reactNative']));
 const ArtifactPlatformSchema = lazyZodSchema(() => z.enum(['web', 'ios', 'android']));
-const MachineMaterializationRevisionSchema = lazyZodSchema(() => z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
-const TimestampMsSchema = lazyZodSchema(() => z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER));
+const MachineMaterializationRevisionSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
+const TimestampMsSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
 
 /**
  * Intent discovery pages the canonical read projections. This is a processing
@@ -68,29 +69,29 @@ export {
  * generated UI artifact. Current host app/channel/capability facts are
  * transient adoption inputs and must not become portable release identity.
  */
-export const PluginUiReleaseSlotV1Schema = lazyZodSchema(() => z.object({
+export const PluginUiReleaseSlotV1Schema = lazyZodSchema(() => z.strictObject({
   contributionId: ContributionIdSchema,
   artifactId: PluginUiArtifactIdV2Schema,
   tier: ArtifactTierSchema,
   platform: ArtifactPlatformSchema,
   artifactDigest: PluginUiArtifactDigestV1Schema,
-  hostUiApiRange: z.string().trim().min(1),
-}).strict().superRefine((value, context) => {
+  hostUiApiRange: z.string().check(z.trim(), z.minLength(1)),
+}).check(z.superRefine((value, context) => {
   if (value.tier === 'hostedWeb' && value.platform !== 'web') {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['platform'],
       message: 'Hosted-web UI slots are platform-web archives.',
     });
   }
   if (value.tier === 'declarative' && value.platform !== 'web') {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['platform'],
       message: 'Declarative UI slots are platform-web archives.',
     });
   }
-}));
+})));
 export type PluginUiReleaseSlotV1 = z.infer<typeof PluginUiReleaseSlotV1Schema>;
 
 function collectionContractKey(value: z.infer<typeof PluginCollectionContractRefV1Schema>): string {
@@ -106,21 +107,21 @@ function uiSlotKey(value: Readonly<{
   return `${value.contributionId}\u0000${value.artifactId}\u0000${value.tier}\u0000${value.platform}`;
 }
 
-export const PluginReleaseFactsV1Schema = lazyZodSchema(() => z.object({
+export const PluginReleaseFactsV1Schema = lazyZodSchema(() => z.strictObject({
   ref: PluginReleaseRefV1Schema,
   archiveDigestSha256: PluginUiArtifactDigestV1Schema,
   normalizedManifest: PluginPortableReleaseManifestV1Schema,
-  collectionContracts: z.array(PluginCollectionContractRefV1Schema).readonly(),
-  uiSlots: z.array(PluginUiReleaseSlotV1Schema).readonly(),
+  collectionContracts: z.readonly(z.array(PluginCollectionContractRefV1Schema)),
+  uiSlots: z.readonly(z.array(PluginUiReleaseSlotV1Schema)),
   /** The only package bytes eligible for Account Artifact publication. */
   packageAssetArchive: PackageAssetArchiveDescriptorV1Schema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (
     value.normalizedManifest.id !== value.ref.pluginId
     || value.normalizedManifest.version !== value.ref.version
   ) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['normalizedManifest'],
       message: 'Portable manifest id and version must match the release coordinate.',
     });
@@ -130,7 +131,7 @@ export const PluginReleaseFactsV1Schema = lazyZodSchema(() => z.object({
     descriptor: value.packageAssetArchive,
   })) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['packageAssetArchive', 'resources'],
       message: 'Package Asset archive resources must exactly match manifest-declared packaged assets.',
     });
@@ -139,7 +140,7 @@ export const PluginReleaseFactsV1Schema = lazyZodSchema(() => z.object({
   value.collectionContracts.forEach((contract, index) => {
     if (contract.pluginId !== value.ref.pluginId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['collectionContracts', index, 'pluginId'],
         message: 'Release collection contracts must belong to the release plugin.',
       });
@@ -147,7 +148,7 @@ export const PluginReleaseFactsV1Schema = lazyZodSchema(() => z.object({
     const key = collectionContractKey(contract);
     if (collectionKeys.has(key)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['collectionContracts', index],
         message: 'Release collection contracts must be unique by plugin and collection.',
       });
@@ -159,14 +160,14 @@ export const PluginReleaseFactsV1Schema = lazyZodSchema(() => z.object({
     const key = uiSlotKey(slot);
     if (slotKeys.has(key)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['uiSlots', index],
         message: 'Release UI slots must be unique by contribution, tier, and platform.',
       });
     }
     slotKeys.add(key);
   });
-}));
+})));
 export type PluginReleaseFactsV1 = z.infer<typeof PluginReleaseFactsV1Schema>;
 
 function cloneReleaseFactValue(value: unknown): unknown {
@@ -234,19 +235,19 @@ export function pluginReleaseFactsEqualV1(
     === createCanonicalJsonSigningInput(normalizePluginReleaseFactsV1(right));
 }
 
-export const PluginAccountPluginIntentV1Schema = lazyZodSchema(() => z.object({
+export const PluginAccountPluginIntentV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
-  desiredVersion: PluginReleaseVersionV1Schema.nullable(),
+  desiredVersion: zMini.nullable(PluginReleaseVersionV1Schema),
   enabled: z.boolean(),
   offlineUiHosting: z.enum(['disabled', 'enabled']),
   writableCollections: z.array(PluginCollectionContractRefV1Schema),
-  revision: z.string().trim().min(1).max(128),
-}).strict().superRefine((value, context) => {
+  revision: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+}).check(z.superRefine((value, context) => {
   const keys = new Set<string>();
   value.writableCollections.forEach((contract, index) => {
     if (contract.pluginId !== value.pluginId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['writableCollections', index, 'pluginId'],
         message: 'Intent writable collections must belong to the selected plugin.',
       });
@@ -254,39 +255,36 @@ export const PluginAccountPluginIntentV1Schema = lazyZodSchema(() => z.object({
     const key = collectionContractKey(contract);
     if (keys.has(key)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['writableCollections', index],
         message: 'Intent writable collections must be unique by plugin and collection.',
       });
     }
     keys.add(key);
   });
-}));
+})));
 export type PluginAccountPluginIntentV1 = z.infer<typeof PluginAccountPluginIntentV1Schema>;
 
 export const PluginUiArtifactHostingCapabilityV1Schema = lazyZodSchema(() => z.union([
-  z.object({ enabled: z.literal(false) }).strict(),
-  z.object({
+  z.strictObject({ enabled: z.literal(false) }),
+  z.strictObject({
     enabled: z.literal(true),
-    maxArtifactBytes: z.number().int().positive(),
-    maxAccountBytes: z.number().int().positive(),
-  }).strict().refine(
-    (value) => value.maxAccountBytes >= value.maxArtifactBytes,
-    'The Account hosting limit must admit one artifact.',
-  ),
+    maxArtifactBytes: z.number().check(z.int(), z.positive()),
+    maxAccountBytes: z.number().check(z.int(), z.positive()),
+  }).check(z.refine((value) => value.maxAccountBytes >= value.maxArtifactBytes, 'The Account hosting limit must admit one artifact.')),
 ]));
 export type PluginUiArtifactHostingCapabilityV1 = z.infer<typeof PluginUiArtifactHostingCapabilityV1Schema>;
 
-export const PluginAccountPluginUiArtifactLinkV1Schema = lazyZodSchema(() => z.object({
+export const PluginAccountPluginUiArtifactLinkV1Schema = lazyZodSchema(() => z.strictObject({
   release: PluginReleaseRefV1Schema,
   contributionId: ContributionIdSchema,
   artifactId: PluginUiArtifactIdV2Schema,
   tier: ArtifactTierSchema,
   platform: ArtifactPlatformSchema,
-  accountArtifactId: z.string().uuid(),
+  accountArtifactId: z.string().check(z.uuid()),
   artifactDigest: PluginUiArtifactDigestV1Schema,
-  hostUiApiRange: z.string().trim().min(1),
-}).strict());
+  hostUiApiRange: z.string().check(z.trim(), z.minLength(1)),
+}));
 export type PluginAccountPluginUiArtifactLinkV1 = z.infer<typeof PluginAccountPluginUiArtifactLinkV1Schema>;
 
 /**
@@ -294,11 +292,11 @@ export type PluginAccountPluginUiArtifactLinkV1 = z.infer<typeof PluginAccountPl
  * package-asset archive authorized by a release. The descriptor remains the
  * release-owned authority; the link names its Account-local byte carrier.
  */
-export const PluginAccountPluginPackageAssetLinkV1Schema = lazyZodSchema(() => z.object({
+export const PluginAccountPluginPackageAssetLinkV1Schema = lazyZodSchema(() => z.strictObject({
   release: PluginReleaseRefV1Schema,
-  artifactId: z.string().uuid(),
+  artifactId: z.string().check(z.uuid()),
   descriptor: PackageAssetArchiveDescriptorV1Schema,
-}).strict());
+}));
 export type PluginAccountPluginPackageAssetLinkV1 =
   z.infer<typeof PluginAccountPluginPackageAssetLinkV1Schema>;
 
@@ -320,17 +318,17 @@ export function isPluginUiReleaseSlotCompatibleWithArtifactLinkV1(
     && link.hostUiApiRange === slot.hostUiApiRange;
 }
 
-export const PluginMachineUiArtifactV1Schema = lazyZodSchema(() => z.object({
+export const PluginMachineUiArtifactV1Schema = lazyZodSchema(() => z.strictObject({
   contributionId: ContributionIdSchema,
   artifactId: PluginUiArtifactIdV2Schema,
   tier: ArtifactTierSchema,
   platform: ArtifactPlatformSchema,
   artifactDigest: PluginUiArtifactDigestV1Schema,
-  hostUiApiRange: z.string().trim().min(1),
-}).strict());
+  hostUiApiRange: z.string().check(z.trim(), z.minLength(1)),
+}));
 export type PluginMachineUiArtifactV1 = z.infer<typeof PluginMachineUiArtifactV1Schema>;
 
-export const PluginMachineMaterializationV1Schema = lazyZodSchema(() => z.object({
+export const PluginMachineMaterializationV1Schema = lazyZodSchema(() => z.strictObject({
   serverIdentityId: ServerIdentityIdSchema,
   machineId: PluginMachineMaterializationMachineIdV1Schema,
   materializationId: PluginMachineMaterializationIdV1Schema,
@@ -344,25 +342,25 @@ export const PluginMachineMaterializationV1Schema = lazyZodSchema(() => z.object
   sourceClass: z.enum(['registryPackage', 'versionedArchive', 'localPath', 'bundledFirstParty']),
   portableRelease: z.boolean(),
   /** Admitted installed declaration for discovery; never an execution grant. */
-  declaredManifest: PluginPortableReleaseManifestV1Schema.optional(),
-  declaredUiEntries: PluginDeclaredUiEntriesV1Schema.optional(),
-  archiveDigestSha256: PluginUiArtifactDigestV1Schema.optional(),
-  uiArtifacts: z.array(PluginMachineUiArtifactV1Schema).readonly(),
+  declaredManifest: zMini.optional(PluginPortableReleaseManifestV1Schema),
+  declaredUiEntries: zMini.optional(PluginDeclaredUiEntriesV1Schema),
+  archiveDigestSha256: zMini.optional(PluginUiArtifactDigestV1Schema),
+  uiArtifacts: z.readonly(z.array(PluginMachineUiArtifactV1Schema)),
   enabled: z.boolean(),
   trustState: z.enum(['trusted', 'untrusted', 'revoked']),
   observedAt: TimestampMsSchema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (value.declaredManifest && (value.declaredManifest.id !== value.pluginId || value.declaredManifest.version !== value.version)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['declaredManifest'], message: 'Installed declaration must match its plugin and version.' });
+    context.addIssue({ code: "custom", path: ['declaredManifest'], message: 'Installed declaration must match its plugin and version.' });
   }
   for (const [entryId, entry] of Object.entries(value.declaredUiEntries ?? {})) {
     if (entry.id !== entryId || entry.pluginId !== value.pluginId) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['declaredUiEntries', entryId], message: 'Installed UI declaration must match its entry and plugin identity.' });
+      context.addIssue({ code: "custom", path: ['declaredUiEntries', entryId], message: 'Installed UI declaration must match its entry and plugin identity.' });
     }
   }
   if ((value.sourceClass === 'localPath' || value.sourceClass === 'bundledFirstParty') && value.portableRelease) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['portableRelease'],
       message: 'Daemon-selected local and bundled plugins are machine-bound and cannot claim a portable release.',
     });
@@ -372,14 +370,14 @@ export const PluginMachineMaterializationV1Schema = lazyZodSchema(() => z.object
     const key = uiSlotKey(artifact);
     if (keys.has(key)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['uiArtifacts', index],
         message: 'Machine UI artifacts must be unique by contribution, tier, and platform.',
       });
     }
     keys.add(key);
   });
-}));
+})));
 export type PluginMachineMaterializationV1 = z.infer<typeof PluginMachineMaterializationV1Schema>;
 
 /**
@@ -439,11 +437,11 @@ export function isExactPluginMachineMaterializationReleaseCorrespondenceV1(
  * The portable execution reference deliberately excludes server identity. The
  * caller-owned execution-origin record carries serverIdentityId beside this ref.
  */
-export const PluginMachineMaterializationSnapshotV1Schema = lazyZodSchema(() => z.object({
+export const PluginMachineMaterializationSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
   serverIdentityId: ServerIdentityIdSchema,
   machineId: PluginMachineMaterializationMachineIdV1Schema,
-  materializations: z.array(PluginMachineMaterializationV1Schema).readonly(),
-}).strict().superRefine((value, context) => {
+  materializations: z.readonly(z.array(PluginMachineMaterializationV1Schema)),
+}).check(z.superRefine((value, context) => {
   const ids = new Set<string>();
   value.materializations.forEach((materialization, index) => {
     if (
@@ -451,21 +449,21 @@ export const PluginMachineMaterializationSnapshotV1Schema = lazyZodSchema(() => 
       || materialization.machineId !== value.machineId
     ) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['materializations', index],
         message: 'Every materialization must belong to the reported server identity and machine.',
       });
     }
     if (ids.has(materialization.materializationId)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['materializations', index, 'materializationId'],
         message: 'A snapshot cannot report duplicate installation epochs.',
       });
     }
     ids.add(materialization.materializationId);
   });
-}));
+})));
 export type PluginMachineMaterializationSnapshotV1 = z.infer<typeof PluginMachineMaterializationSnapshotV1Schema>;
 
 /**
@@ -473,16 +471,16 @@ export type PluginMachineMaterializationSnapshotV1 = z.infer<typeof PluginMachin
  * intent/release/link data controls which immutable Artifact is current, while
  * a complete machine snapshot only reports exact installation correspondence.
  */
-export const PluginAccountAvailabilityIntentReadResponseV1Schema = lazyZodSchema(() => z.object({
+export const PluginAccountAvailabilityIntentReadResponseV1Schema = lazyZodSchema(() => z.strictObject({
   availabilityCursor: MachineMaterializationRevisionSchema,
   hostingCapability: PluginUiArtifactHostingCapabilityV1Schema,
-  intent: PluginAccountPluginIntentV1Schema.nullable(),
-  release: PluginReleaseFactsV1Schema.nullable(),
-  uiArtifacts: z.array(PluginAccountPluginUiArtifactLinkV1Schema).readonly(),
-  packageAssets: z.array(PluginAccountPluginPackageAssetLinkV1Schema).readonly(),
-  managedResources: z.array(ManagedResourceDependencyV1Schema).readonly().optional(),
-  managedResourcesReviewed: z.boolean().optional(),
-}).strict());
+  intent: z.nullable(PluginAccountPluginIntentV1Schema),
+  release: z.nullable(PluginReleaseFactsV1Schema),
+  uiArtifacts: z.readonly(z.array(PluginAccountPluginUiArtifactLinkV1Schema)),
+  packageAssets: z.readonly(z.array(PluginAccountPluginPackageAssetLinkV1Schema)),
+  managedResources: z.optional(z.readonly(z.array(ManagedResourceDependencyV1Schema))),
+  managedResourcesReviewed: z.optional(z.boolean()),
+}));
 export type PluginAccountAvailabilityIntentReadResponseV1 =
   z.infer<typeof PluginAccountAvailabilityIntentReadResponseV1Schema>;
 
@@ -491,22 +489,22 @@ export type PluginAccountAvailabilityIntentReadResponseV1 =
  * release and Artifact facts. Failed reads remain explicit per plugin; neither
  * a partial result nor a missing intent can fabricate a current declaration.
  */
-export const PluginAccountAvailabilityIntentsListResponseV1Schema = lazyZodSchema(() => z.object({
+export const PluginAccountAvailabilityIntentsListResponseV1Schema = lazyZodSchema(() => z.strictObject({
   availabilityCursor: MachineMaterializationRevisionSchema,
-  pluginIds: z.array(asProtocolZod(PluginIdSchema)).readonly(),
-  nextCursor: asProtocolZod(PluginIdSchema).nullable().optional(),
-  intentReads: z.array(z.object({
+  pluginIds: z.readonly(z.array(asProtocolZod(PluginIdSchema))),
+  nextCursor: zMini.optional(zMini.nullable(asProtocolZod(PluginIdSchema))),
+  intentReads: z.readonly(z.array(z.strictObject({
     pluginId: asProtocolZod(PluginIdSchema),
     response: PluginAccountAvailabilityIntentReadResponseV1Schema,
-  }).strict()).readonly(),
-  failedPluginIds: z.array(asProtocolZod(PluginIdSchema)).readonly(),
-}).strict().superRefine((value, context) => {
+  }))),
+  failedPluginIds: z.readonly(z.array(asProtocolZod(PluginIdSchema))),
+}).check(z.superRefine((value, context) => {
   for (let index = 1; index < value.pluginIds.length; index += 1) {
     const previous = value.pluginIds[index - 1]!;
     const pluginId = value.pluginIds[index]!;
     if (previous >= pluginId) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['pluginIds', index],
         message: 'Account Availability intent ids must be sorted and unique.',
       });
@@ -515,25 +513,25 @@ export const PluginAccountAvailabilityIntentsListResponseV1Schema = lazyZodSchem
   const accountedPluginIds = new Set<string>();
   for (const [index, entry] of value.intentReads.entries()) {
     if (accountedPluginIds.has(entry.pluginId)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['intentReads', index, 'pluginId'],
+      context.addIssue({ code: "custom", path: ['intentReads', index, 'pluginId'],
         message: 'Account Availability reads must name each plugin once.' });
     }
     accountedPluginIds.add(entry.pluginId);
   }
   for (const [index, pluginId] of value.failedPluginIds.entries()) {
     if (accountedPluginIds.has(pluginId)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['failedPluginIds', index],
+      context.addIssue({ code: "custom", path: ['failedPluginIds', index],
         message: 'A failed plugin cannot also have a successful read or appear twice.' });
     }
     accountedPluginIds.add(pluginId);
   }
   for (const [index, pluginId] of value.pluginIds.entries()) {
     if (!accountedPluginIds.has(pluginId)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['pluginIds', index],
+      context.addIssue({ code: "custom", path: ['pluginIds', index],
         message: 'Every discovered intent must have a successful or failed read.' });
     }
   }
-}));
+})));
 export type PluginAccountAvailabilityIntentsListResponseV1 =
   z.infer<typeof PluginAccountAvailabilityIntentsListResponseV1Schema>;
 
@@ -542,10 +540,10 @@ export type PluginAccountAvailabilityIntentsListResponseV1 =
  * remains a separate owner, while the cursor tells consumers whether the
  * Account Availability projection advanced around the read.
  */
-export const PluginAccountAvailabilityReleaseReadResponseV1Schema = lazyZodSchema(() => z.object({
+export const PluginAccountAvailabilityReleaseReadResponseV1Schema = lazyZodSchema(() => z.strictObject({
   availabilityCursor: MachineMaterializationRevisionSchema,
   facts: PluginReleaseFactsV1Schema,
-}).strict());
+}));
 export type PluginAccountAvailabilityReleaseReadResponseV1 =
   z.infer<typeof PluginAccountAvailabilityReleaseReadResponseV1Schema>;
 
@@ -555,14 +553,14 @@ export type PluginAccountAvailabilityMaterializationsReadResponseV1 = Readonly<{
   inventoryComplete?: boolean;
   releases?: readonly PluginReleaseFactsV1[];
 }>;
-export const PluginAccountAvailabilityMaterializationsReadResponseV1Schema: z.ZodType<PluginAccountAvailabilityMaterializationsReadResponseV1> = lazyZodSchema(() => z.object({
+export const PluginAccountAvailabilityMaterializationsReadResponseV1Schema: z.ZodMiniType<PluginAccountAvailabilityMaterializationsReadResponseV1> = lazyZodSchema(() => z.strictObject({
   availabilityCursor: MachineMaterializationRevisionSchema,
-  snapshots: z.array(PluginMachineMaterializationSnapshotV1Schema).readonly(),
+  snapshots: z.readonly(z.array(PluginMachineMaterializationSnapshotV1Schema)),
   /** Omitted machine rows are unknown if any complete machine snapshot could not be read. */
-  inventoryComplete: z.boolean().optional(),
+  inventoryComplete: z.optional(z.boolean()),
   /** Immutable facts for reported portable coordinates, independent of enabled selection intent. */
-  releases: z.array(PluginReleaseFactsV1Schema).readonly().optional(),
-}).strict());
+  releases: z.optional(z.readonly(z.array(PluginReleaseFactsV1Schema))),
+}));
 
 function normalizePluginMachineMaterializationV1(
   input: PluginMachineMaterializationV1,

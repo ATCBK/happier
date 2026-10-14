@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { PluginContributionIdentityV1 } from '../plugins/contributionIdentity.js';
 import {
@@ -45,9 +45,9 @@ export const CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD =
 export const CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD =
   'daemon.connectedAccounts.control.command';
 
-const BoundedIdentitySchema = lazyZodSchema(() => z.string().trim().min(1).max(256));
+const BoundedIdentitySchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 const ExpectedConfigurationRevisionSchema =
-  lazyZodSchema(() => z.string().trim().min(1).max(256));
+  lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 const BuiltInLegacyConnectedAccountOperations = new Set<string>(
   Object.values(
     BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID,
@@ -57,15 +57,12 @@ const BuiltInLegacyConnectedAccountOperations = new Set<string>(
   ]),
 );
 const BuiltInLegacyConnectedAccountOperationSchema =
-  lazyZodSchema(() => BoundedIdentitySchema.refine(
-    (operation): operation is BuiltInLegacyConnectedAccountOperation =>
-      BuiltInLegacyConnectedAccountOperations.has(operation),
-    'Unknown built-in legacy Connected Account operation',
-  ));
+  lazyZodSchema(() => BoundedIdentitySchema.check(z.refine((operation): operation is BuiltInLegacyConnectedAccountOperation =>
+      BuiltInLegacyConnectedAccountOperations.has(operation), 'Unknown built-in legacy Connected Account operation')));
 const ManualFieldsSchema = lazyZodSchema(() => z.record(
-  z.string().trim().min(1).max(128),
-  z.string().max(64 * 1024),
-).superRefine((fields, context) => {
+  z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+  z.string().check(z.maxLength(64 * 1024)),
+).check(z.superRefine((fields, context) => {
   if (Object.keys(fields).length > 64) {
     context.addIssue({
       code: 'custom',
@@ -73,11 +70,11 @@ const ManualFieldsSchema = lazyZodSchema(() => z.record(
         'Connected-account manual fields exceed the bounded field count',
     });
   }
-}));
+})));
 const ConfigurationValuesSchema = lazyZodSchema(() => z.record(
-  z.string().trim().min(1).max(128),
+  z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
   PluginJsonValueV2Schema,
-).superRefine((values, context) => {
+).check(z.superRefine((values, context) => {
   if (Object.keys(values).length > 64) {
     context.addIssue({
       code: 'custom',
@@ -85,11 +82,11 @@ const ConfigurationValuesSchema = lazyZodSchema(() => z.record(
         'Connected-account configuration values exceed the bounded field count',
     });
   }
-}));
+})));
 const SecretValuesSchema = lazyZodSchema(() => z.record(
-  z.string().trim().min(1).max(128),
-  z.string().min(1).max(64 * 1024),
-).superRefine((values, context) => {
+  z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+  z.string().check(z.minLength(1), z.maxLength(64 * 1024)),
+).check(z.superRefine((values, context) => {
   if (Object.keys(values).length > 64) {
     context.addIssue({
       code: 'custom',
@@ -97,66 +94,66 @@ const SecretValuesSchema = lazyZodSchema(() => z.record(
         'Connected-account secret replacements exceed the bounded field count',
     });
   }
-}));
+})));
 
 /** Exact command schemas shared by daemon ingress and its admitted Actions. */
 export const ConnectedAccountAuthenticationCommandSchemas = {
-    beginConnect: lazyZodSchema(() => z.object({
+    beginConnect: lazyZodSchema(() => z.strictObject({
       operation: z.literal('beginConnect'),
       service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema),
       modeId: BoundedIdentitySchema,
       expectedConfigurationRevision:
-        ExpectedConfigurationRevisionSchema.optional(),
-    }).strict()),
-    beginReconnect: lazyZodSchema(() => z.object({
+        z.optional(ExpectedConfigurationRevisionSchema),
+    })),
+    beginReconnect: lazyZodSchema(() => z.strictObject({
       operation: z.literal('beginReconnect'),
       account: asProtocolZod(QualifiedConnectedAccountRefSchema),
       expectedConfigurationRevision:
-        ExpectedConfigurationRevisionSchema.optional(),
-    }).strict()),
-    continueConnect: lazyZodSchema(() => z.object({
+        z.optional(ExpectedConfigurationRevisionSchema),
+    })),
+    continueConnect: lazyZodSchema(() => z.strictObject({
       operation: z.literal('continueConnect'),
       attemptId: BoundedIdentitySchema,
       expectedConfigurationRevision:
-        ExpectedConfigurationRevisionSchema.optional(),
-    }).strict()),
-    submitManual: lazyZodSchema(() => z.object({
+        z.optional(ExpectedConfigurationRevisionSchema),
+    })),
+    submitManual: lazyZodSchema(() => z.strictObject({
       operation: z.literal('submitManual'),
       attemptId: BoundedIdentitySchema,
       fields: ManualFieldsSchema,
-    }).strict()),
-    completeOAuth: lazyZodSchema(() => z.object({
+    })),
+    completeOAuth: lazyZodSchema(() => z.strictObject({
       operation: z.literal('completeOAuth'),
       attemptId: BoundedIdentitySchema,
-      completion: z.object({
-        code: z.string().min(1).max(32 * 1024),
-        callbackUrl: z.url().max(2_048),
-        state: z.string().min(1).max(4_096),
-        iss: z.string().optional(),
-      }).strict(),
-    }).strict()),
-    pollDevice: lazyZodSchema(() => z.object({
+      completion: z.strictObject({
+        code: z.string().check(z.minLength(1), z.maxLength(32 * 1024)),
+        callbackUrl: z.url().check(z.maxLength(2_048)),
+        state: z.string().check(z.minLength(1), z.maxLength(4_096)),
+        iss: z.optional(z.string()),
+      }),
+    })),
+    pollDevice: lazyZodSchema(() => z.strictObject({
       operation: z.literal('pollDevice'),
       attemptId: BoundedIdentitySchema,
-    }).strict()),
-    resumeDevice: lazyZodSchema(() => z.object({
+    })),
+    resumeDevice: lazyZodSchema(() => z.strictObject({
       operation: z.literal('resumeDevice'),
       attemptId: BoundedIdentitySchema,
-    }).strict()),
-    reconcile: lazyZodSchema(() => z.object({
+    })),
+    reconcile: lazyZodSchema(() => z.strictObject({
       operation: z.literal('reconcile'),
       attemptId: BoundedIdentitySchema,
-    }).strict()),
-    cancel: lazyZodSchema(() => z.object({
+    })),
+    cancel: lazyZodSchema(() => z.strictObject({
       operation: z.literal('cancel'),
       attemptId: BoundedIdentitySchema,
-    }).strict()),
-    read: lazyZodSchema(() => z.object({
+    })),
+    read: lazyZodSchema(() => z.strictObject({
       operation: z.literal('read'),
       attemptId: BoundedIdentitySchema,
-      restoreKind: z.literal('oauth').optional(),
-      waitForProviderStart: z.boolean().optional(),
-    }).strict()),
+      restoreKind: z.optional(z.literal('oauth')),
+      waitForProviderStart: z.optional(z.boolean()),
+    })),
 } as const;
 export const ConnectedAccountDaemonCommandSchema =
   lazyZodSchema(() => z.discriminatedUnion('operation', [
@@ -177,11 +174,11 @@ export type ConnectedAccountDaemonCommand =
   >;
 
 export const ConnectedAccountAuthenticationCommandRequestSchema =
-  lazyZodSchema(() => z.object({
+  lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     machineId: BoundedIdentitySchema,
     command: ConnectedAccountDaemonCommandSchema,
-  }).strict());
+  }));
 export type ConnectedAccountAuthenticationCommandRequest =
   ReadonlyArrayProperties<
     z.infer<typeof ConnectedAccountAuthenticationCommandRequestSchema>
@@ -189,19 +186,19 @@ export type ConnectedAccountAuthenticationCommandRequest =
 
 export const ConnectedAccountControlTargetSchema =
   lazyZodSchema(() => z.discriminatedUnion('kind', [
-    z.object({
+    z.strictObject({
       kind: z.literal('service'),
       service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema),
       modeId: BoundedIdentitySchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       kind: z.literal('account'),
       account: asProtocolZod(QualifiedConnectedAccountRefSchema),
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       kind: z.literal('attempt'),
       attemptId: BoundedIdentitySchema,
-    }).strict(),
+    }),
   ]));
 export type ConnectedAccountControlTarget =
   ReadonlyArrayProperties<
@@ -210,52 +207,52 @@ export type ConnectedAccountControlTarget =
 
 export const ConnectedAccountPeerOperationTransportSchema =
   lazyZodSchema(() => z.discriminatedUnion('kind', [
-    z.object({
+    z.strictObject({
       kind: z.literal('v4'),
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       kind: z.literal('legacy'),
       peerClass: z.enum(['exact_v0_2_1', 'revisioned_v2_v3']),
       serviceId: ConnectedServiceIdSchema,
-    }).strict(),
+    }),
   ]));
 export type ConnectedAccountPeerOperationTransport =
   ReadonlyArrayProperties<
     z.infer<typeof ConnectedAccountPeerOperationTransportSchema>
   >;
 
-export const ConnectedAccountRevokeCommandV1Schema = lazyZodSchema(() => z.object({
+export const ConnectedAccountRevokeCommandV1Schema = lazyZodSchema(() => z.strictObject({
   operation: z.literal('revokeAccount'),
   account: asProtocolZod(QualifiedConnectedAccountRefSchema),
-  expectedCredentialRevision: ConnectedServiceCredentialRevisionV1Schema.optional(),
+  expectedCredentialRevision: z.optional(ConnectedServiceCredentialRevisionV1Schema),
   cleanupGroupReferences: z.boolean(),
-  emergencyRevoke: z.boolean().optional(),
-  managedResourceDispositions: z.array(ManagedResourceDispositionV1Schema).optional(),
-}).strict());
+  emergencyRevoke: z.optional(z.boolean()),
+  managedResourceDispositions: z.optional(z.array(ManagedResourceDispositionV1Schema)),
+}));
 
 export const ConnectedAccountDaemonControlCommandSchema =
   lazyZodSchema(() => z.discriminatedUnion('operation', [
-    z.object({
+    z.strictObject({
       operation: z.literal('listPendingAttempts'),
       service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema),
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       operation: z.literal('describeService'),
       service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema),
       requiredOperation:
-        BuiltInLegacyConnectedAccountOperationSchema.optional(),
-    }).strict(),
-    z.object({
+        z.optional(BuiltInLegacyConnectedAccountOperationSchema),
+    }),
+    z.strictObject({
       operation: z.literal('readConfiguration'),
       target: ConnectedAccountControlTargetSchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       operation: z.literal('replaceConfiguration'),
       target: ConnectedAccountControlTargetSchema,
-      expectedRevision: ExpectedConfigurationRevisionSchema.nullable(),
+      expectedRevision: z.nullable(ExpectedConfigurationRevisionSchema),
       values: ConfigurationValuesSchema,
       secretValues: SecretValuesSchema,
-    }).strict(),
+    }),
     ConnectedAccountRevokeCommandV1Schema,
   ]));
 export type ConnectedAccountDaemonControlCommand =
@@ -264,11 +261,11 @@ export type ConnectedAccountDaemonControlCommand =
   >;
 
 export const ConnectedAccountControlCommandRequestSchema =
-  lazyZodSchema(() => z.object({
+  lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     machineId: BoundedIdentitySchema,
     command: ConnectedAccountDaemonControlCommandSchema,
-  }).strict());
+  }));
 export type ConnectedAccountControlCommandRequest =
   ReadonlyArrayProperties<
     z.infer<typeof ConnectedAccountControlCommandRequestSchema>
@@ -276,22 +273,22 @@ export type ConnectedAccountControlCommandRequest =
 
 export const ConnectedAccountConfigurationTargetSchema =
   lazyZodSchema(() => z.discriminatedUnion('kind', [
-    z.object({
+    z.strictObject({
       kind: z.literal('service'),
       service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema),
       modeId: BoundedIdentitySchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       kind: z.literal('account'),
       account: asProtocolZod(QualifiedConnectedAccountRefSchema),
       modeId: BoundedIdentitySchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       kind: z.literal('attempt'),
       attemptId: BoundedIdentitySchema,
       service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema),
       modeId: BoundedIdentitySchema,
-    }).strict(),
+    }),
   ]));
 export type ConnectedAccountConfigurationTarget =
   ReadonlyArrayProperties<
@@ -300,89 +297,89 @@ export type ConnectedAccountConfigurationTarget =
 
 export const ConnectedAccountAttemptResponseSchema =
   lazyZodSchema(() => z.discriminatedUnion('status', [
-    z.object({
+    z.strictObject({
       status: z.literal('starting'),
       attemptId: BoundedIdentitySchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       status: z.literal('awaitingManual'),
       attemptId: BoundedIdentitySchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       status: z.literal('awaitingOAuth'),
       attemptId: BoundedIdentitySchema,
-      authorizationUrl: z.url().max(8_192).optional(),
-      callbackUrl: z.url().max(2_048),
-      expiresAtMs: z.number().int().nonnegative().optional(),
-    }).strict(),
-    z.object({
+      authorizationUrl: z.optional(z.url().check(z.maxLength(8_192))),
+      callbackUrl: z.url().check(z.maxLength(2_048)),
+      expiresAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+    }),
+    z.strictObject({
       status: z.literal('awaitingDeviceAuthorization'),
       attemptId: BoundedIdentitySchema,
-      verificationUri: z.url().max(8_192).optional(),
-      verificationUriComplete: z.url().max(8_192).optional(),
-      userCode: z.string().min(1).max(4_096).optional(),
-      expiresAtMs: z.number().int().nonnegative().optional(),
+      verificationUri: z.optional(z.url().check(z.maxLength(8_192))),
+      verificationUriComplete: z.optional(z.url().check(z.maxLength(8_192))),
+      userCode: z.optional(z.string().check(z.minLength(1), z.maxLength(4_096))),
+      expiresAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
       pollIntervalMs:
-        z.number().int().positive().max(3_600_000).optional(),
-    }).strict(),
-    z.object({
+        z.optional(z.number().check(z.int(), z.positive(), z.maximum(3_600_000))),
+    }),
+    z.strictObject({
       status: z.literal('configurationRequired'),
-      attemptId: BoundedIdentitySchema.optional(),
+      attemptId: z.optional(BoundedIdentitySchema),
       target: ConnectedAccountConfigurationTargetSchema,
-      missingFieldIds: z.array(BoundedIdentitySchema).max(64),
-    }).strict(),
-    z.object({
+      missingFieldIds: z.array(BoundedIdentitySchema).check(z.maxLength(64)),
+    }),
+    z.strictObject({
       status: z.literal('pending'),
       attemptId: BoundedIdentitySchema,
-      retryAfterMs: z.number().int().positive().max(3_600_000),
-    }).strict(),
-    z.object({
+      retryAfterMs: z.number().check(z.int(), z.positive(), z.maximum(3_600_000)),
+    }),
+    z.strictObject({
       status: z.literal('outcomeUnknown'),
       attemptId: BoundedIdentitySchema,
       diagnostic: z.unknown(),
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       status: z.literal('reconnectRequired'),
       attemptId: BoundedIdentitySchema,
       code: BoundedIdentitySchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       status: z.literal('connected'),
       attemptId: BoundedIdentitySchema,
       account: asProtocolZod(QualifiedConnectedAccountRefSchema),
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       status: z.literal('cancelled'),
       attemptId: BoundedIdentitySchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       status: z.literal('cleanupPending'),
       attemptId: BoundedIdentitySchema,
       code: z.literal('connected_account_attempt_cleanup_pending'),
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       status: z.literal('rejected'),
-      attemptId: BoundedIdentitySchema.optional(),
+      attemptId: z.optional(BoundedIdentitySchema),
       code: BoundedIdentitySchema,
-      diagnostic: z.unknown().optional(),
-      failureClass: z.literal('rateLimit').optional(),
-      retryNotBeforeMs: z.number().int().nonnegative().safe().optional(),
-    }).strict(),
-    z.object({
+      diagnostic: z.optional(z.unknown()),
+      failureClass: z.optional(z.literal('rateLimit')),
+      retryNotBeforeMs: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
+    }),
+    z.strictObject({
       status: z.literal('unavailable'),
-      attemptId: BoundedIdentitySchema.optional(),
+      attemptId: z.optional(BoundedIdentitySchema),
       code: BoundedIdentitySchema,
-      diagnostic: z.unknown().optional(),
-      failureClass: z.literal('rateLimit').optional(),
-      retryNotBeforeMs: z.number().int().nonnegative().safe().optional(),
-    }).strict(),
-    z.object({
+      diagnostic: z.optional(z.unknown()),
+      failureClass: z.optional(z.literal('rateLimit')),
+      retryNotBeforeMs: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
+    }),
+    z.strictObject({
       status: z.literal('conflict'),
-      attemptId: BoundedIdentitySchema.optional(),
+      attemptId: z.optional(BoundedIdentitySchema),
       code: BoundedIdentitySchema,
-      diagnostic: z.unknown().optional(),
-    }).strict(),
-  ]).superRefine((value, context) => {
+      diagnostic: z.optional(z.unknown()),
+    }),
+  ]).check(z.superRefine((value, context) => {
     if ((value.status === 'rejected' || value.status === 'unavailable')
       && value.retryNotBeforeMs !== undefined
       && value.failureClass !== 'rateLimit') {
@@ -392,58 +389,58 @@ export const ConnectedAccountAttemptResponseSchema =
         message: 'retryNotBeforeMs requires rate-limit failure evidence',
       });
     }
-  }));
+  })));
 export type ConnectedAccountAttemptResponse =
   ReadonlyArrayProperties<
     z.infer<typeof ConnectedAccountAttemptResponseSchema>
   >;
 
-const ConnectedAccountConfigurationControlViewSchema = lazyZodSchema(() => z.object({
+const ConnectedAccountConfigurationControlViewSchema = lazyZodSchema(() => z.strictObject({
   status: z.enum(['ready', 'configurationRequired']),
-  revision: ExpectedConfigurationRevisionSchema.nullable(),
+  revision: z.nullable(ExpectedConfigurationRevisionSchema),
   values: ConfigurationValuesSchema,
-  configuredSecretFieldIds: z.array(BoundedIdentitySchema).max(64),
-  missingFieldIds: z.array(BoundedIdentitySchema).max(64),
-}).strict());
+  configuredSecretFieldIds: z.array(BoundedIdentitySchema).check(z.maxLength(64)),
+  missingFieldIds: z.array(BoundedIdentitySchema).check(z.maxLength(64)),
+}));
 
-export const ConnectedAccountRevokedResponseV1Schema = lazyZodSchema(() => z.object({
+export const ConnectedAccountRevokedResponseV1Schema = lazyZodSchema(() => z.strictObject({
     status: z.literal('revoked'),
     account: asProtocolZod(QualifiedConnectedAccountRefSchema),
     remoteStatus: z.enum(['remoteRevoked', 'remoteUnsupported', 'remoteNotAttempted']),
-  }).strict());
+  }));
 
 export const ConnectedAccountRevokeResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('conflict'), code: BoundedIdentitySchema }).strict(),
-  z.object({ status: z.literal('unavailable'), code: BoundedIdentitySchema }).strict(),
+  z.strictObject({ status: z.literal('conflict'), code: BoundedIdentitySchema }),
+  z.strictObject({ status: z.literal('unavailable'), code: BoundedIdentitySchema }),
   ConnectedAccountRevokedResponseV1Schema,
-  z.object({
+  z.strictObject({
     status: z.literal('removalReviewRequired'),
     account: asProtocolZod(QualifiedConnectedAccountRefSchema),
     resources: z.array(ManagedResourceDependencyV1Schema),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('outcomeUnknown'),
     account: asProtocolZod(QualifiedConnectedAccountRefSchema),
-  }).strict(),
+  }),
 ]));
 
-export const ConnectedAccountPendingAttemptsResponseSchema = lazyZodSchema(() => z.object({
+export const ConnectedAccountPendingAttemptsResponseSchema = lazyZodSchema(() => z.strictObject({
       status: z.literal('pendingAttempts'),
-      attempts: z.array(z.object({
+      attempts: z.array(z.strictObject({
         attemptId: BoundedIdentitySchema,
         kind: z.enum(['oauth', 'device']),
         modeId: BoundedIdentitySchema,
         intent: z.enum(['connect', 'reconnect']),
         phase: z.enum(['awaitingOAuth', 'awaitingDeviceAuthorization', 'outcomeUnknown']),
-        createdAtMs: z.number().int().nonnegative(),
-        expiresAtMs: z.number().int().positive(),
-      }).strict()),
-    }).strict());
+        createdAtMs: z.number().check(z.int(), z.nonnegative()),
+        expiresAtMs: z.number().check(z.int(), z.positive()),
+      })),
+    }));
 
 export const ConnectedAccountDaemonControlResponseSchema =
   lazyZodSchema(() => z.discriminatedUnion('status', [
     ConnectedAccountPendingAttemptsResponseSchema,
-    z.object({
+    z.strictObject({
       status: z.literal('described'),
       service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema),
       descriptor: PluginConnectedAccountDescriptorContributionV2Schema,
@@ -453,25 +450,25 @@ export const ConnectedAccountDaemonControlResponseSchema =
       // bounded at its writer rather than in the projection it produces.
       accounts: z.array(QualifiedConnectedAccountProfileV4Schema),
       operationTransport:
-        ConnectedAccountPeerOperationTransportSchema.optional(),
-    }).strict(),
-    z.object({
+        z.optional(ConnectedAccountPeerOperationTransportSchema),
+    }),
+    z.strictObject({
       status: z.literal('configuration'),
       target: ConnectedAccountConfigurationTargetSchema,
       mode: PluginConnectedAccountAuthenticationModeV2Schema,
       occurrenceId: BoundedIdentitySchema,
       sourceCustody: ConnectedAccountSourceCustodyV1Schema,
       configuration: ConnectedAccountConfigurationControlViewSchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       status: z.literal('configurationCommitted'),
       target: ConnectedAccountConfigurationTargetSchema,
       mode: PluginConnectedAccountAuthenticationModeV2Schema,
       occurrenceId: BoundedIdentitySchema,
       sourceCustody: ConnectedAccountSourceCustodyV1Schema,
       configuration: ConnectedAccountConfigurationControlViewSchema,
-    }).strict(),
-    ...ConnectedAccountRevokeResponseV1Schema.options,
+    }),
+    ...ConnectedAccountRevokeResponseV1Schema._zod.def.options,
   ]));
 export type ConnectedAccountDaemonControlResponse =
   ReadonlyControlResponse<

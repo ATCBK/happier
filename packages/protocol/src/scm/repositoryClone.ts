@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   ScmWorkingSnapshotSchema,
@@ -33,17 +33,15 @@ export const ScmRepositoryCloneAuthorizationTokenSchema = lazyZodSchema(() => z.
 export type ScmRepositoryCloneAuthorizationToken =
   z.infer<typeof ScmRepositoryCloneAuthorizationTokenSchema>;
 
-export const ScmRepositoryCloneRepositorySelectorSchema = lazyZodSchema(() => z
-  .object({
-    nameWithOwner: z.string().trim().min(1),
-    webUrl: z.string().url().optional(),
-    cloneUrl: z.string().min(1).optional(),
-    sshUrl: z.string().min(1).optional(),
-    defaultBranch: z.string().min(1).nullable().optional(),
+export const ScmRepositoryCloneRepositorySelectorSchema = lazyZodSchema(() => z.looseObject({
+    nameWithOwner: z.string().check(z.trim(), z.minLength(1)),
+    webUrl: z.optional(z.string().check(z.url())),
+    cloneUrl: z.optional(z.string().check(z.minLength(1))),
+    sshUrl: z.optional(z.string().check(z.minLength(1))),
+    defaultBranch: z.optional(z.nullable(z.string().check(z.minLength(1)))),
     // The forge resolves visibility; a saved locator need not have discovered it.
-    visibility: ScmHostingRepositorySummarySchema.shape.visibility.optional(),
-  })
-  .passthrough());
+    visibility: z.optional(ScmHostingRepositorySummarySchema.shape.visibility),
+  }));
 export type ScmRepositoryCloneRepositorySelector =
   z.infer<typeof ScmRepositoryCloneRepositorySelectorSchema>;
 
@@ -60,96 +58,79 @@ function isCredentialFreeRepositoryLocator(value: string): boolean {
   } catch { return false; }
 }
 
-export const ScmCredentialFreeRepositorySelectorV1Schema = lazyZodSchema(() => z.object({
-  provider: z.object({
-    id: z.string().min(1), kind: ScmHostingProviderKindSchema, displayName: z.string().min(1),
-    baseUrl: z.string().url().refine(isCredentialFreeRepositoryLocator),
-  }).strict(),
-  repository: ScmRepositoryCloneRepositorySelectorSchema.pick({
+export const ScmCredentialFreeRepositorySelectorV1Schema = lazyZodSchema(() => z.strictObject({
+  provider: z.strictObject({
+    id: z.string().check(z.minLength(1)), kind: ScmHostingProviderKindSchema, displayName: z.string().check(z.minLength(1)),
+    baseUrl: z.string().check(z.url(), z.refine(isCredentialFreeRepositoryLocator)),
+  }),
+  repository: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.pick(ScmRepositoryCloneRepositorySelectorSchema, {
     nameWithOwner: true, webUrl: true, cloneUrl: true, sshUrl: true, defaultBranch: true, visibility: true,
-  }).extend({
-    webUrl: z.string().url().refine(isCredentialFreeRepositoryLocator).optional(),
-    cloneUrl: z.string().trim().min(1).refine(isCredentialFreeRepositoryLocator).optional(),
-    sshUrl: z.string().trim().min(1).refine(isCredentialFreeRepositoryLocator).optional(),
-  }).strict(),
+  }), {
+    webUrl: z.optional(z.string().check(z.url(), z.refine(isCredentialFreeRepositoryLocator))),
+    cloneUrl: z.optional(z.string().check(z.trim(), z.minLength(1), z.refine(isCredentialFreeRepositoryLocator))),
+    sshUrl: z.optional(z.string().check(z.trim(), z.minLength(1), z.refine(isCredentialFreeRepositoryLocator))),
+  })),
   protocol: SourceControlCloneProtocolSchema,
-}).strict());
+}));
 
 /** Machine placement uses the incumbent Action target selector, outside this RPC payload. */
-export const ScmHostingRepositoryResolveAddressRequestV1Schema = lazyZodSchema(() => z.object({
-  address: z.string().trim().min(1),
-}).strict());
+export const ScmHostingRepositoryResolveAddressRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  address: z.string().check(z.trim(), z.minLength(1)),
+}));
 export type ScmHostingRepositoryResolveAddressRequestV1 = z.infer<typeof ScmHostingRepositoryResolveAddressRequestV1Schema>;
 
 export const ScmHostingRepositoryResolveAddressResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ success: z.literal(true), kind: z.literal('resolved'), selector: ScmCredentialFreeRepositorySelectorV1Schema }).strict(),
-  z.object({ success: z.literal(true), kind: z.literal('unknown') }).strict(),
-  z.object({ success: z.literal(true), kind: z.literal('unsupported') }).strict(),
-  z.object({ success: z.literal(true), kind: z.literal('invalid') }).strict(),
+  z.strictObject({ success: z.literal(true), kind: z.literal('resolved'), selector: ScmCredentialFreeRepositorySelectorV1Schema }),
+  z.strictObject({ success: z.literal(true), kind: z.literal('unknown') }),
+  z.strictObject({ success: z.literal(true), kind: z.literal('unsupported') }),
+  z.strictObject({ success: z.literal(true), kind: z.literal('invalid') }),
 ]));
 export type ScmHostingRepositoryResolveAddressResponseV1 = z.infer<typeof ScmHostingRepositoryResolveAddressResponseV1Schema>;
 
 /** Source-contained folder selection shares clone's traversal boundary. */
-export const ScmRepositoryContainedSubdirV1Schema = lazyZodSchema(() => z.string().trim().min(1).refine(
-  value => !hasUnsafePathInput(value) && !/^(?:[/\\]|[A-Za-z]:)/.test(value),
-  'Repository subdirectory must be relative and contained',
-));
+export const ScmRepositoryContainedSubdirV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.refine(value => !hasUnsafePathInput(value) && !/^(?:[/\\]|[A-Za-z]:)/.test(value), 'Repository subdirectory must be relative and contained')));
 
-export const ScmRepositoryCloneInputSchema = lazyZodSchema(() => z
-  .object({
+export const ScmRepositoryCloneInputSchema = lazyZodSchema(() => z.strictObject({
     provider: ScmHostingProviderRefSchema,
     repository: ScmRepositoryCloneRepositorySelectorSchema,
-    destinationParentPath: z.string().trim().min(1).refine(
-      (value) => !hasUnsafePathInput(value),
-      'Destination parent path must not use home expansion or traversal segments',
-    ),
-    destinationDirectoryName: z.string().trim().min(1).refine(
-      (value) => value !== '.' && value !== '..' && !/[\/\\]/.test(value) && !hasUnsafePathInput(value),
-      'Destination directory name must be a single safe path segment',
-    ),
+    destinationParentPath: z.string().check(z.trim(), z.minLength(1), z.refine((value) => !hasUnsafePathInput(value), 'Destination parent path must not use home expansion or traversal segments')),
+    destinationDirectoryName: z.string().check(z.trim(), z.minLength(1), z.refine((value) => value !== '.' && value !== '..' && !/[\/\\]/.test(value) && !hasUnsafePathInput(value), 'Destination directory name must be a single safe path segment')),
     protocol: SourceControlCloneProtocolSchema,
     confirmed: z.literal(true),
     authorizationToken: ScmRepositoryCloneAuthorizationTokenSchema,
-  })
-  .strict());
+  }));
 export type ScmRepositoryCloneInput =
   z.infer<typeof ScmRepositoryCloneInputSchema>;
 
-export const ScmRepositoryCloneTargetSchema = lazyZodSchema(() => z
-  .object({
+export const ScmRepositoryCloneTargetSchema = lazyZodSchema(() => z.strictObject({
     protocol: z.enum(['ssh', 'https']),
-    url: z.string().min(1),
-    isDefault: z.boolean().optional(),
-  })
-  .strict());
+    url: z.string().check(z.minLength(1)),
+    isDefault: z.optional(z.boolean()),
+  }));
 export type ScmRepositoryCloneTarget =
   z.infer<typeof ScmRepositoryCloneTargetSchema>;
 
-export const ScmRepositoryCloneTargetDescriptionSchema = lazyZodSchema(() => z
-  .object({
-    auth: ScmHostingRepositoryAuthSummarySchema.optional(),
+export const ScmRepositoryCloneTargetDescriptionSchema = lazyZodSchema(() => z.looseObject({
+    auth: z.optional(ScmHostingRepositoryAuthSummarySchema),
     repository: ScmHostingRepositorySummarySchema,
-    targets: z.array(ScmRepositoryCloneTargetSchema).min(1),
-  })
-  .passthrough());
+    targets: z.array(ScmRepositoryCloneTargetSchema).check(z.minLength(1)),
+  }));
 export type ScmRepositoryCloneTargetDescription =
   z.infer<typeof ScmRepositoryCloneTargetDescriptionSchema>;
 
 export const ScmRepositoryCloneOutputSchema = lazyZodSchema(() => z.union([
-  z
-    .object({
+  z.looseObject({
       success: z.literal(true),
-      destinationPath: z.string().min(1),
+      destinationPath: z.string().check(z.minLength(1)),
       cloneProtocol: z.enum(['ssh', 'https']),
-      cloneUrl: z.string().min(1),
+      cloneUrl: z.string().check(z.minLength(1)),
       repository: ScmHostingRepositorySummarySchema,
-      snapshot: ScmWorkingSnapshotSchema.optional(),
-      stdout: z.string().optional(),
-      stderr: z.string().optional(),
-    })
-    .passthrough(),
-  ScmRepositoryProvisioningFailureResponseSchema.extend({
-    errorCode: ScmOperationErrorCodeSchema.optional(),
+      snapshot: z.optional(ScmWorkingSnapshotSchema),
+      stdout: z.optional(z.string()),
+      stderr: z.optional(z.string()),
+    }),
+  z.extend(ScmRepositoryProvisioningFailureResponseSchema, {
+    errorCode: z.optional(ScmOperationErrorCodeSchema),
   }),
 ]));
 export type ScmRepositoryCloneOutput =

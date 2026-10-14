@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginContributionReferenceV2Schema } from './publicTypes.js';
 import { asProtocolZod } from '../actions/internalProtocolZodAdapter.js';
@@ -10,92 +10,80 @@ type DeepReadonly<T> = T extends readonly (infer TItem)[]
     ? { readonly [TKey in keyof T]: DeepReadonly<T[TKey]> }
     : T;
 
-const ProcessStringSchema = lazyZodSchema(() => z.string()
-  .refine((value) => !value.includes('\0'), 'Process values cannot contain null bytes'));
+const ProcessStringSchema = lazyZodSchema(() => z.string().check(z.refine((value) => !value.includes('\0'), 'Process values cannot contain null bytes')));
 
 export const PluginDeclaredExecutableRefSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('managedDependency'),
     id: asProtocolZod(PluginContributionReferenceV2Schema),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('systemTool'),
     id: asProtocolZod(PluginContributionReferenceV2Schema),
-  }).strict(),
+  }),
 ]));
 
-const PackagedRuntimePathSegmentSchema = lazyZodSchema(() => z.string()
-  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u));
+const PackagedRuntimePathSegmentSchema = lazyZodSchema(() => z.string().check(z.regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u)));
 
-export const PackagedRuntimeBinaryExecutableRefSchema = lazyZodSchema(() => z.object({
+export const PackagedRuntimeBinaryExecutableRefSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('packaged-runtime-binary'),
-  directorySegments: z.array(PackagedRuntimePathSegmentSchema).min(1).max(8).readonly(),
+  directorySegments: z.readonly(z.array(PackagedRuntimePathSegmentSchema).check(z.minLength(1), z.maxLength(8))),
   executableBaseName: PackagedRuntimePathSegmentSchema,
-}).strict());
+}));
 
 export const ManagedExecutableRefSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  ...PluginDeclaredExecutableRefSchema.options,
+  ...PluginDeclaredExecutableRefSchema._zod.def.options,
   PackagedRuntimeBinaryExecutableRefSchema,
 ]));
 export type ManagedExecutableRef = DeepReadonly<z.infer<typeof ManagedExecutableRefSchema>>;
 
-const PluginAgentAcpTimeoutMsSchema = lazyZodSchema(() => z.number()
-  .int()
-  .min(1)
-  .max(2_147_483_647));
+const PluginAgentAcpTimeoutMsSchema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(1), z.maximum(2_147_483_647)));
 
-export const PluginAgentAcpTimeoutsSchema = lazyZodSchema(() => z.object({
-  initializeMs: PluginAgentAcpTimeoutMsSchema.optional(),
-  idleMs: PluginAgentAcpTimeoutMsSchema.optional(),
-  toolCallMs: PluginAgentAcpTimeoutMsSchema.optional(),
-}).strict());
+export const PluginAgentAcpTimeoutsSchema = lazyZodSchema(() => z.strictObject({
+  initializeMs: z.optional(PluginAgentAcpTimeoutMsSchema),
+  idleMs: z.optional(PluginAgentAcpTimeoutMsSchema),
+  toolCallMs: z.optional(PluginAgentAcpTimeoutMsSchema),
+}));
 export type PluginAgentAcpTimeouts = DeepReadonly<z.infer<typeof PluginAgentAcpTimeoutsSchema>>;
 
 const PluginAgentAcpEnvironmentSchema = lazyZodSchema(() => z.record(
-  ProcessStringSchema
-    .min(1)
-    .refine((value) => value === value.trim(), 'Environment keys cannot have surrounding whitespace'),
+  ProcessStringSchema.check(z.minLength(1), z.refine((value) => value === value.trim(), 'Environment keys cannot have surrounding whitespace')),
   ProcessStringSchema,
 ));
 
-const HttpHeaderNameSchema = lazyZodSchema(() => z.string()
-  .regex(/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/, 'Invalid HTTP header name'));
-const HttpHeaderValueSchema = lazyZodSchema(() => z.string()
-  .refine((value) => !/[\0\r\n]/u.test(value), 'Invalid HTTP header value'));
+const HttpHeaderNameSchema = lazyZodSchema(() => z.string().check(z.regex(/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/, 'Invalid HTTP header name')));
+const HttpHeaderValueSchema = lazyZodSchema(() => z.string().check(z.refine((value) => !/[\0\r\n]/u.test(value), 'Invalid HTTP header value')));
 const PluginAgentAcpHeadersSchema = lazyZodSchema(() => z.record(HttpHeaderNameSchema, HttpHeaderValueSchema));
 
-const PluginAgentAcpWebSocketUrlSchema = lazyZodSchema(() => z.string()
-  .trim()
-  .min(1)
-  .refine((value) => {
+const PluginAgentAcpWebSocketUrlSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.refine((value) => {
     try {
       const url = new URL(value);
       return url.protocol === 'ws:' || url.protocol === 'wss:';
     } catch {
       return false;
     }
-  }, 'ACP WebSocket transport URL must use ws:// or wss://'));
+  }, 'ACP WebSocket transport URL must use ws:// or wss://')));
 
 export const PluginAgentAcpTransportSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('stdio'),
     executable: PluginDeclaredExecutableRefSchema,
-    preferredPath: ProcessStringSchema.trim().min(1).optional(),
-    args: z.array(ProcessStringSchema).optional(),
-    env: PluginAgentAcpEnvironmentSchema.optional(),
-    timeouts: PluginAgentAcpTimeoutsSchema.optional(),
-  }).strict(),
-  z.object({
+    preferredPath: z.optional(ProcessStringSchema.check(z.trim(), z.minLength(1))),
+    args: z.optional(z.array(ProcessStringSchema)),
+    env: z.optional(PluginAgentAcpEnvironmentSchema),
+    timeouts: z.optional(PluginAgentAcpTimeoutsSchema),
+  }),
+  z.strictObject({
     kind: z.literal('webSocket'),
     url: PluginAgentAcpWebSocketUrlSchema,
-    headers: PluginAgentAcpHeadersSchema.optional(),
-    timeouts: PluginAgentAcpTimeoutsSchema.optional(),
-  }).strict(),
-  z.object({
+    headers: z.optional(PluginAgentAcpHeadersSchema),
+    timeouts: z.optional(PluginAgentAcpTimeoutsSchema),
+  }),
+  z.strictObject({
     kind: z.literal('tcp'),
-    host: ProcessStringSchema.trim().min(1),
-    port: z.number().int().min(1).max(65_535),
-    timeouts: PluginAgentAcpTimeoutsSchema.optional(),
-  }).strict(),
+    host: ProcessStringSchema.check(z.trim(), z.minLength(1)),
+    port: z.number().check(z.int(), z.minimum(1), z.maximum(65_535)),
+    timeouts: z.optional(PluginAgentAcpTimeoutsSchema),
+  }),
 ]));
 export type PluginAgentAcpTransport = DeepReadonly<z.infer<typeof PluginAgentAcpTransportSchema>>;

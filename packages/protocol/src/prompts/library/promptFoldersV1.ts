@@ -1,32 +1,32 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ArtifactOrganizationHeaderV1Schema, normalizeArtifactTagsV1 } from '../../artifacts/artifactOrganizationV1.js';
 import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
 
-export const PromptFolderEntryV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().min(1),
-  name: z.string().min(1),
-  parentId: z.string().min(1).nullable().optional(),
-}).passthrough());
+export const PromptFolderEntryV1Schema = lazyZodSchema(() => z.looseObject({
+  id: z.string().check(z.minLength(1)),
+  name: z.string().check(z.minLength(1)),
+  parentId: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+}));
 export type PromptFolderEntryV1 = z.infer<typeof PromptFolderEntryV1Schema>;
 
-export const PromptFoldersV1Schema = lazyZodSchema(() => z.object({
+export const PromptFoldersV1Schema = lazyZodSchema(() => z.looseObject({
   v: z.literal(1),
-  folders: z.array(PromptFolderEntryV1Schema).default([]),
-  artifactHeadersById: z.record(z.string().min(1), ArtifactOrganizationHeaderV1Schema).optional(),
-}).passthrough());
+  folders: z._default(z.array(PromptFolderEntryV1Schema), []),
+  artifactHeadersById: z.optional(z.record(z.string().check(z.minLength(1)), ArtifactOrganizationHeaderV1Schema)),
+}));
 export type PromptFoldersV1 = z.infer<typeof PromptFoldersV1Schema>;
 export const StoredPromptFoldersV1Schema = createStoredReadSchema(PromptFoldersV1Schema);
 
 /** Catalog transfer preserves predecessor topology; it does not author or repair a tree. */
-export const PromptFoldersV1RecordSchema = defineStoredReadProjection(lazyZodSchema(() => z.object({
+export const PromptFoldersV1RecordSchema = defineStoredReadProjection(lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  folders: z.array(PromptFolderEntryV1Schema.strict()),
-  artifactHeadersById: z.record(z.string().min(1), ArtifactOrganizationHeaderV1Schema).optional(),
-}).strict()), () => StoredPromptFoldersV1Schema);
+  folders: z.array((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(PromptFolderEntryV1Schema)),
+  artifactHeadersById: z.optional(z.record(z.string().check(z.minLength(1)), ArtifactOrganizationHeaderV1Schema)),
+})), () => StoredPromptFoldersV1Schema);
 
 /** New folder mutations require a valid tree, independently of retained storage admission. */
-export const PromptFoldersV1WriteSchema = defineStoredReadProjection(lazyZodSchema(() => PromptFoldersV1RecordSchema.superRefine((value, context) => {
+export const PromptFoldersV1WriteSchema = defineStoredReadProjection(lazyZodSchema(() => PromptFoldersV1RecordSchema.check(z.superRefine((value, context) => {
   const byId = new Map(value.folders.map(folder => [folder.id, folder]));
   if (byId.size !== value.folders.length) {
     context.addIssue({ code: 'custom', path: ['folders'], message: 'folder_already_exists' });
@@ -55,7 +55,7 @@ export const PromptFoldersV1WriteSchema = defineStoredReadProjection(lazyZodSche
       context.addIssue({ code: 'custom', path: ['artifactHeadersById', artifactId, 'folderId'], message: 'folder_not_found' });
     }
   }
-})), () => StoredPromptFoldersV1Schema);
+}))), () => StoredPromptFoldersV1Schema);
 
 export function normalizePromptFolderNameV1(value: string): string {
   return value.trim().replace(/\s+/g, ' ');

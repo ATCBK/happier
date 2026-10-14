@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { buildSessionAuthoringFieldArtifacts } from './buildFieldArtifacts.js';
 import { SESSION_AUTHORING_CONTEXT_KINDS } from './contextKinds.js';

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 import {
@@ -122,24 +122,23 @@ export const ConnectedServiceCredentialRefreshFailureKindV1Schema = lazyZodSchem
 ]));
 export type ConnectedServiceCredentialRefreshFailureKindV1 = z.infer<typeof ConnectedServiceCredentialRefreshFailureKindV1Schema>;
 
-export const ConnectedServiceCredentialHealthV1Schema = lazyZodSchema(() => z.object({
+export const ConnectedServiceCredentialHealthV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     status: ConnectedServiceCredentialHealthStatusV1Schema,
-    reconnectRequired: z.boolean().default(false),
-    lastRefreshAttemptAt: z.number().int().nonnegative().optional(),
-    lastRefreshSuccessAt: z.number().int().nonnegative().optional(),
-    lastRefreshFailureAt: z.number().int().nonnegative().optional(),
-    lastRefreshFailureKind: ConnectedServiceCredentialRefreshFailureKindV1Schema.optional(),
-    lastRuntimeAuthFailureAt: z.number().int().nonnegative().optional(),
-    providerHttpStatus: z.number().int().min(100).max(599).optional(),
-    providerErrorCode: z.string().trim().min(1).max(128).optional(),
-}).strict());
+    reconnectRequired: z._default(z.boolean(), false),
+    lastRefreshAttemptAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+    lastRefreshSuccessAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+    lastRefreshFailureAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+    lastRefreshFailureKind: z.optional(ConnectedServiceCredentialRefreshFailureKindV1Schema),
+    lastRuntimeAuthFailureAt: z.optional(z.number().check(z.int(), z.nonnegative())),
+    providerHttpStatus: z.optional(z.number().check(z.int(), z.minimum(100), z.maximum(599))),
+    providerErrorCode: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(128))),
+}));
 export type ConnectedServiceCredentialHealthV1 = z.infer<typeof ConnectedServiceCredentialHealthV1Schema>;
 
 /** Opaque server-owned revision independent from row timestamps and lease bookkeeping. */
 export const ConnectedServiceCredentialRevisionV1Schema = lazyZodSchema(() => z
-    .string()
-    .regex(/^csr_[A-Za-z0-9_-]{22,64}$/));
+    .string().check(z.regex(/^csr_[A-Za-z0-9_-]{22,64}$/)));
 export type ConnectedServiceCredentialRevisionV1 = z.infer<typeof ConnectedServiceCredentialRevisionV1Schema>;
 
 export const ConnectedServiceExecutionAuthorityV1Schema = lazyZodSchema(() => z.enum([
@@ -149,10 +148,10 @@ export const ConnectedServiceExecutionAuthorityV1Schema = lazyZodSchema(() => z.
 ]));
 export type ConnectedServiceExecutionAuthorityV1 = z.infer<typeof ConnectedServiceExecutionAuthorityV1Schema>;
 
-export const ConnectedServiceCredentialMutationGuardV1Schema = lazyZodSchema(() => z.object({
-    expectedCredentialRevision: ConnectedServiceCredentialRevisionV1Schema.nullable().optional(),
-    refreshLeaseOwnerId: z.string().trim().min(1).max(256).optional(),
-}).strict().superRefine((value, context) => {
+export const ConnectedServiceCredentialMutationGuardV1Schema = lazyZodSchema(() => z.strictObject({
+    expectedCredentialRevision: z.optional(z.nullable(ConnectedServiceCredentialRevisionV1Schema)),
+    refreshLeaseOwnerId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+}).check(z.superRefine((value, context) => {
     if (value.refreshLeaseOwnerId && typeof value.expectedCredentialRevision !== 'string') {
         context.addIssue({
             code: 'custom',
@@ -160,16 +159,16 @@ export const ConnectedServiceCredentialMutationGuardV1Schema = lazyZodSchema(() 
             path: ['expectedCredentialRevision'],
         });
     }
-}));
+})));
 export type ConnectedServiceCredentialMutationGuardV1 = z.infer<typeof ConnectedServiceCredentialMutationGuardV1Schema>;
 
-export const ConnectedServiceCredentialRevisionedMutationSuccessV1Schema = lazyZodSchema(() => z.object({
+export const ConnectedServiceCredentialRevisionedMutationSuccessV1Schema = lazyZodSchema(() => z.strictObject({
     success: z.literal(true),
     credentialRevision: ConnectedServiceCredentialRevisionV1Schema,
-}).strict());
-export const ConnectedServiceCredentialLegacyMutationSuccessV1Schema = lazyZodSchema(() => z.object({
+}));
+export const ConnectedServiceCredentialLegacyMutationSuccessV1Schema = lazyZodSchema(() => z.strictObject({
     success: z.literal(true),
-}).strict());
+}));
 export const ConnectedServiceCredentialMutationSuccessV1Schema =
     ConnectedServiceCredentialRevisionedMutationSuccessV1Schema;
 export const ConnectedServiceCredentialCompatibleMutationSuccessV1Schema = lazyZodSchema(() => z.union([
@@ -207,11 +206,11 @@ export function readConnectedServiceCredentialRevisionBoundaryV1(
     return { revisionSemantics: 'revisioned', credentialRevision: parsed.data };
 }
 
-export const ConnectedServiceCredentialMutationSupersededV1Schema = lazyZodSchema(() => z.object({
+export const ConnectedServiceCredentialMutationSupersededV1Schema = lazyZodSchema(() => z.strictObject({
     error: z.literal('connect_credential_mutation_superseded'),
     reason: z.enum(['revision_mismatch', 'refresh_lease_lost']),
-    credentialRevision: ConnectedServiceCredentialRevisionV1Schema.nullable(),
-}).strict());
+    credentialRevision: z.nullable(ConnectedServiceCredentialRevisionV1Schema),
+}));
 export type ConnectedServiceCredentialMutationSupersededV1 = z.infer<typeof ConnectedServiceCredentialMutationSupersededV1Schema>;
 
 export const ConnectedServiceCredentialMutationResponseV1Schema = lazyZodSchema(() => z.union([
@@ -227,43 +226,43 @@ export type ConnectedServiceCredentialCompatibleMutationResponseV1 =
     z.infer<typeof ConnectedServiceCredentialCompatibleMutationResponseV1Schema>;
 
 const OauthCredentialPayloadSchema = lazyZodSchema(() => z.object({
-    accessToken: z.string().min(1),
-    refreshToken: z.string().min(1),
-    idToken: z.string().min(1).nullable(),
-    scope: z.string().min(1).nullable(),
-    tokenType: z.string().min(1).nullable(),
-    providerAccountId: z.string().min(1).nullable(),
-    providerEmail: z.string().min(1).nullable(),
-    raw: z.unknown().nullable(),
+    accessToken: z.string().check(z.minLength(1)),
+    refreshToken: z.string().check(z.minLength(1)),
+    idToken: z.nullable(z.string().check(z.minLength(1))),
+    scope: z.nullable(z.string().check(z.minLength(1))),
+    tokenType: z.nullable(z.string().check(z.minLength(1))),
+    providerAccountId: z.nullable(z.string().check(z.minLength(1))),
+    providerEmail: z.nullable(z.string().check(z.minLength(1))),
+    raw: z.nullable(z.unknown()),
 }));
 
 const TokenCredentialPayloadSchema = lazyZodSchema(() => z.object({
     // Trim before length-check so a whitespace-only token is rejected at the
     // schema boundary, not just defensively downstream in materializers.
-    token: z.string().trim().min(1),
-    providerAccountId: z.string().min(1).nullable(),
-    providerEmail: z.string().min(1).nullable(),
-    raw: z.unknown().nullable(),
+    token: z.string().check(z.trim(), z.minLength(1)),
+    providerAccountId: z.nullable(z.string().check(z.minLength(1))),
+    providerEmail: z.nullable(z.string().check(z.minLength(1))),
+    raw: z.nullable(z.unknown()),
 }));
 
 const ConnectedServiceCredentialBaseSchema = lazyZodSchema(() => z.object({
     v: z.literal(1),
     serviceId: ConnectedServiceIdSchema,
     profileId: ConnectedServiceProfileIdSchema,
-    createdAt: z.number().int().nonnegative(),
-    updatedAt: z.number().int().nonnegative(),
-    expiresAt: z.number().int().nonnegative().nullable(),
+    createdAt: z.number().check(z.int(), z.nonnegative()),
+    updatedAt: z.number().check(z.int(), z.nonnegative()),
+    expiresAt: z.nullable(z.number().check(z.int(), z.nonnegative())),
 }));
 
 export const ConnectedServiceCredentialRecordV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-    ConnectedServiceCredentialBaseSchema.extend({
+    z.extend(ConnectedServiceCredentialBaseSchema, {
         kind: z.literal('oauth'),
         oauth: OauthCredentialPayloadSchema,
         token: z.null(),
     }),
-    ConnectedServiceCredentialBaseSchema.extend({
+    z.extend(ConnectedServiceCredentialBaseSchema, {
         kind: z.literal('token'),
-        oauth: z.null().optional(),
+        oauth: z.optional(z.null()),
         token: TokenCredentialPayloadSchema,
     }),
 ]));
@@ -272,7 +271,7 @@ export type ConnectedServiceCredentialRecordV1 = z.infer<typeof ConnectedService
 
 export const SealedConnectedServiceCredentialV1Schema = lazyZodSchema(() => z.object({
     format: ConnectedServiceCredentialFormatSchema,
-    ciphertext: z.string().min(1),
+    ciphertext: z.string().check(z.minLength(1)),
 }));
 
 export type SealedConnectedServiceCredentialV1 = z.infer<typeof SealedConnectedServiceCredentialV1Schema>;
@@ -336,23 +335,20 @@ export const ConnectedServiceQuotaLimitScopeV1Schema = lazyZodSchema(() => z.enu
 
 export type ConnectedServiceQuotaLimitScopeV1 = z.infer<typeof ConnectedServiceQuotaLimitScopeV1Schema>;
 
-const ConnectedServiceQuotaEvidenceV1Schema = lazyZodSchema(() => z
-    .object({
-        kind: z.string().trim().min(1).optional(),
-        status: z.number().int().min(100).max(599).optional(),
-        headers: z.record(z.string(), z.string()).optional(),
-        code: z.string().trim().min(1).optional(),
-        message: z.string().trim().min(1).optional(),
-        providerLimitId: z.string().trim().min(1).optional(),
-        observedAtMs: z.number().int().nonnegative().optional(),
-    })
-    .strict()
-    .superRefine((evidence, ctx) => {
+const ConnectedServiceQuotaEvidenceV1Schema = lazyZodSchema(() => z.strictObject({
+        kind: z.optional(z.string().check(z.trim(), z.minLength(1))),
+        status: z.optional(z.number().check(z.int(), z.minimum(100), z.maximum(599))),
+        headers: z.optional(z.record(z.string(), z.string())),
+        code: z.optional(z.string().check(z.trim(), z.minLength(1))),
+        message: z.optional(z.string().check(z.trim(), z.minLength(1))),
+        providerLimitId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+        observedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+    }).check(z.superRefine((evidence, ctx) => {
         if (evidence.headers) {
             for (const [headerName, headerValue] of Object.entries(evidence.headers)) {
                 if (isUnsafeDiagnosticHeaderName(headerName) || containsUnsafeDiagnosticText(headerValue)) {
                     ctx.addIssue({
-                        code: z.ZodIssueCode.custom,
+                        code: "custom",
                         message: 'Unsafe quota evidence header',
                         path: ['headers', headerName],
                     });
@@ -361,19 +357,19 @@ const ConnectedServiceQuotaEvidenceV1Schema = lazyZodSchema(() => z
         }
         if (containsUnsafeDiagnosticText(evidence.code)) {
             ctx.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: "custom",
                 message: 'Unsafe quota evidence code',
                 path: ['code'],
             });
         }
         if (containsUnsafeDiagnosticText(evidence.message)) {
             ctx.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: "custom",
                 message: 'Unsafe quota evidence message',
                 path: ['message'],
             });
         }
-    }));
+    })));
 
 export const ConnectedServiceQuotaResetSourceV1Schema = lazyZodSchema(() => z.enum([
     'header',
@@ -408,93 +404,86 @@ export const ConnectedServiceQuotaRecoveryCreditStatusV1Schema = lazyZodSchema((
 ]));
 export type ConnectedServiceQuotaRecoveryCreditStatusV1 = z.infer<typeof ConnectedServiceQuotaRecoveryCreditStatusV1Schema>;
 
-export const ConnectedServiceQuotaRecoveryCreditV1Schema = lazyZodSchema(() => z
-    .object({
-        id: z.string().trim().min(1).optional(),
+export const ConnectedServiceQuotaRecoveryCreditV1Schema = lazyZodSchema(() => z.strictObject({
+        id: z.optional(z.string().check(z.trim(), z.minLength(1))),
         kind: ConnectedServiceQuotaRecoveryCreditKindV1Schema,
         status: ConnectedServiceQuotaRecoveryCreditStatusV1Schema,
-        providerResetType: z.string().trim().min(1).optional(),
-        appliesToProviderLimitId: z.string().trim().min(1).nullable().optional(),
-        grantedAtMs: z.number().int().nonnegative().nullable().optional(),
-        expiresAtMs: z.number().int().nonnegative().nullable().optional(),
-        redeemStartedAtMs: z.number().int().nonnegative().nullable().optional(),
-        redeemedAtMs: z.number().int().nonnegative().nullable().optional(),
-        title: z.string().trim().min(1).nullable().optional(),
-        description: z.string().trim().min(1).nullable().optional(),
-    })
-    .strict());
+        providerResetType: z.optional(z.string().check(z.trim(), z.minLength(1))),
+        appliesToProviderLimitId: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+        grantedAtMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        expiresAtMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        redeemStartedAtMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        redeemedAtMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        title: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+        description: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+    }));
 export type ConnectedServiceQuotaRecoveryCreditV1 = z.infer<typeof ConnectedServiceQuotaRecoveryCreditV1Schema>;
 
-export const ConnectedServiceQuotaRecoveryCreditsV1Schema = lazyZodSchema(() => z
-    .object({
-        availableCount: z.number().int().nonnegative(),
-        totalCount: z.number().int().nonnegative().optional(),
-        nextExpiresAtMs: z.number().int().nonnegative().nullable().optional(),
-        source: ConnectedServiceQuotaSourceV1Schema.optional(),
-        confidence: ConnectedServiceQuotaConfidenceV1Schema.optional(),
-        credits: z.array(ConnectedServiceQuotaRecoveryCreditV1Schema).default([]),
-    })
-    .strict()
-    .superRefine((value, context) => {
+export const ConnectedServiceQuotaRecoveryCreditsV1Schema = lazyZodSchema(() => z.strictObject({
+        availableCount: z.number().check(z.int(), z.nonnegative()),
+        totalCount: z.optional(z.number().check(z.int(), z.nonnegative())),
+        nextExpiresAtMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        source: z.optional(ConnectedServiceQuotaSourceV1Schema),
+        confidence: z.optional(ConnectedServiceQuotaConfidenceV1Schema),
+        credits: z._default(z.array(ConnectedServiceQuotaRecoveryCreditV1Schema), []),
+    }).check(z.superRefine((value, context) => {
         if (
             typeof value.totalCount === 'number'
             && value.totalCount < value.availableCount
         ) {
             context.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: "custom",
                 message: 'totalCount must be greater than or equal to availableCount',
                 path: ['totalCount'],
             });
         }
-    }));
+    })));
 export type ConnectedServiceQuotaRecoveryCreditsV1 = z.infer<typeof ConnectedServiceQuotaRecoveryCreditsV1Schema>;
 
 /** Presentation facts only; credit status and availableCount own usability. */
-export const ConnectedServiceQuotaRecoveryCreditDetailsV1Schema = lazyZodSchema(() => z.object({
-    remainingCount: z.number().int().nonnegative(),
-    appliesToProviderLimitIds: z.array(z.string().trim().min(1)).default([]),
-    unavailableReason: z.enum(['paused', 'cooldown', 'ineligible', 'not_selected', 'provider_unavailable', 'not_started', 'expired', 'consumed', 'unknown']).optional(),
-}).strict());
+export const ConnectedServiceQuotaRecoveryCreditDetailsV1Schema = lazyZodSchema(() => z.strictObject({
+    remainingCount: z.number().check(z.int(), z.nonnegative()),
+    appliesToProviderLimitIds: z._default(z.array(z.string().check(z.trim(), z.minLength(1))), []),
+    unavailableReason: z.optional(z.enum(['paused', 'cooldown', 'ineligible', 'not_selected', 'provider_unavailable', 'not_started', 'expired', 'consumed', 'unknown'])),
+}));
 export type ConnectedServiceQuotaRecoveryCreditDetailsV1 = z.infer<typeof ConnectedServiceQuotaRecoveryCreditDetailsV1Schema>;
-export const ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema = lazyZodSchema(() => z.record(z.string().trim().min(1), ConnectedServiceQuotaRecoveryCreditDetailsV1Schema));
+export const ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema = lazyZodSchema(() => z.record(z.string().check(z.trim(), z.minLength(1)), ConnectedServiceQuotaRecoveryCreditDetailsV1Schema));
 export type ConnectedServiceQuotaRecoveryCreditDetailsByIdV1 = z.infer<typeof ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema>;
 
 export const ConnectedServiceQuotaMeterV1Schema = lazyZodSchema(() => z.object({
-    meterId: z.string().min(1),
-    label: z.string().min(1),
-    used: z.number().finite().nullable(),
-    limit: z.number().finite().nullable(),
-    remaining: z.number().finite().nullable().optional(),
-    remainingPct: z.number().finite().min(0).max(100).nullable().optional(),
-    usedPct: z.number().finite().min(0).max(100).nullable().optional(),
-    resetAtMs: z.number().int().nonnegative().nullable().optional(),
-    resetSource: ConnectedServiceQuotaResetSourceV1Schema.optional(),
-    providerLimitId: z.string().trim().min(1).optional(),
-    windowDurationMs: z.number().int().positive().optional(),
-    modelId: z.string().trim().min(1).nullable().optional(),
-    isExhausted: z.boolean().optional(),
-    isSoftLimited: z.boolean().optional(),
-    isCapacityLimited: z.boolean().optional(),
+    meterId: z.string().check(z.minLength(1)),
+    label: z.string().check(z.minLength(1)),
+    used: z.nullable(z.number()),
+    limit: z.nullable(z.number()),
+    remaining: z.optional(z.nullable(z.number())),
+    remainingPct: z.optional(z.nullable(z.number().check(z.minimum(0), z.maximum(100)))),
+    usedPct: z.optional(z.nullable(z.number().check(z.minimum(0), z.maximum(100)))),
+    resetAtMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    resetSource: z.optional(ConnectedServiceQuotaResetSourceV1Schema),
+    providerLimitId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    windowDurationMs: z.optional(z.number().check(z.int(), z.positive())),
+    modelId: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+    isExhausted: z.optional(z.boolean()),
+    isSoftLimited: z.optional(z.boolean()),
+    isCapacityLimited: z.optional(z.boolean()),
     unit: ConnectedServiceQuotaUnitV1Schema,
-    utilizationPct: z.number().finite().min(0).max(100).nullable(),
-    resetsAt: z.number().int().nonnegative().nullable(),
+    utilizationPct: z.nullable(z.number().check(z.minimum(0), z.maximum(100))),
+    resetsAt: z.nullable(z.number().check(z.int(), z.nonnegative())),
     status: z.enum(['ok', 'unavailable', 'estimated']),
-    source: ConnectedServiceQuotaSourceV1Schema.optional(),
-    scope: ConnectedServiceQuotaMeterScopeV1Schema.optional(),
-    limitScope: ConnectedServiceQuotaLimitScopeV1Schema.optional(),
-    confidence: ConnectedServiceQuotaConfidenceV1Schema.optional(),
-    details: z
+    source: z.optional(ConnectedServiceQuotaSourceV1Schema),
+    scope: z.optional(ConnectedServiceQuotaMeterScopeV1Schema),
+    limitScope: z.optional(ConnectedServiceQuotaLimitScopeV1Schema),
+    confidence: z.optional(ConnectedServiceQuotaConfidenceV1Schema),
+    details: z._default(z.optional(z
         .object({
-            note: z.string().min(1).nullable().optional(),
-            code: z.string().trim().min(1).optional(),
-            rawScope: z.string().trim().min(1).optional(),
-            remainingPct: z.number().finite().min(0).max(100).nullable().optional(),
-            scope: ConnectedServiceQuotaMeterScopeV1Schema.optional(),
-            providerLimitId: z.string().trim().min(1).optional(),
-            limitCategory: ConnectedServiceLimitCategoryV1Schema.optional(),
-        })
-        .optional()
-        .default({}),
+            note: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+            code: z.optional(z.string().check(z.trim(), z.minLength(1))),
+            rawScope: z.optional(z.string().check(z.trim(), z.minLength(1))),
+            remainingPct: z.optional(z.nullable(z.number().check(z.minimum(0), z.maximum(100)))),
+            scope: z.optional(ConnectedServiceQuotaMeterScopeV1Schema),
+            providerLimitId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+            limitCategory: z.optional(ConnectedServiceLimitCategoryV1Schema),
+        })), {}),
 }));
 
 export type ConnectedServiceQuotaMeterV1 = z.infer<typeof ConnectedServiceQuotaMeterV1Schema>;
@@ -503,18 +492,18 @@ export const ConnectedServiceUsageSourceBindingKindV1Schema = lazyZodSchema(() =
 export type ConnectedServiceUsageSourceBindingKindV1 = z.infer<typeof ConnectedServiceUsageSourceBindingKindV1Schema>;
 
 export const ConnectedServiceUsageSourceV1Schema = lazyZodSchema(() => z.discriminatedUnion('bindingKind', [
-    z.object({
+    z.strictObject({
         serviceId: ConnectedAccountServiceKeyIngressSchema,
         profileId: ConnectedServiceProfileIdSchema,
         bindingKind: z.literal('profile'),
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
         serviceId: ConnectedAccountServiceKeyIngressSchema,
         profileId: ConnectedServiceProfileIdSchema,
         bindingKind: z.literal('group_member'),
-        groupId: z.string().trim().min(1),
-        groupGeneration: z.number().int().nonnegative().optional(),
-    }).strict(),
+        groupId: z.string().check(z.trim(), z.minLength(1)),
+        groupGeneration: z.optional(z.number().check(z.int(), z.nonnegative())),
+    }),
 ]));
 
 export type ConnectedServiceUsageSourceV1 = z.infer<typeof ConnectedServiceUsageSourceV1Schema>;
@@ -523,22 +512,22 @@ export const ConnectedServiceQuotaSnapshotV1Schema = lazyZodSchema(() => z.objec
     v: z.literal(1),
     serviceId: ConnectedServiceIdSchema,
     profileId: ConnectedServiceProfileIdSchema,
-    fetchedAt: z.number().int().nonnegative(),
-    staleAfterMs: z.number().int().min(1),
-    planLabel: z.string().min(1).nullable(),
-    accountLabel: z.string().min(1).nullable(),
-    providerId: z.string().trim().min(1).optional(),
-    activeAccountId: z.string().trim().min(1).optional(),
-    fetchedAtMs: z.number().int().nonnegative().optional(),
-    staleAtMs: z.number().int().nonnegative().optional(),
-    source: ConnectedServiceQuotaSourceV1Schema.optional(),
-    confidence: ConnectedServiceQuotaConfidenceV1Schema.optional(),
-    evidence: ConnectedServiceQuotaEvidenceV1Schema.optional(),
-    recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1Schema.optional(),
-    recoveryCreditDetails: ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema.optional(),
-    subscription: ProviderAccountSubscriptionV1Schema.optional(),
+    fetchedAt: z.number().check(z.int(), z.nonnegative()),
+    staleAfterMs: z.number().check(z.int(), z.minimum(1)),
+    planLabel: z.nullable(z.string().check(z.minLength(1))),
+    accountLabel: z.nullable(z.string().check(z.minLength(1))),
+    providerId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    activeAccountId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    fetchedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+    staleAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+    source: z.optional(ConnectedServiceQuotaSourceV1Schema),
+    confidence: z.optional(ConnectedServiceQuotaConfidenceV1Schema),
+    evidence: z.optional(ConnectedServiceQuotaEvidenceV1Schema),
+    recoveryCredits: z.optional(ConnectedServiceQuotaRecoveryCreditsV1Schema),
+    recoveryCreditDetails: z.optional(ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema),
+    subscription: z.optional(ProviderAccountSubscriptionV1Schema),
     meters: z.array(ConnectedServiceQuotaMeterV1Schema),
-    diagnostics: z.array(ProviderAccountUsageDiagnosticV1Schema).optional(),
+    diagnostics: z.optional(z.array(ProviderAccountUsageDiagnosticV1Schema)),
 }));
 
 export type ConnectedServiceQuotaSnapshotV1 = z.infer<typeof ConnectedServiceQuotaSnapshotV1Schema>;
@@ -546,31 +535,26 @@ export const ConnectedServiceQuotaSnapshotV1StoredSchema = createStoredReadSchem
 
 export const SealedConnectedServiceQuotaSnapshotV1Schema = lazyZodSchema(() => z.object({
     format: ConnectedServiceCredentialFormatSchema,
-    ciphertext: z.string().min(1),
+    ciphertext: z.string().check(z.minLength(1)),
 }));
 
 export type SealedConnectedServiceQuotaSnapshotV1 = z.infer<typeof SealedConnectedServiceQuotaSnapshotV1Schema>;
 
-const ConnectedServiceQuotaProviderLimitIdV1Schema = lazyZodSchema(() => z.string().trim().min(1));
+const ConnectedServiceQuotaProviderLimitIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 
 const ConnectedServiceSelectedQuotaProviderLimitIdsV1Schema = lazyZodSchema(() => z
-    .array(ConnectedServiceQuotaProviderLimitIdV1Schema)
-    .min(1)
-    .refine(
-        (providerLimitIds) => new Set(providerLimitIds).size === providerLimitIds.length,
-        'Provider limit ids must be unique',
-    ));
+    .array(ConnectedServiceQuotaProviderLimitIdV1Schema).check(z.minLength(1), z.refine((providerLimitIds) => new Set(providerLimitIds).size === providerLimitIds.length, 'Provider limit ids must be unique')));
 
 /** Which provider-reported allowance families drive a Pool's quota decisions. */
 export const ConnectedServiceQuotaLimitSelectionV1Schema = lazyZodSchema(() => z.discriminatedUnion('mode', [
-    z.object({
+    z.strictObject({
         mode: z.literal('all'),
-        providerLimitIds: z.array(ConnectedServiceQuotaProviderLimitIdV1Schema).length(0),
-    }).strict(),
-    z.object({
+        providerLimitIds: z.array(ConnectedServiceQuotaProviderLimitIdV1Schema).check(z.length(0)),
+    }),
+    z.strictObject({
         mode: z.literal('selected'),
         providerLimitIds: ConnectedServiceSelectedQuotaProviderLimitIdsV1Schema,
-    }).strict(),
+    }),
 ]));
 
 export type ConnectedServiceQuotaLimitSelectionV1 = z.infer<
@@ -579,291 +563,242 @@ export type ConnectedServiceQuotaLimitSelectionV1 = z.infer<
 
 export const ConnectedServiceAuthGroupStrategyV1Schema = lazyZodSchema(() => z.enum(['expiry_first', 'priority', 'least_limited', 'manual']));
 
-export const ConnectedServiceAuthGroupPolicyV1Schema = lazyZodSchema(() => z
-    .object({
-        v: z.literal(1).default(1),
-        strategy: ConnectedServiceAuthGroupStrategyV1Schema.default('expiry_first'),
-        autoSwitch: z.boolean().default(false),
+export const ConnectedServiceAuthGroupPolicyV1Schema = lazyZodSchema(() => z.strictObject({
+        v: z._default(z.literal(1), 1),
+        strategy: z._default(ConnectedServiceAuthGroupStrategyV1Schema, 'expiry_first'),
+        autoSwitch: z._default(z.boolean(), false),
         // Absence remains false, preserving predecessor persisted policies.
-        autoUseQuotaResetsWhenExhausted: z.boolean().optional(),
+        autoUseQuotaResetsWhenExhausted: z.optional(z.boolean()),
         // Absence remains false. V4 projects this field only when the server feature is enabled.
-        autoDisablePlanInvalidAccounts: z.boolean().optional(),
-        quotaLimitSelection: ConnectedServiceQuotaLimitSelectionV1Schema.optional(),
-        switchOn: z
-            .object({
+        autoDisablePlanInvalidAccounts: z.optional(z.boolean()),
+        quotaLimitSelection: z.optional(ConnectedServiceQuotaLimitSelectionV1Schema),
+        switchOn: z._default(z.strictObject({
                 usageLimit: z.boolean(),
                 authExpired: z.boolean(),
                 accountChanged: z.boolean(),
                 refreshFailure: z.boolean(),
-            })
-            .strict()
-            .default({
+            }), {
                 usageLimit: true,
                 authExpired: true,
                 accountChanged: true,
                 refreshFailure: false,
             }),
-        cooldownMs: z.number().int().min(0).default(30_000),
-        honorProviderResetsAt: z.boolean().default(true),
-        autoRestorePrimaryWhenReset: z.boolean().default(false),
-        maxSwitchesPerTurn: z.number().int().min(0).default(1),
-        maxSwitchesPerSessionHour: z.number().int().min(0).default(3),
-        softSwitchRemainingPercent: z.number().finite().min(0).max(100).default(15),
-        probeIfSnapshotOlderThanMs: z.number().int().min(1).default(300_000),
-        preTurnProbeMode: z.enum(['never', 'when_stale', 'always_for_group']).default('when_stale'),
-        preTurnProbeOrder: z
-            .enum(['current_first_then_candidates', 'candidates_first_then_current'])
-            .default('current_first_then_candidates'),
-        recoveryMode: z
-            .enum(['off', 'wait_until_reset', 'switch_then_resume', 'switch_or_wait'])
-            .default('switch_or_wait'),
-        resumePromptMode: z.enum(['standard', 'off', 'custom']).default('standard'),
-    })
-    .strict());
+        cooldownMs: z._default(z.number().check(z.int(), z.minimum(0)), 30_000),
+        honorProviderResetsAt: z._default(z.boolean(), true),
+        autoRestorePrimaryWhenReset: z._default(z.boolean(), false),
+        maxSwitchesPerTurn: z._default(z.number().check(z.int(), z.minimum(0)), 1),
+        maxSwitchesPerSessionHour: z._default(z.number().check(z.int(), z.minimum(0)), 3),
+        softSwitchRemainingPercent: z._default(z.number().check(z.minimum(0), z.maximum(100)), 15),
+        probeIfSnapshotOlderThanMs: z._default(z.number().check(z.int(), z.minimum(1)), 300_000),
+        preTurnProbeMode: z._default(z.enum(['never', 'when_stale', 'always_for_group']), 'when_stale'),
+        preTurnProbeOrder: z._default(z
+            .enum(['current_first_then_candidates', 'candidates_first_then_current']), 'current_first_then_candidates'),
+        recoveryMode: z._default(z
+            .enum(['off', 'wait_until_reset', 'switch_then_resume', 'switch_or_wait']), 'switch_or_wait'),
+        resumePromptMode: z._default(z.enum(['standard', 'off', 'custom']), 'standard'),
+    }));
 
 export type ConnectedServiceAuthGroupPolicyV1 = z.infer<typeof ConnectedServiceAuthGroupPolicyV1Schema>;
 
-export const ConnectedServiceAuthGroupPolicyPatchV1Schema = lazyZodSchema(() => z
-    .object({
-        v: z.literal(1).optional(),
-        strategy: ConnectedServiceAuthGroupStrategyV1Schema.optional(),
-        autoSwitch: z.boolean().optional(),
-        autoUseQuotaResetsWhenExhausted: z.boolean().optional(),
-        autoDisablePlanInvalidAccounts: z.boolean().optional(),
-        quotaLimitSelection: ConnectedServiceQuotaLimitSelectionV1Schema.optional(),
-        switchOn: z
-            .object({
-                usageLimit: z.boolean().optional(),
-                authExpired: z.boolean().optional(),
-                accountChanged: z.boolean().optional(),
-                refreshFailure: z.boolean().optional(),
-            })
-            .strict()
-            .optional(),
-        cooldownMs: z.number().int().min(0).optional(),
-        honorProviderResetsAt: z.boolean().optional(),
-        autoRestorePrimaryWhenReset: z.boolean().optional(),
-        maxSwitchesPerTurn: z.number().int().min(0).optional(),
-        maxSwitchesPerSessionHour: z.number().int().min(0).optional(),
-        softSwitchRemainingPercent: z.number().finite().min(0).max(100).optional(),
-        probeIfSnapshotOlderThanMs: z.number().int().min(1).optional(),
-        preTurnProbeMode: z.enum(['never', 'when_stale', 'always_for_group']).optional(),
-        preTurnProbeOrder: z.enum(['current_first_then_candidates', 'candidates_first_then_current']).optional(),
-        recoveryMode: z.enum(['off', 'wait_until_reset', 'switch_then_resume', 'switch_or_wait']).optional(),
-        resumePromptMode: z.enum(['standard', 'off', 'custom']).optional(),
-    })
-    .strict());
+export const ConnectedServiceAuthGroupPolicyPatchV1Schema = lazyZodSchema(() => z.strictObject({
+        v: z.optional(z.literal(1)),
+        strategy: z.optional(ConnectedServiceAuthGroupStrategyV1Schema),
+        autoSwitch: z.optional(z.boolean()),
+        autoUseQuotaResetsWhenExhausted: z.optional(z.boolean()),
+        autoDisablePlanInvalidAccounts: z.optional(z.boolean()),
+        quotaLimitSelection: z.optional(ConnectedServiceQuotaLimitSelectionV1Schema),
+        switchOn: z.optional(z.strictObject({
+                usageLimit: z.optional(z.boolean()),
+                authExpired: z.optional(z.boolean()),
+                accountChanged: z.optional(z.boolean()),
+                refreshFailure: z.optional(z.boolean()),
+            })),
+        cooldownMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+        honorProviderResetsAt: z.optional(z.boolean()),
+        autoRestorePrimaryWhenReset: z.optional(z.boolean()),
+        maxSwitchesPerTurn: z.optional(z.number().check(z.int(), z.minimum(0))),
+        maxSwitchesPerSessionHour: z.optional(z.number().check(z.int(), z.minimum(0))),
+        softSwitchRemainingPercent: z.optional(z.number().check(z.minimum(0), z.maximum(100))),
+        probeIfSnapshotOlderThanMs: z.optional(z.number().check(z.int(), z.minimum(1))),
+        preTurnProbeMode: z.optional(z.enum(['never', 'when_stale', 'always_for_group'])),
+        preTurnProbeOrder: z.optional(z.enum(['current_first_then_candidates', 'candidates_first_then_current'])),
+        recoveryMode: z.optional(z.enum(['off', 'wait_until_reset', 'switch_then_resume', 'switch_or_wait'])),
+        resumePromptMode: z.optional(z.enum(['standard', 'off', 'custom'])),
+    }));
 
 export type ConnectedServiceAuthGroupPolicyPatchV1 = z.infer<typeof ConnectedServiceAuthGroupPolicyPatchV1Schema>;
 
-export const ConnectedServiceAuthGroupMemberStateV1Schema = lazyZodSchema(() => z
-    .object({
-        cooldownUntilMs: z.number().int().nonnegative().nullable().optional(),
-        exhaustedUntilMs: z.number().int().nonnegative().nullable().optional(),
-        quotaExhaustedUntilMs: z.number().int().nonnegative().nullable().optional(),
-        rateLimitedUntilMs: z.number().int().nonnegative().nullable().optional(),
-        capacityLimitedUntilMs: z.number().int().nonnegative().nullable().optional(),
-        authInvalidUntilMs: z.number().int().nonnegative().nullable().optional(),
-        planUnavailableUntilMs: z.number().int().nonnegative().nullable().optional(),
-        modelUnavailableUntilMsByModelId: z.record(z.string().trim().min(1), z.number().int().nonnegative()).optional(),
-        autoDisabledReason: z.enum(['model_not_entitled']).nullable().optional(),
-        validationBlockedUntilMs: z.number().int().nonnegative().nullable().optional(),
-        lastFailureKind: z.string().trim().min(1).nullable().optional(),
-        lastFailureCode: z.string().trim().min(1).nullable().optional(),
-        lastObservedPlanType: z.string().trim().min(1).nullable().optional(),
-        lastObservedAtMs: z.number().int().nonnegative().nullable().optional(),
-        providerResetsAtMs: z.number().int().nonnegative().nullable().optional(),
-        credentialHealthStatus: ConnectedServiceCredentialHealthStatusV1Schema.nullable().optional(),
-    })
-    .passthrough()
-    .default({}));
+export const ConnectedServiceAuthGroupMemberStateV1Schema = lazyZodSchema(() => z._default(z.looseObject({
+        cooldownUntilMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        exhaustedUntilMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        quotaExhaustedUntilMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        rateLimitedUntilMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        capacityLimitedUntilMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        authInvalidUntilMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        planUnavailableUntilMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        modelUnavailableUntilMsByModelId: z.optional(z.record(z.string().check(z.trim(), z.minLength(1)), z.number().check(z.int(), z.nonnegative()))),
+        autoDisabledReason: z.optional(z.nullable(z.enum(['model_not_entitled']))),
+        validationBlockedUntilMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        lastFailureKind: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+        lastFailureCode: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+        lastObservedPlanType: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+        lastObservedAtMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        providerResetsAtMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        credentialHealthStatus: z.optional(z.nullable(ConnectedServiceCredentialHealthStatusV1Schema)),
+    }), {}));
 
 export type ConnectedServiceAuthGroupMemberStateV1 = z.infer<typeof ConnectedServiceAuthGroupMemberStateV1Schema>;
 
-export const ConnectedServiceAuthGroupStateV1Schema = lazyZodSchema(() => z
-    .object({
-        status: z.enum(['ready', 'switching', 'exhausted', 'error', 'unknown']).optional(),
-        lastSwitchAt: z.number().int().nonnegative().nullable().optional(),
-        lastSwitchReason: z.string().trim().min(1).nullable().optional(),
-        activeSince: z.object({
-            accountId: z.string().trim().min(1),
-            atMs: z.number().int().nonnegative(),
-        }).strict().nullable().optional(),
-    })
-    .passthrough()
-    .default({}));
+export const ConnectedServiceAuthGroupStateV1Schema = lazyZodSchema(() => z._default(z.looseObject({
+        status: z.optional(z.enum(['ready', 'switching', 'exhausted', 'error', 'unknown'])),
+        lastSwitchAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        lastSwitchReason: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+        activeSince: z.optional(z.nullable(z.strictObject({
+            accountId: z.string().check(z.trim(), z.minLength(1)),
+            atMs: z.number().check(z.int(), z.nonnegative()),
+        }))),
+    }), {}));
 
 export type ConnectedServiceAuthGroupStateV1 = z.infer<typeof ConnectedServiceAuthGroupStateV1Schema>;
 
-const ConnectedServiceAuthGroupStatePatchV1Schema = lazyZodSchema(() => z
-    .object({
-        status: z.enum(['ready', 'switching', 'exhausted', 'error', 'unknown']).optional(),
-        lastSwitchAt: z.number().int().nonnegative().nullable().optional(),
-        lastSwitchReason: z.string().trim().min(1).nullable().optional(),
-    })
-    .passthrough());
+const ConnectedServiceAuthGroupStatePatchV1Schema = lazyZodSchema(() => z.looseObject({
+        status: z.optional(z.enum(['ready', 'switching', 'exhausted', 'error', 'unknown'])),
+        lastSwitchAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        lastSwitchReason: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+    }));
 
-export const ConnectedServiceAuthGroupMemberV1Schema = lazyZodSchema(() => z
-    .object({
+export const ConnectedServiceAuthGroupMemberV1Schema = lazyZodSchema(() => z.strictObject({
         v: z.literal(1),
         serviceId: ConnectedServiceIdSchema,
         groupId: ConnectedServiceAuthGroupIdSchema,
         profileId: ConnectedServiceProfileIdSchema,
-        priority: z.number().int().default(100),
-        enabled: z.boolean().default(true),
+        priority: z._default(z.number().check(z.int()), 100),
+        enabled: z._default(z.boolean(), true),
         state: ConnectedServiceAuthGroupMemberStateV1Schema,
-        createdAt: z.number().int().nonnegative(),
-        updatedAt: z.number().int().nonnegative(),
-    })
-    .strict());
+        createdAt: z.number().check(z.int(), z.nonnegative()),
+        updatedAt: z.number().check(z.int(), z.nonnegative()),
+    }));
 
 export type ConnectedServiceAuthGroupMemberV1 = z.infer<typeof ConnectedServiceAuthGroupMemberV1Schema>;
 
 export const ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema =
-    lazyZodSchema(() => z.number().int().nonnegative());
+    lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
 
-export const ConnectedServiceAuthGroupV1Schema = lazyZodSchema(() => z
-    .object({
+export const ConnectedServiceAuthGroupV1Schema = lazyZodSchema(() => z.strictObject({
         v: z.literal(1),
         serviceId: ConnectedServiceIdSchema,
         groupId: ConnectedServiceAuthGroupIdSchema,
-        displayName: z.string().trim().min(1).nullable(),
+        displayName: z.nullable(z.string().check(z.trim(), z.minLength(1))),
         policy: ConnectedServiceAuthGroupPolicyV1Schema,
-        activeProfileId: ConnectedServiceProfileIdSchema.nullable(),
-        generation: z.number().int().nonnegative(),
+        activeProfileId: z.nullable(ConnectedServiceProfileIdSchema),
+        generation: z.number().check(z.int(), z.nonnegative()),
         runtimeStateRevision: ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema,
         state: ConnectedServiceAuthGroupStateV1Schema,
-        createdAt: z.number().int().nonnegative(),
-        updatedAt: z.number().int().nonnegative(),
-        members: z.array(ConnectedServiceAuthGroupMemberV1Schema).default([]),
-    })
-    .strict());
+        createdAt: z.number().check(z.int(), z.nonnegative()),
+        updatedAt: z.number().check(z.int(), z.nonnegative()),
+        members: z._default(z.array(ConnectedServiceAuthGroupMemberV1Schema), []),
+    }));
 
 export type ConnectedServiceAuthGroupV1 = z.infer<typeof ConnectedServiceAuthGroupV1Schema>;
 
-export const ConnectedServiceAuthGroupRouteParamsV1Schema = lazyZodSchema(() => z
-    .object({
+export const ConnectedServiceAuthGroupRouteParamsV1Schema = lazyZodSchema(() => z.strictObject({
         serviceId: ConnectedServiceIdSchema,
         groupId: ConnectedServiceAuthGroupIdSchema,
-    })
-    .strict());
+    }));
 
 export type ConnectedServiceAuthGroupRouteParamsV1 = z.infer<typeof ConnectedServiceAuthGroupRouteParamsV1Schema>;
 
-const ConnectedServiceAuthGroupMemberInputV1Schema = lazyZodSchema(() => z
-    .object({
+const ConnectedServiceAuthGroupMemberInputV1Schema = lazyZodSchema(() => z.strictObject({
         profileId: ConnectedServiceProfileIdSchema,
-        priority: z.number().int().default(100),
-        enabled: z.boolean().default(true),
-    })
-    .strict());
+        priority: z._default(z.number().check(z.int()), 100),
+        enabled: z._default(z.boolean(), true),
+    }));
 
-export const ConnectedServiceAuthGroupCreateRequestV1Schema = lazyZodSchema(() => z
-    .object({
+export const ConnectedServiceAuthGroupCreateRequestV1Schema = lazyZodSchema(() => z.strictObject({
         groupId: ConnectedServiceAuthGroupIdSchema,
-        displayName: z.string().trim().min(1).nullable().optional(),
-        policy: ConnectedServiceAuthGroupPolicyPatchV1Schema.optional(),
-        members: z.array(ConnectedServiceAuthGroupMemberInputV1Schema).default([]),
-        activeProfileId: ConnectedServiceProfileIdSchema.nullable().optional(),
-    })
-    .strict());
+        displayName: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+        policy: z.optional(ConnectedServiceAuthGroupPolicyPatchV1Schema),
+        members: z._default(z.array(ConnectedServiceAuthGroupMemberInputV1Schema), []),
+        activeProfileId: z.optional(z.nullable(ConnectedServiceProfileIdSchema)),
+    }));
 
 export type ConnectedServiceAuthGroupCreateRequestV1 = z.infer<typeof ConnectedServiceAuthGroupCreateRequestV1Schema>;
 
-export const ConnectedServiceAuthGroupPatchRequestV1Schema = lazyZodSchema(() => z
-    .object({
-        displayName: z.string().trim().min(1).nullable().optional(),
-        policy: ConnectedServiceAuthGroupPolicyPatchV1Schema.optional(),
-        activeProfileId: ConnectedServiceProfileIdSchema.nullable().optional(),
-        expectedGeneration: z.number().int().nonnegative().optional(),
-    })
-    .strict()
-    .superRefine((request, ctx) => {
+export const ConnectedServiceAuthGroupPatchRequestV1Schema = lazyZodSchema(() => z.strictObject({
+        displayName: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+        policy: z.optional(ConnectedServiceAuthGroupPolicyPatchV1Schema),
+        activeProfileId: z.optional(z.nullable(ConnectedServiceProfileIdSchema)),
+        expectedGeneration: z.optional(z.number().check(z.int(), z.nonnegative())),
+    }).check(z.superRefine((request, ctx) => {
         if (
             (request.activeProfileId !== undefined || request.policy !== undefined)
             && request.expectedGeneration === undefined
         ) {
             ctx.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: "custom",
                 path: ['expectedGeneration'],
                 message: 'expectedGeneration is required when generation-sensitive group fields are patched',
             });
         }
-    }));
+    })));
 
 export type ConnectedServiceAuthGroupPatchRequestV1 = z.infer<typeof ConnectedServiceAuthGroupPatchRequestV1Schema>;
 
-export const ConnectedServiceAuthGroupMemberCreateRequestV1Schema = lazyZodSchema(() => ConnectedServiceAuthGroupMemberInputV1Schema
-    .extend({
-        expectedGeneration: z.number().int().nonnegative(),
-    })
-    .strict());
+export const ConnectedServiceAuthGroupMemberCreateRequestV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ConnectedServiceAuthGroupMemberInputV1Schema, {
+        expectedGeneration: z.number().check(z.int(), z.nonnegative()),
+    })));
 export type ConnectedServiceAuthGroupMemberCreateRequestV1 = z.infer<typeof ConnectedServiceAuthGroupMemberCreateRequestV1Schema>;
 
-export const ConnectedServiceAuthGroupMemberPatchRequestV1Schema = lazyZodSchema(() => z
-    .object({
-        priority: z.number().int().optional(),
-        enabled: z.boolean().optional(),
-        expectedGeneration: z.number().int().nonnegative(),
-    })
-    .strict());
+export const ConnectedServiceAuthGroupMemberPatchRequestV1Schema = lazyZodSchema(() => z.strictObject({
+        priority: z.optional(z.number().check(z.int())),
+        enabled: z.optional(z.boolean()),
+        expectedGeneration: z.number().check(z.int(), z.nonnegative()),
+    }));
 
 export type ConnectedServiceAuthGroupMemberPatchRequestV1 = z.infer<typeof ConnectedServiceAuthGroupMemberPatchRequestV1Schema>;
 
-export const ConnectedServiceAuthGroupMemberDeleteRequestV1Schema = lazyZodSchema(() => z
-    .object({
-        expectedGeneration: z.preprocess((value) => {
+export const ConnectedServiceAuthGroupMemberDeleteRequestV1Schema = lazyZodSchema(() => z.strictObject({
+        expectedGeneration: z.pipe(z.transform((value) => {
             if (typeof value !== 'string') return value;
             const trimmed = value.trim();
             return trimmed.length > 0 ? Number(trimmed) : value;
-        }, z.number().int().nonnegative()),
-    })
-    .strict());
+        }), z.number().check(z.int(), z.nonnegative())),
+    }));
 
 export type ConnectedServiceAuthGroupMemberDeleteRequestV1 = z.infer<typeof ConnectedServiceAuthGroupMemberDeleteRequestV1Schema>;
 
-export const ConnectedServiceAuthGroupActiveProfileRequestV1Schema = lazyZodSchema(() => z
-    .object({
+export const ConnectedServiceAuthGroupActiveProfileRequestV1Schema = lazyZodSchema(() => z.strictObject({
         profileId: ConnectedServiceProfileIdSchema,
-        expectedGeneration: z.number().int().nonnegative(),
-        overrideRuntimeCooldown: z.boolean().optional(),
-    })
-    .strict());
+        expectedGeneration: z.number().check(z.int(), z.nonnegative()),
+        overrideRuntimeCooldown: z.optional(z.boolean()),
+    }));
 
 export type ConnectedServiceAuthGroupActiveProfileRequestV1 = z.infer<typeof ConnectedServiceAuthGroupActiveProfileRequestV1Schema>;
 
-const ConnectedServiceAuthGroupMemberRuntimeStatePatchV1Schema = lazyZodSchema(() => z
-    .object({
+const ConnectedServiceAuthGroupMemberRuntimeStatePatchV1Schema = lazyZodSchema(() => z.strictObject({
         profileId: ConnectedServiceProfileIdSchema,
         state: ConnectedServiceAuthGroupMemberStateV1Schema,
-    })
-    .strict());
+    }));
 
-export const ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema = lazyZodSchema(() => z
-    .object({
-        expectedGeneration: z.number().int().nonnegative().optional(),
-        expectedRuntimeStateRevision: ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema.optional(),
-        state: ConnectedServiceAuthGroupStatePatchV1Schema.optional(),
-        memberStates: z.array(ConnectedServiceAuthGroupMemberRuntimeStatePatchV1Schema).default([]),
-    })
-    .strict());
+export const ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema = lazyZodSchema(() => z.strictObject({
+        expectedGeneration: z.optional(z.number().check(z.int(), z.nonnegative())),
+        expectedRuntimeStateRevision: z.optional(ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema),
+        state: z.optional(ConnectedServiceAuthGroupStatePatchV1Schema),
+        memberStates: z._default(z.array(ConnectedServiceAuthGroupMemberRuntimeStatePatchV1Schema), []),
+    }));
 
 export type ConnectedServiceAuthGroupRuntimeStatePatchRequestV1 =
     z.infer<typeof ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema>;
 
-export const ConnectedServiceAuthGroupListResponseV1Schema = lazyZodSchema(() => z
-    .object({
+export const ConnectedServiceAuthGroupListResponseV1Schema = lazyZodSchema(() => z.strictObject({
         groups: z.array(ConnectedServiceAuthGroupV1Schema),
-    })
-    .strict());
+    }));
 
 export type ConnectedServiceAuthGroupListResponseV1 = z.infer<typeof ConnectedServiceAuthGroupListResponseV1Schema>;
 
-export const ConnectedServiceAuthGroupResponseV1Schema = lazyZodSchema(() => z
-    .object({
+export const ConnectedServiceAuthGroupResponseV1Schema = lazyZodSchema(() => z.strictObject({
         group: ConnectedServiceAuthGroupV1Schema,
-    })
-    .strict());
+    }));
 
 export type ConnectedServiceAuthGroupResponseV1 = z.infer<typeof ConnectedServiceAuthGroupResponseV1Schema>;
 
@@ -889,11 +824,11 @@ export const ConnectedServiceAuthGroupErrorCodeV1Schema = lazyZodSchema(() => z.
 
 export type ConnectedServiceAuthGroupErrorCodeV1 = z.infer<typeof ConnectedServiceAuthGroupErrorCodeV1Schema>;
 
-export const ConnectedServiceAuthGroupErrorResponseV1Schema = lazyZodSchema(() => z.object({
+export const ConnectedServiceAuthGroupErrorResponseV1Schema = lazyZodSchema(() => z.strictObject({
     error: ConnectedServiceAuthGroupErrorCodeV1Schema,
-    generation: z.number().int().min(0).optional(),
-    runtimeStateRevision: ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema.optional(),
-    resetAtMs: z.number().int().nonnegative().optional(),
-}).strict());
+    generation: z.optional(z.number().check(z.int(), z.minimum(0))),
+    runtimeStateRevision: z.optional(ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema),
+    resetAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+}));
 
 export type ConnectedServiceAuthGroupErrorResponseV1 = z.infer<typeof ConnectedServiceAuthGroupErrorResponseV1Schema>;

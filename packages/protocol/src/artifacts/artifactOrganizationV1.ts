@@ -1,13 +1,13 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 
 /** Generic library metadata. Personal placement is stored in the existing private folders row. */
-export const ArtifactOrganizationHeaderV1Schema = lazyZodSchema(() => z.object({
-  folderId: z.string().min(1).nullable().optional(),
-  tags: z.array(z.string().min(1)).optional(),
-}).strict());
+export const ArtifactOrganizationHeaderV1Schema = lazyZodSchema(() => z.strictObject({
+  folderId: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+  tags: z.optional(z.array(z.string().check(z.minLength(1)))),
+}));
 export type ArtifactOrganizationHeaderV1 = z.infer<typeof ArtifactOrganizationHeaderV1Schema>;
 export const StoredArtifactOrganizationHeaderV1Schema = createStoredReadSchema(ArtifactOrganizationHeaderV1Schema);
 

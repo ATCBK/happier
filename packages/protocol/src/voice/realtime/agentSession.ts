@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginContributionIdentityV1Schema } from '../../plugins/contributionIdentity.js';
 import {
@@ -12,10 +12,7 @@ import {
 
 export const AGENT_SESSION_REALTIME_SDP_MAX_BYTES = 64 * 1024;
 
-const boundedUtf8String = (maxBytes: number) => z.string().refine(
-  (value) => new TextEncoder().encode(value).byteLength <= maxBytes,
-  `Value must be at most ${maxBytes} UTF-8 bytes.`,
-);
+const boundedUtf8String = (maxBytes: number) => z.string().check(z.refine((value) => new TextEncoder().encode(value).byteLength <= maxBytes, `Value must be at most ${maxBytes} UTF-8 bytes.`));
 
 const agentSessionRealtimeSelectionV1Shape = {
   v: defineProtocolLiteral(1),
@@ -37,25 +34,25 @@ const AgentSessionRealtimeAttemptSelectionV1Schema = defineProtocolObject(
   { policy: 'closed' },
 );
 
-const AgentSessionRealtimeUnavailableV1Schema = lazyZodSchema(() => z.object({
+const AgentSessionRealtimeUnavailableV1Schema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(false),
   status: z.literal('unavailable'),
-  code: z.string().min(1).max(128),
-  message: z.string().min(1).max(4096),
-  reason: z.enum([
+  code: z.string().check(z.minLength(1), z.maxLength(128)),
+  message: z.string().check(z.minLength(1), z.maxLength(4096)),
+  reason: z.optional(z.enum([
     'authentication_required',
     'session_unavailable',
     'unsupported_runtime',
     'update_required',
     'feature_unavailable',
-  ]).optional(),
-}).strict());
+  ])),
+}));
 
 const AgentSessionRealtimeFailedV1Schema =
-  lazyZodSchema(() => AgentSessionRealtimeUnavailableV1Schema.extend({
+  lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AgentSessionRealtimeUnavailableV1Schema, {
     status: z.literal('failed'),
-    reason: z.never().optional(),
-  }).strict());
+    reason: z.optional(z.never()),
+  })));
 
 export const AgentSessionRealtimeInspectRequestV1Schema =
   AgentSessionRealtimeSelectionV1Schema;
@@ -101,11 +98,11 @@ export type AgentSessionRealtimeWatchRequestV1 = ReturnType<
 >;
 
 export const AgentSessionRealtimeInspectResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     status: z.literal('available'),
     transport: z.literal('webrtc'),
-  }).strict(),
+  }),
   AgentSessionRealtimeUnavailableV1Schema,
 ]));
 export type AgentSessionRealtimeInspectResultV1 = z.infer<
@@ -113,18 +110,18 @@ export type AgentSessionRealtimeInspectResultV1 = z.infer<
 >;
 
 export const AgentSessionRealtimeStartResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     status: z.literal('started'),
-    transport: z.object({
+    transport: z.strictObject({
       kind: z.literal('webrtc'),
       answerSdp: boundedUtf8String(AGENT_SESSION_REALTIME_SDP_MAX_BYTES),
-    }).strict(),
-  }).strict(),
-  z.object({
+    }),
+  }),
+  z.strictObject({
     ok: z.literal(true),
     status: z.enum(['busy', 'aborted']),
-  }).strict(),
+  }),
   AgentSessionRealtimeUnavailableV1Schema,
   AgentSessionRealtimeFailedV1Schema,
 ]));
@@ -133,10 +130,10 @@ export type AgentSessionRealtimeStartResultV1 = z.infer<
 >;
 
 export const AgentSessionRealtimeStopResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     status: z.enum(['stopped', 'already_stopped', 'aborted']),
-  }).strict(),
+  }),
   AgentSessionRealtimeUnavailableV1Schema,
 ]));
 export type AgentSessionRealtimeStopResultV1 = z.infer<
@@ -144,10 +141,10 @@ export type AgentSessionRealtimeStopResultV1 = z.infer<
 >;
 
 export const AgentSessionRealtimeWatchResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     status: z.literal('terminal'),
-    event: z.object({
+    event: z.strictObject({
       kind: z.literal('terminal'),
       reason: z.enum([
         'stopped',
@@ -156,13 +153,13 @@ export const AgentSessionRealtimeWatchResultV1Schema = lazyZodSchema(() => z.uni
         'aborted',
         'error',
       ]),
-      diagnostic: z.object({
-        code: z.string().min(1).max(128),
+      diagnostic: z.optional(z.strictObject({
+        code: z.string().check(z.minLength(1), z.maxLength(128)),
         severity: z.enum(['info', 'warning', 'error']),
-        message: z.string().min(1).max(4096).optional(),
-      }).strict().optional(),
-    }).strict(),
-  }).strict(),
+        message: z.optional(z.string().check(z.minLength(1), z.maxLength(4096))),
+      })),
+    }),
+  }),
   AgentSessionRealtimeUnavailableV1Schema,
 ]));
 export type AgentSessionRealtimeWatchResultV1 = z.infer<

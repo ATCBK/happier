@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ProjectNativeRefV1Schema } from '../../../workspaces/projectSetup/projectManifestV1.js';
 import { WorkspaceRefV1WriteSchema } from '../../../workspaces/workspaceRefV1.js';
 import { ProjectExecutionChoiceV1Schema } from '../../../workspaces/projectWorkerPreferencesV1.js';
@@ -9,13 +9,13 @@ import { bytesToHex } from '@noble/hashes/utils';
 import type { WorkspaceRefV1 } from '../../../workspaces/workspaceRefV1.js';
 
 /** Source identity retained by Local Services; this input does not confer launch/control authority. */
-export const ProjectServiceDeclarationRefV1Schema = lazyZodSchema(() => z.object({
+export const ProjectServiceDeclarationRefV1Schema = lazyZodSchema(() => z.strictObject({
   workspaceRefId: WorkspaceRefV1WriteSchema.shape.id,
   selection: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('manifest'), name: z.string().min(1) }).strict(),
-    z.object({ kind: z.literal('native'), source: ProjectNativeRefV1Schema }).strict(),
+    z.strictObject({ kind: z.literal('manifest'), name: z.string().check(z.minLength(1)) }),
+    z.strictObject({ kind: z.literal('native'), source: ProjectNativeRefV1Schema }),
   ]),
-}).strict());
+}));
 export type ProjectServiceDeclarationRefV1 = z.infer<typeof ProjectServiceDeclarationRefV1Schema>;
 
 /** Incumbent launcher identity, qualified by the actual Home, Machine and declaration. */
@@ -39,73 +39,63 @@ export const LocalServiceActionKindV1Schema = lazyZodSchema(() => z.enum([
 ]));
 export type LocalServiceActionKindV1 = z.infer<typeof LocalServiceActionKindV1Schema>;
 
-export const LocalServiceManagedServiceActionTargetV1Schema = lazyZodSchema(() => z
-  .object({
+export const LocalServiceManagedServiceActionTargetV1Schema = lazyZodSchema(() => z.strictObject({
     kind: z.literal('managed_service'),
-    managedServiceId: z.string().trim().min(1).max(256),
-    machineId: z.string().trim().min(1).max(256),
-    sessionId: z.string().trim().min(1).max(256).optional(),
-    workspaceId: WorkspaceRefV1WriteSchema.shape.id.optional(),
-    cwd: WorkspaceRefV1WriteSchema.shape.rootPath.optional(),
-    declaration: ProjectServiceDeclarationRefV1Schema.optional(),
-  })
-  .strict());
+    managedServiceId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    machineId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    sessionId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    workspaceId: z.optional(WorkspaceRefV1WriteSchema.shape.id),
+    cwd: z.optional(WorkspaceRefV1WriteSchema.shape.rootPath),
+    declaration: z.optional(ProjectServiceDeclarationRefV1Schema),
+  }));
 export type LocalServiceManagedServiceActionTargetV1 = z.infer<typeof LocalServiceManagedServiceActionTargetV1Schema>;
 
 export const LocalServiceActionTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z
-    .object({
+  z.strictObject({
       kind: z.literal('inventory_entry'),
-      inventoryEntryId: z.string().trim().min(1).max(256),
-      machineId: z.string().trim().min(1).max(256),
-      sessionId: z.string().trim().min(1).max(256).optional(),
-      workspaceId: z.string().trim().min(1).max(256).optional(),
-    })
-    .strict(),
+      inventoryEntryId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+      machineId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+      sessionId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+      workspaceId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    }),
   LocalServiceManagedServiceActionTargetV1Schema,
 ]));
 export type LocalServiceActionTargetV1 = z.infer<typeof LocalServiceActionTargetV1Schema>;
 
-export const LocalServiceActionDecisionV1Schema = lazyZodSchema(() => z
-  .object({
+export const LocalServiceActionDecisionV1Schema = lazyZodSchema(() => z.strictObject({
     kind: LocalServiceActionKindV1Schema,
     enabled: z.boolean(),
     requiresConfirmation: z.boolean(),
-    requiresSecondConfirmation: z.boolean().optional().default(false),
-    reasonCode: z.string().trim().min(1).max(256).optional(),
+    requiresSecondConfirmation: z._default(z.optional(z.boolean()), false),
+    reasonCode: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
     auditRequired: z.boolean(),
-  })
-  .strict()
-  .superRefine((decision, ctx) => {
+  }).check(z.superRefine((decision, ctx) => {
     if (!decision.enabled && !decision.reasonCode) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['reasonCode'],
         message: 'Disabled action decisions must include a reasonCode.',
       });
     }
-  }));
+  })));
 export type LocalServiceActionDecisionV1 = z.infer<typeof LocalServiceActionDecisionV1Schema>;
 
-export const LocalServiceActionRequestV1Schema = lazyZodSchema(() => z
-  .object({
-    requestId: z.string().trim().min(1).max(256),
+export const LocalServiceActionRequestV1Schema = lazyZodSchema(() => z.strictObject({
+    requestId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
     target: LocalServiceActionTargetV1Schema,
     action: LocalServiceActionKindV1Schema,
     // On Undo, both this key and the target id address the owner's persisted suppression.
-    undoKey: z.string().trim().min(1).optional(),
-    confirmationNonce: z.string().trim().min(1).max(256).optional(),
-    force: z.boolean().optional().default(false),
-    expectedEffectDigest: z.string().min(1).optional(),
-    choice: ProjectExecutionChoiceV1Schema.optional(),
-  })
-  .strict()
-  .superRefine((request, ctx) => {
+    undoKey: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    confirmationNonce: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    force: z._default(z.optional(z.boolean()), false),
+    expectedEffectDigest: z.optional(z.string().check(z.minLength(1))),
+    choice: z.optional(ProjectExecutionChoiceV1Schema),
+  }).check(z.superRefine((request, ctx) => {
     if (request.undoKey && (request.action !== 'forget' || request.target.kind !== 'inventory_entry'
       || request.target.inventoryEntryId !== request.undoKey)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['undoKey'], message: 'Undo must target the same detected service suppression key.' });
+      ctx.addIssue({ code: "custom", path: ['undoKey'], message: 'Undo must target the same detected service suppression key.' });
     }
-  }));
+  })));
 export type LocalServiceActionRequestV1 = z.infer<typeof LocalServiceActionRequestV1Schema>;
 
 const LOCAL_SERVICE_ACTION_CONFIRMATION_NONCE_PREFIX_V1 = 'lsact1_';
@@ -185,42 +175,37 @@ export function isLocalServiceActionConfirmationNonceV1(
   return request.confirmationNonce === createLocalServiceActionConfirmationNonceV1(request);
 }
 
-export const LocalServiceActionAuditEventV1Schema = lazyZodSchema(() => z
-  .object({
+export const LocalServiceActionAuditEventV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    eventId: z.string().trim().min(1).max(256),
-    requestId: z.string().trim().min(1).max(256),
-    machineId: z.string().trim().min(1).max(256),
+    eventId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    requestId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    machineId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
     action: LocalServiceActionKindV1Schema,
     result: z.enum(['requested', 'denied', 'confirmed', 'succeeded', 'failed']),
-    reasonCode: z.string().trim().min(1).max(256).optional(),
-    recordedAt: z.number().int().nonnegative(),
-  })
-  .strict());
+    reasonCode: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    recordedAt: z.number().check(z.int(), z.nonnegative()),
+  }));
 export type LocalServiceActionAuditEventV1 = z.infer<typeof LocalServiceActionAuditEventV1Schema>;
 
-export const LocalServiceActionResultV1Schema = lazyZodSchema(() => z
-  .object({
+export const LocalServiceActionResultV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    requestId: z.string().trim().min(1).max(256),
+    requestId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
     action: LocalServiceActionKindV1Schema,
     status: z.enum(['succeeded', 'denied', 'failed']),
-    undoKey: z.string().trim().min(1).optional(),
-    reasonCode: z.string().trim().min(1).max(256).optional(),
+    undoKey: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    reasonCode: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
     auditEvents: z.array(LocalServiceActionAuditEventV1Schema),
-    reviewedEffect: StrictJsonValueSchema.optional(),
-    reviewedEffectDigest: z.string().min(1).optional(),
-  })
-  .strict()
-  .superRefine((result, ctx) => {
+    reviewedEffect: z.optional(StrictJsonValueSchema),
+    reviewedEffectDigest: z.optional(z.string().check(z.minLength(1))),
+  }).check(z.superRefine((result, ctx) => {
     if (result.status !== 'succeeded' && !result.reasonCode) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['reasonCode'],
         message: 'Unsuccessful action results must include a reasonCode.',
       });
     }
-  }));
+  })));
 export type LocalServiceActionResultV1 = z.infer<typeof LocalServiceActionResultV1Schema>;
 
 export const DaemonLocalServiceActionExecuteRequestV1Schema = LocalServiceActionRequestV1Schema;
@@ -228,12 +213,10 @@ export type DaemonLocalServiceActionExecuteRequestV1 = z.infer<
   typeof DaemonLocalServiceActionExecuteRequestV1Schema
 >;
 
-export const DaemonLocalServiceActionExecuteResponseV1Schema = lazyZodSchema(() => z
-  .object({
+export const DaemonLocalServiceActionExecuteResponseV1Schema = lazyZodSchema(() => z.strictObject({
     protocolVersion: z.literal(1),
     result: LocalServiceActionResultV1Schema,
-  })
-  .strict());
+  }));
 export type DaemonLocalServiceActionExecuteResponseV1 = z.infer<
   typeof DaemonLocalServiceActionExecuteResponseV1Schema
 >;

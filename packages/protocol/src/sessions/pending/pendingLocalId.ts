@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { defineProtocolString } from '../../plugins/actions/protocolComposableSchema.js';
 import { SessionIndexedIdentifierMaxLengthV1 } from '../idsV1.js';
@@ -37,8 +37,8 @@ export function readPendingLocalId(value: unknown): string | null {
   return isPendingLocalId(value) ? value : null;
 }
 
-export const PendingLocalIdSchema = lazyZodSchema(() => z.string().refine(isPendingLocalId, {
+export const PendingLocalIdSchema = lazyZodSchema(() => z.string().check(z.refine(isPendingLocalId, {
   message: 'Pending localId must not be blank',
-}));
+})));
 
 export type PendingLocalId = z.infer<typeof PendingLocalIdSchema>;

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ManagedResourceDependencyV1Schema, ManagedResourceDispositionV1Schema } from '../../machines/managed/managedDependencyV1.js';
 
 import { AccountSettingsStoredContentEnvelopeSchema } from './accountSettingsStoredContentEnvelope.js';
@@ -22,47 +22,47 @@ import { SHARED_SAVED_SECRET_ACTION_IDS_V1, type SharedSavedSecretActionIdV1 } f
 export { SHARED_SAVED_SECRET_ACTION_IDS_V1, type SharedSavedSecretActionIdV1 } from './savedSecretResourceActionIdsV1.js';
 export const SharedSavedSecretActionIdV1Schema = lazyZodSchema(() => z.enum(SHARED_SAVED_SECRET_ACTION_IDS_V1));
 
-const ResourceIdSchema = lazyZodSchema(() => z.string().min(1).max(128));
-const GrantIdSchema = lazyZodSchema(() => z.string().min(1));
-const SharedResourceReferenceSchema = lazyZodSchema(() => z.string().refine(value => {
+const ResourceIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(128)));
+const GrantIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1)));
+const SharedResourceReferenceSchema = lazyZodSchema(() => z.string().check(z.refine(value => {
   try { return parseSavedSecretRefV1(value).kind === 'shared_resource'; } catch { return false; }
-}, 'Expected a shared Saved Secret resource reference'));
+}, 'Expected a shared Saved Secret resource reference')));
 
-export const SavedSecretCatalogRevisionsV1Schema = lazyZodSchema(() => z.object({
+export const SavedSecretCatalogRevisionsV1Schema = lazyZodSchema(() => z.strictObject({
   mcp: ProfileReferenceGuardRevisionV1Schema,
   acp: ProfileReferenceGuardRevisionV1Schema,
   providerConnections: ProfileReferenceGuardRevisionV1Schema,
   connectedConfigurations: ProfileReferenceGuardRevisionV1Schema,
   connectedPurposes: ProfileReferenceGuardRevisionV1Schema,
-  registrySources: ProfileReferenceGuardRevisionV1Schema.optional(),
-}).strict());
+  registrySources: z.optional(ProfileReferenceGuardRevisionV1Schema),
+}));
 export type SavedSecretCatalogRevisionsV1 = z.infer<typeof SavedSecretCatalogRevisionsV1Schema>;
 
-const SavedSecretRemoteHostReferenceCensusV1Schema = lazyZodSchema(() => z.object({
+const SavedSecretRemoteHostReferenceCensusV1Schema = lazyZodSchema(() => z.strictObject({
   revision: ProfileReferenceGuardRevisionV1Schema,
   resourceRefs: z.array(SharedResourceReferenceSchema),
-}).strict());
-const SavedSecretNotificationChannelReferenceCensusV1Schema = lazyZodSchema(() => z.object({
+}));
+const SavedSecretNotificationChannelReferenceCensusV1Schema = lazyZodSchema(() => z.strictObject({
   revision: ProfileReferenceGuardRevisionV1Schema,
   resourceRefs: z.array(SharedResourceReferenceSchema),
-}).strict());
+}));
 
 /** Complete opened Profile inventory; the guard covers concurrent new identities. */
-export const SavedSecretReferenceCensusV1Schema = lazyZodSchema(() => z.object({
+export const SavedSecretReferenceCensusV1Schema = lazyZodSchema(() => z.strictObject({
   accountMode: z.enum(['plain', 'e2ee']),
   /** The incumbent control CAS also fences source-sensitive promotion. */
-  profileTransferRevision: ProfileReferenceGuardRevisionV1Schema.optional(),
-  profiles: z.object({
+  profileTransferRevision: z.optional(ProfileReferenceGuardRevisionV1Schema),
+  profiles: z.strictObject({
     referenceGuardRevision: ProfileReferenceGuardRevisionV1Schema,
-    rows: z.array(z.object({ id: ProfileRecordIdV1Schema, revision: ProfileRowRevisionV1Schema }).strict()),
-  }).strict(),
+    rows: z.array(z.strictObject({ id: ProfileRecordIdV1Schema, revision: ProfileRowRevisionV1Schema })),
+  }),
   /** Only explicitly reached definitions, never the automatic shared catalog. */
-  artifacts: z.array(ArtifactRevisionV1Schema.extend({ artifactId: z.string().min(1) }).strict()).optional(),
+  artifacts: z.optional(z.array((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ArtifactRevisionV1Schema, { artifactId: z.string().check(z.minLength(1)) })))),
   /** When catalog references are reached, all active catalog authorities are captured. */
-  catalogs: SavedSecretCatalogRevisionsV1Schema.optional(),
-  remoteHosts: SavedSecretRemoteHostReferenceCensusV1Schema.optional(),
-  notificationChannels: SavedSecretNotificationChannelReferenceCensusV1Schema.optional(),
-}).strict().superRefine((value, context) => {
+  catalogs: z.optional(SavedSecretCatalogRevisionsV1Schema),
+  remoteHosts: z.optional(SavedSecretRemoteHostReferenceCensusV1Schema),
+  notificationChannels: z.optional(SavedSecretNotificationChannelReferenceCensusV1Schema),
+}).check(z.superRefine((value, context) => {
   const ids = new Set<string>();
   value.profiles.rows.forEach((row, index) => {
     if (ids.has(row.id)) context.addIssue({ code: 'custom', path: ['profiles', 'rows', index, 'id'], message: 'Duplicate Profile census identity' });
@@ -73,17 +73,17 @@ export const SavedSecretReferenceCensusV1Schema = lazyZodSchema(() => z.object({
     if (artifactIds.has(artifact.artifactId)) context.addIssue({ code: 'custom', path: ['artifacts', index, 'artifactId'], message: 'Duplicate reached Artifact census identity' });
     artifactIds.add(artifact.artifactId);
   });
-}));
+})));
 export type SavedSecretReferenceCensusV1 = z.infer<typeof SavedSecretReferenceCensusV1Schema>;
 
 /** Promotion of existing catalog references does not claim a Profile inventory. */
-export const SavedSecretCatalogReferenceCensusV1Schema = lazyZodSchema(() => z.object({
+export const SavedSecretCatalogReferenceCensusV1Schema = lazyZodSchema(() => z.strictObject({
   scope: z.literal('catalogs'),
   accountMode: z.enum(['plain', 'e2ee']),
-  catalogs: SavedSecretCatalogRevisionsV1Schema.partial(),
-  remoteHosts: SavedSecretRemoteHostReferenceCensusV1Schema.optional(),
-  notificationChannels: SavedSecretNotificationChannelReferenceCensusV1Schema.optional(),
-}).strict());
+  catalogs: z.partial(SavedSecretCatalogRevisionsV1Schema),
+  remoteHosts: z.optional(SavedSecretRemoteHostReferenceCensusV1Schema),
+  notificationChannels: z.optional(SavedSecretNotificationChannelReferenceCensusV1Schema),
+}));
 export type SavedSecretCatalogReferenceCensusV1 = z.infer<typeof SavedSecretCatalogReferenceCensusV1Schema>;
 export const SavedSecretPromoteReferenceCensusV1Schema = lazyZodSchema(() => z.union([
   SavedSecretReferenceCensusV1Schema, SavedSecretCatalogReferenceCensusV1Schema,
@@ -91,65 +91,62 @@ export const SavedSecretPromoteReferenceCensusV1Schema = lazyZodSchema(() => z.u
 export type SavedSecretPromoteReferenceCensusV1 = z.infer<typeof SavedSecretPromoteReferenceCensusV1Schema>;
 
 function connectedCatalogSecretMutationSchema(key: ConnectedAccountCatalogKeyV1) {
-  return ConnectedAccountCatalogRowMutationV1Schema.safeExtend({
+  return lazyZodSchema(() => z.safeExtend(ConnectedAccountCatalogRowMutationV1Schema, {
     // The outer resource transaction is the sole paired Settings writer.
-    settingsMutation: z.never().optional(),
-  }).superRefine((mutation, context) => {
+    settingsMutation: z.optional(z.never()),
+  }).check(z.superRefine((mutation, context) => {
     if (mutation.content?.t === 'plain' && mutation.content.v.key !== key) {
       context.addIssue({ code: 'custom', path: ['content'], message: 'Catalog content must match its mutation arm' });
     }
-  });
+  })));
 }
 
-export const SavedSecretCatalogMutationsV1Schema = lazyZodSchema(() => z.object({
-  mcp: McpServerCatalogRowMutationV1Schema.optional(),
-  acp: AcpCatalogRowMutationV1Schema.optional(),
-  providerConnections: ProviderConnectionsRowMutationV1Schema.optional(),
-  connectedConfigurations: connectedCatalogSecretMutationSchema('configurations').optional(),
-  connectedPurposes: connectedCatalogSecretMutationSchema('purposes').optional(),
-  registrySources: PromptLibraryRowMutationV1Schema.superRefine((mutation, context) => {
+export const SavedSecretCatalogMutationsV1Schema = lazyZodSchema(() => z.strictObject({
+  mcp: z.optional(McpServerCatalogRowMutationV1Schema),
+  acp: z.optional(AcpCatalogRowMutationV1Schema),
+  providerConnections: z.optional(ProviderConnectionsRowMutationV1Schema),
+  connectedConfigurations: z.optional(connectedCatalogSecretMutationSchema('configurations')),
+  connectedPurposes: z.optional(connectedCatalogSecretMutationSchema('purposes')),
+  registrySources: z.optional(PromptLibraryRowMutationV1Schema.check(z.superRefine((mutation, context) => {
     if (mutation.content?.t === 'plain' && mutation.content.v.key !== 'registry-sources') {
       context.addIssue({ code: 'custom', path: ['content'], message: 'Registry token mutation must address registry sources' });
     }
-  }).optional(),
-}).strict());
+  }))),
+}));
 export type SavedSecretCatalogMutationsV1 = z.infer<typeof SavedSecretCatalogMutationsV1Schema>;
 
-export const SavedSecretResourceRecipientEnvelopeInputV1Schema = lazyZodSchema(() => z.object({
-  recipientAccountId: z.string().min(1),
-  encryptedDataKey: z.string().refine(
-    (value) => readCanonicalPaddedBase64DecodedLength(value) === ENCRYPTED_DATA_KEY_ENVELOPE_V1_BYTES,
-    'Expected one canonical encrypted data-key envelope',
-  ),
-  recipientContentPublicKeyFingerprint: z.string().min(1),
-}).strict());
+export const SavedSecretResourceRecipientEnvelopeInputV1Schema = lazyZodSchema(() => z.strictObject({
+  recipientAccountId: z.string().check(z.minLength(1)),
+  encryptedDataKey: z.string().check(z.refine((value) => readCanonicalPaddedBase64DecodedLength(value) === ENCRYPTED_DATA_KEY_ENVELOPE_V1_BYTES, 'Expected one canonical encrypted data-key envelope')),
+  recipientContentPublicKeyFingerprint: z.string().check(z.minLength(1)),
+}));
 
-export const SharedSavedSecretListInputV1Schema = lazyZodSchema(() => z.object({}).strict());
-export const SharedSavedSecretListOutputV1Schema = lazyZodSchema(() => z.object({
+export const SharedSavedSecretListInputV1Schema = lazyZodSchema(() => z.strictObject({}));
+export const SharedSavedSecretListOutputV1Schema = lazyZodSchema(() => z.strictObject({
   resources: z.array(SavedSecretCatalogResultV1Schema),
-}).strict());
+}));
 
-export const SharedSavedSecretCreateInputV1Schema = lazyZodSchema(() => z.object({
+export const SharedSavedSecretCreateInputV1Schema = lazyZodSchema(() => z.strictObject({
   resourceId: ResourceIdSchema,
-  displayName: z.string().min(1).max(100),
+  displayName: z.string().check(z.minLength(1), z.maxLength(100)),
   kind: z.enum(['apiKey', 'token', 'password', 'other']),
   encryptionMode: z.enum(['plain', 'e2ee']),
   storedContent: SavedSecretResourceStoredContentV1Schema,
-  accountGrants: z.array(GrantIdSchema).optional(),
-  teamGrants: z.array(GrantIdSchema).optional(),
-  groupGrants: z.array(GrantIdSchema).optional(),
-  keyEnvelopes: z.array(SavedSecretResourceRecipientEnvelopeInputV1Schema).optional(),
-}).strict());
+  accountGrants: z.optional(z.array(GrantIdSchema)),
+  teamGrants: z.optional(z.array(GrantIdSchema)),
+  groupGrants: z.optional(z.array(GrantIdSchema)),
+  keyEnvelopes: z.optional(z.array(SavedSecretResourceRecipientEnvelopeInputV1Schema)),
+}));
 
 export type SharedSavedSecretCreateInputV1 = z.infer<typeof SharedSavedSecretCreateInputV1Schema>;
 
 /** Source identities for equivalent reference rewrites owned by the promotion transaction. */
-export const SavedSecretPersonalPromotionsV1Schema = lazyZodSchema(() => z.array(z.object({
+export const SavedSecretPersonalPromotionsV1Schema = lazyZodSchema(() => z.array(z.strictObject({
   // Retained SavedSecret.id is opaque, including a same-spelling Resource ref.
   // The source owner proves provenance; the transaction validates source custody.
-  personalSecretId: z.string().min(1),
+  personalSecretId: z.string().check(z.minLength(1)),
   resourceId: ResourceIdSchema,
-}).strict()).superRefine((promotions, context) => {
+})).check(z.superRefine((promotions, context) => {
   const sources = new Set<string>();
   const destinations = new Set<string>();
   promotions.forEach((promotion, index) => {
@@ -159,23 +156,23 @@ export const SavedSecretPersonalPromotionsV1Schema = lazyZodSchema(() => z.array
     sources.add(promotion.personalSecretId);
     destinations.add(promotion.resourceId);
   });
-}));
+})));
 export type SavedSecretPersonalPromotionsV1 = z.infer<typeof SavedSecretPersonalPromotionsV1Schema>;
 
-export const SharedSavedSecretPromoteInputV1Schema = lazyZodSchema(() => SharedSavedSecretCreateInputV1Schema.extend({
-  expectedSettingsVersion: z.number().int().nonnegative().optional(),
-  nextSettings: AccountSettingsStoredContentEnvelopeSchema.nullable(),
+export const SharedSavedSecretPromoteInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SharedSavedSecretCreateInputV1Schema, {
+  expectedSettingsVersion: z.optional(z.number().check(z.int(), z.nonnegative())),
+  nextSettings: z.nullable(AccountSettingsStoredContentEnvelopeSchema),
   referenceCensus: SavedSecretPromoteReferenceCensusV1Schema,
-  profileMutations: z.array(ProfileRowMutationV1Schema).default([]),
-  catalogMutations: SavedSecretCatalogMutationsV1Schema.optional(),
-  additionalSavedSecretResources: z.array(SharedSavedSecretCreateInputV1Schema).optional(),
-  personalSecretPromotions: SavedSecretPersonalPromotionsV1Schema.optional(),
+  profileMutations: z._default(z.array(ProfileRowMutationV1Schema), []),
+  catalogMutations: z.optional(SavedSecretCatalogMutationsV1Schema),
+  additionalSavedSecretResources: z.optional(z.array(SharedSavedSecretCreateInputV1Schema)),
+  personalSecretPromotions: z.optional(SavedSecretPersonalPromotionsV1Schema),
   remoteHostMutation: z.optional(RemoteHostCatalogRowMutationV1Schema),
-  notificationChannelMutation: NotificationChannelCatalogMutationV1Schema.safeExtend({
+  notificationChannelMutation: z.optional(z.safeExtend(NotificationChannelCatalogMutationV1Schema, {
     // The outer resource transaction remains the sole paired Settings writer.
-    settingsMutation: z.never().optional(),
-  }).optional(),
-}).strict().superRefine((value, context) => {
+    settingsMutation: z.optional(z.never()),
+  })),
+})).check(z.superRefine((value, context) => {
   const catalogOnly = 'scope' in value.referenceCensus;
   if (catalogOnly) {
     if (value.nextSettings !== null) context.addIssue({ code: 'custom', path: ['nextSettings'], message: 'Catalog-only promotion cannot write Settings' });
@@ -237,30 +234,30 @@ export const SharedSavedSecretPromoteInputV1Schema = lazyZodSchema(() => SharedS
       context.addIssue({ code: 'custom', path: ['personalSecretPromotions', index, 'resourceId'], message: 'Personal promotion destination must be a resource in this request' });
     }
   });
-}));
+})));
 export type SharedSavedSecretPromoteInputV1 = z.infer<typeof SharedSavedSecretPromoteInputV1Schema>;
 
-export const SharedSavedSecretGrantsSetInputV1Schema = lazyZodSchema(() => z.object({
+export const SharedSavedSecretGrantsSetInputV1Schema = lazyZodSchema(() => z.strictObject({
   resourceId: ResourceIdSchema,
-  expectedRevision: z.number().int().nonnegative(),
+  expectedRevision: z.number().check(z.int(), z.nonnegative()),
   accountGrants: z.array(GrantIdSchema),
   teamGrants: z.array(GrantIdSchema),
   groupGrants: z.array(GrantIdSchema),
   /** Complete current E2EE recipient envelopes for the replacement audience. */
-  keyEnvelopes: z.array(SavedSecretResourceRecipientEnvelopeInputV1Schema).optional(),
-}).strict());
+  keyEnvelopes: z.optional(z.array(SavedSecretResourceRecipientEnvelopeInputV1Schema)),
+}));
 
 /** Internal owner repair after an audience/key change; this is not an Action. */
-export const SavedSecretResourceEnvelopeRepairInputV1Schema = lazyZodSchema(() => z.object({
+export const SavedSecretResourceEnvelopeRepairInputV1Schema = lazyZodSchema(() => z.strictObject({
   resourceId: ResourceIdSchema,
-  expectedRevision: z.number().int().positive(),
-  keyEnvelopes: z.array(SavedSecretResourceRecipientEnvelopeInputV1Schema).min(1),
-}).strict());
+  expectedRevision: z.number().check(z.int(), z.positive()),
+  keyEnvelopes: z.array(SavedSecretResourceRecipientEnvelopeInputV1Schema).check(z.minLength(1)),
+}));
 
-export const SharedSavedSecretUpdateInputV1Schema = lazyZodSchema(() => z.object({
+export const SharedSavedSecretUpdateInputV1Schema = lazyZodSchema(() => z.strictObject({
   resourceId: ResourceIdSchema,
-  expectedRevision: z.number().int().nonnegative(),
-  displayName: z.string().min(1).max(100),
+  expectedRevision: z.number().check(z.int(), z.nonnegative()),
+  displayName: z.string().check(z.minLength(1), z.maxLength(100)),
   kind: z.enum(['apiKey', 'token', 'password', 'other']),
   storedContent: SavedSecretResourceStoredContentV1Schema,
   /**
@@ -268,46 +265,46 @@ export const SharedSavedSecretUpdateInputV1Schema = lazyZodSchema(() => z.object
    * resource's current mode, so rename and value rotation are unchanged; the
    * submitted `storedContent` must always match the resulting mode.
    */
-  toMode: z.enum(['plain', 'e2ee']).optional(),
+  toMode: z.optional(z.enum(['plain', 'e2ee'])),
   /** Owner and current-recipient envelopes for a Plain to E2EE conversion. */
-  keyEnvelopes: z.array(SavedSecretResourceRecipientEnvelopeInputV1Schema).optional(),
-}).strict());
+  keyEnvelopes: z.optional(z.array(SavedSecretResourceRecipientEnvelopeInputV1Schema)),
+}));
 
-export const SharedSavedSecretDeleteInputV1Schema = lazyZodSchema(() => z.object({
+export const SharedSavedSecretDeleteInputV1Schema = lazyZodSchema(() => z.strictObject({
   // Deletion is also the recovery path for retained corrupt rows, whose opaque
   // database identity must not be reinterpreted as a canonical resource id.
   resourceId: z.string(),
-  expectedRevision: z.number().int(),
-  expectedSettingsVersion: z.number().int().nonnegative(),
+  expectedRevision: z.number().check(z.int()),
+  expectedSettingsVersion: z.number().check(z.int(), z.nonnegative()),
   referenceCensus: SavedSecretReferenceCensusV1Schema,
-  managedResourceDispositions: z.array(ManagedResourceDispositionV1Schema).optional(),
-}).strict());
+  managedResourceDispositions: z.optional(z.array(ManagedResourceDispositionV1Schema)),
+}));
 
-export const SharedSavedSecretMutationOutputV1Schema = lazyZodSchema(() => z.object({
-  resourceId: z.string().min(1),
-  revision: z.number().int().nonnegative(),
-}).strict());
+export const SharedSavedSecretMutationOutputV1Schema = lazyZodSchema(() => z.strictObject({
+  resourceId: z.string().check(z.minLength(1)),
+  revision: z.number().check(z.int(), z.nonnegative()),
+}));
 export const SavedSecretResourceEnvelopeRepairOutputV1Schema = SharedSavedSecretMutationOutputV1Schema;
-export const SharedSavedSecretPromoteOutputV1Schema = lazyZodSchema(() => z.object({
-  resourceId: z.string().min(1),
-  settingsVersion: z.number().int().nonnegative(),
-  remoteHostRevision: z.number().int().nonnegative().optional(),
-  notificationChannelRevision: z.number().int().nonnegative().optional(),
-  catalogRevisions: SavedSecretCatalogRevisionsV1Schema.partial().optional(),
-}).strict());
-export const SharedSavedSecretDeleteOutputV1Schema = lazyZodSchema(() => z.object({ resourceId: z.string() }).strict());
+export const SharedSavedSecretPromoteOutputV1Schema = lazyZodSchema(() => z.strictObject({
+  resourceId: z.string().check(z.minLength(1)),
+  settingsVersion: z.number().check(z.int(), z.nonnegative()),
+  remoteHostRevision: z.optional(z.number().check(z.int(), z.nonnegative())),
+  notificationChannelRevision: z.optional(z.number().check(z.int(), z.nonnegative())),
+  catalogRevisions: z.optional(z.partial(SavedSecretCatalogRevisionsV1Schema)),
+}));
+export const SharedSavedSecretDeleteOutputV1Schema = lazyZodSchema(() => z.strictObject({ resourceId: z.string() }));
 
-export const SavedSecretResourceActionErrorV1Schema = lazyZodSchema(() => z.union([z.object({
+export const SavedSecretResourceActionErrorV1Schema = lazyZodSchema(() => z.union([z.strictObject({
   error: z.enum([
     'invalid_resource', 'resource_not_found', 'forbidden', 'resource_changed',
     'recipient_changed', 'recipient_key_unavailable', 'invalid_cursor',
     'recipient_mode_unsupported', 'settings_conflict', 'settings_invalid', 'internal',
     'references_conflict', 'references_invalid', 'resource_in_use',
   ]),
-}).strict(), z.object({
+}), z.strictObject({
   error: z.literal('managed_resources_review_required'),
   resources: z.array(ManagedResourceDependencyV1Schema),
-}).strict()]));
+})]));
 
 export const SHARED_SAVED_SECRET_ACTION_PATHS_V1 = {
   'secrets.shared.list': '/v1/account/saved-secrets/resources',
@@ -334,7 +331,7 @@ export const SHARED_SAVED_SECRET_ACTION_INPUT_SCHEMAS_V1 = {
   'secrets.shared.grants.set': SharedSavedSecretGrantsSetInputV1Schema,
   'secrets.shared.update': SharedSavedSecretUpdateInputV1Schema,
   'secrets.shared.delete': SharedSavedSecretDeleteInputV1Schema,
-} as const satisfies Readonly<Record<SharedSavedSecretActionIdV1, z.ZodTypeAny>>;
+} as const satisfies Readonly<Record<SharedSavedSecretActionIdV1, z.ZodMiniType>>;
 
 export const SHARED_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1 = {
   'secrets.shared.list': SharedSavedSecretListOutputV1Schema,
@@ -343,4 +340,4 @@ export const SHARED_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1 = {
   'secrets.shared.grants.set': SharedSavedSecretMutationOutputV1Schema,
   'secrets.shared.update': SharedSavedSecretMutationOutputV1Schema,
   'secrets.shared.delete': SharedSavedSecretDeleteOutputV1Schema,
-} as const satisfies Readonly<Record<SharedSavedSecretActionIdV1, z.ZodTypeAny>>;
+} as const satisfies Readonly<Record<SharedSavedSecretActionIdV1, z.ZodMiniType>>;

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import * as mini from 'zod/mini';
 import { lazyDefinition, lazyZodSchema } from '../../lazyZodSchema.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
@@ -25,26 +25,26 @@ const revision = () => mini.int().check(mini.gte(0));
 export const ManagedMachineActionIdV1Schema = lazyDefinition(() => mini.enum(MANAGED_MACHINE_ACTION_IDS_V1));
 const target = () => ({ homeId: id(), managedId: id() });
 const current = () => ({ ...target(), expectedIntentRevision: revision(), requestId: id(), controller: ManagedControllerV1Schema });
-export const MachineEnvironmentApplyInputV1Schema = lazyZodSchema(() => z.object({
+export const MachineEnvironmentApplyInputV1Schema = lazyZodSchema(() => z.strictObject({
   homeId: id(), machineId: id(), presetId: id(), presetRevision: revision(),
-}).strict());
+}));
 export type MachineEnvironmentApplyInputV1 = z.infer<typeof MachineEnvironmentApplyInputV1Schema>;
-export const MachineEnvironmentApplyResultV1Schema = lazyZodSchema(() => z.object({ operationId: id(), terminalId: mini.optional(id()) }).strict());
-export const MachineEnvironmentResolveResultV1Schema = lazyZodSchema(() => z.object({ environment: MachineEnvironmentV1Schema, managedId: mini.optional(id()) }).strict());
-export const MachineEnvironmentReportInputV1Schema = lazyZodSchema(() => MachineEnvironmentApplyInputV1Schema.extend({
+export const MachineEnvironmentApplyResultV1Schema = lazyZodSchema(() => z.strictObject({ operationId: id(), terminalId: mini.optional(id()) }));
+export const MachineEnvironmentResolveResultV1Schema = lazyZodSchema(() => z.strictObject({ environment: MachineEnvironmentV1Schema, managedId: mini.optional(id()) }));
+export const MachineEnvironmentReportInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(MachineEnvironmentApplyInputV1Schema, {
   managedId: id(), state: z.enum(['running', 'succeeded', 'failed']),
-  operation: z.object({ operationId: id() }).strict(), errorCode: z.string().min(1).optional(),
-}).strict());
+  operation: z.strictObject({ operationId: id() }), errorCode: z.optional(z.string().check(z.minLength(1))),
+})));
 export type MachineEnvironmentReportInputV1 = z.infer<typeof MachineEnvironmentReportInputV1Schema>;
 
 // Classic roots are the actual public Action-spec consumer seam. Internal
 // fields remain one Mini tree; stored projections derive from these owners.
 export const ManagedAcquireInputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ selection: ManagedOneOffSelectionV1Schema, agentStart: ManagedAcquireAgentStartV1Schema.optional(),
-    reviewedFacts: ManagedConfigurationFactsV1Schema.optional() }).strict(),
-  z.object({ selection: ManagedPresetSelectionV1Schema, controller: ManagedControllerV1Schema,
+  z.strictObject({ selection: ManagedOneOffSelectionV1Schema, agentStart: z.optional(ManagedAcquireAgentStartV1Schema),
+    reviewedFacts: z.optional(ManagedConfigurationFactsV1Schema) }),
+  z.strictObject({ selection: ManagedPresetSelectionV1Schema, controller: ManagedControllerV1Schema,
     retention: RetentionV1Schema, wakeOnAcceptedMessage: mini.boolean(),
-    agentStart: ManagedAcquireAgentStartV1Schema.optional(), reviewedFacts: ManagedConfigurationFactsV1Schema.optional() }).strict(),
+    agentStart: z.optional(ManagedAcquireAgentStartV1Schema), reviewedFacts: z.optional(ManagedConfigurationFactsV1Schema) }),
 ]));
 /** One-off effects live in the selection; preset requests carry the separately reviewed policy. */
 export function resolveManagedAcquireReviewV1(input: ManagedAcquireInputV1) {
@@ -53,71 +53,71 @@ export function resolveManagedAcquireReviewV1(input: ManagedAcquireInputV1) {
   return { homeId: input.selection.homeId, controller: input.selection.controller,
     retention: input.selection.retention, wakeOnAcceptedMessage: input.selection.wakeOnAcceptedMessage };
 }
-export const ManagedAcceptedV1Schema = lazyZodSchema(() => z.object({ managedId: id(), operation: ActionOperationGetV1RequestSchema.optional() }).strict());
-export const ManagedListInputV1Schema = lazyZodSchema(() => z.object({ homeId: id(), archived: mini.optional(mini.boolean()) }).strict());
-export const ManagedListOutputV1Schema = lazyZodSchema(() => z.object({ machines: mini.array(ManagedMachineV1Schema) }).strict());
+export const ManagedAcceptedV1Schema = lazyZodSchema(() => z.strictObject({ managedId: id(), operation: z.optional(ActionOperationGetV1RequestSchema) }));
+export const ManagedListInputV1Schema = lazyZodSchema(() => z.strictObject({ homeId: id(), archived: mini.optional(mini.boolean()) }));
+export const ManagedListOutputV1Schema = lazyZodSchema(() => z.strictObject({ machines: mini.array(ManagedMachineV1Schema) }));
 export const ManagedGetOutputV1Schema = lazyZodSchema(() => z.lazy(() => ManagedMachineV1Schema));
-export const ManagedGetInputV1Schema = lazyZodSchema(() => z.object(target()).strict());
-export const ManagedMutationInputV1Schema = lazyZodSchema(() => z.object({ ...target(), expectedIntentRevision: revision() }).strict());
-export const ManagedRebuildInputV1Schema = lazyZodSchema(() => z.object({ homeId: id(), ...DevcontainerRebuildIntentV1Schema.def.shape }).strict());
+export const ManagedGetInputV1Schema = lazyZodSchema(() => z.strictObject(target()));
+export const ManagedMutationInputV1Schema = lazyZodSchema(() => z.strictObject({ ...target(), expectedIntentRevision: revision() }));
+export const ManagedRebuildInputV1Schema = lazyZodSchema(() => z.strictObject({ homeId: id(), ...DevcontainerRebuildIntentV1Schema.def.shape }));
 export const ManagedPowerInputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ ...ManagedIntentInputSchema.def.options[0].def.shape, intent: z.enum(['start', 'stop', 'suspend', 'resume']) }).strict(),
-  z.object({ ...ManagedIntentInputSchema.def.options[1].def.shape, intent: z.literal('stop') }).strict(),
+  z.strictObject({ ...ManagedIntentInputSchema.def.options[0].def.shape, intent: z.enum(['start', 'stop', 'suspend', 'resume']) }),
+  z.strictObject({ ...ManagedIntentInputSchema.def.options[1].def.shape, intent: z.literal('stop') }),
 ]));
 export const ManagedDeleteInputV1Schema = lazyZodSchema(() => z.union([
-  z.object({ ...ManagedIntentInputSchema.def.options[0].def.shape, intent: z.literal('delete'), reviewedDependencies: z.literal(true) }).strict(),
-  z.object({ ...ManagedIntentInputSchema.def.options[1].def.shape, intent: z.literal('delete'), reviewedDependencies: z.literal(true) }).strict(),
+  z.strictObject({ ...ManagedIntentInputSchema.def.options[0].def.shape, intent: z.literal('delete'), reviewedDependencies: z.literal(true) }),
+  z.strictObject({ ...ManagedIntentInputSchema.def.options[1].def.shape, intent: z.literal('delete'), reviewedDependencies: z.literal(true) }),
 ]));
 /** Delete discloses its captured census on every semantic outcome; native intent facts stay unchanged. */
 export const ManagedDeleteOutputV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ ...ManagedIntentResultSchema.def.options[0].def.shape, machineReferences: MachineReferenceCensusV1Schema }).strict(),
-  z.object({ ...ManagedIntentResultSchema.def.options[1].def.shape, machineReferences: MachineReferenceCensusV1Schema }).strict(),
-  z.object({ ...ManagedIntentResultSchema.def.options[2].def.shape, machineReferences: MachineReferenceCensusV1Schema }).strict(),
+  z.strictObject({ ...ManagedIntentResultSchema.def.options[0].def.shape, machineReferences: MachineReferenceCensusV1Schema }),
+  z.strictObject({ ...ManagedIntentResultSchema.def.options[1].def.shape, machineReferences: MachineReferenceCensusV1Schema }),
+  z.strictObject({ ...ManagedIntentResultSchema.def.options[2].def.shape, machineReferences: MachineReferenceCensusV1Schema }),
 ]));
-export const ManagedRetentionUpdateInputV1Schema = lazyZodSchema(() => z.object({ ...target(), expectedIntentRevision: revision(), retention: RetentionV1Schema, wakeOnAcceptedMessage: mini.boolean() }).strict());
-export const ManagedControllerUpdateInputV1Schema = lazyZodSchema(() => z.object({ ...target(), expectedIntentRevision: revision(), controller: ManagedControllerV1Schema, reviewedPendingEffects: z.literal(true) }).strict());
-export const ManagedRetireInputV1Schema = lazyZodSchema(() => z.object({ ...target(), expectedIntentRevision: revision(), manualResponsibility: z.literal(true) }).strict());
-export const ManagedCancelInputV1Schema = lazyZodSchema(() => z.object({ ...target(), expectedIntentRevision: revision() }).strict());
-export const ManagedInspectOutputV1Schema = lazyZodSchema(() => z.object({ machine: ManagedMachineV1Schema, operation: ActionOperationGetV1RequestSchema.optional() }).strict());
-export const ManagedCancelOutputV1Schema = lazyZodSchema(() => z.object({ machine: ManagedMachineV1Schema, operation: ActionOperationGetV1RequestSchema.optional() }).strict());
-export const ManagedErrorV1Schema = lazyZodSchema(() => z.object({ code: ManagedRefusalCodeV1Schema }).strict());
-export const ManagedControllerCurrentnessV1Schema = lazyZodSchema(() => z.object(current()).strict());
-export const ManagedControllerCurrentInputV1Schema = lazyZodSchema(() => ManagedControllerCurrentnessV1Schema.extend({ nativeRole: z.literal('inspect').optional() }).strict());
-export const ManagedGuestCurrentInputV1Schema = lazyZodSchema(() => z.object({ v: z.literal(1),
-  context: SocketRpcMachineAdmissionContextV1Schema, method: z.string().min(1),
+export const ManagedRetentionUpdateInputV1Schema = lazyZodSchema(() => z.strictObject({ ...target(), expectedIntentRevision: revision(), retention: RetentionV1Schema, wakeOnAcceptedMessage: mini.boolean() }));
+export const ManagedControllerUpdateInputV1Schema = lazyZodSchema(() => z.strictObject({ ...target(), expectedIntentRevision: revision(), controller: ManagedControllerV1Schema, reviewedPendingEffects: z.literal(true) }));
+export const ManagedRetireInputV1Schema = lazyZodSchema(() => z.strictObject({ ...target(), expectedIntentRevision: revision(), manualResponsibility: z.literal(true) }));
+export const ManagedCancelInputV1Schema = lazyZodSchema(() => z.strictObject({ ...target(), expectedIntentRevision: revision() }));
+export const ManagedInspectOutputV1Schema = lazyZodSchema(() => z.strictObject({ machine: ManagedMachineV1Schema, operation: z.optional(ActionOperationGetV1RequestSchema) }));
+export const ManagedCancelOutputV1Schema = lazyZodSchema(() => z.strictObject({ machine: ManagedMachineV1Schema, operation: z.optional(ActionOperationGetV1RequestSchema) }));
+export const ManagedErrorV1Schema = lazyZodSchema(() => z.strictObject({ code: ManagedRefusalCodeV1Schema }));
+export const ManagedControllerCurrentnessV1Schema = lazyZodSchema(() => z.strictObject(current()));
+export const ManagedControllerCurrentInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ManagedControllerCurrentnessV1Schema, { nativeRole: z.optional(z.literal('inspect')) })));
+export const ManagedGuestCurrentInputV1Schema = lazyZodSchema(() => z.strictObject({ v: z.literal(1),
+  context: SocketRpcMachineAdmissionContextV1Schema, method: z.string().check(z.minLength(1)),
   managedTarget: z.lazy(() => ManagedActivityReadRequestV1Schema), proof: MachineInstallationProofV1Schema,
-}).strict());
-export const ManagedGuestCurrentOutputV1Schema = lazyZodSchema(() => z.object({ current: z.boolean() }).strict());
+}));
+export const ManagedGuestCurrentOutputV1Schema = lazyZodSchema(() => z.strictObject({ current: z.boolean() }));
 /** Signed only by the current guest after its real admission drain commits idle. */
-export const ManagedCommittedIdleEvidenceV1Schema = lazyZodSchema(() => z.object({
-  context: SocketRpcMachineAdmissionContextV1Schema, method: z.string().min(1),
+export const ManagedCommittedIdleEvidenceV1Schema = lazyZodSchema(() => z.strictObject({
+  context: SocketRpcMachineAdmissionContextV1Schema, method: z.string().check(z.minLength(1)),
   managedTarget: z.lazy(() => ManagedActivityReadRequestV1Schema),
-  decision: z.object({ kind: z.literal('idle'), since: z.number().nonnegative(), confirmedAt: z.number().nonnegative() }).strict(),
+  decision: z.strictObject({ kind: z.literal('idle'), since: z.number().check(z.nonnegative()), confirmedAt: z.number().check(z.nonnegative()) }),
   proof: MachineInstallationProofV1Schema,
-}).strict());
+}));
 export type ManagedCommittedIdleEvidenceV1 = z.infer<typeof ManagedCommittedIdleEvidenceV1Schema>;
-export const ManagedControllerReportV1Schema = lazyZodSchema(() => z.object({ ...current(), result: AcquireResultV1Schema, observation: mini.optional(ProviderObservationV1Schema) }).strict());
-export const ManagedEnrollmentCorrelationV1Schema = lazyZodSchema(() => z.object({ ...current(), resource: ManagedResourceV1Schema }).strict());
+export const ManagedControllerReportV1Schema = lazyZodSchema(() => z.strictObject({ ...current(), result: AcquireResultV1Schema, observation: mini.optional(ProviderObservationV1Schema) }));
+export const ManagedEnrollmentCorrelationV1Schema = lazyZodSchema(() => z.strictObject({ ...current(), resource: ManagedResourceV1Schema }));
 /** Controller admission never receives ordinary composer text or startup instructions. */
 export const ManagedAdmissionComputeInputV1Schema = lazyZodSchema(() => z.union([
-  ManagedAcquireInputV1Schema.options[0].omit({ agentStart: true }),
-  ManagedAcquireInputV1Schema.options[1].omit({ agentStart: true }),
+  z.omit(ManagedAcquireInputV1Schema._zod.def.options[0], { agentStart: true }),
+  z.omit(ManagedAcquireInputV1Schema._zod.def.options[1], { agentStart: true }),
 ]));
-export const ManagedAdmissionInputV1Schema = lazyZodSchema(() => z.object({ input: ManagedAdmissionComputeInputV1Schema, requestId: id(), continuationPresent: mini.boolean() }).strict());
-export const ManagedAdmissionOutputV1Schema = lazyZodSchema(() => z.object({ machine: ManagedMachineV1Schema, replayed: mini.boolean() }).strict());
-export const ManagedControllerContextInputV1Schema = lazyZodSchema(() => z.object({ ...target(), expectedIntentRevision: revision(), controller: ManagedControllerV1Schema }).strict());
-export const ManagedControllerContextOutputV1Schema = lazyZodSchema(() => z.object({ machine: ManagedMachineV1Schema, requestId: id() }).strict());
-export const ManagedControllerMachineOutputV1Schema = lazyZodSchema(() => z.object({ machine: ManagedMachineV1Schema }).strict());
-export const ManagedControllerSubmitOutputV1Schema = lazyZodSchema(() => z.object({ machine: ManagedMachineV1Schema, submitted: mini.boolean() }).strict());
+export const ManagedAdmissionInputV1Schema = lazyZodSchema(() => z.strictObject({ input: ManagedAdmissionComputeInputV1Schema, requestId: id(), continuationPresent: mini.boolean() }));
+export const ManagedAdmissionOutputV1Schema = lazyZodSchema(() => z.strictObject({ machine: ManagedMachineV1Schema, replayed: mini.boolean() }));
+export const ManagedControllerContextInputV1Schema = lazyZodSchema(() => z.strictObject({ ...target(), expectedIntentRevision: revision(), controller: ManagedControllerV1Schema }));
+export const ManagedControllerContextOutputV1Schema = lazyZodSchema(() => z.strictObject({ machine: ManagedMachineV1Schema, requestId: id() }));
+export const ManagedControllerMachineOutputV1Schema = lazyZodSchema(() => z.strictObject({ machine: ManagedMachineV1Schema }));
+export const ManagedControllerSubmitOutputV1Schema = lazyZodSchema(() => z.strictObject({ machine: ManagedMachineV1Schema, submitted: mini.boolean() }));
 /** Only the admitted controller captures this source-owned metadata before native spend. */
-export const ManagedControllerSubmitInputV1Schema = lazyZodSchema(() => z.object({ ...current(),
+export const ManagedControllerSubmitInputV1Schema = lazyZodSchema(() => z.strictObject({ ...current(),
   credentials: mini.optional(RetainedManagedCredentialSelectionsV1Schema),
-}).strict());
-export const ManagedBootstrapCredentialCreateV1Schema = lazyZodSchema(() => z.object({ ...current(), credential: SharedSavedSecretCreateInputV1Schema }).strict());
+}));
+export const ManagedBootstrapCredentialCreateV1Schema = lazyZodSchema(() => z.strictObject({ ...current(), credential: SharedSavedSecretCreateInputV1Schema }));
 
-export const ProvisionersListInputV1Schema = lazyZodSchema(() => z.object({ homeId: id(), controller: mini.optional(ManagedControllerV1Schema) }).strict());
-export const ProvisionerProbeInputV1Schema = lazyZodSchema(() => z.object({ homeId: id(), controller: ManagedControllerV1Schema, contribution: asProtocolZod(PluginContributionIdentityV1Schema), credentials: mini.optional(ManagedCredentialSelectionsV1Schema) }).strict());
-export const ProvisionerOptionsInputV1Schema = lazyZodSchema(() => z.object({ homeId: id(), controller: ManagedControllerV1Schema, contribution: asProtocolZod(PluginContributionIdentityV1Schema), credentials: mini.optional(ManagedCredentialSelectionsV1Schema), selectors: PluginJsonValueV2Schema }).strict());
+export const ProvisionersListInputV1Schema = lazyZodSchema(() => z.strictObject({ homeId: id(), controller: mini.optional(ManagedControllerV1Schema) }));
+export const ProvisionerProbeInputV1Schema = lazyZodSchema(() => z.strictObject({ homeId: id(), controller: ManagedControllerV1Schema, contribution: asProtocolZod(PluginContributionIdentityV1Schema), credentials: mini.optional(ManagedCredentialSelectionsV1Schema) }));
+export const ProvisionerOptionsInputV1Schema = lazyZodSchema(() => z.strictObject({ homeId: id(), controller: ManagedControllerV1Schema, contribution: asProtocolZod(PluginContributionIdentityV1Schema), credentials: mini.optional(ManagedCredentialSelectionsV1Schema), selectors: PluginJsonValueV2Schema }));
 
 export const ManagedMachineActionInputSchemasV1 = {
   'machines.provisioners.list': ProvisionersListInputV1Schema,
@@ -162,15 +162,15 @@ export const ManagedMachineActionOutputSchemasV1 = {
 export const MANAGED_CONTROL_ACTION_IDS_V1 = ['machines.managed.power.set', 'machines.managed.rebuild', 'machines.managed.retention.update', 'machines.managed.delete', 'machines.managed.controller.update', 'machines.managed.retire'] as const;
 export type ManagedControlActionIdV1 = typeof MANAGED_CONTROL_ACTION_IDS_V1[number];
 export const ManagedControlAdmissionInputV1Schema = lazyZodSchema(() => z.discriminatedUnion('action', [
-  z.object({ action: z.literal('machines.managed.power.set'), input: ManagedPowerInputV1Schema, requestId: id() }).strict(),
-  z.object({ action: z.literal('machines.managed.rebuild'), input: ManagedRebuildInputV1Schema, requestId: id() }).strict(),
-  z.object({ action: z.literal('machines.managed.delete'), input: ManagedDeleteInputV1Schema, requestId: id() }).strict(),
-  z.object({ action: z.literal('machines.managed.retention.update'), input: ManagedRetentionUpdateInputV1Schema, requestId: id() }).strict(),
-  z.object({ action: z.literal('machines.managed.controller.update'), input: ManagedControllerUpdateInputV1Schema, requestId: id() }).strict(),
-  z.object({ action: z.literal('machines.managed.retire'), input: ManagedRetireInputV1Schema, requestId: id() }).strict(),
+  z.strictObject({ action: z.literal('machines.managed.power.set'), input: ManagedPowerInputV1Schema, requestId: id() }),
+  z.strictObject({ action: z.literal('machines.managed.rebuild'), input: ManagedRebuildInputV1Schema, requestId: id() }),
+  z.strictObject({ action: z.literal('machines.managed.delete'), input: ManagedDeleteInputV1Schema, requestId: id() }),
+  z.strictObject({ action: z.literal('machines.managed.retention.update'), input: ManagedRetentionUpdateInputV1Schema, requestId: id() }),
+  z.strictObject({ action: z.literal('machines.managed.controller.update'), input: ManagedControllerUpdateInputV1Schema, requestId: id() }),
+  z.strictObject({ action: z.literal('machines.managed.retire'), input: ManagedRetireInputV1Schema, requestId: id() }),
 ]));
 export type ManagedControlAdmissionInputV1 = z.infer<typeof ManagedControlAdmissionInputV1Schema>;
-export const ManagedControllerIntentReportV1Schema = lazyZodSchema(() => z.object({ ...current(), result: z.union([asProtocolZod(MachineProvisionerDestroyResultV1Schema), asProtocolZod(MachineProvisionerRebuildResultV1Schema)]), observation: mini.optional(ProviderObservationV1Schema) }).strict());
+export const ManagedControllerIntentReportV1Schema = lazyZodSchema(() => z.strictObject({ ...current(), result: z.union([asProtocolZod(MachineProvisionerDestroyResultV1Schema), asProtocolZod(MachineProvisionerRebuildResultV1Schema)]), observation: mini.optional(ProviderObservationV1Schema) }));
 export type ManagedControllerIntentReportV1 = z.infer<typeof ManagedControllerIntentReportV1Schema>;
 export function managedMachineActionEndpointPathV1(action: ManagedMachineActionIdV1): string {
   const suffix = action.startsWith('machines.managed.') ? action.slice('machines.managed.'.length) : action;

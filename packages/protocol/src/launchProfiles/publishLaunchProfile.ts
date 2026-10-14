@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import type { ArtifactSharingResourceV1 } from '../artifacts/artifactSharingV1.js';
 import { artifactSavedByFromActionContextV1, type ArtifactSavedByV1 } from '../artifacts/artifactBinaryV1.js';
@@ -11,7 +11,7 @@ import {
   buildLaunchProfileArtifactHeaderV1,
 } from './launchProfileArtifactV1.js';
 
-export const LaunchProfilePublishInputV1Schema = lazyZodSchema(() => z.object({ profileId: ProfileRecordIdV1Schema }).strict());
+export const LaunchProfilePublishInputV1Schema = lazyZodSchema(() => z.strictObject({ profileId: ProfileRecordIdV1Schema }));
 export const LaunchProfilePublishOutputV1Schema = LaunchProfileArtifactReferenceV1Schema;
 export type LaunchProfilePublisherV1 = Readonly<{
   publish: (input: z.input<typeof LaunchProfilePublishInputV1Schema>, options?: Readonly<{ signal?: AbortSignal; context?: ActionExecutorContext }>) => Promise<z.output<typeof LaunchProfilePublishOutputV1Schema>>;

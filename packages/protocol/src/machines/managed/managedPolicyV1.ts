@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { computeCanonicalDomainSeparatedDigest } from '../../crypto/canonicalDigest.js';
 import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
@@ -13,31 +13,31 @@ import { ExternalActionExecutionAuthorizationV1Schema, type ExternalActionExecut
 export const MANAGED_POLICY_PROOF_HEADER = 'x-happier-managed-policy-proof';
 /** Reserved Home-to-installed-controller preparation; it never carries Project input. */
 export const MANAGED_FINITE_WAKE_RPC_METHOD = 'managed.wake.finite.v1';
-export const ManagedFiniteWakeRequestV1Schema = lazyZodSchema(() => z.object({
+export const ManagedFiniteWakeRequestV1Schema = lazyZodSchema(() => z.strictObject({
   target: ManagedWakeTargetV1Schema,
   actionOrigin: ExternalActionExecutionAuthorizationV1Schema,
-}).strict().refine(value => value.target.origin.kind === 'finite-command'
-  && value.target.origin.actionRequestId === value.actionOrigin.binding.requestId));
+}).check(z.refine(value => value.target.origin.kind === 'finite-command'
+  && value.target.origin.actionRequestId === value.actionOrigin.binding.requestId)));
 /** A host-owned policy purpose, never an external caller's Action authority. */
 export const ManagedPolicyPurposeV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('retention'), evidence: ManagedCommittedIdleEvidenceV1Schema.optional() }).strict(),
-  z.object({ kind: z.literal('accepted-input-start'), target: z.lazy(() => ManagedWakeTargetV1Schema) }).strict(),
-  z.object({ kind: z.literal('creation-cleanup') }).strict(),
+  z.strictObject({ kind: z.literal('retention'), evidence: z.optional(ManagedCommittedIdleEvidenceV1Schema) }),
+  z.strictObject({ kind: z.literal('accepted-input-start'), target: z.lazy(() => ManagedWakeTargetV1Schema) }),
+  z.strictObject({ kind: z.literal('creation-cleanup') }),
 ]));
 export type ManagedPolicyPurposeV1 = z.infer<typeof ManagedPolicyPurposeV1Schema>;
-export const ManagedPolicyAdmissionInputV1Schema = lazyZodSchema(() => ManagedControllerCurrentnessV1Schema.extend({ purpose: ManagedPolicyPurposeV1Schema }).strict());
+export const ManagedPolicyAdmissionInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ManagedControllerCurrentnessV1Schema, { purpose: ManagedPolicyPurposeV1Schema })));
 export type ManagedPolicyAdmissionInputV1 = z.infer<typeof ManagedPolicyAdmissionInputV1Schema>;
-export const ManagedPolicyCensusInputV1Schema = lazyZodSchema(() => z.object({ homeId: z.string().min(1), controller: ManagedControllerV1Schema, proof: MachineInstallationProofV1Schema }).strict());
-export const ManagedPolicyCensusOutputV1Schema = lazyZodSchema(() => z.object({ machines: z.array(ManagedMachineV1Schema), targets: z.array(ManagedWakeTargetV1Schema) }).strict());
+export const ManagedPolicyCensusInputV1Schema = lazyZodSchema(() => z.strictObject({ homeId: z.string().check(z.minLength(1)), controller: ManagedControllerV1Schema, proof: MachineInstallationProofV1Schema }));
+export const ManagedPolicyCensusOutputV1Schema = lazyZodSchema(() => z.strictObject({ machines: z.array(ManagedMachineV1Schema), targets: z.array(ManagedWakeTargetV1Schema) }));
 export function createManagedPolicyCensusProofV1(input: Readonly<{ homeId: string; controller: ManagedControllerV1; custodianAccountId: string; privateKey: string | Uint8Array }>) {
   return signMachineInstallationProof({ payload: { version: 1, machineId: input.controller.machineId, installationId: input.controller.installationId,
     accountId: input.custodianAccountId, managedPolicyCensus: { homeId: input.homeId } }, privateKey: input.privateKey });
 }
-export const ManagedPolicyAdmissionOutputV1Schema = lazyZodSchema(() => ManagedControllerContextOutputV1Schema.extend({ replayed: z.boolean() }).strict());
-export const ManagedPolicyProofV1Schema = lazyZodSchema(() => z.object({
+export const ManagedPolicyAdmissionOutputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ManagedControllerContextOutputV1Schema, { replayed: z.boolean() })));
+export const ManagedPolicyProofV1Schema = lazyZodSchema(() => z.strictObject({
   payload: MachineInstallationProofPayloadV1Schema, purpose: ManagedPolicyPurposeV1Schema, proof: MachineInstallationProofV1Schema,
-  actionOrigin: ExternalActionExecutionAuthorizationV1Schema.optional(),
-}).strict());
+  actionOrigin: z.optional(ExternalActionExecutionAuthorizationV1Schema),
+}));
 export type ManagedPolicyProofV1 = z.infer<typeof ManagedPolicyProofV1Schema>;
 
 /** Digests are signature inputs for exact native identity, purpose and HTTP bytes, not new persisted state. */

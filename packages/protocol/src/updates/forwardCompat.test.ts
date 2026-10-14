@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 
 import {
@@ -18,7 +18,7 @@ describe('updates forward compatibility', () => {
     }
     const invalid = UpdateMetadataAckResponseSchema.safeParse({ result: 'success', version: 'invalid', metadata: 'cipher' });
     expect(invalid.success).toBe(false);
-    if (!invalid.success) expect(invalid.error).toBeInstanceOf(z.ZodError);
+    if (!invalid.success) expect(invalid.error).toBeInstanceOf(z.core.$ZodError);
   });
   it('accepts extra fields in session broadcast containers', () => {
     const parsed = SessionBroadcastContainerSchema.safeParse({

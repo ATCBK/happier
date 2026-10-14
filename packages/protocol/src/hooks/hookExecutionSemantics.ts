@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { HookCategoryV1Schema, type HookCategoryV1 } from './hookCategories.js';
 
 export const HOOK_EXECUTION_KIND_V1_VALUES = ['integrate', 'observe', 'augment', 'decide'] as const;

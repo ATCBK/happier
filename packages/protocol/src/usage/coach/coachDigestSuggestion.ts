@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { getUsageQueryKey, normalizeUsageQuery, UsageQuerySchema, type UsageQuery } from '../../inputs/usageQuery.js';
 import { projectNativeJsonValueForTransport } from '../../json/strictJsonValue.js';
@@ -6,14 +6,14 @@ import { WorkflowDefinitionV1Schema } from '../../workflows/workflowV1.js';
 import { agent, literal, result } from '../../workflows/builtins/definitionParts.js';
 
 /** A read-only recipe, not a schedule, assignment or grant to create an Automation. */
-export const UsageCoachDigestSuggestionSchema = lazyZodSchema(() => z.object({
-    kind: z.literal('recurring_automation'), queryKey: z.string().min(1), query: UsageQuerySchema,
-    lookbackMs: z.number().int().positive(), actionId: z.literal('workflow.trigger.add'),
+export const UsageCoachDigestSuggestionSchema = lazyZodSchema(() => z.strictObject({
+    kind: z.literal('recurring_automation'), queryKey: z.string().check(z.minLength(1)), query: UsageQuerySchema,
+    lookbackMs: z.number().check(z.int(), z.positive()), actionId: z.literal('workflow.trigger.add'),
     requiredInputs: z.tuple([z.literal('project'), z.literal('trigger')]),
-    target: z.object({ kind: z.literal('inline'), definition: WorkflowDefinitionV1Schema }).strict(),
-}).strict().refine(value => value.queryKey === getUsageQueryKey(value.query), {
+    target: z.strictObject({ kind: z.literal('inline'), definition: WorkflowDefinitionV1Schema }),
+}).check(z.refine(value => value.queryKey === getUsageQueryKey(value.query), {
     message: 'The digest must use the admitted usage query', path: ['queryKey'],
-}));
+})));
 export type UsageCoachDigestSuggestion = z.infer<typeof UsageCoachDigestSuggestionSchema>;
 
 /** Existing Automation/Workflow owners choose destinations, cadence, admission and delivery. */

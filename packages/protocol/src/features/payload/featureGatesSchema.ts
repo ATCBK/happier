@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { FeatureGateSchema, type FeatureGate } from './featureGate.js';
 
@@ -8,72 +8,58 @@ const DEFAULT_GATE_ENABLED: FeatureGate = { enabled: true };
 
 const VoiceGateSchema = lazyZodSchema(() => z.object({
   enabled: z.boolean(),
-  happierVoice: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
+  happierVoice: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
 }));
 
 export const FeatureGatesSchema = lazyZodSchema(() => z.object({
-  teams: FeatureGateSchema.extend({
-    credentialResources: FeatureGateSchema.extend({
-      externalApi: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-    }).optional().default({ enabled: false, externalApi: DEFAULT_GATE_DISABLED }),
-  }).optional().default({ enabled: false, credentialResources: { enabled: false, externalApi: DEFAULT_GATE_DISABLED } }),
-  bugReports: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-  e2ee: z
+  teams: z._default(z.optional(z.extend(FeatureGateSchema, {
+    credentialResources: z._default(z.optional(z.extend(FeatureGateSchema, {
+      externalApi: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+    })), { enabled: false, externalApi: DEFAULT_GATE_DISABLED }),
+  })), { enabled: false, credentialResources: { enabled: false, externalApi: DEFAULT_GATE_DISABLED } }),
+  bugReports: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+  e2ee: z._default(z.optional(z
     .object({
-      keylessAccounts: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-    })
-    .optional()
-    .default({ keylessAccounts: DEFAULT_GATE_DISABLED }),
-  encryption: z
+      keylessAccounts: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+    })), { keylessAccounts: DEFAULT_GATE_DISABLED }),
+  encryption: z._default(z.optional(z
     .object({
-      plaintextStorage: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      accountOptOut: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-    })
-    .optional()
-    .default({ plaintextStorage: DEFAULT_GATE_DISABLED, accountOptOut: DEFAULT_GATE_DISABLED }),
-  remoteHosts: z
+      plaintextStorage: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      accountOptOut: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+    })), { plaintextStorage: DEFAULT_GATE_DISABLED, accountOptOut: DEFAULT_GATE_DISABLED }),
+  remoteHosts: z._default(z.optional(z
     .object({
-      management: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      secretMaterial: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-    })
-    .optional()
-    .default({
+      management: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      secretMaterial: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+    })), {
       management: DEFAULT_GATE_DISABLED,
       secretMaterial: DEFAULT_GATE_DISABLED,
     }),
-  attachments: z
+  attachments: z._default(z.optional(z
     .object({
-      uploads: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-    })
-    .optional()
-    .default({ uploads: DEFAULT_GATE_DISABLED }),
-  pets: z
+      uploads: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+    })), { uploads: DEFAULT_GATE_DISABLED }),
+  pets: z._default(z.optional(z
     .object({
-      companion: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      sync: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-    })
-    .optional()
-    .default({ companion: DEFAULT_GATE_DISABLED, sync: DEFAULT_GATE_DISABLED }),
-  automations: z
+      companion: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      sync: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+    })), { companion: DEFAULT_GATE_DISABLED, sync: DEFAULT_GATE_DISABLED }),
+  automations: z._default(z.optional(z
     .object({
       enabled: z.boolean(),
-    })
-    .optional()
-    .default({ enabled: false }),
-  workflows: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED).catch(DEFAULT_GATE_DISABLED),
-  connectedServices: z
+    })), { enabled: false }),
+  workflows: z.catch(z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED), DEFAULT_GATE_DISABLED),
+  connectedServices: z._default(z.optional(z
     .object({
       enabled: z.boolean(),
-      quotas: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      subscription: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      accountGroups: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      accountFallback: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      autoQuotaReset: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      autoDisablePlanInvalid: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      poolQuotaLimitSelection: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-    })
-    .optional()
-    .default({
+      quotas: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      subscription: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      accountGroups: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      accountFallback: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      autoQuotaReset: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      autoDisablePlanInvalid: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      poolQuotaLimitSelection: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+    })), {
       enabled: false,
       quotas: DEFAULT_GATE_DISABLED,
       subscription: DEFAULT_GATE_DISABLED,
@@ -83,49 +69,41 @@ export const FeatureGatesSchema = lazyZodSchema(() => z.object({
       autoDisablePlanInvalid: DEFAULT_GATE_DISABLED,
       poolQuotaLimitSelection: DEFAULT_GATE_DISABLED,
     }),
-  updates: z
+  updates: z._default(z.optional(z
     .object({
-      ota: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-    })
-    .optional()
-    .default({ ota: DEFAULT_GATE_DISABLED }),
-  sharing: z
+      ota: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+    })), { ota: DEFAULT_GATE_DISABLED }),
+  sharing: z._default(z.optional(z
     .object({
-      session: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      public: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      contentKeys: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      pendingQueueV2: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      pendingDeliveryState: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-    })
-    .optional()
-    .default({
+      session: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      public: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      contentKeys: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      pendingQueueV2: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      pendingDeliveryState: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+    })), {
       session: DEFAULT_GATE_DISABLED,
       public: DEFAULT_GATE_DISABLED,
       contentKeys: DEFAULT_GATE_DISABLED,
       pendingQueueV2: DEFAULT_GATE_DISABLED,
       pendingDeliveryState: DEFAULT_GATE_DISABLED,
     }),
-  sessions: z
+  sessions: z._default(z.optional(z
     .object({
       enabled: z.boolean(),
-      handoff: z
+      handoff: z._default(z.optional(z
         .object({
           enabled: z.boolean(),
-        })
-        .optional()
-        .default({ enabled: false }),
-      ephemeralRunner: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      agentSwitching: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      board: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      folders: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      drafts: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      filteredListing: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      following: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      conversations: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      usageLimitRecovery: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-    })
-    .optional()
-    .default({
+        })), { enabled: false }),
+      ephemeralRunner: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      agentSwitching: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      board: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      folders: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      drafts: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      filteredListing: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      following: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      conversations: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      usageLimitRecovery: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+    })), {
       enabled: false,
       handoff: { enabled: false },
       ephemeralRunner: DEFAULT_GATE_DISABLED,
@@ -138,61 +116,45 @@ export const FeatureGatesSchema = lazyZodSchema(() => z.object({
       conversations: DEFAULT_GATE_DISABLED,
       usageLimitRecovery: DEFAULT_GATE_DISABLED,
     }),
-  machines: z
+  machines: z._default(z.optional(z
     .object({
       enabled: z.boolean(),
-      transfer: z
+      transfer: z._default(z.optional(z
         .object({
           enabled: z.boolean(),
-          directPeer: z
+          directPeer: z._default(z.optional(z
             .object({
               enabled: z.boolean(),
-            })
-            .optional()
-            .default({ enabled: false }),
-          serverRouted: z
+            })), { enabled: false }),
+          serverRouted: z._default(z.optional(z
             .object({
               enabled: z.boolean(),
-            })
-            .optional()
-            .default({ enabled: false }),
-        })
-        .optional()
-        .default({ enabled: false, directPeer: { enabled: false }, serverRouted: { enabled: false } }),
-      pools: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      peerMediation: z
+            })), { enabled: false }),
+        })), { enabled: false, directPeer: { enabled: false }, serverRouted: { enabled: false } }),
+      pools: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      peerMediation: z._default(z.optional(z
         .object({
           enabled: z.boolean(),
-          observability: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-        })
-        .optional()
-        .default({ enabled: false, observability: DEFAULT_GATE_DISABLED }),
-      tunnel: z
+          observability: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+        })), { enabled: false, observability: DEFAULT_GATE_DISABLED }),
+      tunnel: z._default(z.optional(z
         .object({
           enabled: z.boolean(),
-          directPeer: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-          serverRouted: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-        })
-        .optional()
-        .default({ enabled: false, directPeer: DEFAULT_GATE_DISABLED, serverRouted: DEFAULT_GATE_DISABLED }),
-      liveStream: z
+          directPeer: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+          serverRouted: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+        })), { enabled: false, directPeer: DEFAULT_GATE_DISABLED, serverRouted: DEFAULT_GATE_DISABLED }),
+      liveStream: z._default(z.optional(z
         .object({
           enabled: z.boolean(),
-          directPeer: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-          serverRouted: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-        })
-        .optional()
-        .default({ enabled: false, directPeer: DEFAULT_GATE_DISABLED, serverRouted: DEFAULT_GATE_DISABLED }),
-      rpc: z
+          directPeer: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+          serverRouted: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+        })), { enabled: false, directPeer: DEFAULT_GATE_DISABLED, serverRouted: DEFAULT_GATE_DISABLED }),
+      rpc: z._default(z.optional(z
         .object({
           enabled: z.boolean(),
-          directPeer: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-        })
-        .optional()
-        .default({ enabled: false, directPeer: DEFAULT_GATE_DISABLED }),
-    })
-    .optional()
-    .default({
+          directPeer: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+        })), { enabled: false, directPeer: DEFAULT_GATE_DISABLED }),
+    })), {
       enabled: false,
       transfer: { enabled: false, directPeer: { enabled: false }, serverRouted: { enabled: false } },
       pools: DEFAULT_GATE_DISABLED,
@@ -201,24 +163,20 @@ export const FeatureGatesSchema = lazyZodSchema(() => z.object({
       liveStream: { enabled: false, directPeer: DEFAULT_GATE_DISABLED, serverRouted: DEFAULT_GATE_DISABLED },
       rpc: { enabled: false, directPeer: DEFAULT_GATE_DISABLED },
     }),
-  localServices: z
+  localServices: z._default(z.optional(z
     .object({
       enabled: z.boolean(),
-      inventory: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      managed: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      launcher: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      actions: z
+      inventory: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      managed: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      launcher: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      actions: z._default(z.optional(z
         .object({
           enabled: z.boolean(),
-          terminate: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-        })
-        .optional()
-        .default({ enabled: false, terminate: DEFAULT_GATE_DISABLED }),
-      preview: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      publicPreview: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-    })
-    .optional()
-    .default({
+          terminate: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+        })), { enabled: false, terminate: DEFAULT_GATE_DISABLED }),
+      preview: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      publicPreview: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+    })), {
       enabled: false,
       inventory: DEFAULT_GATE_DISABLED,
       managed: DEFAULT_GATE_DISABLED,
@@ -227,38 +185,32 @@ export const FeatureGatesSchema = lazyZodSchema(() => z.object({
       preview: DEFAULT_GATE_DISABLED,
       publicPreview: DEFAULT_GATE_DISABLED,
     }),
-  providers: z
+  providers: z._default(z.optional(z
     .object({
       enabled: z.boolean(),
-      localDiscovery: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      localModelManagement: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-    })
-    .optional()
-    .default({
+      localDiscovery: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      localModelManagement: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+    })), {
       enabled: false,
       localDiscovery: DEFAULT_GATE_DISABLED,
       localModelManagement: DEFAULT_GATE_DISABLED,
     }),
-  search: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-  browser: z
+  search: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+  browser: z._default(z.optional(z
     .object({
       enabled: z.boolean(),
-      viewTargets: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      internal: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      sidecar: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      diagnostics: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      context: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      automation: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      recording: z
+      viewTargets: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      internal: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      sidecar: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      diagnostics: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      context: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      automation: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      recording: z._default(z.optional(z
         .object({
           enabled: z.boolean(),
-          attachments: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-        })
-        .optional()
-        .default({ enabled: false, attachments: DEFAULT_GATE_DISABLED }),
-    })
-    .optional()
-    .default({
+          attachments: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+        })), { enabled: false, attachments: DEFAULT_GATE_DISABLED }),
+    })), {
       enabled: false,
       viewTargets: DEFAULT_GATE_DISABLED,
       internal: DEFAULT_GATE_DISABLED,
@@ -268,30 +220,24 @@ export const FeatureGatesSchema = lazyZodSchema(() => z.object({
       automation: DEFAULT_GATE_DISABLED,
       recording: { enabled: false, attachments: DEFAULT_GATE_DISABLED },
     }),
-  plugins: z
+  plugins: z._default(z.optional(z
     .object({
       enabled: z.boolean(),
-      webhooks: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      ui: z
+      webhooks: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      ui: z._default(z.optional(z
         .object({
           enabled: z.boolean(),
-          hostedWeb: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-          reactNativeBundles: z
+          hostedWeb: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+          reactNativeBundles: z._default(z.optional(z
             .object({
               enabled: z.boolean(),
-            })
-            .optional()
-            .default({ enabled: false }),
-        })
-        .optional()
-        .default({
+            })), { enabled: false }),
+        })), {
           enabled: false,
           hostedWeb: DEFAULT_GATE_DISABLED,
           reactNativeBundles: { enabled: false },
         }),
-    })
-    .optional()
-    .default({
+    })), {
       enabled: false,
       webhooks: DEFAULT_GATE_DISABLED,
       ui: {
@@ -300,65 +246,53 @@ export const FeatureGatesSchema = lazyZodSchema(() => z.object({
         reactNativeBundles: { enabled: false },
       },
     }),
-  devices: z
+  devices: z._default(z.optional(z
     .object({
       enabled: z.boolean(),
-      simulatorPreview: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-    })
-    .optional()
-    .default({
+      simulatorPreview: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+    })), {
       enabled: false,
       simulatorPreview: DEFAULT_GATE_DISABLED,
     }),
-  setup: z
+  setup: z._default(z.optional(z
     .object({
-      relay: z
+      relay: z._default(z.optional(z
         .object({
-          allowRelaySelection: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-          allowHappierCloud: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-          allowCustomRelayUrl: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-          allowLocalRelayHost: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-          allowRemoteSshRelayHost: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-        })
-        .optional()
-        .default({
+          allowRelaySelection: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+          allowHappierCloud: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+          allowCustomRelayUrl: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+          allowLocalRelayHost: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+          allowRemoteSshRelayHost: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+        })), {
           allowRelaySelection: DEFAULT_GATE_DISABLED,
           allowHappierCloud: DEFAULT_GATE_DISABLED,
           allowCustomRelayUrl: DEFAULT_GATE_DISABLED,
           allowLocalRelayHost: DEFAULT_GATE_DISABLED,
           allowRemoteSshRelayHost: DEFAULT_GATE_DISABLED,
         }),
-      relayAccess: z
+      relayAccess: z._default(z.optional(z
         .object({
-          allowTailscale: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-          allowCloudflareTunnel: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-        })
-        .optional()
-        .default({
+          allowTailscale: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+          allowCloudflareTunnel: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+        })), {
           allowTailscale: DEFAULT_GATE_DISABLED,
           allowCloudflareTunnel: DEFAULT_GATE_DISABLED,
         }),
-      machine: z
+      machine: z._default(z.optional(z
         .object({
-          allowLocalMachineSetup: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-          allowRemoteSshMachineSetup: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-        })
-        .optional()
-        .default({
+          allowLocalMachineSetup: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+          allowRemoteSshMachineSetup: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+        })), {
           allowLocalMachineSetup: DEFAULT_GATE_DISABLED,
           allowRemoteSshMachineSetup: DEFAULT_GATE_DISABLED,
         }),
-      ssh: z
+      ssh: z._default(z.optional(z
         .object({
-          nativeTransport: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-        })
-        .optional()
-        .default({
+          nativeTransport: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+        })), {
           nativeTransport: DEFAULT_GATE_DISABLED,
         }),
-    })
-    .optional()
-    .default({
+    })), {
       relay: {
         allowRelaySelection: DEFAULT_GATE_DISABLED,
         allowHappierCloud: DEFAULT_GATE_DISABLED,
@@ -378,65 +312,49 @@ export const FeatureGatesSchema = lazyZodSchema(() => z.object({
         nativeTransport: DEFAULT_GATE_DISABLED,
       },
     }),
-  terminal: z
+  terminal: z._default(z.optional(z
     .object({
-      embeddedPty: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      transport: z
+      embeddedPty: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      transport: z._default(z.optional(z
         .object({
-          byteStream: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-        })
-        .optional()
-        .default({
+          byteStream: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+        })), {
           byteStream: DEFAULT_GATE_DISABLED,
         }),
-    })
-    .optional()
-    .default({
+    })), {
       embeddedPty: DEFAULT_GATE_DISABLED,
       transport: {
         byteStream: DEFAULT_GATE_DISABLED,
       },
     }),
-  voice: VoiceGateSchema.optional().default({ enabled: false, happierVoice: DEFAULT_GATE_DISABLED }),
-  social: z
+  voice: z._default(z.optional(VoiceGateSchema), { enabled: false, happierVoice: DEFAULT_GATE_DISABLED }),
+  social: z._default(z.optional(z
     .object({
-      friends: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-    })
-    .optional()
-    .default({ friends: DEFAULT_GATE_DISABLED }),
-  auth: z
+      friends: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+    })), { friends: DEFAULT_GATE_DISABLED }),
+  auth: z._default(z.optional(z
     .object({
-      recovery: z
+      recovery: z._default(z.optional(z
         .object({
-          providerReset: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-        })
-        .optional()
-        .default({ providerReset: DEFAULT_GATE_DISABLED }),
-      mtls: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-      login: z
+          providerReset: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+        })), { providerReset: DEFAULT_GATE_DISABLED }),
+      mtls: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      login: z._default(z.optional(z
         .object({
           // Backward compatibility: older servers predate this gate but still support key-challenge login.
           // Default to enabled unless a server explicitly disables it.
-          keyChallenge: FeatureGateSchema.optional().default(DEFAULT_GATE_ENABLED),
-        })
-        .optional()
-        .default({ keyChallenge: DEFAULT_GATE_ENABLED }),
-      pairing: z
+          keyChallenge: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_ENABLED),
+        })), { keyChallenge: DEFAULT_GATE_ENABLED }),
+      pairing: z._default(z.optional(z
         .object({
-          desktopQrMobileScan: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-          boundQrV2: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-        })
-        .optional()
-        .default({ desktopQrMobileScan: DEFAULT_GATE_DISABLED, boundQrV2: DEFAULT_GATE_DISABLED }),
-      ui: z
+          desktopQrMobileScan: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+          boundQrV2: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+        })), { desktopQrMobileScan: DEFAULT_GATE_DISABLED, boundQrV2: DEFAULT_GATE_DISABLED }),
+      ui: z._default(z.optional(z
         .object({
-          recoveryKeyReminder: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
-        })
-        .optional()
-        .default({ recoveryKeyReminder: DEFAULT_GATE_DISABLED }),
-    })
-    .optional()
-    .default({
+          recoveryKeyReminder: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+        })), { recoveryKeyReminder: DEFAULT_GATE_DISABLED }),
+    })), {
       recovery: { providerReset: DEFAULT_GATE_DISABLED },
       mtls: DEFAULT_GATE_DISABLED,
       login: { keyChallenge: DEFAULT_GATE_ENABLED },

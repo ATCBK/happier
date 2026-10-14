@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 
 import {
   PLUGIN_CORE_CONTRIBUTION_FAMILIES_V2,
@@ -110,7 +110,7 @@ export type PluginContributionLifecycleProjectionV2 = Readonly<{
 
 export type PluginContributionCatalogEntryV2 = Readonly<{
   manifestKey: string;
-  schema: z.ZodTypeAny;
+  schema: z.ZodMiniType;
   identityField: string | null;
   identityKind: 'localId' | 'nestedId' | 'locale' | 'delegatedDomain';
   activationDemand: 'none' | 'declarative' | 'registration' | 'conditional';
@@ -864,7 +864,7 @@ export function readContributedProviderCatalogParserIds(
 
 function createCatalogAdapters(input: Readonly<{
   manifestKey: string;
-  schema: z.ZodTypeAny;
+  schema: z.ZodMiniType;
   identityField: string | null;
   identityKind: PluginContributionCatalogEntryV2['identityKind'];
   consumer: string;

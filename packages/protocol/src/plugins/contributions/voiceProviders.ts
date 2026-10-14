@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import semver from 'semver';
 
 import {
@@ -42,19 +42,18 @@ import {
   type PluginClientExecutionPlatformV1,
 } from './clientExecution.js';
 
-const VoiceJsonScalarSchema = lazyZodSchema(() => z.union([z.null(), z.boolean(), z.number().finite(), z.string()]));
+const VoiceJsonScalarSchema = lazyZodSchema(() => z.union([z.null(), z.boolean(), z.number(), z.string()]));
 
 /** Decorative service identity; it grants no Agent, credential or Connected Account access. */
 export const VoiceServiceMarkSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('connected_service'), serviceId: ConnectedServiceIdSchema }).strict(),
-  z.object({ kind: z.literal('agent'), agentId: z.string().trim().min(1) }).strict(),
-  z.object({ kind: z.literal('icon'), name: PluginUiIconTokenV1Schema }).strict(),
+  z.strictObject({ kind: z.literal('connected_service'), serviceId: ConnectedServiceIdSchema }),
+  z.strictObject({ kind: z.literal('agent'), agentId: z.string().check(z.trim(), z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('icon'), name: PluginUiIconTokenV1Schema }),
 ]));
 export type VoiceServiceMark = z.infer<typeof VoiceServiceMarkSchema>;
 const MAX_VOICE_JSON_SETTINGS_BYTES = 64 * 1024;
 
-export const VoiceCredentialSlotIdSchema = canonicalBoundedRecordKeySchema(128)
-  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u)
+export const VoiceCredentialSlotIdSchema = canonicalBoundedRecordKeySchema(128).check(z.regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u))
   .brand<'VoiceCredentialSlotId'>();
 export type VoiceCredentialSlotId = z.infer<typeof VoiceCredentialSlotIdSchema>;
 
@@ -86,28 +85,25 @@ export const VoiceSpeechInputMimeTypeSchema = lazyZodSchema(() => z.enum([
 ]));
 export type VoiceSpeechInputMimeType = z.infer<typeof VoiceSpeechInputMimeTypeSchema>;
 
-const uniqueBoundedArray = <TSchema extends z.ZodTypeAny>(
+const uniqueBoundedArray = <TSchema extends z.ZodMiniType>(
   schema: TSchema,
   min: number,
   max: number,
   label: string,
   uniquenessKey: (value: z.output<TSchema>) => string = (value) => JSON.stringify(value),
-) => z.array(schema).min(min).max(max).superRefine((values, context) => {
+) => z.array(schema).check(z.minLength(min), z.maxLength(max), z.superRefine((values, context) => {
   const seen = new Set(values.map((value) => uniquenessKey(value)));
   if (seen.size !== values.length) {
     context.addIssue({ code: 'custom', message: `${label} must be unique.` });
   }
-});
+}));
 
-const VoiceCredentialHeaderNameSchema = lazyZodSchema(() => z.string().trim().min(1).max(128)
-  .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u)
-  .transform((value) => value.toLowerCase()));
-const VoiceCredentialHeaderNamesSchema = lazyZodSchema(() => z.array(VoiceCredentialHeaderNameSchema).min(1).max(32)
-  .superRefine((values, context) => {
+const VoiceCredentialHeaderNameSchema = lazyZodSchema(() => z.pipe(z.string().check(z.trim(), z.minLength(1), z.maxLength(128), z.regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u)), z.transform((value) => value.toLowerCase())));
+const VoiceCredentialHeaderNamesSchema = lazyZodSchema(() => z.array(VoiceCredentialHeaderNameSchema).check(z.minLength(1), z.maxLength(32), z.superRefine((values, context) => {
     if (new Set(values).size !== values.length) {
       context.addIssue({ code: 'custom', message: 'Voice credential header names must be unique.' });
     }
-  }));
+  })));
 export const VoiceCredentialAccessPhaseSchema = lazyZodSchema(() => z.enum([
   'settings',
   'prepare',
@@ -117,13 +113,13 @@ export const VoiceCredentialAccessPhaseSchema = lazyZodSchema(() => z.enum([
 export type VoiceCredentialAccessPhase = z.infer<typeof VoiceCredentialAccessPhaseSchema>;
 
 export const VoiceCredentialOperationProjectionSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({
+  z.strictObject({
     kind: z.literal('recipientCredential'),
     operation: asProtocolZod(PluginContributionLocalIdSchema),
     phase: VoiceCredentialAccessPhaseSchema,
     format: z.enum(['raw', 'bearer']),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('materializedHttpHeaders'),
     operation: asProtocolZod(PluginContributionLocalIdSchema),
     phase: VoiceCredentialAccessPhaseSchema,
@@ -132,8 +128,8 @@ export const VoiceCredentialOperationProjectionSchema = lazyZodSchema(() => z.di
     requiredHeaderNames: VoiceCredentialHeaderNamesSchema,
     /** Complete allowlist; providers may omit members not listed as required. */
     allowedHeaderNames: VoiceCredentialHeaderNamesSchema,
-  }).strict(),
-]).superRefine((value, context) => {
+  }),
+]).check(z.superRefine((value, context) => {
   if (value.kind !== 'materializedHttpHeaders') return;
   const allowed = new Set(value.allowedHeaderNames);
   for (const required of value.requiredHeaderNames) {
@@ -145,16 +141,16 @@ export const VoiceCredentialOperationProjectionSchema = lazyZodSchema(() => z.di
       });
     }
   }
-}));
+})));
 export type VoiceCredentialOperationProjection = z.infer<
   typeof VoiceCredentialOperationProjectionSchema
 >;
 
-export const VoiceRawCredentialGrantDeclarationSchema = lazyZodSchema(() => z.object({
+export const VoiceRawCredentialGrantDeclarationSchema = lazyZodSchema(() => z.strictObject({
   realm: z.enum(['web', 'ios', 'android', 'daemon']),
   phase: VoiceCredentialAccessPhaseSchema,
   request: ConnectedAccountMaterializationRequestSchema,
-}).strict());
+}));
 export type VoiceRawCredentialGrantDeclaration = z.infer<
   typeof VoiceRawCredentialGrantDeclarationSchema
 >;
@@ -171,23 +167,23 @@ function canonicalVoiceRawCredentialGrantUniquenessKey(
 }
 
 const VoiceCredentialSourceBaseSchema = lazyZodSchema(() => z.object({
-  operationProjections: uniqueBoundedArray(
+  operationProjections: z.optional(uniqueBoundedArray(
     VoiceCredentialOperationProjectionSchema,
     1,
     16,
     'Voice credential operation projections',
-  ).optional(),
-  rawGrants: uniqueBoundedArray(
+  )),
+  rawGrants: z.optional(uniqueBoundedArray(
     VoiceRawCredentialGrantDeclarationSchema,
     1,
     8,
     'Voice raw credential grants',
     canonicalVoiceRawCredentialGrantUniquenessKey,
-  ).optional(),
+  )),
 }));
 
 export const VoiceCredentialSourceSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  VoiceCredentialSourceBaseSchema.extend({
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(VoiceCredentialSourceBaseSchema, {
     kind: z.literal('savedSecret'),
     secretKinds: uniqueBoundedArray(
       z.enum(['apiKey', 'token', 'password', 'other']),
@@ -195,35 +191,35 @@ export const VoiceCredentialSourceSchema = lazyZodSchema(() => z.discriminatedUn
       4,
       'Voice SavedSecret kinds',
     ),
-  }).strict(),
-  VoiceCredentialSourceBaseSchema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(VoiceCredentialSourceBaseSchema, {
     kind: z.literal('connectedAccount'),
     service: asProtocolZod(PluginContributionReferenceV2Schema),
-  }).strict(),
+  })),
 ]));
 export type VoiceCredentialSource = z.infer<typeof VoiceCredentialSourceSchema>;
 
-export const VoiceCredentialDeclarationSchema = lazyZodSchema(() => z.object({
-  slot: z.object({
+export const VoiceCredentialDeclarationSchema = lazyZodSchema(() => z.strictObject({
+  slot: z.strictObject({
     id: VoiceCredentialSlotIdSchema,
     purpose: ConnectedAccountPurposeIdSchema,
     title: PluginLocalizedStringV2Schema,
-    description: PluginLocalizedStringV2Schema.optional(),
-  }).strict(),
+    description: z.optional(PluginLocalizedStringV2Schema),
+  }),
   requirement: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('always') }).strict(),
-    z.object({ kind: z.literal('optional') }).strict(),
-    z.object({
+    z.strictObject({ kind: z.literal('always') }),
+    z.strictObject({ kind: z.literal('optional') }),
+    z.strictObject({
       kind: z.literal('when_setting_equals'),
       settingId: PluginSettingFieldIdV2Schema,
       value: VoiceJsonScalarSchema,
-    }).strict(),
+    }),
   ]),
-  sources: z.array(VoiceCredentialSourceSchema).min(1).max(5),
-  hostMediated: z.object({
-    operations: z.array(RecipientOperationV1Schema).min(1).max(16),
-  }).strict().optional(),
-}).strict().superRefine((declaration, context) => {
+  sources: z.array(VoiceCredentialSourceSchema).check(z.minLength(1), z.maxLength(5)),
+  hostMediated: z.optional(z.strictObject({
+    operations: z.array(RecipientOperationV1Schema).check(z.minLength(1), z.maxLength(16)),
+  })),
+}).check(z.superRefine((declaration, context) => {
   const savedSecretCount = declaration.sources.filter((source) => source.kind === 'savedSecret').length;
   if (savedSecretCount > 1) {
     context.addIssue({ code: 'custom', path: ['sources'], message: 'Voice credentials permit at most one SavedSecret source.' });
@@ -292,32 +288,32 @@ export const VoiceCredentialDeclarationSchema = lazyZodSchema(() => z.object({
   if (!declaration.hostMediated && !hasRawGrant) {
     context.addIssue({ code: 'custom', message: 'Voice credentials must declare host mediation or a source-specific raw grant.' });
   }
-}));
+})));
 export type VoiceCredentialDeclaration = z.infer<typeof VoiceCredentialDeclarationSchema>;
 
-export const VoiceSettingReadinessDeclarationSchema = lazyZodSchema(() => z.object({
+export const VoiceSettingReadinessDeclarationSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('setting_nonempty'),
   settingId: PluginSettingFieldIdV2Schema,
-  when: z.object({
+  when: z.optional(z.strictObject({
     settingId: PluginSettingFieldIdV2Schema,
     equals: VoiceJsonScalarSchema,
-  }).strict().optional(),
-}).strict());
+  })),
+}));
 export type VoiceSettingReadinessDeclaration = z.infer<
   typeof VoiceSettingReadinessDeclarationSchema
 >;
 
-export const VoiceProviderSettingsActionDeclarationSchema = lazyZodSchema(() => PluginSettingsActionDeclarationV2Schema.extend({
-  enabledWhen: z.object({
+export const VoiceProviderSettingsActionDeclarationSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PluginSettingsActionDeclarationV2Schema, {
+  enabledWhen: z.optional(z.strictObject({
     kind: z.literal('setting_nonempty'),
     settingId: PluginSettingFieldIdV2Schema,
-  }).strict().optional(),
-}).strict());
+  })),
+})));
 export type VoiceProviderSettingsActionDeclaration = z.infer<
   typeof VoiceProviderSettingsActionDeclarationSchema
 >;
 
-function validateVoiceJsonBounds(value: unknown, context: z.RefinementCtx): void {
+function validateVoiceJsonBounds(value: unknown, context: z.core.$RefinementCtx): void {
   let snapshot: unknown;
   try {
     snapshot = cloneStrictPluginJsonValue(value, 'Voice JSON settings');
@@ -334,7 +330,7 @@ function validateVoiceJsonBounds(value: unknown, context: z.RefinementCtx): void
   }
 }
 
-export const VoiceProviderSettingFieldSchema = lazyZodSchema(() => PluginSettingFieldV2Schema.superRefine((field, context) => {
+export const VoiceProviderSettingFieldSchema = lazyZodSchema(() => PluginSettingFieldV2Schema.check(z.superRefine((field, context) => {
   if (field.secret === true || field.availability !== undefined || field.analytics !== undefined) {
     context.addIssue({ code: 'custom', message: 'Voice settings are bounded non-secret fields without gates or analytics.' });
   }
@@ -422,11 +418,11 @@ export const VoiceProviderSettingFieldSchema = lazyZodSchema(() => PluginSetting
   } else {
     validateVoiceJsonBounds(field.default, context);
   }
-}));
+})));
 export type VoiceProviderSettingField = z.infer<typeof VoiceProviderSettingFieldSchema>;
 
 const VoiceProviderSettingsPresentationTextSchema = PluginLocalizedStringV2Schema;
-export const VoiceProviderSettingsPresentationPathSchema = lazyZodSchema(() => z.string().min(1).max(256).refine((value) => {
+export const VoiceProviderSettingsPresentationPathSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(256), z.refine((value) => {
   const segments = value.split('.');
   return segments.length <= 12 && segments.every((segment) => (
     /^[A-Za-z][A-Za-z0-9_]*$/u.test(segment)
@@ -434,29 +430,29 @@ export const VoiceProviderSettingsPresentationPathSchema = lazyZodSchema(() => z
     && segment !== 'prototype'
     && segment !== 'constructor'
   ));
-}, 'Voice settings presentation paths must be bounded safe dotted paths.'));
+}, 'Voice settings presentation paths must be bounded safe dotted paths.')));
 
 const VoiceProviderSettingsPresentationOptionSchema = lazyZodSchema(() => z.union([
-  z.string().max(512),
-  z.object({
-    id: z.string().max(512),
-    kind: z.enum(['pinned', 'moving_alias']).optional(),
-    title: VoiceProviderSettingsPresentationTextSchema.optional(),
-    titleKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-    subtitle: VoiceProviderSettingsPresentationTextSchema.optional(),
-    subtitleKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  }).strict(),
+  z.string().check(z.maxLength(512)),
+  z.strictObject({
+    id: z.string().check(z.maxLength(512)),
+    kind: z.optional(z.enum(['pinned', 'moving_alias'])),
+    title: z.optional(VoiceProviderSettingsPresentationTextSchema),
+    titleKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+    subtitle: z.optional(VoiceProviderSettingsPresentationTextSchema),
+    subtitleKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  }),
 ]));
 
-const VoiceProviderSettingsPresentationNumericSchema = lazyZodSchema(() => z.object({
-  min: z.number().finite().optional(),
-  max: z.number().finite().optional(),
-  step: z.number().finite().positive().optional(),
-  reset: z.number().finite().optional(),
-  integer: z.boolean().optional(),
-  nullable: z.boolean().optional(),
-  requiresOptIn: z.boolean().optional(),
-}).strict().superRefine((value, context) => {
+const VoiceProviderSettingsPresentationNumericSchema = lazyZodSchema(() => z.strictObject({
+  min: z.optional(z.number()),
+  max: z.optional(z.number()),
+  step: z.optional(z.number().check(z.positive())),
+  reset: z.optional(z.number()),
+  integer: z.optional(z.boolean()),
+  nullable: z.optional(z.boolean()),
+  requiresOptIn: z.optional(z.boolean()),
+}).check(z.superRefine((value, context) => {
   if (value.min !== undefined && value.max !== undefined && value.min > value.max) {
     context.addIssue({ code: 'custom', path: ['min'], message: 'Voice presentation minimum cannot exceed maximum.' });
   }
@@ -466,29 +462,29 @@ const VoiceProviderSettingsPresentationNumericSchema = lazyZodSchema(() => z.obj
   )) {
     context.addIssue({ code: 'custom', path: ['reset'], message: 'Voice presentation reset must satisfy its bounds.' });
   }
+})));
+
+const VoiceProviderSettingsPresentationSubfieldSchema = lazyZodSchema(() => z.strictObject({
+  path: VoiceProviderSettingsPresentationPathSchema,
+  suffix: z.optional(z.string().check(z.minLength(1), z.maxLength(128))),
+  kind: z.optional(z.literal('number')),
+  titleKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  subtitleKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  promptTitleKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  promptBodyKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  confirmTitleKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  confirmBodyKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  confirmActionKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  min: z.optional(z.number()),
+  max: z.optional(z.number()),
+  step: z.optional(z.number().check(z.positive())),
+  reset: z.optional(z.number()),
+  integer: z.optional(z.boolean()),
+  nullable: z.optional(z.boolean()),
+  requiresOptIn: z.optional(z.boolean()),
 }));
 
-const VoiceProviderSettingsPresentationSubfieldSchema = lazyZodSchema(() => z.object({
-  path: VoiceProviderSettingsPresentationPathSchema,
-  suffix: z.string().min(1).max(128).optional(),
-  kind: z.literal('number').optional(),
-  titleKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  subtitleKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  promptTitleKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  promptBodyKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  confirmTitleKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  confirmBodyKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  confirmActionKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  min: z.number().finite().optional(),
-  max: z.number().finite().optional(),
-  step: z.number().finite().positive().optional(),
-  reset: z.number().finite().optional(),
-  integer: z.boolean().optional(),
-  nullable: z.boolean().optional(),
-  requiresOptIn: z.boolean().optional(),
-}).strict());
-
-export const VoiceProviderSettingsPresentationFieldSchema = lazyZodSchema(() => z.object({
+export const VoiceProviderSettingsPresentationFieldSchema = lazyZodSchema(() => z.strictObject({
   kind: z.enum([
     'welcome',
     'text',
@@ -506,42 +502,42 @@ export const VoiceProviderSettingsPresentationFieldSchema = lazyZodSchema(() => 
     'privacy_opt_in',
   ]),
   path: VoiceProviderSettingsPresentationPathSchema,
-  titleKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  subtitleKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  promptTitleKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  promptBodyKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  searchPlaceholderKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  confirmTitleKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  confirmBodyKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  confirmActionKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  options: z.array(VoiceProviderSettingsPresentationOptionSchema).max(64).optional(),
-  supportedModelIds: z.array(z.string().min(1).max(512)).max(64).optional(),
-  catalog: z.literal('voices').optional(),
-  valueShape: z.enum(['string', 'selection']).optional(),
-  customIdAllowed: z.boolean().optional(),
-  movingAliasRequiresOptIn: z.boolean().optional(),
-  immediateRequiresLiteral: z.boolean().optional(),
-  advanced: z.boolean().optional(),
-  defaultValue: VoiceJsonScalarSchema.optional(),
+  titleKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  subtitleKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  promptTitleKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  promptBodyKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  searchPlaceholderKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  confirmTitleKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  confirmBodyKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  confirmActionKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  options: z.optional(z.array(VoiceProviderSettingsPresentationOptionSchema).check(z.maxLength(64))),
+  supportedModelIds: z.optional(z.array(z.string().check(z.minLength(1), z.maxLength(512))).check(z.maxLength(64))),
+  catalog: z.optional(z.literal('voices')),
+  valueShape: z.optional(z.enum(['string', 'selection'])),
+  customIdAllowed: z.optional(z.boolean()),
+  movingAliasRequiresOptIn: z.optional(z.boolean()),
+  immediateRequiresLiteral: z.optional(z.boolean()),
+  advanced: z.optional(z.boolean()),
+  defaultValue: z.optional(VoiceJsonScalarSchema),
   /** Presentation only; stored and agent-edited numeric values remain unformatted. */
-  valueSuffix: z.string().optional(),
+  valueSuffix: z.optional(z.string()),
   /** The shared numeric field control; its increment is declared, never guessed by the host. */
-  numericControl: z.literal('stepper').optional(),
-  unitKey: VoiceProviderSettingsPresentationTextSchema.optional(),
+  numericControl: z.optional(z.literal('stepper')),
+  unitKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
   // Number.toFixed accepts precision from 0 through 100.
-  fractionDigits: z.number().int().min(0).max(100).optional(),
-  forgetAction: z.literal('forget_provider_conversation').optional(),
-  maxLength: z.number().int().positive().max(10_000).optional(),
-  maxItems: z.number().int().positive().max(1_000).optional(),
-  min: z.number().finite().optional(),
-  max: z.number().finite().optional(),
-  step: z.number().finite().positive().optional(),
-  reset: z.number().finite().optional(),
-  integer: z.boolean().optional(),
-  nullable: z.boolean().optional(),
-  requiresOptIn: z.boolean().optional(),
-  subfields: z.array(VoiceProviderSettingsPresentationSubfieldSchema).min(1).max(16).optional(),
-}).strict().superRefine((field, context) => {
+  fractionDigits: z.optional(z.number().check(z.int(), z.minimum(0), z.maximum(100))),
+  forgetAction: z.optional(z.literal('forget_provider_conversation')),
+  maxLength: z.optional(z.number().check(z.int(), z.positive(), z.maximum(10_000))),
+  maxItems: z.optional(z.number().check(z.int(), z.positive(), z.maximum(1_000))),
+  min: z.optional(z.number()),
+  max: z.optional(z.number()),
+  step: z.optional(z.number().check(z.positive())),
+  reset: z.optional(z.number()),
+  integer: z.optional(z.boolean()),
+  nullable: z.optional(z.boolean()),
+  requiresOptIn: z.optional(z.boolean()),
+  subfields: z.optional(z.array(VoiceProviderSettingsPresentationSubfieldSchema).check(z.minLength(1), z.maxLength(16))),
+}).check(z.superRefine((field, context) => {
   if (field.numericControl !== undefined && (field.kind !== 'number' || field.step === undefined)) {
     context.addIssue({ code: 'custom', path: ['numericControl'], message: 'Voice steppers require a numeric field and an explicit positive step.' });
   }
@@ -566,7 +562,7 @@ export const VoiceProviderSettingsPresentationFieldSchema = lazyZodSchema(() => 
   if (field.kind === 'privacy_opt_in' && field.titleKey === undefined) {
     context.addIssue({ code: 'custom', path: ['titleKey'], message: 'Voice privacy controls require a title.' });
   }
-}));
+})));
 export type VoiceProviderSettingsPresentationField = z.infer<
   typeof VoiceProviderSettingsPresentationFieldSchema
 >;
@@ -580,48 +576,48 @@ export function resolveVoiceProviderLanguagePreference(preference: string | null
   return supportedLanguageCodes.includes(base) ? base : null;
 }
 
-export const VoiceProviderSettingsPresentationSchema = lazyZodSchema(() => z.object({
+export const VoiceProviderSettingsPresentationSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('voice.provider-settings.v1'),
   modes: uniqueBoundedArray(z.enum(['byo', 'happier']), 1, 2, 'Voice settings presentation modes'),
-  titleKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  footerKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  language: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('automatic_recognition') }).strict(),
-    z.object({ kind: z.literal('independent_reply') }).strict(),
-    z.object({
+  titleKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  footerKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  language: z.optional(z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('automatic_recognition') }),
+    z.strictObject({ kind: z.literal('independent_reply') }),
+    z.strictObject({
       kind: z.literal('single_language'),
-      supportedLanguageCodes: uniqueBoundedArray(z.string().min(1).max(64), 1, 64, 'Voice service language codes'),
-    }).strict(),
-  ]).optional(),
-  credential: z.object({
+      supportedLanguageCodes: uniqueBoundedArray(z.string().check(z.minLength(1), z.maxLength(64)), 1, 64, 'Voice service language codes'),
+    }),
+  ])),
+  credential: z.strictObject({
     kind: z.enum(['api_key', 'none']),
-    credentialPurpose: ConnectedAccountPurposeIdSchema.optional(),
-    catalog: z.literal('voices').nullable(),
-    titleKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-    promptTitleKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-    promptBodyKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-  }).strict(),
-  links: z.object({
-    account: z.string().url().max(2_048).optional(),
-    apiKeys: z.string().url().max(2_048).optional(),
-    privacy: z.string().url().max(2_048).optional(),
-  }).strict().superRefine((links, context) => {
+    credentialPurpose: z.optional(ConnectedAccountPurposeIdSchema),
+    catalog: z.nullable(z.literal('voices')),
+    titleKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+    promptTitleKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+    promptBodyKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+  }),
+  links: z.strictObject({
+    account: z.optional(z.string().check(z.url(), z.maxLength(2_048))),
+    apiKeys: z.optional(z.string().check(z.url(), z.maxLength(2_048))),
+    privacy: z.optional(z.string().check(z.url(), z.maxLength(2_048))),
+  }).check(z.superRefine((links, context) => {
     Object.entries(links).forEach(([name, raw]) => {
       const url = new URL(raw);
       if (url.protocol !== 'https:' || url.username !== '' || url.password !== '') {
         context.addIssue({ code: 'custom', path: [name], message: 'Voice settings presentation links must use HTTPS without embedded credentials.' });
       }
     });
-  }),
-  fields: z.array(VoiceProviderSettingsPresentationFieldSchema).max(64),
-  groups: z.array(z.object({
-    id: z.string().min(1).max(128),
+  })),
+  fields: z.array(VoiceProviderSettingsPresentationFieldSchema).check(z.maxLength(64)),
+  groups: z.optional(z.array(z.strictObject({
+    id: z.string().check(z.minLength(1), z.maxLength(128)),
     titleKey: VoiceProviderSettingsPresentationTextSchema,
-    descriptionKey: VoiceProviderSettingsPresentationTextSchema.optional(),
-    fieldPaths: z.array(VoiceProviderSettingsPresentationPathSchema).max(64),
-    includeCredentials: z.boolean().optional(),
-  }).strict()).min(1).max(64).optional(),
-}).strict().superRefine((presentation, context) => {
+    descriptionKey: z.optional(VoiceProviderSettingsPresentationTextSchema),
+    fieldPaths: z.array(VoiceProviderSettingsPresentationPathSchema).check(z.maxLength(64)),
+    includeCredentials: z.optional(z.boolean()),
+  })).check(z.minLength(1), z.maxLength(64))),
+}).check(z.superRefine((presentation, context) => {
   if (presentation.credential.kind === 'none' && presentation.credential.catalog !== null) {
     context.addIssue({ code: 'custom', path: ['credential', 'catalog'], message: 'Voice settings without credentials cannot declare a credential catalog.' });
   }
@@ -654,27 +650,27 @@ export const VoiceProviderSettingsPresentationSchema = lazyZodSchema(() => z.obj
     });
     if (groupedPaths.size !== fieldPaths.size || credentialGroups > 1) context.addIssue({ code: 'custom', path: ['groups'], message: 'Voice settings groups must cover every field and have at most one credential group.' });
   }
-}));
+})));
 export type VoiceProviderSettingsPresentation = z.infer<
   typeof VoiceProviderSettingsPresentationSchema
 >;
 
-export const VoiceProviderSettingsSchema = lazyZodSchema(() => z.object({
+export const VoiceProviderSettingsSchema = lazyZodSchema(() => z.strictObject({
   schemaVersion: z.union([z.literal(1), z.literal(2)]),
-  fields: z.array(VoiceProviderSettingFieldSchema).max(16),
-  privacyDisclosure: PluginLocalizedStringV2Schema.optional(),
+  fields: z.array(VoiceProviderSettingFieldSchema).check(z.maxLength(16)),
+  privacyDisclosure: z.optional(PluginLocalizedStringV2Schema),
   /** Compact service-declared processing facts; the full disclosure remains separate. */
-  privacyFacts: z.object({
+  privacyFacts: z.optional(z.strictObject({
     audioDestination: PluginLocalizedStringV2Schema,
     processor: PluginLocalizedStringV2Schema,
     retention: PluginLocalizedStringV2Schema,
-    details: PluginLocalizedStringV2Schema.optional(),
-  }).strict().optional(),
-  presentation: VoiceProviderSettingsPresentationSchema.optional(),
-  connectedServicesBinding: z.object({
+    details: z.optional(PluginLocalizedStringV2Schema),
+  })),
+  presentation: z.optional(VoiceProviderSettingsPresentationSchema),
+  connectedServicesBinding: z.optional(z.strictObject({
     id: PluginSettingFieldIdV2Schema,
     title: PluginLocalizedStringV2Schema,
-    description: PluginLocalizedStringV2Schema.optional(),
+    description: z.optional(PluginLocalizedStringV2Schema),
     agent: asProtocolZod(PluginContributionReferenceV2Schema),
     serviceIds: uniqueBoundedArray(
       ConnectedServiceIdSchema,
@@ -682,15 +678,15 @@ export const VoiceProviderSettingsSchema = lazyZodSchema(() => z.object({
       ConnectedServiceIdSchema.options.length,
       'Voice Connected Service ids',
     ),
-  }).strict().optional(),
-  actions: z.array(VoiceProviderSettingsActionDeclarationSchema).max(8).optional(),
-  readiness: uniqueBoundedArray(
+  })),
+  actions: z.optional(z.array(VoiceProviderSettingsActionDeclarationSchema).check(z.maxLength(8))),
+  readiness: z.optional(uniqueBoundedArray(
     VoiceSettingReadinessDeclarationSchema,
     1,
     8,
     'Voice settings readiness declarations',
-  ).optional(),
-}).strict().superRefine((settings, context) => {
+  )),
+}).check(z.superRefine((settings, context) => {
   if (
     settings.fields.length === 0
     && !settings.connectedServicesBinding
@@ -770,27 +766,27 @@ export const VoiceProviderSettingsSchema = lazyZodSchema(() => z.object({
       }
     });
   });
-}));
+})));
 export type VoiceProviderSettings = z.infer<typeof VoiceProviderSettingsSchema>;
 
-export const VoiceSpeechCatalogDeclarationSchema = lazyZodSchema(() => z.object({
+export const VoiceSpeechCatalogDeclarationSchema = lazyZodSchema(() => z.strictObject({
   kind: z.enum(['models', 'voices']),
   settingFieldId: PluginSettingFieldIdV2Schema,
   allowCustom: z.boolean(),
-}).strict());
+}));
 export type VoiceSpeechCatalogDeclaration = z.infer<typeof VoiceSpeechCatalogDeclarationSchema>;
 
-const VoiceSpeechProviderLimitSchema = lazyZodSchema(() => z.number().int().min(1).max(2_147_483_647));
-export const VoiceSpeechProviderLimitsSchema = lazyZodSchema(() => z.object({
-  transcribe: z.object({ maxInputBytes: VoiceSpeechProviderLimitSchema.optional() }).strict().optional(),
-  synthesize: z.object({
-    maxInputCharacters: VoiceSpeechProviderLimitSchema.optional(),
-    maxInputUtf8Bytes: VoiceSpeechProviderLimitSchema.optional(),
+const VoiceSpeechProviderLimitSchema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(1), z.maximum(2_147_483_647)));
+export const VoiceSpeechProviderLimitsSchema = lazyZodSchema(() => z.strictObject({
+  transcribe: z.optional(z.strictObject({ maxInputBytes: z.optional(VoiceSpeechProviderLimitSchema) })),
+  synthesize: z.optional(z.strictObject({
+    maxInputCharacters: z.optional(VoiceSpeechProviderLimitSchema),
+    maxInputUtf8Bytes: z.optional(VoiceSpeechProviderLimitSchema),
     /** A selected endpoint may declare a smaller character cap in its settings. */
-    maxInputCharactersSettingId: PluginSettingFieldIdV2Schema.optional(),
-    maxOutputBytes: VoiceSpeechProviderLimitSchema.optional(),
-  }).strict().optional(),
-}).strict());
+    maxInputCharactersSettingId: z.optional(PluginSettingFieldIdV2Schema),
+    maxOutputBytes: z.optional(VoiceSpeechProviderLimitSchema),
+  })),
+}));
 export type VoiceSpeechProviderLimits = z.infer<typeof VoiceSpeechProviderLimitsSchema>;
 
 /** One public speech-response ceiling shared by provider declarations and daemon transfer/wire admission. */
@@ -806,37 +802,34 @@ export type VoiceConversationToolEffectCalls = z.infer<
   typeof VoiceConversationToolEffectCallsSchema
 >;
 
-export const VoiceConversationToolCapabilitiesSchema = lazyZodSchema(() => z.object({
-  effectCalls: VoiceConversationToolEffectCallsSchema.default('none'),
-}).strict());
+export const VoiceConversationToolCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+  effectCalls: z._default(VoiceConversationToolEffectCallsSchema, 'none'),
+}));
 export type VoiceConversationToolCapabilities = z.infer<
   typeof VoiceConversationToolCapabilitiesSchema
 >;
 
-export const VoiceConversationCapabilitiesSchema = lazyZodSchema(() => z.object({
-  turn: z.object({
+export const VoiceConversationCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
+  turn: z.strictObject({
     cancelResponse: z.boolean(),
     bargeIn: z.boolean(),
-    clearInput: z.boolean().optional(),
-    resumption: z.enum(['none', 'resume']).optional(),
-    replay: z.enum(['none', 'stable_ids']).optional(),
-    exactMessage: z.boolean().optional(),
-    interruptionPolicy: z.enum(['disabled', 'client_two_stage', 'provider_immediate']).optional(),
-  }).strict(),
-  tools: VoiceConversationToolCapabilitiesSchema.default({ effectCalls: 'none' }),
-}).strict());
+    clearInput: z.optional(z.boolean()),
+    resumption: z.optional(z.enum(['none', 'resume'])),
+    replay: z.optional(z.enum(['none', 'stable_ids'])),
+    exactMessage: z.optional(z.boolean()),
+    interruptionPolicy: z.optional(z.enum(['disabled', 'client_two_stage', 'provider_immediate'])),
+  }),
+  tools: z._default(VoiceConversationToolCapabilitiesSchema, { effectCalls: 'none' }),
+}));
 export type VoiceConversationCapabilities = z.infer<typeof VoiceConversationCapabilitiesSchema>;
 
-const VoiceAgentRuntimeVersionSchema = lazyZodSchema(() => z.string().min(1).max(64).refine(
-  (value) => value.trim() === value && semver.valid(value) === value,
-  'Voice Agent runtime versions must be exact canonical semver versions.',
-));
+const VoiceAgentRuntimeVersionSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(64), z.refine((value) => value.trim() === value && semver.valid(value) === value, 'Voice Agent runtime versions must be exact canonical semver versions.')));
 
-const VoiceConversationProviderContributionSchema = lazyZodSchema(() => z.object({
+const VoiceConversationProviderContributionSchema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   title: PluginLocalizedStringV2Schema,
-  description: PluginLocalizedStringV2Schema.optional(),
-  mark: VoiceServiceMarkSchema.optional(),
+  description: z.optional(PluginLocalizedStringV2Schema),
+  mark: z.optional(VoiceServiceMarkSchema),
   kind: z.literal('conversation'),
   roles: uniqueBoundedArray(
     VoiceConversationProviderRoleSchema,
@@ -846,27 +839,27 @@ const VoiceConversationProviderContributionSchema = lazyZodSchema(() => z.object
   ),
   platforms: PluginClientExecutionPlatformsV1Schema,
   capabilities: VoiceConversationCapabilitiesSchema,
-  credentials: VoiceCredentialDeclarationSchema.optional(),
-  execution: z.object({
+  credentials: z.optional(VoiceCredentialDeclarationSchema),
+  execution: z.optional(z.strictObject({
     kind: z.literal('experimental_agent_session_realtime'),
     agent: asProtocolZod(PluginContributionReferenceV2Schema),
-    supportedRuntimeVersions: uniqueBoundedArray(
+    supportedRuntimeVersions: z.optional(uniqueBoundedArray(
       VoiceAgentRuntimeVersionSchema,
       1,
       16,
       'Voice Agent runtime versions',
-    ).optional(),
-  }).strict().optional(),
-  settings: VoiceProviderSettingsSchema.optional(),
-  client: PluginClientExecutionReferenceV1Schema.extend({
+    )),
+  })),
+  settings: z.optional(VoiceProviderSettingsSchema),
+  client: z.extend(PluginClientExecutionReferenceV1Schema, {
     exportName: z.literal('activate'),
   }),
-}).strict());
+}));
 
-const VoiceSpeechProviderContributionSchema = lazyZodSchema(() => z.object({
+const VoiceSpeechProviderContributionSchema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   title: PluginLocalizedStringV2Schema,
-  mark: VoiceServiceMarkSchema.optional(),
+  mark: z.optional(VoiceServiceMarkSchema),
   kind: z.literal('speech'),
   roles: uniqueBoundedArray(
     VoiceSpeechProviderRoleSchema,
@@ -875,16 +868,16 @@ const VoiceSpeechProviderContributionSchema = lazyZodSchema(() => z.object({
     'Voice speech roles',
   ),
   platforms: PluginClientExecutionPlatformsV1Schema,
-  credentials: VoiceCredentialDeclarationSchema.optional(),
+  credentials: z.optional(VoiceCredentialDeclarationSchema),
   settings: VoiceProviderSettingsSchema,
-  catalogs: z.array(VoiceSpeechCatalogDeclarationSchema).max(2).optional(),
-  limits: VoiceSpeechProviderLimitsSchema.optional(),
-}).strict());
+  catalogs: z.optional(z.array(VoiceSpeechCatalogDeclarationSchema).check(z.maxLength(2))),
+  limits: z.optional(VoiceSpeechProviderLimitsSchema),
+}));
 
 export const VoiceProviderContributionSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   VoiceConversationProviderContributionSchema,
   VoiceSpeechProviderContributionSchema,
-]).superRefine((contribution, context) => {
+]).check(z.superRefine((contribution, context) => {
   const settings = contribution.settings;
   if (contribution.kind === 'conversation') {
     if (settings?.connectedServicesBinding && contribution.execution?.kind !== 'experimental_agent_session_realtime') {
@@ -1011,7 +1004,7 @@ export const VoiceProviderContributionSchema = lazyZodSchema(() => z.discriminat
       }
     }
   }
-}));
+})));
 export type VoiceProviderContribution = z.infer<typeof VoiceProviderContributionSchema>;
 
 /**
@@ -1286,11 +1279,11 @@ export function resolveVoiceSpeechSettingsCorrespondence(input: Readonly<{
   });
 }
 
-export const VoiceCredentialBindingIdentityV1Schema = lazyZodSchema(() => z.object({
+export const VoiceCredentialBindingIdentityV1Schema = lazyZodSchema(() => z.strictObject({
   contribution: asProtocolZod(PluginContributionIdentityV1Schema),
   credentialSlotId: VoiceCredentialSlotIdSchema,
   purpose: QualifiedConnectedAccountPurposeV1Schema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   if (
     value.purpose.consumer.pluginId !== value.contribution.pluginId
     || value.purpose.consumer.localId !== value.contribution.localId
@@ -1301,7 +1294,7 @@ export const VoiceCredentialBindingIdentityV1Schema = lazyZodSchema(() => z.obje
       message: 'Voice credential purpose consumer must equal its qualified contribution.',
     });
   }
-}));
+})));
 export type VoiceCredentialBindingIdentityV1 = z.infer<
   typeof VoiceCredentialBindingIdentityV1Schema
 >;

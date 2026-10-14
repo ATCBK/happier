@@ -1,5 +1,5 @@
 import { decodeBase64, encodeBase64 } from '../../crypto/base64.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import type { SkillReadInputV1, SkillReadResultV1, SessionSkillReadItemV1 } from './skills/skillReadV1.js';
 import type { SkillUsageRowV1 } from './skills/skillUsageV1.js';

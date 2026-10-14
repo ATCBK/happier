@@ -1,22 +1,22 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { SessionSystemRecordRevisionSchema } from '../system/records/sessionSystemRecordRevision.js';
 import { SessionSurfaceItemIdSchema } from './ids.js';
 import { SessionSurfaceItemV1Schema, SessionSurfaceItemDestinationV1Schema, isSessionSurfaceItemIdentityCorrespondingV1 } from './item.js';
 import { SessionBoardLayoutV1Schema } from './layout.js';
 
-const SessionBoardEncryptedRecordContentV1Schema = lazyZodSchema(() => z.object({
+const SessionBoardEncryptedRecordContentV1Schema = lazyZodSchema(() => z.strictObject({
   t: z.literal('encrypted'),
-  c: z.string().min(1),
-}).strict());
+  c: z.string().check(z.minLength(1)),
+}));
 
 export const SessionBoardItemRecordContentV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('plain'), v: SessionSurfaceItemV1Schema }).strict(),
+  z.strictObject({ t: z.literal('plain'), v: SessionSurfaceItemV1Schema }),
   SessionBoardEncryptedRecordContentV1Schema,
 ]));
 
 export const SessionBoardLayoutRecordContentV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('plain'), v: SessionBoardLayoutV1Schema }).strict(),
+  z.strictObject({ t: z.literal('plain'), v: SessionBoardLayoutV1Schema }),
   SessionBoardEncryptedRecordContentV1Schema,
 ]));
 
@@ -25,41 +25,41 @@ export const SessionBoardLayoutRecordContentV1Schema = lazyZodSchema(() => z.dis
  * The aggregate verifies this exact revision in the same transaction as the
  * layout CAS, so a concurrent item removal cannot leave a dangling placement.
  */
-export const SessionBoardItemPlacementParticipantV1Schema = lazyZodSchema(() => z.object({
+export const SessionBoardItemPlacementParticipantV1Schema = lazyZodSchema(() => z.strictObject({
   itemId: SessionSurfaceItemIdSchema,
   expectedItemRevision: SessionSystemRecordRevisionSchema,
-}).strict());
+}));
 export type SessionBoardItemPlacementParticipantV1 = Readonly<
   z.infer<typeof SessionBoardItemPlacementParticipantV1Schema>
 >;
 
 export const SessionBoardMutationV1Schema = lazyZodSchema(() => z.discriminatedUnion('operation', [
-  z.object({
+  z.strictObject({
     operation: z.literal('upsert_item'),
     itemId: SessionSurfaceItemIdSchema,
     itemContent: SessionBoardItemRecordContentV1Schema,
-    expectedItemRevision: SessionSystemRecordRevisionSchema.nullable(),
-    destination: SessionSurfaceItemDestinationV1Schema.optional(),
-    placement: z.object({
+    expectedItemRevision: z.nullable(SessionSystemRecordRevisionSchema),
+    destination: z.optional(SessionSurfaceItemDestinationV1Schema),
+    placement: z.optional(z.strictObject({
       layoutContent: SessionBoardLayoutRecordContentV1Schema,
-      expectedLayoutRevision: SessionSystemRecordRevisionSchema.nullable(),
-    }).strict().optional(),
-  }).strict(),
-  z.object({
+      expectedLayoutRevision: z.nullable(SessionSystemRecordRevisionSchema),
+    })),
+  }),
+  z.strictObject({
     operation: z.literal('remove_item'),
     itemId: SessionSurfaceItemIdSchema,
     expectedItemRevision: SessionSystemRecordRevisionSchema,
-    layoutContent: SessionBoardLayoutRecordContentV1Schema.optional(),
-    expectedLayoutRevision: SessionSystemRecordRevisionSchema.optional(),
-  }).strict(),
-  z.object({
+    layoutContent: z.optional(SessionBoardLayoutRecordContentV1Schema),
+    expectedLayoutRevision: z.optional(SessionSystemRecordRevisionSchema),
+  }),
+  z.strictObject({
     operation: z.literal('update_layout'),
     layoutContent: SessionBoardLayoutRecordContentV1Schema,
-    expectedLayoutRevision: SessionSystemRecordRevisionSchema.nullable(),
+    expectedLayoutRevision: z.nullable(SessionSystemRecordRevisionSchema),
     /** Present only when the semantic edit adds an existing item placement. */
-    itemPlacementParticipant: SessionBoardItemPlacementParticipantV1Schema.optional(),
-  }).strict(),
-]).superRefine((mutation, context) => {
+    itemPlacementParticipant: z.optional(SessionBoardItemPlacementParticipantV1Schema),
+  }),
+]).check(z.superRefine((mutation, context) => {
   if (mutation.operation === 'upsert_item' && mutation.itemContent.t === 'plain'
     && !isSessionSurfaceItemIdentityCorrespondingV1(mutation.itemId, mutation.itemContent.v)) {
     context.addIssue({ code: 'custom', path: ['itemContent', 'v', 'source', 'instance', 'id'], message: 'Widget instance identity must match its Board item identity' });
@@ -81,7 +81,7 @@ export const SessionBoardMutationV1Schema = lazyZodSchema(() => z.discriminatedU
   if (mutation.operation === 'remove_item' && (mutation.layoutContent === undefined) !== (mutation.expectedLayoutRevision === undefined)) {
     context.addIssue({ code: 'custom', path: ['layoutContent'], message: 'Layout removal requires both content and revision operands' });
   }
-}));
+})));
 export type SessionBoardMutationV1 = Readonly<z.infer<typeof SessionBoardMutationV1Schema>>;
 
 /** Transcript item mutations have no Board layout admission or persistence effects. */
@@ -91,24 +91,24 @@ export function sessionBoardMutationUsesLayoutV1(mutation: SessionBoardMutationV
 }
 
 export const SessionBoardMutationResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('operation', [
-  z.object({
+  z.strictObject({
     operation: z.literal('upsert_item'),
     itemId: SessionSurfaceItemIdSchema,
     outcome: z.enum(['created', 'updated', 'unchanged']),
     itemRevision: SessionSystemRecordRevisionSchema,
-    layoutRevision: SessionSystemRecordRevisionSchema.optional(),
-  }).strict(),
-  z.object({
+    layoutRevision: z.optional(SessionSystemRecordRevisionSchema),
+  }),
+  z.strictObject({
     operation: z.literal('remove_item'),
     itemId: SessionSurfaceItemIdSchema,
     outcome: z.literal('removed'),
-    layoutRevision: SessionSystemRecordRevisionSchema.optional(),
-  }).strict(),
-  z.object({
+    layoutRevision: z.optional(SessionSystemRecordRevisionSchema),
+  }),
+  z.strictObject({
     operation: z.literal('update_layout'),
     outcome: z.enum(['created', 'updated', 'unchanged']),
     layoutRevision: SessionSystemRecordRevisionSchema,
-  }).strict(),
+  }),
 ]));
 export type SessionBoardMutationResultV1 = Readonly<z.infer<typeof SessionBoardMutationResultV1Schema>>;
 

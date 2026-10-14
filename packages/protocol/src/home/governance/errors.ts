@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ManagedResourceDependencyV1Schema } from '../../machines/managed/managedDependencyV1.js';
 
 /**
@@ -60,12 +60,12 @@ export const HomeGovernanceErrorCodeV1Schema = lazyZodSchema(() => z.enum([
 
 export type HomeGovernanceErrorCodeV1 = z.infer<typeof HomeGovernanceErrorCodeV1Schema>;
 
-export const HomeGovernanceErrorV1Schema = lazyZodSchema(() => z.union([z.object({
-  error: HomeGovernanceErrorCodeV1Schema.exclude(['account_erasure_managed_resources_review_required']),
-}).strict(), z.object({
+export const HomeGovernanceErrorV1Schema = lazyZodSchema(() => z.union([z.strictObject({
+  error: z.enum(HomeGovernanceErrorCodeV1Schema.options.filter((value): value is Exclude<(typeof HomeGovernanceErrorCodeV1Schema.options)[number], 'account_erasure_managed_resources_review_required'> => !(['account_erasure_managed_resources_review_required'] as readonly string[]).includes(value))),
+}), z.strictObject({
   error: z.literal('account_erasure_managed_resources_review_required'),
   resources: z.array(ManagedResourceDependencyV1Schema),
-}).strict()]));
+})]));
 
 export type HomeGovernanceErrorV1 = z.infer<typeof HomeGovernanceErrorV1Schema>;
 

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { RuntimeActionIdV1 } from '../actionIds.js';
 import { SecretFillSettlementV1Schema } from '../../computer/v1.js';
@@ -68,36 +68,36 @@ const BrowserAutomationCancelActiveResultV1Schema = lazyZodSchema(() => z.union(
   BrowserAutomationEngineCancelActiveResultV1Schema, BrowserAutomationInterruptedResultV1Schema,
 ]));
 
-const BrowserDiagnosticsClearResultV1Schema = lazyZodSchema(() => z.object({
+const BrowserDiagnosticsClearResultV1Schema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(true),
-}).strict());
+}));
 
-const BrowserDiagnosticsPauseResultV1Schema = lazyZodSchema(() => z.object({
+const BrowserDiagnosticsPauseResultV1Schema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(true),
   status: z.literal('paused'),
-  viewId: z.string().trim().min(1).max(256),
-}).strict());
+  viewId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+}));
 
-const BrowserDiagnosticsResumeResultV1Schema = lazyZodSchema(() => z.object({
+const BrowserDiagnosticsResumeResultV1Schema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(true),
   status: z.literal('resumed'),
-  viewId: z.string().trim().min(1).max(256),
-}).strict());
+  viewId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+}));
 
-const BrowserRecordingAttachToComposerResultV1Schema = lazyZodSchema(() => z.object({
+const BrowserRecordingAttachToComposerResultV1Schema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(true),
-  attachmentId: z.string().trim().min(1).max(256),
-}).strict());
+  attachmentId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+}));
 
 const BrowserRecordingListResultV1Schema = lazyZodSchema(() => z.array(BrowserRecordingSessionV1Schema));
 
-const BrowserSandboxInstallInputV1Schema = lazyZodSchema(() => z.object({ machineId: z.string().trim().min(1) }).strict());
+const BrowserSandboxInstallInputV1Schema = lazyZodSchema(() => z.strictObject({ machineId: z.string().check(z.trim(), z.minLength(1)) }));
 const BrowserSandboxInstallResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('installed') }).strict(),
-  z.object({ status: z.literal('failed'), code: z.enum([
+  z.strictObject({ status: z.literal('installed') }),
+  z.strictObject({ status: z.literal('failed'), code: z.enum([
     'platform_unsupported', 'managed_browser_unavailable', 'managed_browser_install_failed',
     'os_authorization_required', 'sandbox_install_failed', 'cancelled',
-  ]) }).strict(),
+  ]) }),
 ]));
 
 type BrowserRuntimeActionId = Extract<RuntimeActionIdV1, `browser.${string}`>;
@@ -107,32 +107,28 @@ function createBrowserAutomationActionInputSchema<
 >(actionKind: TActionKind) {
   return lazyZodSchema(() => z.intersection(
     BrowserAutomationActionRequestV1Schema,
-    z.object({ actionKind: z.literal(actionKind) }).passthrough(),
+    z.looseObject({ actionKind: z.literal(actionKind) }),
   ));
 }
 
-const RuntimeBrowserViewInputSchema = lazyZodSchema(() => z
-  .object({
-    browserSessionId: z.string().trim().min(1).max(256),
-    viewId: z.string().trim().min(1).max(256),
-  })
-  .passthrough());
+const RuntimeBrowserViewInputSchema = lazyZodSchema(() => z.looseObject({
+    browserSessionId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    viewId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+  }));
 
-const RuntimeBrowserContextActionInputSchema = lazyZodSchema(() => RuntimeBrowserViewInputSchema.extend({
-  navigationGeneration: z.number().int().nonnegative().optional(),
-  contextId: z.string().trim().min(1).max(256).optional(),
-  annotationId: z.string().trim().min(1).max(256).optional(),
-  command: BrowserContextCommandV1Schema.optional(),
-  comment: z.string().trim().min(1).max(2048).optional(),
-  styleIntent: BrowserAnnotationStyleIntentV1Schema.optional(),
-}).passthrough());
+const RuntimeBrowserContextActionInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(RuntimeBrowserViewInputSchema, {
+  navigationGeneration: z.optional(z.number().check(z.int(), z.nonnegative())),
+  contextId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+  annotationId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+  command: z.optional(BrowserContextCommandV1Schema),
+  comment: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(2048))),
+  styleIntent: z.optional(BrowserAnnotationStyleIntentV1Schema),
+})));
 
-const RuntimeBrowserRecordingAttachInputSchema = lazyZodSchema(() => z
-  .object({
-    recordingId: z.string().trim().min(1).max(256),
-    sessionId: z.string().trim().min(1).max(256).optional(),
-  })
-  .passthrough());
+const RuntimeBrowserRecordingAttachInputSchema = lazyZodSchema(() => z.looseObject({
+    recordingId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    sessionId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+  }));
 
 export const BROWSER_RUNTIME_ACTION_TITLES: Readonly<Partial<Record<RuntimeActionIdV1, string>>> = Object.freeze({
   'browser.sandbox.install': 'Install managed browser sandbox permission',
@@ -287,13 +283,13 @@ export const BROWSER_RUNTIME_ACTION_INPUT_SCHEMAS = Object.freeze({
   'browser.sandbox.install': BrowserSandboxInstallInputV1Schema,
   'browser.control.takeControl': BrowserTakeControlCommandV1Schema,
   'browser.control.handBack': BrowserHandBackCommandV1Schema,
-  'browser.workspace.open': lazyZodSchema(() => z.object({
-    scopeId: z.string().trim().min(1),
+  'browser.workspace.open': lazyZodSchema(() => z.strictObject({
+    scopeId: z.string().check(z.trim(), z.minLength(1)),
     commandId: BrowserOpenViewCommandV1Schema.shape.commandId,
     target: BrowserViewTargetV1Schema,
-  }).strict()),
+  })),
   'browser.view.open': BrowserOpenViewCommandV1Schema,
-  'browser.view.openExternal': RuntimeBrowserViewInputSchema.extend({ commandId: z.string().trim().min(1).max(256) }).strict(),
+  'browser.view.openExternal': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(RuntimeBrowserViewInputSchema, { commandId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)) }))),
   'browser.view.close': BrowserCloseViewCommandV1Schema,
   'browser.view.focus': BrowserFocusViewCommandV1Schema,
   'browser.target.set': BrowserSetTargetCommandV1Schema,
@@ -357,7 +353,7 @@ export const BROWSER_RUNTIME_ACTION_INPUT_SCHEMAS = Object.freeze({
   'browser.recording.discard': DaemonBrowserRecordingCancelInputV1Schema,
   'browser.recording.cleanupExpired': DaemonBrowserRecordingCleanupInputV1Schema,
   'browser.recording.attachToComposer': RuntimeBrowserRecordingAttachInputSchema,
-} as const satisfies Readonly<Record<BrowserRuntimeActionId, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<BrowserRuntimeActionId, z.ZodMiniType>>);
 
 export const BROWSER_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
   'browser.sandbox.install': BrowserSandboxInstallResultV1Schema,
@@ -424,12 +420,12 @@ export const BROWSER_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
   'browser.recording.start': DaemonBrowserRecordingStartResultV1Schema,
   'browser.recording.stop': DaemonBrowserRecordingStopResultV1Schema,
   'browser.recording.cancel': DaemonBrowserRecordingTerminalResultV1Schema,
-  'browser.recording.status': BrowserRecordingSessionV1Schema.nullable(),
+  'browser.recording.status': z.nullable(BrowserRecordingSessionV1Schema),
   'browser.recording.listForView': BrowserRecordingListResultV1Schema,
   'browser.recording.discard': DaemonBrowserRecordingTerminalResultV1Schema,
   'browser.recording.cleanupExpired': DaemonBrowserRecordingCleanupResultV1Schema,
   'browser.recording.attachToComposer': BrowserRecordingAttachToComposerResultV1Schema,
-} as const satisfies Readonly<Record<BrowserRuntimeActionId, z.ZodTypeAny>>);
+} as const satisfies Readonly<Record<BrowserRuntimeActionId, z.ZodMiniType>>);
 
 export const BROWSER_RUNTIME_ACTION_SPEC_FAMILY = Object.freeze({
   approvalPolicies: {

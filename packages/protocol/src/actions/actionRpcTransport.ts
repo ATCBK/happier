@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   ExternalActionTargetV1Schema,
@@ -12,22 +12,22 @@ import {
  * is opened only by the generic RPC ingress and is never passed to an Action
  * input schema.
  */
-export const TargetedActionRpcRequestV1Schema = lazyZodSchema(() => z.object({
+export const TargetedActionRpcRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   kind: z.literal('targeted_action_rpc'),
   input: z.unknown(),
   target: ExternalActionTargetV1Schema,
   /** The caller's invoking Session (host context `defaultSessionId`), e.g. a Run's origin. */
-  defaultSessionId: z.string().trim().min(1).optional(),
-}).strict().superRefine((value, context) => {
+  defaultSessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}).check(z.superRefine((value, context) => {
   if (!Object.prototype.hasOwnProperty.call(value, 'input')) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['input'],
       message: 'input is required',
     });
   }
-}));
+})));
 
 export type TargetedActionRpcRequestV1 = z.infer<typeof TargetedActionRpcRequestV1Schema>;
 

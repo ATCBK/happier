@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 
 import { ACTION_ID_FAMILIES_V1, ActionIdSchema, type ActionId } from './actionIds.js';
 import {

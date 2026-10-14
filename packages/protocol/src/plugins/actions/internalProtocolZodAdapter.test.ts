@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
-import { z } from 'zod';
+import * as mini from 'zod/mini';
 
 import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
@@ -8,7 +8,19 @@ import { PluginContributionIdentityV1Schema } from '../contributionIdentity.js';
 import { asProtocolZod } from './internalProtocolZodAdapter.js';
 import { createProtocolStoredReadSchema, defineProtocolArray, defineProtocolJsonValue, defineProtocolObject, defineProtocolString, defineProtocolUnion, defineProtocolUniqueArray } from './protocolComposableSchema.js';
 
-describe('the private neutral-schema bridge for classic parents', () => {
+describe('the private neutral-schema bridge for Mini parents', () => {
+  it('returns a native Mini schema that composes in a Mini parent', () => {
+    const canonical = defineProtocolObject({ value: defineProtocolString({ minLength: 1 }) }, { policy: 'closed' });
+    const adapter = asProtocolZod(canonical);
+    expect(adapter).toBeInstanceOf(mini.ZodMiniType);
+    const parent = mini.strictObject({ payload: mini._default(adapter, { value: 'fallback' }) });
+    expect(mini.parse(parent, {})).toEqual({ payload: { value: 'fallback' } });
+    expect(mini.parse(parent, { payload: { value: 'kept' } })).toEqual({ payload: { value: 'kept' } });
+    expect(mini.safeParse(parent, { payload: { value: 'kept', retired: true } }).success).toBe(false);
+    expect(createStoredReadSchema(parent).parse({ payload: { value: 'kept', retired: true }, retired: true }))
+      .toEqual({ payload: { value: 'kept' } });
+  });
+
   it('reads retained canonical contribution identity annotations without weakening known fields or fresh input', () => {
     const identity = { pluginId: 'happier.agent.codex', localId: 'codex' };
     const retained = { ...identity, retired: true };
@@ -65,25 +77,25 @@ describe('the private neutral-schema bridge for classic parents', () => {
     expect(adapter.safeParse('').success).toBe(false);
   });
 
-  it('keeps the classic facade, defaults and the canonical normalized output', async () => {
+  it('keeps native Mini defaults and the canonical normalized output', async () => {
     const canonical = defineProtocolObject({ value: defineProtocolString({ minLength: 1 }) }, { policy: 'additive-open/drop' });
     const adapter = asProtocolZod(canonical);
-    expectTypeOf(adapter).toMatchTypeOf<z.ZodType<{ value: string }, { value: string }>>();
-    expect(adapter).toBeInstanceOf(z.ZodType);
-    const parent = z.object({ payload: adapter.default(() => ({ value: 'default' })) }).strict();
+    expectTypeOf(adapter).toMatchTypeOf<mini.ZodMiniType<{ value: string }, { value: string }>>();
+    expect(adapter).toBeInstanceOf(mini.ZodMiniType);
+    const parent = mini.strictObject({ payload: mini._default(adapter, () => ({ value: 'default' })) });
     expect(parent.parse({})).toEqual({ payload: { value: 'default' } });
     expect(await parent.parseAsync({ payload: { value: 'accepted', extra: true } })).toEqual({ payload: { value: 'accepted' } });
     const first = parent.parse({});
     first.payload.value = 'changed';
     expect(parent.parse({})).toEqual({ payload: { value: 'default' } });
-    expect(adapter.optional().parse(undefined)).toBeUndefined();
-    expect(adapter.nullable().parse(null)).toBeNull();
+    expect(mini.parse(mini.optional(adapter), undefined)).toBeUndefined();
+    expect(mini.parse(mini.nullable(adapter), null)).toBeNull();
   });
 
   it('retains bridge issue paths and closes writes while stored reads drop extras', () => {
     const canonical = defineProtocolObject({ value: defineProtocolString({ minLength: 1 }) }, { policy: 'closed' });
     const adapter = asProtocolZod(canonical);
-    const parent = z.object({ payload: adapter }).strict();
+    const parent = mini.strictObject({ payload: adapter });
     const parsed = parent.safeParse({ payload: { value: 7 } });
     expect(parsed.success).toBe(false);
     if (!parsed.success) expect(parsed.error.issues).toEqual([
@@ -103,10 +115,10 @@ describe('the private neutral-schema bridge for classic parents', () => {
   });
 
   it('exposes the original rejected input when a parent refinement explicitly opts in', () => {
-    const parent = asProtocolZod(defineProtocolString({ minLength: 2 })).refine(value => value !== 'x', {
-      when: () => true,
-      message: 'Parent rejected the original input',
-    });
+    const parent = asProtocolZod(defineProtocolString({ minLength: 2 })).check(mini.refine(
+      value => value !== 'x',
+      { when: () => true, message: 'Parent rejected the original input' },
+    ));
     const parsed = parent.safeParse('x');
     expect(parsed.success).toBe(false);
     if (!parsed.success) expect(parsed.error.issues).toEqual([
@@ -126,9 +138,9 @@ describe('the private neutral-schema bridge for classic parents', () => {
     expect(canonical.safeParse(raw).success).toBe(false);
   });
 
-  it.each(['draft-7', 'draft-2020-12'] as const)('preserves canonical custom projections in %s through classic parents', (target) => {
+  it.each(['draft-7', 'draft-2020-12'] as const)('preserves canonical custom projections in %s through Mini parents', (target) => {
     const canonical = defineProtocolObject({ value: defineProtocolString({ minLength: 1 }) }, { policy: 'closed' });
-    const parent = z.object({ payload: asProtocolZod(canonical), second: asProtocolZod(canonical) }).strict();
+    const parent = mini.strictObject({ payload: asProtocolZod(canonical), second: asProtocolZod(canonical) });
     const json = zodSchemaToJsonSchemaObject(parent, { target });
     expect(json).toMatchObject({
       type: 'object', required: ['payload', 'second'], additionalProperties: false,

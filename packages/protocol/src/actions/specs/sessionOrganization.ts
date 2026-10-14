@@ -1,4 +1,5 @@
-import { z } from 'zod';
+import { lazyZodSchema } from '../../lazyZodSchema.js';
+import { z } from 'zod/mini';
 import {
   CreateOrUpdateSessionOrganizationFolderRequestSchema, CreateOrUpdateSessionOrganizationFolderResponseSchema,
   CreateOrUpdateSessionOrganizationTagRequestSchema, CreateOrUpdateSessionOrganizationTagResponseSchema,
@@ -9,16 +10,16 @@ import { SessionOrganizationSnapshotResponseSchema } from '../../sessions/organi
 import { homeDomainActionRow } from './homeDomainRow.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 
-const listInput = z.object({}).strict();
-const folderRenameInput = CreateOrUpdateSessionOrganizationFolderRequestSchema.extend({ folderId: z.string().trim().min(1) });
-const tagRenameInput = CreateOrUpdateSessionOrganizationTagRequestSchema.extend({ tagId: z.string().trim().min(1) });
+const listInput = z.strictObject({});
+const folderRenameInput = lazyZodSchema(() => z.extend(CreateOrUpdateSessionOrganizationFolderRequestSchema, { folderId: z.string().check(z.trim(), z.minLength(1)) }));
+const tagRenameInput = lazyZodSchema(() => z.extend(CreateOrUpdateSessionOrganizationTagRequestSchema, { tagId: z.string().check(z.trim(), z.minLength(1)) }));
 
 // Resource creation and rename use the incumbent upsert contract and display
 // envelopes. This is an Action projection, never an organization store.
 function row<
   const TActionId extends PreNormalizedActionSpec['id'],
-  const TInputSchema extends z.ZodTypeAny,
-  const TOutputSchema extends z.ZodTypeAny,
+  const TInputSchema extends z.ZodMiniType,
+  const TOutputSchema extends z.ZodMiniType,
 >(spec: Parameters<typeof homeDomainActionRow<TActionId, TInputSchema, TOutputSchema>>[0]) {
   const declared = homeDomainActionRow(spec);
   // Keep this literal family's schema/authority projection exact. The shared

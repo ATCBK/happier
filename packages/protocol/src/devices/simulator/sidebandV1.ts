@@ -1,7 +1,7 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const NonNegativeIntSchema = lazyZodSchema(() => z.number().int().nonnegative());
+const NonNegativeIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
 
 // Sideband payloads cross a JSON transport. Zod's native JSON schema models
 // that recursive wire contract directly and can be faithfully advertised to
@@ -20,41 +20,41 @@ export const SimulatorSidebandKindV1Schema = lazyZodSchema(() => z.enum([
 
 const BaseSimulatorSidebandMessageV1Schema = lazyZodSchema(() => z.object({
   v: z.literal(1),
-  simulatorId: z.string().min(1),
+  simulatorId: z.string().check(z.minLength(1)),
   emittedAtMs: NonNegativeIntSchema,
 }));
 
 export const SimulatorSidebandMessageV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  BaseSimulatorSidebandMessageV1Schema.extend({
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSimulatorSidebandMessageV1Schema, {
     kind: z.literal('accessibility_tree'),
     tree: SimulatorJsonValueSchema,
-  }).strict(),
-  BaseSimulatorSidebandMessageV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSimulatorSidebandMessageV1Schema, {
     kind: z.literal('logs'),
     level: z.enum(['debug', 'info', 'warn', 'error']),
     message: z.string(),
-  }).strict(),
-  BaseSimulatorSidebandMessageV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSimulatorSidebandMessageV1Schema, {
     kind: z.literal('device_config'),
     config: z.record(z.string(), SimulatorJsonValueSchema),
-  }).strict(),
-  BaseSimulatorSidebandMessageV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSimulatorSidebandMessageV1Schema, {
     kind: z.literal('app_metadata'),
     metadata: z.record(z.string(), SimulatorJsonValueSchema),
-  }).strict(),
-  BaseSimulatorSidebandMessageV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSimulatorSidebandMessageV1Schema, {
     kind: z.literal('network_diagnostics'),
     diagnostics: z.record(z.string(), SimulatorJsonValueSchema),
-  }).strict(),
-  BaseSimulatorSidebandMessageV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSimulatorSidebandMessageV1Schema, {
     kind: z.literal('route'),
     route: z.string(),
-  }).strict(),
-  BaseSimulatorSidebandMessageV1Schema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BaseSimulatorSidebandMessageV1Schema, {
     kind: z.literal('capture_health'),
     status: z.enum(['available', 'starting', 'degraded', 'unavailable']),
-    reasonCode: z.string().min(1).optional(),
-  }).strict(),
+    reasonCode: z.optional(z.string().check(z.minLength(1))),
+  })),
 ]));
 
 export type SimulatorSidebandKindV1 = z.infer<typeof SimulatorSidebandKindV1Schema>;

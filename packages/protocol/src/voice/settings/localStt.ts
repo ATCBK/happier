@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { LocalNeuralExecutionSchema } from '../../daemon/voiceInference.js';
 
 import {
@@ -10,16 +10,15 @@ import { VoiceLocalSpeechProviderIdSchema } from './speechProvider.js';
 export const VoiceLocalSttProviderSchema = VoiceLocalSpeechProviderIdSchema;
 export type VoiceLocalSttProvider = z.infer<typeof VoiceLocalSttProviderSchema>;
 
-const VoiceLocalSttLocalNeuralSchema = z
+const VoiceLocalSttLocalNeuralSchema = z.prefault(z
   .object({
-    assetId: z.string().nullable().default('sherpa-onnx-streaming-zipformer-en-20M-2023-02-17'),
-    language: z.string().nullable().default(null),
-    execution: LocalNeuralExecutionSchema.default('auto'),
-  })
-  .prefault({});
+    assetId: z._default(z.nullable(z.string()), 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17'),
+    language: z._default(z.nullable(z.string()), null),
+    execution: z._default(LocalNeuralExecutionSchema, 'auto'),
+  }), {});
 
 const VoiceLocalSttSchemaV3 = z.object({
-  provider: VoiceLocalSttProviderSchema.default('device'),
+  provider: z._default(VoiceLocalSttProviderSchema, 'device'),
   localNeural: VoiceLocalSttLocalNeuralSchema,
 });
 
@@ -34,7 +33,7 @@ function migrateLegacyLocalStt(input: Record<string, unknown>): VoiceLocalSttV3 
   };
 }
 
-export const VoiceLocalSttSchema = z.preprocess((raw) => {
+export const VoiceLocalSttSchema = z.pipe(z.transform((raw) => {
   if (!raw || typeof raw !== 'object') return raw;
   const obj = migrateLegacyGoogleSttSettings(raw as Record<string, unknown>);
 
@@ -56,6 +55,6 @@ export const VoiceLocalSttSchema = z.preprocess((raw) => {
   }
 
   return obj;
-}, VoiceLocalSttSchemaV3);
+}), VoiceLocalSttSchemaV3);
 
 export type VoiceLocalSttSettings = z.infer<typeof VoiceLocalSttSchema>;

@@ -1,31 +1,31 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const SessionIdSchema = lazyZodSchema(() => z.string().trim().min(1));
-const LocalIdSchema = lazyZodSchema(() => z.string().trim().min(1));
+const SessionIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
+const LocalIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 
-export const SessionInputCancelExactTurnRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionInputCancelExactTurnRequestV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: SessionIdSchema,
   localId: LocalIdSchema,
-}).strict());
+}));
 export type SessionInputCancelExactTurnRequestV1 =
   z.infer<typeof SessionInputCancelExactTurnRequestV1Schema>;
 
 export const SessionInputCancelExactTurnResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     status: z.literal('cancelled'),
     sessionId: SessionIdSchema,
     localId: LocalIdSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(false),
     status: z.enum(['notCurrent', 'notRunning', 'unsupported', 'cancel_failed']),
     sessionId: SessionIdSchema,
     localId: LocalIdSchema,
-    errorCode: z.string().min(1).optional(),
-    error: z.string().min(1).optional(),
-  }).strict(),
+    errorCode: z.optional(z.string().check(z.minLength(1))),
+    error: z.optional(z.string().check(z.minLength(1))),
+  }),
 ]));
 export type SessionInputCancelExactTurnResultV1 =
   z.infer<typeof SessionInputCancelExactTurnResultV1Schema>;

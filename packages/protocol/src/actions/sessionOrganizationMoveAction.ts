@@ -1,38 +1,38 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { EntityDragScopeV1Schema } from '../plugins/ui/entityDragDrop.js';
 import type { PreNormalizedActionSpec } from './actionSpecs.js';
 import { SetSessionPinRequestSchema, SetSessionPinResponseSchema } from '../sessions/organization/mutations.js';
 import { SESSION_ORGANIZATION_MAX_ID_LENGTH } from '../sessions/organization/constants.js';
 import { SESSION_ORGANIZATION_PIN_HTTP_PATH_V1 } from '../sessions/organization/pins.js';
 
-const id = z.string().trim().min(1);
+const id = z.string().check(z.trim(), z.minLength(1));
 /** Stable semantic anchors, never a drag snapshot or a replacement order array. */
-export const SessionOrganizationMoveInputSchema = lazyZodSchema(() => z.object({
+export const SessionOrganizationMoveInputSchema = lazyZodSchema(() => z.strictObject({
   scope: EntityDragScopeV1Schema,
-  projection: z.literal('rail').optional(),
+  projection: z.optional(z.literal('rail')),
   sourceRowId: id,
   sourceKind: z.enum(['leaf', 'container']),
   instructionKind: z.enum(['reorder-before', 'reorder-after', 'nest-into', 'move-to-root']),
-  targetRowId: id.nullable(),
-  containerId: id.nullable(),
-  parentRowId: id.nullable(),
-  depth: z.number().int().nonnegative().nullable(),
-  edge: z.enum(['top', 'bottom']).nullable(),
-}).strict());
+  targetRowId: z.nullable(id),
+  containerId: z.nullable(id),
+  parentRowId: z.nullable(id),
+  depth: z.nullable(z.number().check(z.int(), z.nonnegative())),
+  edge: z.nullable(z.enum(['top', 'bottom'])),
+}));
 export type SessionOrganizationMoveInput = z.infer<typeof SessionOrganizationMoveInputSchema>;
 export const SessionOrganizationMoveOutputSchema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('applied') }).strict(),
-  z.object({ status: z.literal('refused'), reason: id }).strict(),
-  z.object({ status: z.literal('unavailable') }).strict(),
-  z.object({ status: z.literal('unknown'), reason: id }).strict(),
+  z.strictObject({ status: z.literal('applied') }),
+  z.strictObject({ status: z.literal('refused'), reason: id }),
+  z.strictObject({ status: z.literal('unavailable') }),
+  z.strictObject({ status: z.literal('unknown'), reason: id }),
 ]));
 export type SessionOrganizationMoveOutput = z.infer<typeof SessionOrganizationMoveOutputSchema>;
 
-export const SessionOrganizationPinSetInputSchema = lazyZodSchema(() => SetSessionPinRequestSchema.extend({
-  sessionId: id.max(SESSION_ORGANIZATION_MAX_ID_LENGTH),
-  serverId: id.optional(),
-}).strict());
+export const SessionOrganizationPinSetInputSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(SetSessionPinRequestSchema, {
+  sessionId: id.check(z.maxLength(SESSION_ORGANIZATION_MAX_ID_LENGTH)),
+  serverId: z.optional(id),
+})));
 export type SessionOrganizationPinSetInput = z.infer<typeof SessionOrganizationPinSetInputSchema>;
 
 export const SESSION_ORGANIZATION_MOVE_ACTION_SPECS = [{

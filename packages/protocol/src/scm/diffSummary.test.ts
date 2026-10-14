@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import * as diffSummary from './diffSummary.js';
 
 describe('personal reviewed marks', () => {
@@ -106,7 +106,7 @@ describe('comparison evidence and analysis contracts', () => {
   });
 
   it('rejects unexpected model authority and does not cap valid prose', () => {
-    const schema = (diffSummary as Record<string, unknown>).ScmDiffSummaryModelOutputSchema as z.ZodTypeAny;
+    const schema = (diffSummary as Record<string, unknown>).ScmDiffSummaryModelOutputSchema as z.ZodMiniType;
     expect(schema?.safeParse({ summaryMarkdown: 'x'.repeat(120_000) }).success).toBe(true);
     expect(schema?.safeParse({ summaryMarkdown: 'done', command: 'git commit' }).success).toBe(false);
   });
@@ -153,7 +153,7 @@ describe('comparison evidence and analysis contracts', () => {
 describe('SCM diff-summary protocol schemas', () => {
   it('accepts checkpoint-backed summary requests keyed by TurnChangeSet metadata', async () => {
     const protocol = await import('./diffSummary.js') as Record<string, unknown>;
-    const schema = protocol.ScmDiffSummaryGenerateInputSchema as z.ZodTypeAny | undefined;
+    const schema = protocol.ScmDiffSummaryGenerateInputSchema as z.ZodMiniType | undefined;
 
     expect(schema).toMatchObject({ parse: expect.any(Function) });
     expect(schema?.parse({
@@ -173,7 +173,7 @@ describe('SCM diff-summary protocol schemas', () => {
 
   it('rejects checkpoint-backed summary requests without turn or receipt identity', async () => {
     const protocol = await import('./diffSummary.js') as Record<string, unknown>;
-    const schema = protocol.ScmDiffSummaryGenerateInputSchema as z.ZodTypeAny | undefined;
+    const schema = protocol.ScmDiffSummaryGenerateInputSchema as z.ZodMiniType | undefined;
 
     expect(schema).toMatchObject({ safeParse: expect.any(Function) });
     const result = schema?.safeParse({
@@ -186,7 +186,7 @@ describe('SCM diff-summary protocol schemas', () => {
 
   it('preserves buffered output metadata for later execution-run and UI packets', async () => {
     const protocol = await import('./diffSummary.js') as Record<string, unknown>;
-    const schema = protocol.ScmDiffSummaryGenerateOutputSchema as z.ZodTypeAny | undefined;
+    const schema = protocol.ScmDiffSummaryGenerateOutputSchema as z.ZodMiniType | undefined;
 
     expect(schema).toMatchObject({ parse: expect.any(Function) });
     expect(schema?.parse({
@@ -222,7 +222,7 @@ describe('SCM diff-summary protocol schemas', () => {
 
   it('rejects workingTree summaries that carry a checkpointReceiptId (cache-key-pollution guard)', async () => {
     const protocol = await import('./diffSummary.js') as Record<string, unknown>;
-    const schema = protocol.ScmDiffSummaryGenerateInputSchema as z.ZodTypeAny | undefined;
+    const schema = protocol.ScmDiffSummaryGenerateInputSchema as z.ZodMiniType | undefined;
 
     expect(schema).toMatchObject({ safeParse: expect.any(Function) });
     const result = schema?.safeParse({
@@ -243,7 +243,7 @@ describe('SCM diff-summary protocol schemas', () => {
     // future implementation that bakes modelSelector into sourceKey must change this test
     // intentionally so reviewers see the policy break.
     const protocol = await import('./diffSummary.js') as Record<string, unknown>;
-    const inputSchema = protocol.ScmDiffSummaryGenerateInputSchema as z.ZodTypeAny | undefined;
+    const inputSchema = protocol.ScmDiffSummaryGenerateInputSchema as z.ZodMiniType | undefined;
 
     expect(inputSchema).toMatchObject({ parse: expect.any(Function) });
     const baseInput = {

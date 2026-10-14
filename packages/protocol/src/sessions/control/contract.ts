@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { SessionReportsToV1Schema, SessionReportsV1Schema } from '../relations/sessionReportsToV1.js';
 import { SessionEffectiveAccessV1Schema, type SessionEffectiveAccessV1 } from '../access/sessionEffectiveAccessV1.js';
 import { SessionAccessAccountSummaryV1Schema } from '../access/sessionAccessPrincipalV1.js';
@@ -192,27 +192,27 @@ export const SessionControlErrorCodeSchema = lazyZodSchema(() => z.enum([
 ]));
 export type SessionControlErrorCode = z.infer<typeof SessionControlErrorCodeSchema>;
 
-export const SessionControlErrorSchema = lazyZodSchema(() => z.object({
+export const SessionControlErrorSchema = lazyZodSchema(() => z.looseObject({
   code: SessionControlErrorCodeSchema,
-  message: z.string().optional(),
-  details: z.unknown().optional(),
-}).passthrough());
+  message: z.optional(z.string()),
+  details: z.optional(z.unknown()),
+}));
 export type SessionControlError = z.infer<typeof SessionControlErrorSchema>;
 
-export const SessionControlEnvelopeSuccessSchema = lazyZodSchema(() => z.object({
+export const SessionControlEnvelopeSuccessSchema = lazyZodSchema(() => z.looseObject({
   v: z.literal(1),
   ok: z.literal(true),
-  kind: z.string().min(1),
+  kind: z.string().check(z.minLength(1)),
   data: z.unknown(),
-}).passthrough());
+}));
 export type SessionControlEnvelopeSuccess = z.infer<typeof SessionControlEnvelopeSuccessSchema>;
 
-export const SessionControlEnvelopeErrorSchema = lazyZodSchema(() => z.object({
+export const SessionControlEnvelopeErrorSchema = lazyZodSchema(() => z.looseObject({
   v: z.literal(1),
   ok: z.literal(false),
-  kind: z.string().min(1),
+  kind: z.string().check(z.minLength(1)),
   error: SessionControlErrorSchema,
-}).passthrough());
+}));
 export type SessionControlEnvelopeError = z.infer<typeof SessionControlEnvelopeErrorSchema>;
 
 export const SessionControlEnvelopeBaseSchema = lazyZodSchema(() => z.discriminatedUnion('ok', [
@@ -221,17 +221,17 @@ export const SessionControlEnvelopeBaseSchema = lazyZodSchema(() => z.discrimina
 ]));
 export type SessionControlEnvelopeBase = z.infer<typeof SessionControlEnvelopeBaseSchema>;
 
-export const AuthStatusResultSchema = lazyZodSchema(() => z.object({
+export const AuthStatusResultSchema = lazyZodSchema(() => z.looseObject({
   authenticated: z.literal(true),
-  encryption: z.object({
+  encryption: z.looseObject({
     type: z.enum(['legacy', 'dataKey']),
-  }).passthrough(),
+  }),
   machineRegistered: z.boolean(),
-  machineId: z.string().min(1).optional(),
-  host: z.string().min(1),
-  happyHomeDir: z.string().min(1),
+  machineId: z.optional(z.string().check(z.minLength(1))),
+  host: z.string().check(z.minLength(1)),
+  happyHomeDir: z.string().check(z.minLength(1)),
   daemonRunning: z.boolean(),
-}).passthrough());
+}));
 export type AuthStatusResult = z.infer<typeof AuthStatusResultSchema>;
 
 /**
@@ -240,11 +240,11 @@ export type AuthStatusResult = z.infer<typeof AuthStatusResultSchema>;
  * instead of importing `SessionSystemSessionV1Schema` directly.
  */
 export function createSessionSystemSessionV1Schema(zod: typeof z) {
-  return zod.object({
+  return zod.looseObject({
     v: zod.literal(1),
     key: zod.string(),
-    hidden: zod.boolean().optional(),
-  }).passthrough();
+    hidden: zod.optional(zod.boolean()),
+  });
 }
 
 export const SessionSystemSessionV1Schema = lazyZodSchema(() => createSessionSystemSessionV1Schema(z));
@@ -256,19 +256,17 @@ export const VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_KEY =
   'voice_transcript_history';
 
 export function createSessionMetadataSchema(zod: typeof z) {
-  return zod
-    .object({
-      systemSessionV1: createSessionSystemSessionV1Schema(zod).optional(),
-      [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: SessionUsageLimitRecoveryV1Schema.optional(),
-      [SESSION_RUNNER_RUNTIME_METADATA_KEY]: SessionRunnerRuntimeStateV1Schema.optional(),
-      [SESSION_PENDING_QUEUE_HOLD_METADATA_KEY]: SessionPendingQueueHoldV1Schema.optional(),
-      [PROVIDER_ACCOUNT_USAGE_REFS_METADATA_KEY]: ProviderAccountUsageRefsV1Schema.optional(),
+  return zod.looseObject({
+      systemSessionV1: zod.optional(createSessionSystemSessionV1Schema(zod)),
+      [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: z.optional(SessionUsageLimitRecoveryV1Schema),
+      [SESSION_RUNNER_RUNTIME_METADATA_KEY]: z.optional(SessionRunnerRuntimeStateV1Schema),
+      [SESSION_PENDING_QUEUE_HOLD_METADATA_KEY]: z.optional(SessionPendingQueueHoldV1Schema),
+      [PROVIDER_ACCOUNT_USAGE_REFS_METADATA_KEY]: z.optional(ProviderAccountUsageRefsV1Schema),
       [CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_METADATA_KEY]:
-        createConnectedServiceMaterializationIdentityV1Schema(zod).optional(),
+        z.optional(createConnectedServiceMaterializationIdentityV1Schema(zod)),
       [SESSION_WORKSPACE_LOCATION_METADATA_KEY]:
-        createSessionWorkspaceLocationV1Schema(zod).optional(),
-    })
-    .passthrough();
+        z.optional(createSessionWorkspaceLocationV1Schema(zod)),
+    });
 }
 
 export const SessionMetadataSchema = lazyZodSchema(() => createSessionMetadataSchema(z));
@@ -303,12 +301,10 @@ export function buildSystemSessionMetadataV1(params: Readonly<{ key: string; hid
   };
 }
 
-export const SessionShareSchema = lazyZodSchema(() => z
-  .object({
+export const SessionShareSchema = lazyZodSchema(() => z.looseObject({
     accessLevel: z.enum(['view', 'edit', 'admin']),
     canApprovePermissions: z.boolean(),
-  })
-  .passthrough());
+  }));
 export type SessionShare = z.infer<typeof SessionShareSchema>;
 
 function refineV2SessionMetadataRecipientFields(
@@ -322,7 +318,7 @@ function refineV2SessionMetadataRecipientFields(
     share?: SessionShare | null;
     effectiveAccess?: SessionEffectiveAccessV1;
   }>,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   const metadataLayoutVersion = value.metadataLayoutVersion ?? 0;
   if (metadataLayoutVersion !== 0 && metadataLayoutVersion !== 1) {
@@ -407,41 +403,40 @@ function refineV2SessionMetadataRecipientFields(
   }
 }
 
-export const V2SessionRecordSchema = lazyZodSchema(() => z
-  .object({
-    id: z.string().min(1),
-    origin: SessionAwarenessOriginV1Schema.optional(),
-    workDepth: SessionWorkDepthV1Schema.optional(),
-    reportsTo: SessionReportsToV1Schema.optional(),
-    reports: SessionReportsV1Schema.optional(),
-    pendingReviewRuns: z.number().int().nonnegative().optional(),
-    seq: z.number().int().nonnegative(),
-    createdAt: z.number().int().nonnegative(),
-    updatedAt: z.number().int().nonnegative(),
-    meaningfulActivityAt: z.number().int().nonnegative().optional(),
+export const V2SessionRecordSchema = lazyZodSchema(() => z.looseObject({
+    id: z.string().check(z.minLength(1)),
+    origin: z.optional(SessionAwarenessOriginV1Schema),
+    workDepth: z.optional(SessionWorkDepthV1Schema),
+    reportsTo: z.optional(SessionReportsToV1Schema),
+    reports: z.optional(SessionReportsV1Schema),
+    pendingReviewRuns: z.optional(z.number().check(z.int(), z.nonnegative())),
+    seq: z.number().check(z.int(), z.nonnegative()),
+    createdAt: z.number().check(z.int(), z.nonnegative()),
+    updatedAt: z.number().check(z.int(), z.nonnegative()),
+    meaningfulActivityAt: z.optional(z.number().check(z.int(), z.nonnegative())),
     active: z.boolean(),
-    activeAt: z.number().int().nonnegative(),
-    archivedAt: z.number().int().nonnegative().nullable().optional(),
-    encryptionMode: AccountEncryptionModeSchema.optional(),
+    activeAt: z.number().check(z.int(), z.nonnegative()),
+    archivedAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    encryptionMode: z.optional(AccountEncryptionModeSchema),
     metadata: z.string(),
-    metadataVersion: z.number().int().nonnegative(),
-    metadataLayoutVersion: z.number().int().nonnegative().optional(),
+    metadataVersion: z.number().check(z.int(), z.nonnegative()),
+    metadataLayoutVersion: z.optional(z.number().check(z.int(), z.nonnegative())),
     ownerMetadata:
-      StoredSessionOwnerMetadataEnvelopeV1Schema.nullable().optional(),
-    agentState: z.string().nullable().optional(),
-    agentStateVersion: z.number().int().nonnegative().optional(),
-    lastViewedSessionSeq: z.number().int().nonnegative().nullable().optional(),
-    unreadSince: z.number().int().nonnegative().nullable().optional(),
-    viewer: SessionViewerProjectionV1Schema.optional(),
-    pendingPermissionRequestCount: z.number().int().min(0).optional(),
-    pendingUserActionRequestCount: z.number().int().min(0).optional(),
-    pendingRequestObservedAt: z.number().int().nonnegative().nullable().optional(),
-    pendingCount: z.number().int().min(0).optional(),
-    pendingBlockedCount: z.number().int().min(0).optional(),
-    pendingVersion: z.number().int().min(0).optional(),
-    pendingActivationAuthorization: PendingActivationAuthorizationV1Schema.optional(),
-    pendingActivationFailureDetails: PendingActivationFailureDetailsV1Schema.optional(),
-    dataEncryptionKey: z.string().nullable(),
+      z.optional(z.nullable(StoredSessionOwnerMetadataEnvelopeV1Schema)),
+    agentState: z.optional(z.nullable(z.string())),
+    agentStateVersion: z.optional(z.number().check(z.int(), z.nonnegative())),
+    lastViewedSessionSeq: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    unreadSince: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    viewer: z.optional(SessionViewerProjectionV1Schema),
+    pendingPermissionRequestCount: z.optional(z.number().check(z.int(), z.minimum(0))),
+    pendingUserActionRequestCount: z.optional(z.number().check(z.int(), z.minimum(0))),
+    pendingRequestObservedAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    pendingCount: z.optional(z.number().check(z.int(), z.minimum(0))),
+    pendingBlockedCount: z.optional(z.number().check(z.int(), z.minimum(0))),
+    pendingVersion: z.optional(z.number().check(z.int(), z.minimum(0))),
+    pendingActivationAuthorization: z.optional(PendingActivationAuthorizationV1Schema),
+    pendingActivationFailureDetails: z.optional(PendingActivationFailureDetailsV1Schema),
+    dataEncryptionKey: z.nullable(z.string()),
     /**
      * The one human Account currently responsible for this Session.
      *
@@ -449,83 +444,70 @@ export const V2SessionRecordSchema = lazyZodSchema(() => z
      * responsibility; it is never proof that nobody is assigned. Explicit
      * `null` is a supporting producer stating the Session is unassigned.
      */
-    responsibleAccountId: z.string().min(1).nullable().optional(),
+    responsibleAccountId: z.optional(z.nullable(z.string().check(z.minLength(1)))),
     /**
      * The safe current summary for `responsibleAccountId`, projected at
      * read/mutation/event time through the shared safe projector. `null`
      * when unassigned; omitted exactly when `responsibleAccountId` is omitted.
      */
-    responsibleAccount: SessionAccessAccountSummaryV1Schema.nullable().optional(),
-    share: SessionShareSchema.nullable().optional(),
-    effectiveAccess: SessionEffectiveAccessV1Schema.optional(),
+    responsibleAccount: z.optional(z.nullable(SessionAccessAccountSummaryV1Schema)),
+    share: z.optional(z.nullable(SessionShareSchema)),
+    effectiveAccess: z.optional(SessionEffectiveAccessV1Schema),
     /** Safe audience-existence signal; never a roster or authorization input. */
-    hasOtherNamedCollaborator: z.boolean().optional(),
-    latestTurnId: TurnIdSchema.nullable().optional(),
-    latestTurnStatus: PrimaryTurnStatusV1Schema.nullable().optional(),
-    latestTurnStatusObservedAt: z.number().int().nonnegative().nullable().optional(),
-    lastRuntimeIssue: SessionRuntimeIssueV1Schema.nullable().optional(),
-    runtimeActivityState: SessionRuntimeActivityStateSchema.optional(),
-    runtimeActivityActiveCount: z.number().int().nonnegative().optional(),
-    runtimeActivityObservedAt: z.number().int().nonnegative().nullable().optional(),
-    runtimeActivityRevision: z.number().int().nonnegative().optional(),
-    rollbackEligibleTurnStarts: z.array(z.number().int().nonnegative()).optional(),
-    latestReadyEventSeq: z.number().int().nonnegative().nullable().optional(),
-    latestReadyEventAt: z.number().int().nonnegative().nullable().optional(),
-    thinking: z.boolean().optional(),
-    thinkingAt: z.number().int().nonnegative().nullable().optional(),
-    currentStorageState: ExternalSessionStorageStateV1Schema.optional(),
-    acceptedThroughServerSeq: z.number().int().nonnegative().nullable().optional(),
-    materializedThroughSourceAt: z.number().int().nonnegative().nullable().optional(),
-    publishedThroughServerSeq: z.number().int().nonnegative().nullable().optional(),
-    transcriptShareable: z.boolean().optional(),
-  })
-  .passthrough()
-  .superRefine(refineV2SessionMetadataRecipientFields)
-  .superRefine(refineRuntimeActivityProjectionFields)
-  .superRefine((value, ctx) => {
+    hasOtherNamedCollaborator: z.optional(z.boolean()),
+    latestTurnId: z.optional(z.nullable(TurnIdSchema)),
+    latestTurnStatus: z.optional(z.nullable(PrimaryTurnStatusV1Schema)),
+    latestTurnStatusObservedAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    lastRuntimeIssue: z.optional(z.nullable(SessionRuntimeIssueV1Schema)),
+    runtimeActivityState: z.optional(SessionRuntimeActivityStateSchema),
+    runtimeActivityActiveCount: z.optional(z.number().check(z.int(), z.nonnegative())),
+    runtimeActivityObservedAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    runtimeActivityRevision: z.optional(z.number().check(z.int(), z.nonnegative())),
+    rollbackEligibleTurnStarts: z.optional(z.array(z.number().check(z.int(), z.nonnegative()))),
+    latestReadyEventSeq: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    latestReadyEventAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    thinking: z.optional(z.boolean()),
+    thinkingAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    currentStorageState: z.optional(ExternalSessionStorageStateV1Schema),
+    acceptedThroughServerSeq: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    materializedThroughSourceAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    publishedThroughServerSeq: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    transcriptShareable: z.optional(z.boolean()),
+  }).check(z.superRefine(refineV2SessionMetadataRecipientFields), z.superRefine(refineRuntimeActivityProjectionFields), z.superRefine((value, ctx) => {
     const id = (value as { responsibleAccountId?: string | null }).responsibleAccountId;
     const summary = (value as { responsibleAccount?: { accountId: string } | null }).responsibleAccount;
     if (id === undefined && summary !== undefined) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'responsibleAccount without responsibleAccountId is unsupported', path: ['responsibleAccount'] });
+      ctx.addIssue({ code: "custom", message: 'responsibleAccount without responsibleAccountId is unsupported', path: ['responsibleAccount'] });
     }
     if (id !== undefined && summary === undefined) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'responsibleAccountId requires an explicit responsibleAccount projection', path: ['responsibleAccount'] });
+      ctx.addIssue({ code: "custom", message: 'responsibleAccountId requires an explicit responsibleAccount projection', path: ['responsibleAccount'] });
     }
     if (id === null && summary !== undefined && summary !== null) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'unassigned responsibility must project a null summary', path: ['responsibleAccount'] });
+      ctx.addIssue({ code: "custom", message: 'unassigned responsibility must project a null summary', path: ['responsibleAccount'] });
     }
     if (typeof id === 'string' && summary !== undefined && (summary === null || summary.accountId !== id)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'assigned responsibility must project the matching summary', path: ['responsibleAccount'] });
+      ctx.addIssue({ code: "custom", message: 'assigned responsibility must project the matching summary', path: ['responsibleAccount'] });
     }
-  }));
+  })));
 export type V2SessionRecord = z.infer<typeof V2SessionRecordSchema>;
 
 export const SESSION_LOOKUP_BY_TAGS_MAX_TAGS_V2 = 4;
 export const SESSION_LOOKUP_BY_TAGS_TAG_MAX_CODE_UNITS_V2 = 256;
 
 const SessionLookupTagV2Schema = lazyZodSchema(() => z
-  .string()
-  .min(1)
-  .max(SESSION_LOOKUP_BY_TAGS_TAG_MAX_CODE_UNITS_V2));
+  .string().check(z.minLength(1), z.maxLength(SESSION_LOOKUP_BY_TAGS_TAG_MAX_CODE_UNITS_V2)));
 
-export const SessionLookupByTagsRequestV2Schema = lazyZodSchema(() => z
-  .object({
+export const SessionLookupByTagsRequestV2Schema = lazyZodSchema(() => z.strictObject({
     tags: z
-      .array(SessionLookupTagV2Schema)
-      .min(1)
-      .max(SESSION_LOOKUP_BY_TAGS_MAX_TAGS_V2)
-      .refine((tags) => new Set(tags).size === tags.length, {
+      .array(SessionLookupTagV2Schema).check(z.minLength(1), z.maxLength(SESSION_LOOKUP_BY_TAGS_MAX_TAGS_V2), z.refine((tags) => new Set(tags).size === tags.length, {
         message: 'Session lookup tags must be unique',
-      }),
-  })
-  .strict());
+      })),
+  }));
 export type SessionLookupByTagsRequestV2 = z.infer<typeof SessionLookupByTagsRequestV2Schema>;
 
-export const SessionLookupByTagsResponseV2Schema = lazyZodSchema(() => z
-  .object({
-    sessions: z.array(V2SessionRecordSchema).max(SESSION_LOOKUP_BY_TAGS_MAX_TAGS_V2),
-  })
-  .strict());
+export const SessionLookupByTagsResponseV2Schema = lazyZodSchema(() => z.strictObject({
+    sessions: z.array(V2SessionRecordSchema).check(z.maxLength(SESSION_LOOKUP_BY_TAGS_MAX_TAGS_V2)),
+  }));
 export type SessionLookupByTagsResponseV2 = z.infer<typeof SessionLookupByTagsResponseV2Schema>;
 
 /**
@@ -534,101 +516,91 @@ export type SessionLookupByTagsResponseV2 = z.infer<typeof SessionLookupByTagsRe
  * record, no Resource identity, and no inventory: authorization belongs to
  * the Session-access owner, while Resource lifetime stays local to its owner.
  */
-export const V2SessionResourceAccessResponseSchema = lazyZodSchema(() => z
-  .object({
-    accountId: z.string().trim().min(1).max(256),
-    throughCursor: z.number().int().nonnegative(),
+export const V2SessionResourceAccessResponseSchema = lazyZodSchema(() => z.strictObject({
+    accountId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    throughCursor: z.number().check(z.int(), z.nonnegative()),
     status: z.enum(['available', 'unavailable']),
-  })
-  .strict());
+  }));
 export type V2SessionResourceAccessResponse = z.infer<typeof V2SessionResourceAccessResponseSchema>;
 
-export const V2SessionListResponseSchema = lazyZodSchema(() => z
-  .object({
+export const V2SessionListResponseSchema = lazyZodSchema(() => z.looseObject({
     sessions: z.array(V2SessionRecordSchema),
-    nextCursor: z.string().nullable().optional(),
-    hasNext: z.boolean().optional(),
-    attentionNextCursor: z.string().nullable().optional(),
-    attentionHasNext: z.boolean().optional(),
+    nextCursor: z.optional(z.nullable(z.string())),
+    hasNext: z.optional(z.boolean()),
+    attentionNextCursor: z.optional(z.nullable(z.string())),
+    attentionHasNext: z.optional(z.boolean()),
     // Rows selected but omitted because their owning Account has not migrated
     // Session metadata to the current layout. One unmigrated historical share
     // never refuses the whole page; the refusal stays visible through this
     // count instead of silently shrinking the page.
-    metadataUpgradeRequiredCount: SessionListMetadataUpgradeRequiredCountSchema.optional(),
-  })
-  .passthrough());
+    metadataUpgradeRequiredCount: z.optional(SessionListMetadataUpgradeRequiredCountSchema),
+  }));
 export type V2SessionListResponse = z.infer<typeof V2SessionListResponseSchema>;
 
-export const V2SessionByIdResponseSchema = lazyZodSchema(() => z
-  .object({
+export const V2SessionByIdResponseSchema = lazyZodSchema(() => z.looseObject({
     session: V2SessionRecordSchema,
-    created: z.boolean().optional(),
-    organizationPlacement: SessionOrganizationPlacementV1Schema.optional(),
-  })
-  .passthrough());
+    created: z.optional(z.boolean()),
+    organizationPlacement: z.optional(SessionOrganizationPlacementV1Schema),
+  }));
 export type V2SessionByIdResponse = z.infer<typeof V2SessionByIdResponseSchema>;
 
-export const V2SessionByIdNotFoundSchema = lazyZodSchema(() => z.object({
+export const V2SessionByIdNotFoundSchema = lazyZodSchema(() => z.strictObject({
   error: z.literal('Session not found'),
-}).strict());
+}));
 export type V2SessionByIdNotFound = z.infer<typeof V2SessionByIdNotFoundSchema>;
 
-export const V2SessionMessageResponseSchema = lazyZodSchema(() => z
-  .object({
+export const V2SessionMessageResponseSchema = lazyZodSchema(() => z.looseObject({
     didWrite: z.boolean(),
-    message: z
-      .object({
-        id: z.string().min(1),
-        seq: z.number().int().nonnegative(),
-        localId: z.string().nullable(),
-        createdAt: z.number().int().nonnegative(),
-      })
-      .passthrough(),
-  })
-  .passthrough());
+    message: z.looseObject({
+        id: z.string().check(z.minLength(1)),
+        seq: z.number().check(z.int(), z.nonnegative()),
+        localId: z.nullable(z.string()),
+        createdAt: z.number().check(z.int(), z.nonnegative()),
+      }),
+  }));
 export type V2SessionMessageResponse = z.infer<typeof V2SessionMessageResponseSchema>;
 
-export const SessionStatusResultSchema = lazyZodSchema(() => z.object({
+export const SessionStatusResultSchema = lazyZodSchema(() => z.looseObject({
   session: SessionSummarySchema,
-  awareness: SessionAwarenessProjectionV1Schema.optional(),
-  agentState: z.object({
-    controlledByUser: z.boolean().optional(),
-    pendingRequestsCount: z.number().int().nonnegative(),
-  }).passthrough().nullish(),
-}).passthrough());
+  awareness: z.optional(SessionAwarenessProjectionV1Schema),
+  agentState: z.nullish(z.looseObject({
+    controlledByUser: z.optional(z.boolean()),
+    pendingRequestsCount: z.number().check(z.int(), z.nonnegative()),
+  })),
+}));
 export type SessionStatusResult = z.infer<typeof SessionStatusResultSchema>;
 
-export const SessionCreateResultSchema = lazyZodSchema(() => z.object({
+export const SessionCreateResultSchema = lazyZodSchema(() => z.looseObject({
   session: SessionSummarySchema,
   created: z.boolean(),
-}).passthrough());
+}));
 export type SessionCreateResult = z.infer<typeof SessionCreateResultSchema>;
 
-export const SessionSendResultSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
+export const SessionSendResultSchema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.string().check(z.minLength(1)),
   localId: PendingLocalIdSchema,
   waited: z.boolean(),
-}).passthrough());
+}));
 export type SessionSendResult = z.infer<typeof SessionSendResultSchema>;
 
-export const SessionWaitResultSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
+export const SessionWaitResultSchema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.string().check(z.minLength(1)),
   idle: z.literal(true),
-  observedAt: z.number().int().nonnegative(),
-}).passthrough());
+  observedAt: z.number().check(z.int(), z.nonnegative()),
+}));
 export type SessionWaitResult = z.infer<typeof SessionWaitResultSchema>;
 
-export const SessionStopCleanupIncompleteReasonSchema = lazyZodSchema(() => StopSessionIncompleteReasonSchema.extract([
+export const SessionStopCleanupIncompleteReasonSchema = lazyZodSchema(() => z.enum(([
   'terminal_control_serviceability_retirement_failed',
   'terminal_attachment_descriptor_retirement_failed',
-]));
+] as const).map((value) => { if (!StopSessionIncompleteReasonSchema.options.includes(value)) throw new Error(`Key ${value} not found in enum`); return value; })));
 export type SessionStopCleanupIncompleteReason = z.infer<typeof SessionStopCleanupIncompleteReasonSchema>;
 
 const SessionStopPhysicalUnconfirmedReasonSchema = lazyZodSchema(() => z.union([
-  StopSessionIncompleteReasonSchema.exclude([
+  z.enum(StopSessionIncompleteReasonSchema.options.filter((value): value is Exclude<(typeof StopSessionIncompleteReasonSchema.options)[number], 'terminal_control_serviceability_retirement_failed' | 'terminal_attachment_descriptor_retirement_failed'> => !([
     'terminal_control_serviceability_retirement_failed',
     'terminal_attachment_descriptor_retirement_failed',
-  ]),
+  ] as readonly string[]).includes(value))),
   z.enum([
     'transport_ambiguous',
     'marker_fallback_failed',
@@ -652,39 +624,39 @@ export const SessionStopOutcomeSchema = lazyZodSchema(() => z.discriminatedUnion
    * reason, because every reason on that arm means "could not determine" and
    * consumers read the STATUS to decide whether liveness is settled.
    */
-  z.object({
+  z.strictObject({
     status: z.literal('already_stopped'),
     reason: z.literal('no_runtime_session_inactive'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('stopped_projection_unconfirmed'),
     reason: z.literal('relay_inactive_not_observed'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('stopped_cleanup_incomplete'),
     reason: SessionStopCleanupIncompleteReasonSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('physical_stop_unconfirmed'),
     reason: SessionStopPhysicalUnconfirmedReasonSchema,
-  }).strict(),
+  }),
 ]));
 export type SessionStopOutcome = z.infer<typeof SessionStopOutcomeSchema>;
 
 const SessionStopResultBaseSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
+  sessionId: z.string().check(z.minLength(1)),
 }));
 
 export const SessionStopResultSchema = lazyZodSchema(() => z.discriminatedUnion('stopped', [
-  SessionStopResultBaseSchema.extend({
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(SessionStopResultBaseSchema, {
     stopped: z.literal(true),
-  }).passthrough(),
-  SessionStopResultBaseSchema.extend({
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(SessionStopResultBaseSchema, {
     stopped: z.literal(false),
     // cli-v0.2.0 and cli-v0.2.1 emitted `{ stopped: false }`; keep reading that
     // released shape while current writers add the structured reason.
-    stopOutcome: SessionStopOutcomeSchema.optional(),
-  }).passthrough(),
+    stopOutcome: z.optional(SessionStopOutcomeSchema),
+  })),
 ]));
 export type SessionStopResult = z.infer<typeof SessionStopResultSchema>;
 
@@ -706,261 +678,255 @@ export function isSessionStopConfirmed(result: SessionStopResult): boolean {
   return result.stopped ? true : result.stopOutcome?.status === 'already_stopped';
 }
 
-export const SessionArchiveResultSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
-  archivedAt: z.number().int().nonnegative(),
-}).passthrough());
+export const SessionArchiveResultSchema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.string().check(z.minLength(1)),
+  archivedAt: z.number().check(z.int(), z.nonnegative()),
+}));
 export type SessionArchiveResult = z.infer<typeof SessionArchiveResultSchema>;
 
-export const SessionUnarchiveResultSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
+export const SessionUnarchiveResultSchema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.string().check(z.minLength(1)),
   archivedAt: z.null(),
-}).passthrough());
+}));
 export type SessionUnarchiveResult = z.infer<typeof SessionUnarchiveResultSchema>;
 
-export const SessionSetTitleResultSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
-  title: z.string().min(1),
-}).passthrough());
+export const SessionSetTitleResultSchema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.string().check(z.minLength(1)),
+  title: z.string().check(z.minLength(1)),
+}));
 export type SessionSetTitleResult = z.infer<typeof SessionSetTitleResultSchema>;
 
-export const SessionSetPermissionModeResultSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
-  permissionMode: z.string().min(1),
-  updatedAt: z.number().int().nonnegative(),
-}).passthrough());
+export const SessionSetPermissionModeResultSchema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.string().check(z.minLength(1)),
+  permissionMode: z.string().check(z.minLength(1)),
+  updatedAt: z.number().check(z.int(), z.nonnegative()),
+}));
 export type SessionSetPermissionModeResult = z.infer<typeof SessionSetPermissionModeResultSchema>;
 
-export const SessionSetModelResultSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
-  modelId: z.string().min(1),
-  updatedAt: z.number().int().nonnegative(),
-}).passthrough());
+export const SessionSetModelResultSchema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.string().check(z.minLength(1)),
+  modelId: z.string().check(z.minLength(1)),
+  updatedAt: z.number().check(z.int(), z.nonnegative()),
+}));
 export type SessionSetModelResult = z.infer<typeof SessionSetModelResultSchema>;
 
-export const SessionHistoryCompactMessageSchema = lazyZodSchema(() => z.object({
-  id: z.string().min(1),
-  createdAt: z.number().int().nonnegative(),
-  role: z.string().min(1),
-  kind: z.string().min(1),
+export const SessionHistoryCompactMessageSchema = lazyZodSchema(() => z.looseObject({
+  id: z.string().check(z.minLength(1)),
+  createdAt: z.number().check(z.int(), z.nonnegative()),
+  role: z.string().check(z.minLength(1)),
+  kind: z.string().check(z.minLength(1)),
   text: z.string(),
-  structuredKind: z.string().min(1).optional(),
-}).passthrough());
+  structuredKind: z.optional(z.string().check(z.minLength(1))),
+}));
 export type SessionHistoryCompactMessage = z.infer<typeof SessionHistoryCompactMessageSchema>;
 
-export const SessionHistoryRawMessageSchema = lazyZodSchema(() => z.object({
-  id: z.string().min(1),
-  createdAt: z.number().int().nonnegative(),
-  role: z.string().min(1),
+export const SessionHistoryRawMessageSchema = lazyZodSchema(() => z.looseObject({
+  id: z.string().check(z.minLength(1)),
+  createdAt: z.number().check(z.int(), z.nonnegative()),
+  role: z.string().check(z.minLength(1)),
   raw: z.record(z.string(), z.unknown()),
-}).passthrough());
+}));
 export type SessionHistoryRawMessage = z.infer<typeof SessionHistoryRawMessageSchema>;
 
 export const SessionHistoryResultSchema = lazyZodSchema(() => z.discriminatedUnion('format', [
-  z.object({
-    sessionId: z.string().min(1),
+  z.looseObject({
+    sessionId: z.string().check(z.minLength(1)),
     format: z.literal('compact'),
     messages: z.array(SessionHistoryCompactMessageSchema),
-  }).passthrough(),
-  z.object({
-    sessionId: z.string().min(1),
+  }),
+  z.looseObject({
+    sessionId: z.string().check(z.minLength(1)),
     format: z.literal('raw'),
     messages: z.array(SessionHistoryRawMessageSchema),
-  }).passthrough(),
+  }),
 ]));
 export type SessionHistoryResult = z.infer<typeof SessionHistoryResultSchema>;
 
-export const SessionRunStartResultSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
-  runId: z.string().min(1),
-  callId: z.string().min(1),
-  intent: z.string().min(1),
-  backendId: z.string().min(1),
-}).passthrough());
+export const SessionRunStartResultSchema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.string().check(z.minLength(1)),
+  runId: z.string().check(z.minLength(1)),
+  callId: z.string().check(z.minLength(1)),
+  intent: z.string().check(z.minLength(1)),
+  backendId: z.string().check(z.minLength(1)),
+}));
 export type SessionRunStartResult = z.infer<typeof SessionRunStartResultSchema>;
 
-export const SessionRunListResultSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
+export const SessionRunListResultSchema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.string().check(z.minLength(1)),
   runs: z.array(ExecutionRunPublicStateSchema),
-}).passthrough());
+}));
 export type SessionRunListResult = z.infer<typeof SessionRunListResultSchema>;
 
-export const SessionRunGetResultSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
+export const SessionRunGetResultSchema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.string().check(z.minLength(1)),
   run: ExecutionRunPublicStateSchema,
-  latestToolResult: SubAgentRunResultV2Schema.optional(),
-  structuredMeta: z.object({ kind: z.string().min(1), payload: z.unknown() }).passthrough().optional(),
-}).passthrough());
+  latestToolResult: z.optional(SubAgentRunResultV2Schema),
+  structuredMeta: z.optional(z.looseObject({ kind: z.string().check(z.minLength(1)), payload: z.unknown() })),
+}));
 export type SessionRunGetResult = z.infer<typeof SessionRunGetResultSchema>;
 
-export const SessionRunSendResultSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
-  runId: z.string().min(1),
+export const SessionRunSendResultSchema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.string().check(z.minLength(1)),
+  runId: z.string().check(z.minLength(1)),
   sent: z.literal(true),
-}).passthrough());
+}));
 export type SessionRunSendResult = z.infer<typeof SessionRunSendResultSchema>;
 
-export const SessionRunStopResultSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
-  runId: z.string().min(1),
+export const SessionRunStopResultSchema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.string().check(z.minLength(1)),
+  runId: z.string().check(z.minLength(1)),
   stopped: z.literal(true),
-}).passthrough());
+}));
 export type SessionRunStopResult = z.infer<typeof SessionRunStopResultSchema>;
 
-export const SessionRunActionResultSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
-  runId: z.string().min(1),
-  actionId: z.string().min(1),
-  updatedToolResult: SubAgentRunResultV2Schema.optional(),
-}).passthrough());
+export const SessionRunActionResultSchema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.string().check(z.minLength(1)),
+  runId: z.string().check(z.minLength(1)),
+  actionId: z.string().check(z.minLength(1)),
+  updatedToolResult: z.optional(SubAgentRunResultV2Schema),
+}));
 export type SessionRunActionResult = z.infer<typeof SessionRunActionResultSchema>;
 
-export const SessionRunWaitResultSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().min(1),
-  runId: z.string().min(1),
+export const SessionRunWaitResultSchema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.string().check(z.minLength(1)),
+  runId: z.string().check(z.minLength(1)),
   status: ExecutionRunTerminalStatusSchema,
-}).passthrough());
+}));
 export type SessionRunWaitResult = z.infer<typeof SessionRunWaitResultSchema>;
 
-export const SessionRunStreamStartResultSchema = lazyZodSchema(() => z
+export const SessionRunStreamStartResultSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)((<A extends z.ZodMiniObject, B extends z.ZodMiniObject>(a: A, b: B) => z.core.util.merge(a, b) as z.ZodMiniObject<z.core.util.Extend<A['shape'], B['shape']>, B['_zod']['config']>)(z
   .object({
-    sessionId: z.string().min(1),
-    runId: z.string().min(1),
-  })
-  .merge(ExecutionRunTurnStreamStartResponseSchema)
-  .passthrough());
+    sessionId: z.string().check(z.minLength(1)),
+    runId: z.string().check(z.minLength(1)),
+  }), ExecutionRunTurnStreamStartResponseSchema)));
 export type SessionRunStreamStartResult = z.infer<typeof SessionRunStreamStartResultSchema>;
 
-export const SessionRunStreamReadResultSchema = lazyZodSchema(() => z
+export const SessionRunStreamReadResultSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)((<A extends z.ZodMiniObject, B extends z.ZodMiniObject>(a: A, b: B) => z.core.util.merge(a, b) as z.ZodMiniObject<z.core.util.Extend<A['shape'], B['shape']>, B['_zod']['config']>)(z
   .object({
-    sessionId: z.string().min(1),
-    runId: z.string().min(1),
-  })
-  .merge(ExecutionRunTurnStreamReadResponseSchema)
-  .passthrough());
+    sessionId: z.string().check(z.minLength(1)),
+    runId: z.string().check(z.minLength(1)),
+  }), ExecutionRunTurnStreamReadResponseSchema)));
 export type SessionRunStreamReadResult = z.infer<typeof SessionRunStreamReadResultSchema>;
 
-export const SessionRunStreamCancelResultSchema = lazyZodSchema(() => z
-  .object({
-    sessionId: z.string().min(1),
-    runId: z.string().min(1),
-    streamId: z.string().min(1),
+export const SessionRunStreamCancelResultSchema = lazyZodSchema(() => z.looseObject({
+    sessionId: z.string().check(z.minLength(1)),
+    runId: z.string().check(z.minLength(1)),
+    streamId: z.string().check(z.minLength(1)),
     cancelled: z.literal(true),
-  })
-  .passthrough());
+  }));
 export type SessionRunStreamCancelResult = z.infer<typeof SessionRunStreamCancelResultSchema>;
 
-export const SessionListEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionListEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_list'),
   data: SessionListResultSchema,
 }));
 
-export const SessionHistoryEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionHistoryEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_history'),
   data: SessionHistoryResultSchema,
 }));
 
-export const SessionRunGetEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionRunGetEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_run_get'),
   data: SessionRunGetResultSchema,
 }));
 
-export const SessionStatusEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionStatusEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_status'),
   data: SessionStatusResultSchema,
 }));
 
-export const SessionCreateEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionCreateEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_create'),
   data: SessionCreateResultSchema,
 }));
 
-export const SessionSendEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionSendEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_send'),
   data: SessionSendResultSchema,
 }));
 
-export const SessionWaitEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionWaitEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_wait'),
   data: SessionWaitResultSchema,
 }));
 
-export const SessionStopEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionStopEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_stop'),
   data: SessionStopResultSchema,
 }));
 
-export const SessionArchiveEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionArchiveEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_archive'),
   data: SessionArchiveResultSchema,
 }));
 
-export const SessionUnarchiveEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionUnarchiveEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_unarchive'),
   data: SessionUnarchiveResultSchema,
 }));
 
-export const SessionSetTitleEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionSetTitleEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_set_title'),
   data: SessionSetTitleResultSchema,
 }));
 
-export const SessionSetPermissionModeEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionSetPermissionModeEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_set_permission_mode'),
   data: SessionSetPermissionModeResultSchema,
 }));
 
-export const SessionSetModelEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionSetModelEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_set_model'),
   data: SessionSetModelResultSchema,
 }));
 
-export const SessionRunStartEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionRunStartEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_run_start'),
   data: SessionRunStartResultSchema,
 }));
 
-export const SessionRunListEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionRunListEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_run_list'),
   data: SessionRunListResultSchema,
 }));
 
-export const SessionRunSendEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionRunSendEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_run_send'),
   data: SessionRunSendResultSchema,
 }));
 
-export const SessionRunStopEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionRunStopEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_run_stop'),
   data: SessionRunStopResultSchema,
 }));
 
-export const SessionRunActionEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionRunActionEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_run_action'),
   data: SessionRunActionResultSchema,
 }));
 
-export const SessionRunWaitEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionRunWaitEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_run_wait'),
   data: SessionRunWaitResultSchema,
 }));
 
-export const SessionRunStreamStartEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionRunStreamStartEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_run_stream_start'),
   data: SessionRunStreamStartResultSchema,
 }));
 
-export const SessionRunStreamReadEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionRunStreamReadEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_run_stream_read'),
   data: SessionRunStreamReadResultSchema,
 }));
 
-export const SessionRunStreamCancelEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionRunStreamCancelEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_run_stream_cancel'),
   data: SessionRunStreamCancelResultSchema,
 }));
 
-export const AuthStatusEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const AuthStatusEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('auth_status'),
   data: AuthStatusResultSchema,
 }));
@@ -968,40 +934,34 @@ export const AuthStatusEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelo
 export const SessionControlActionSpecSummarySchema = ActionDefinitionSummaryV1Schema;
 export type SessionControlActionSpecSummary = z.infer<typeof SessionControlActionSpecSummarySchema>;
 
-export const SessionActionsListResultSchema = lazyZodSchema(() => z
-  .object({
+export const SessionActionsListResultSchema = lazyZodSchema(() => z.looseObject({
     actionSpecs: z.array(SessionControlActionSpecSummarySchema),
-  })
-  .passthrough());
+  }));
 export type SessionActionsListResult = z.infer<typeof SessionActionsListResultSchema>;
 
-export const SessionActionsDescribeResultSchema = lazyZodSchema(() => z
-  .object({
+export const SessionActionsDescribeResultSchema = lazyZodSchema(() => z.looseObject({
     actionSpec: SessionControlActionSpecSummarySchema,
-  })
-  .passthrough());
+  }));
 export type SessionActionsDescribeResult = z.infer<typeof SessionActionsDescribeResultSchema>;
 
-export const SessionActionsExecuteResultSchema = lazyZodSchema(() => z
-  .object({
-    sessionId: z.string().min(1),
+export const SessionActionsExecuteResultSchema = lazyZodSchema(() => z.looseObject({
+    sessionId: z.string().check(z.minLength(1)),
     actionId: ActionDefinitionIdV1Schema,
     result: z.unknown(),
-  })
-  .passthrough());
+  }));
 export type SessionActionsExecuteResult = z.infer<typeof SessionActionsExecuteResultSchema>;
 
-export const SessionActionsListEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionActionsListEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_actions_list'),
   data: SessionActionsListResultSchema,
 }));
 
-export const SessionActionsDescribeEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionActionsDescribeEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_actions_describe'),
   data: SessionActionsDescribeResultSchema,
 }));
 
-export const SessionActionsExecuteEnvelopeSchema = lazyZodSchema(() => SessionControlEnvelopeSuccessSchema.extend({
+export const SessionActionsExecuteEnvelopeSchema = lazyZodSchema(() => z.extend(SessionControlEnvelopeSuccessSchema, {
   kind: z.literal('session_actions_execute'),
   data: SessionActionsExecuteResultSchema,
 }));

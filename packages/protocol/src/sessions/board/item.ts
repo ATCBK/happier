@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
 import { WidgetSnapshotDocumentV1Schema, WidgetSnapshotMetadataV1Schema } from './declarative/snapshot.js';
 import { WidgetInstanceV1Schema as InstanceSchema } from '../../widgets/widgetInstanceV1.js';
@@ -13,32 +14,32 @@ import { SessionSurfaceDeclarativeDocumentV1Schema } from './declarative/authori
 const HeightSizeSchema = lazyZodSchema(() => z.enum(['compact', 'regular', 'tall']));
 export const SessionSurfaceItemDestinationV1Schema = lazyZodSchema(() => z.enum(['transcript', 'board', 'both']));
 export type SessionSurfaceItemDestinationV1 = z.infer<typeof SessionSurfaceItemDestinationV1Schema>;
-export const SessionSurfaceItemV1Schema = lazyZodSchema(() => z.object({
+export const SessionSurfaceItemV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   /** Creation intent; Pin and Unpin belong to layout and do not rewrite it. */
-  destination: SessionSurfaceItemDestinationV1Schema.optional(),
-  title: z.string().trim(),
+  destination: z.optional(SessionSurfaceItemDestinationV1Schema),
+  title: z.string().check(z.trim()),
   frame: z.enum(['card', 'full_bleed', 'frameless']),
   height: z.discriminatedUnion('mode', [
-    z.object({ mode: z.literal('auto'), fallback: HeightSizeSchema }).strict(),
-    z.object({ mode: z.literal('fixed'), size: HeightSizeSchema }).strict(),
+    z.strictObject({ mode: z.literal('auto'), fallback: HeightSizeSchema }),
+    z.strictObject({ mode: z.literal('fixed'), size: HeightSizeSchema }),
   ]),
   source: z.discriminatedUnion('kind', [
     // Development host projection: no saved prose, marks, result id or executable authority.
-    z.object({ kind: z.literal('walkthrough'), comparison: z.enum(['session', 'workingTree']) }).strict(),
-    z.object({ kind: z.literal('declarative'), document: SessionSurfaceDeclarativeDocumentV1Schema }).strict(),
-    z.object({
+    z.strictObject({ kind: z.literal('walkthrough'), comparison: z.enum(['session', 'workingTree']) }),
+    z.strictObject({ kind: z.literal('declarative'), document: SessionSurfaceDeclarativeDocumentV1Schema }),
+    z.strictObject({
       kind: z.literal('hostedHtml'),
       source: PluginHostedHtmlSourceV1Schema,
       // The capability grammar owns canonical host Action ids, whose closed
       // family includes Board Actions. Defer this edge until parse time so the
       // public schemas can share that owner without an initialization cycle.
-      requestedCapabilities: z.lazy(() => UiSurfaceCapabilityRequestV1Schema).optional(),
-    }).strict(),
-    z.object({
+      requestedCapabilities: z.optional(z.lazy(() => UiSurfaceCapabilityRequestV1Schema)),
+    }),
+    z.strictObject({
       kind: z.literal('widget'),
       // Account-private definitions must be explicitly copied into shared content.
-      instance: WidgetInstanceV1Schema.superRefine((instance, context) => {
+      instance: WidgetInstanceV1Schema.check(z.superRefine((instance, context) => {
         if (instance.definition.kind === 'artifact') context.addIssue({ code: 'custom', path: ['definition'], message: 'A shared Session widget cannot reference an Account-private definition.' });
         for (const issue of getWidgetSharedInputIssuesV1(instance)) {
           context.addIssue({ code: 'custom', path: issue.inputPath ? ['bindings', issue.inputPath] : ['definition'],
@@ -47,21 +48,20 @@ export const SessionSurfaceItemV1Schema = lazyZodSchema(() => z.object({
               : issue.inputPath ? 'Shared connection inputs require viewer intent.'
                 : 'A shared definition cannot contain a private Connected Account selection.' });
         }
-      }),
-    }).strict(),
+      })),
+    }),
   ]),
-  input: PluginUiLaunchInputV1Schema.optional(),
-  snapshot: WidgetSnapshotMetadataV1Schema.optional(),
-}).strict().superRefine((item, context) => {
+  input: zMini.optional(PluginUiLaunchInputV1Schema),
+  snapshot: zMini.optional(WidgetSnapshotMetadataV1Schema),
+}).check(z.superRefine((item, context) => {
   if (item.snapshot !== undefined && (item.input !== undefined || item.source.kind !== 'declarative'
     || !WidgetSnapshotDocumentV1Schema.safeParse(item.source.document).success)) {
     context.addIssue({ code: 'custom', path: ['snapshot'], message: 'A snapshot requires inert declarative content without launch input' });
   }
-}));
+})));
 export type SessionSurfaceItemV1 = Readonly<z.infer<typeof SessionSurfaceItemV1Schema>>;
 /** Persisted content drops additive fields before the strict Action/result owners consume it. */
-export const SessionSurfaceItemV1StoredSchema = lazyZodSchema(() => createStoredReadSchema(SessionSurfaceItemV1Schema.clone())
-  .transform(item => ({ ...item, destination: item.destination ?? 'board' as const })));
+export const SessionSurfaceItemV1StoredSchema = lazyZodSchema(() => z.pipe(createStoredReadSchema(SessionSurfaceItemV1Schema.clone()), z.transform(item => ({ ...item, destination: item.destination ?? 'board' as const }))));
 defineStoredReadProjection(SessionSurfaceItemV1Schema, () => SessionSurfaceItemV1StoredSchema);
 
 /** A Board widget's instance identity is its existing canonical record identity. */

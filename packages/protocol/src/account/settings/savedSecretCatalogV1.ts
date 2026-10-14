@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   formatSharedSavedSecretRefV1,
@@ -28,60 +28,60 @@ export const SavedSecretCatalogMaterialStatusV1Schema = lazyZodSchema(() => z.en
 ]));
 export type SavedSecretCatalogMaterialStatusV1 = z.infer<typeof SavedSecretCatalogMaterialStatusV1Schema>;
 
-export const SavedSecretCatalogAccountSummaryV1Schema = lazyZodSchema(() => AccountDisplayProfileV1BaseSchema.extend({
+export const SavedSecretCatalogAccountSummaryV1Schema = lazyZodSchema(() => z.pipe((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AccountDisplayProfileV1BaseSchema, {
   kind: z.literal('account'),
-  accountId: z.string().min(1),
-}).strict().transform(profile => ({ ...profile, name: readAccountNameFromLegacyProfileV1(profile) })));
+  accountId: z.string().check(z.minLength(1)),
+})), z.transform(profile => ({ ...profile, name: readAccountNameFromLegacyProfileV1(profile) }))));
 export type SavedSecretCatalogAccountSummaryV1 = z.infer<typeof SavedSecretCatalogAccountSummaryV1Schema>;
 
 export const SavedSecretCatalogAccessSourceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('account') }).strict(),
-  z.object({ kind: z.literal('team'), teamId: z.string().min(1), name: z.string().min(1) }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('account') }),
+  z.strictObject({ kind: z.literal('team'), teamId: z.string().check(z.minLength(1)), name: z.string().check(z.minLength(1)) }),
+  z.strictObject({
     kind: z.literal('group'),
-    teamId: z.string().min(1),
-    teamName: z.string().min(1),
-    groupId: z.string().min(1),
-    name: z.string().min(1),
-  }).strict(),
+    teamId: z.string().check(z.minLength(1)),
+    teamName: z.string().check(z.minLength(1)),
+    groupId: z.string().check(z.minLength(1)),
+    name: z.string().check(z.minLength(1)),
+  }),
 ]));
 export type SavedSecretCatalogAccessSourceV1 = z.infer<typeof SavedSecretCatalogAccessSourceV1Schema>;
 
-export const SavedSecretCatalogAudienceV1Schema = lazyZodSchema(() => z.object({
+export const SavedSecretCatalogAudienceV1Schema = lazyZodSchema(() => z.strictObject({
   accounts: z.array(SavedSecretCatalogAccountSummaryV1Schema),
-  teams: z.array(z.object({ kind: z.literal('team'), teamId: z.string().min(1), name: z.string().min(1) }).strict()),
-  groups: z.array(z.object({
+  teams: z.array(z.strictObject({ kind: z.literal('team'), teamId: z.string().check(z.minLength(1)), name: z.string().check(z.minLength(1)) })),
+  groups: z.array(z.strictObject({
     kind: z.literal('group'),
-    teamId: z.string().min(1),
-    teamName: z.string().min(1),
-    groupId: z.string().min(1),
-    name: z.string().min(1),
-  }).strict()),
-}).strict());
+    teamId: z.string().check(z.minLength(1)),
+    teamName: z.string().check(z.minLength(1)),
+    groupId: z.string().check(z.minLength(1)),
+    name: z.string().check(z.minLength(1)),
+  })),
+}));
 export type SavedSecretCatalogAudienceV1 = z.infer<typeof SavedSecretCatalogAudienceV1Schema>;
 
-export const SavedSecretCatalogEntryV1Schema = lazyZodSchema(() => z.object({
-  ref: z.string().min(1).max(256),
+export const SavedSecretCatalogEntryV1Schema = lazyZodSchema(() => z.strictObject({
+  ref: z.string().check(z.minLength(1), z.maxLength(256)),
   source: z.enum(['personal', 'shared_resource']),
   relationship: z.enum(['owner', 'recipient']),
-  name: z.string().min(1).max(100).nullable(),
-  kind: z.enum(['apiKey', 'token', 'password', 'other']).nullable(),
-  encryptionMode: SavedSecretResourceEncryptionModeV1Schema.nullable().optional().default(null),
-  owner: SavedSecretCatalogAccountSummaryV1Schema.nullable().optional().default(null),
-  accessSources: z.array(SavedSecretCatalogAccessSourceV1Schema).optional().default([]),
-  audience: SavedSecretCatalogAudienceV1Schema.nullable().optional().default(null),
+  name: z.nullable(z.string().check(z.minLength(1), z.maxLength(100))),
+  kind: z.nullable(z.enum(['apiKey', 'token', 'password', 'other'])),
+  encryptionMode: z._default(z.optional(z.nullable(SavedSecretResourceEncryptionModeV1Schema)), null),
+  owner: z._default(z.optional(z.nullable(SavedSecretCatalogAccountSummaryV1Schema)), null),
+  accessSources: z._default(z.optional(z.array(SavedSecretCatalogAccessSourceV1Schema)), []),
+  audience: z._default(z.optional(z.nullable(SavedSecretCatalogAudienceV1Schema)), null),
   /** @deprecated Use the recipient-safe `owner` projection. */
-  ownerAccountId: z.string().min(1).nullable().optional().default(null),
-  revision: z.number().int().nonnegative().nullable(),
+  ownerAccountId: z._default(z.optional(z.nullable(z.string().check(z.minLength(1)))), null),
+  revision: z.nullable(z.number().check(z.int(), z.nonnegative())),
   materialStatus: SavedSecretCatalogMaterialStatusV1Schema,
-  capabilities: z.object({
+  capabilities: z.strictObject({
     use: z.boolean(),
     rename: z.boolean(),
     rotate: z.boolean(),
     manageAccess: z.boolean(),
     delete: z.boolean(),
-  }).strict(),
-}).strict());
+  }),
+}));
 export type SavedSecretCatalogEntryV1 = Readonly<z.infer<typeof SavedSecretCatalogEntryV1Schema>>;
 
 /** Value-free revision identity shared by catalog pickers and admitted consumers. */
@@ -94,24 +94,24 @@ export function formatSavedSecretCatalogFingerprintV1(input: Readonly<{
     : `${input.source === 'personal' ? 'personal' : 'shared'}:${input.ref}:${input.revision}`;
 }
 
-const SavedSecretCatalogCorruptOwnerEntryV1Schema = lazyZodSchema(() => z.object({
+const SavedSecretCatalogCorruptOwnerEntryV1Schema = lazyZodSchema(() => z.strictObject({
   materialStatus: z.literal('resource_corrupt'),
   relationship: z.literal('owner'),
-  repair: z.object({
+  repair: z.strictObject({
     kind: z.literal('delete_resource'),
     // This is the retained database identity, not a Saved Secret reference.
     // Keep it opaque so malformed legacy bytes are never reclassified as a
     // personal id or formatted as a canonical shared-resource ref.
     resourceId: z.string(),
-    expectedRevision: z.number().int(),
-  }).strict(),
-}).strict());
+    expectedRevision: z.number().check(z.int()),
+  }),
+}));
 
-const SavedSecretCatalogCorruptRecipientEntryV1Schema = lazyZodSchema(() => z.object({
+const SavedSecretCatalogCorruptRecipientEntryV1Schema = lazyZodSchema(() => z.strictObject({
   materialStatus: z.literal('resource_corrupt'),
   relationship: z.literal('recipient'),
   repair: z.null(),
-}).strict());
+}));
 
 export const SavedSecretCatalogCorruptEntryV1Schema = lazyZodSchema(() => z.discriminatedUnion('relationship', [
   SavedSecretCatalogCorruptOwnerEntryV1Schema,
@@ -125,56 +125,53 @@ export const SavedSecretCatalogResultV1Schema = lazyZodSchema(() => z.union([
 ]));
 export type SavedSecretCatalogResultV1 = Readonly<z.infer<typeof SavedSecretCatalogResultV1Schema>>;
 
-export const SavedSecretCatalogResourceV1Schema = lazyZodSchema(() => z.object({
-  resourceId: z.string().min(1),
-  ownerAccountId: z.string().min(1),
-  displayName: z.string().min(1).max(100),
+export const SavedSecretCatalogResourceV1Schema = lazyZodSchema(() => z.strictObject({
+  resourceId: z.string().check(z.minLength(1)),
+  ownerAccountId: z.string().check(z.minLength(1)),
+  displayName: z.string().check(z.minLength(1), z.maxLength(100)),
   kind: z.enum(['apiKey', 'token', 'password', 'other']),
   encryptionMode: SavedSecretResourceEncryptionModeV1Schema,
-  revision: z.number().int().positive(),
+  revision: z.number().check(z.int(), z.positive()),
   storedContent: SavedSecretResourceStoredContentV1Schema,
   materialStatus: SavedSecretCatalogMaterialStatusV1Schema,
-}).strict());
+}));
 export type SavedSecretCatalogResourceV1 = Readonly<z.infer<typeof SavedSecretCatalogResourceV1Schema>>;
 
-const SavedSecretResourceRecipientEnvelopeV1Schema = lazyZodSchema(() => z.object({
-  encryptedDataKey: z.string().refine(
-    value => readCanonicalPaddedBase64DecodedLength(value) === ENCRYPTED_DATA_KEY_ENVELOPE_V1_BYTES,
-    'Expected one canonical encrypted data-key envelope',
-  ),
-  recipientContentPublicKeyFingerprint: z.string().min(1),
-}).strict());
+const SavedSecretResourceRecipientEnvelopeV1Schema = lazyZodSchema(() => z.strictObject({
+  encryptedDataKey: z.string().check(z.refine(value => readCanonicalPaddedBase64DecodedLength(value) === ENCRYPTED_DATA_KEY_ENVELOPE_V1_BYTES, 'Expected one canonical encrypted data-key envelope')),
+  recipientContentPublicKeyFingerprint: z.string().check(z.minLength(1)),
+}));
 
-const SavedSecretResourceHealthyMaterialV1Schema = lazyZodSchema(() => z.object({
-  resourceId: z.string().min(1),
+const SavedSecretResourceHealthyMaterialV1Schema = lazyZodSchema(() => z.strictObject({
+  resourceId: z.string().check(z.minLength(1)),
   encryptionMode: SavedSecretResourceEncryptionModeV1Schema,
   entry: SavedSecretCatalogEntryV1Schema,
-  storedContent: SavedSecretResourceStoredContentV1Schema.nullable(),
-  recipientEnvelope: SavedSecretResourceRecipientEnvelopeV1Schema.nullable(),
-}).strict().superRefine((row, context) => {
+  storedContent: z.nullable(SavedSecretResourceStoredContentV1Schema),
+  recipientEnvelope: z.nullable(SavedSecretResourceRecipientEnvelopeV1Schema),
+}).check(z.superRefine((row, context) => {
   const ref = parseSavedSecretCatalogReferenceV1(row.entry.ref);
   if (row.entry.source !== 'shared_resource' || ref?.kind !== 'shared_resource' || ref.id !== row.resourceId) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Material identity must match the shared resource reference' });
+    context.addIssue({ code: "custom", message: 'Material identity must match the shared resource reference' });
   }
   if (row.storedContent !== null && (
     (row.encryptionMode === 'plain' && row.storedContent.t !== 'plain')
     || (row.encryptionMode === 'e2ee' && row.storedContent.t !== 'encrypted')
   )) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Material content must match the resource encryption mode' });
+    context.addIssue({ code: "custom", message: 'Material content must match the resource encryption mode' });
   }
   if (row.encryptionMode === 'plain' && row.recipientEnvelope !== null) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Plain material cannot carry a recipient envelope' });
+    context.addIssue({ code: "custom", message: 'Plain material cannot carry a recipient envelope' });
   }
   if (row.entry.materialStatus === 'ready' && (
     row.storedContent === null
     || (row.encryptionMode === 'e2ee' && row.recipientEnvelope === null)
   )) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Ready material must contain all mode-required material' });
+    context.addIssue({ code: "custom", message: 'Ready material must contain all mode-required material' });
   }
-}));
-const SavedSecretResourceCorruptMaterialV1Schema = lazyZodSchema(() => z.object({
+})));
+const SavedSecretResourceCorruptMaterialV1Schema = lazyZodSchema(() => z.strictObject({
   entry: SavedSecretCatalogCorruptEntryV1Schema,
-}).strict());
+}));
 
 export const SavedSecretResourceMaterialV1Schema = lazyZodSchema(() => z.union([
   SavedSecretResourceHealthyMaterialV1Schema,
@@ -182,52 +179,49 @@ export const SavedSecretResourceMaterialV1Schema = lazyZodSchema(() => z.union([
 ]));
 export type SavedSecretResourceMaterialV1 = Readonly<z.infer<typeof SavedSecretResourceMaterialV1Schema>>;
 
-export const SavedSecretResourceMaterialsResponseV1Schema = lazyZodSchema(() => z.object({
+export const SavedSecretResourceMaterialsResponseV1Schema = lazyZodSchema(() => z.strictObject({
   resources: z.array(SavedSecretResourceMaterialV1Schema),
-}).strict());
+}));
 export type SavedSecretResourceMaterialsResponseV1 = Readonly<
   z.infer<typeof SavedSecretResourceMaterialsResponseV1Schema>
 >;
 
-const CanonicalContentPublicKeyBase64Schema = lazyZodSchema(() => z.string().refine(
-  value => readCanonicalPaddedBase64DecodedLength(value) === ACCOUNT_CONTENT_PUBLIC_KEY_BYTES_V1,
-  'Expected one canonical Account content public key',
-));
+const CanonicalContentPublicKeyBase64Schema = lazyZodSchema(() => z.string().check(z.refine(value => readCanonicalPaddedBase64DecodedLength(value) === ACCOUNT_CONTENT_PUBLIC_KEY_BYTES_V1, 'Expected one canonical Account content public key')));
 
-export const SavedSecretResourceEnvelopeCensusRecipientV1Schema = lazyZodSchema(() => z.object({
+export const SavedSecretResourceEnvelopeCensusRecipientV1Schema = lazyZodSchema(() => z.strictObject({
   account: SavedSecretCatalogAccountSummaryV1Schema,
   readiness: z.discriminatedUnion('status', [
-    z.object({
+    z.strictObject({
       status: z.literal('available'),
       contentPublicKey: CanonicalContentPublicKeyBase64Schema,
       contentPublicKeyFingerprint: ContentPublicKeyFingerprintSchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       status: z.literal('unavailable'),
       reason: AccountRecipientEnvelopeUnavailableReasonSchema,
-    }).strict(),
+    }),
   ]),
   envelopeStatus: z.enum(['prepared', 'missing', 'stale', 'invalid']),
-}).strict());
+}));
 export type SavedSecretResourceEnvelopeCensusRecipientV1 = z.infer<
   typeof SavedSecretResourceEnvelopeCensusRecipientV1Schema
 >;
 
-export const SavedSecretResourceEnvelopeCensusRequestV1Schema = lazyZodSchema(() => z.object({
-  resourceId: z.string().min(1).max(128),
-  cursor: z.string().min(1).optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
-}).strict());
+export const SavedSecretResourceEnvelopeCensusRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  resourceId: z.string().check(z.minLength(1), z.maxLength(128)),
+  cursor: z.optional(z.string().check(z.minLength(1))),
+  limit: z._default(z.optional(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(100))), 50),
+}));
 export type SavedSecretResourceEnvelopeCensusRequestV1 = z.infer<
   typeof SavedSecretResourceEnvelopeCensusRequestV1Schema
 >;
 
-export const SavedSecretResourceEnvelopeCensusResponseV1Schema = lazyZodSchema(() => z.object({
-  resourceId: z.string().min(1),
-  revision: z.number().int().positive(),
+export const SavedSecretResourceEnvelopeCensusResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  resourceId: z.string().check(z.minLength(1)),
+  revision: z.number().check(z.int(), z.positive()),
   recipients: z.array(SavedSecretResourceEnvelopeCensusRecipientV1Schema),
-  nextCursor: z.string().min(1).nullable(),
-}).strict());
+  nextCursor: z.nullable(z.string().check(z.minLength(1))),
+}));
 export type SavedSecretResourceEnvelopeCensusResponseV1 = z.infer<
   typeof SavedSecretResourceEnvelopeCensusResponseV1Schema
 >;

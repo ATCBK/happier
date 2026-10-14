@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import { serializeActionSpec } from './actionCatalog.js';
 
 import {

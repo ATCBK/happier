@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 
 import { PluginContributionLocalIdSchema } from '../contributionIdentity.js';
@@ -9,13 +9,13 @@ import {
   PluginJsonValueV2Schema,
 } from './publicTypes.js';
 
-export const PluginPromptAssetContributionV1Schema = lazyZodSchema(() => z.object({
+export const PluginPromptAssetContributionV1Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   kind: z.enum(['systemPrompt', 'context', 'guidelines']),
   resource: asProtocolZod(PluginContributionReferenceV2Schema),
-  target: z.object({ kind: z.literal('agent'), agent: asProtocolZod(PluginContributionReferenceV2Schema) }).strict(),
-  priority: z.number().int().optional(),
-  availability: PluginAvailabilityDescriptorV2Schema.optional(),
-  metadata: z.record(z.string(), PluginJsonValueV2Schema).optional(),
-}).strict());
+  target: z.strictObject({ kind: z.literal('agent'), agent: asProtocolZod(PluginContributionReferenceV2Schema) }),
+  priority: z.optional(z.number().check(z.int())),
+  availability: z.optional(PluginAvailabilityDescriptorV2Schema),
+  metadata: z.optional(z.record(z.string(), PluginJsonValueV2Schema)),
+}));
 export type PluginPromptAssetContributionV1 = z.infer<typeof PluginPromptAssetContributionV1Schema>;

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { BackendTargetKeySchema } from '../../backends/targets/backendTargetRef.js';
 import { BackendTargetRefV2Schema } from '../../backends/targets/backendTargetRefV2.js';
@@ -81,13 +81,13 @@ export const PluginHookSupportedRuntimeFamilyV1Schema = lazyZodSchema(() => z.en
 export type PluginHookSupportedRuntimeFamilyV1 = z.infer<typeof PluginHookSupportedRuntimeFamilyV1Schema>;
 
 export const PluginHookDecisionResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('decision', [
-  z.object({ decision: z.literal('allow') }).strict(),
-  z.object({
+  z.strictObject({ decision: z.literal('allow') }),
+  z.strictObject({
     decision: z.literal('deny'),
-    reasonCode: z.string().trim().min(1).max(256).optional(),
-    errorMessage: z.string().trim().min(1).max(2_048).optional(),
-  }).strict(),
-  z.object({ decision: z.literal('abstain') }).strict(),
+    reasonCode: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    errorMessage: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(2_048))),
+  }),
+  z.strictObject({ decision: z.literal('abstain') }),
 ]));
 export type PluginHookDecisionResultV1 = z.infer<typeof PluginHookDecisionResultV1Schema>;
 
@@ -95,258 +95,257 @@ export const PluginExecutionInterceptionCapabilitySchema = lazyZodSchema(() => z
 export type PluginExecutionInterceptionCapability = z.infer<typeof PluginExecutionInterceptionCapabilitySchema>;
 
 export const PluginExecutionCallerSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('host') }).strict(),
-  z.object({ kind: z.literal('session'), sessionId: z.string().trim().min(1) }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('host') }),
+  z.strictObject({ kind: z.literal('session'), sessionId: z.string().check(z.trim(), z.minLength(1)) }),
+  z.strictObject({
     kind: z.literal('plugin'),
-    pluginId: z.string().trim().min(1).max(256),
-  }).strict(),
+    pluginId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+  }),
 ]));
 export type PluginExecutionCaller = z.infer<typeof PluginExecutionCallerSchema>;
 
 export const PluginExecutionInterceptionResultSchema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({
+  z.strictObject({
     status: z.literal('continue'),
     input: PluginJsonValueV2Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('rejected'),
-    code: z.string().trim().min(1).max(256).optional(),
-    message: z.string().trim().min(1).max(2_048).optional(),
-  }).strict(),
+    code: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    message: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(2_048))),
+  }),
 ]));
 export type PluginExecutionInterceptionResult = z.infer<typeof PluginExecutionInterceptionResultSchema>;
 
 const PluginExecutionOutcomeSchema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('succeeded'), result: PluginJsonValueV2Schema.optional() }).strict(),
-  z.object({
+  z.strictObject({ status: z.literal('succeeded'), result: z.optional(PluginJsonValueV2Schema) }),
+  z.strictObject({
     status: z.literal('failed'),
-    code: z.string().trim().min(1).max(256),
-    message: z.string().trim().min(1).max(2_048).optional(),
-  }).strict(),
-  z.object({ status: z.literal('cancelled') }).strict(),
-  z.object({
+    code: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    message: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(2_048))),
+  }),
+  z.strictObject({ status: z.literal('cancelled') }),
+  z.strictObject({
     status: z.literal('rejected'),
-    code: z.string().trim().min(1).max(256).optional(),
-    message: z.string().trim().min(1).max(2_048).optional(),
-  }).strict(),
+    code: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    message: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(2_048))),
+  }),
 ]));
 
-const PluginActionExecutionInvocationSchema = lazyZodSchema(() => z.object({
+const PluginActionExecutionInvocationSchema = lazyZodSchema(() => z.strictObject({
   surface: z.enum(['ui', 'voice', 'agent', 'mcp', 'cli', 'rpc', 'api', 'plugin']),
-  sessionId: z.string().trim().min(1).optional(),
+  sessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   caller: PluginExecutionCallerSchema,
-}).strict());
+}));
 
-export const ActionExecuteBeforeHookPayloadSchema = lazyZodSchema(() => z.object({
+export const ActionExecuteBeforeHookPayloadSchema = lazyZodSchema(() => z.strictObject({
   actionId: ActionIdSchema,
   input: PluginJsonValueV2Schema,
   invocation: PluginActionExecutionInvocationSchema,
-  timestampMs: z.number().int().nonnegative(),
-}).strict());
+  timestampMs: z.number().check(z.int(), z.nonnegative()),
+}));
 export type ActionExecuteBeforeHookPayload = z.infer<typeof ActionExecuteBeforeHookPayloadSchema>;
 
-export const ActionExecuteAfterHookPayloadSchema = lazyZodSchema(() => ActionExecuteBeforeHookPayloadSchema.extend({
+export const ActionExecuteAfterHookPayloadSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ActionExecuteBeforeHookPayloadSchema, {
   outcome: PluginExecutionOutcomeSchema,
-}).strict());
+})));
 export type ActionExecuteAfterHookPayload = z.infer<typeof ActionExecuteAfterHookPayloadSchema>;
 
-const AgentToolExecutionBaseHookPayloadSchema = lazyZodSchema(() => z.object({
+const AgentToolExecutionBaseHookPayloadSchema = lazyZodSchema(() => z.strictObject({
   agentId: AgentIdV1Schema,
   runtimeFamily: PluginHookSupportedRuntimeFamilyV1Schema,
   capability: PluginExecutionInterceptionCapabilitySchema,
-  sessionId: z.string().trim().min(1).optional(),
-  turnId: z.string().trim().min(1).optional(),
-  tool: z.object({
-    callId: z.string().trim().min(1).max(512),
-    name: z.string().trim().min(1).max(512),
+  sessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  turnId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  tool: z.strictObject({
+    callId: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+    name: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
     input: PluginJsonValueV2Schema,
-  }).strict(),
-  timestampMs: z.number().int().nonnegative(),
-}).strict());
+  }),
+  timestampMs: z.number().check(z.int(), z.nonnegative()),
+}));
 
-export const AgentToolExecuteBeforeHookPayloadSchema = lazyZodSchema(() => AgentToolExecutionBaseHookPayloadSchema.extend({
+export const AgentToolExecuteBeforeHookPayloadSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AgentToolExecutionBaseHookPayloadSchema, {
   capability: z.literal('interceptable'),
-}).strict());
+})));
 export type AgentToolExecuteBeforeHookPayload = z.infer<typeof AgentToolExecuteBeforeHookPayloadSchema>;
 
-export const AgentToolExecuteAfterHookPayloadSchema = lazyZodSchema(() => AgentToolExecutionBaseHookPayloadSchema.extend({
+export const AgentToolExecuteAfterHookPayloadSchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AgentToolExecutionBaseHookPayloadSchema, {
   caller: PluginExecutionCallerSchema,
   outcome: PluginExecutionOutcomeSchema,
-}).strict());
+})));
 export type AgentToolExecuteAfterHookPayload = z.infer<typeof AgentToolExecuteAfterHookPayloadSchema>;
 
 const PluginHookAugmentationResultV1Schema = lazyZodSchema(() => z.record(z.string(), PluginJsonValueV2Schema));
 
-export const PluginHookDefinitionV1Schema = lazyZodSchema(() => z.object({
+export const PluginHookDefinitionV1Schema = lazyZodSchema(() => z.strictObject({
   id: PluginHookIdV1Schema,
   category: HookCategoryV1Schema,
   scope: PluginHookScopeV1Schema,
   executionKind: HookExecutionKindV1Schema,
   aggregation: PluginHookAggregationKindV1Schema,
   failureMode: PluginHookFailureModeV1Schema,
-  purity: PluginHookPurityV1Schema.optional(),
-  supportedRuntimes: z.array(PluginHookSupportedRuntimeFamilyV1Schema).default([]),
-  payloadSchema: z.record(z.string(), z.unknown()).default({}),
-  resultSchema: z.record(z.string(), z.unknown()).default({}),
-}).strict());
+  purity: z.optional(PluginHookPurityV1Schema),
+  supportedRuntimes: z._default(z.array(PluginHookSupportedRuntimeFamilyV1Schema), []),
+  payloadSchema: z._default(z.record(z.string(), z.unknown()), {}),
+  resultSchema: z._default(z.record(z.string(), z.unknown()), {}),
+}));
 export type PluginHookDefinitionV1 = z.infer<typeof PluginHookDefinitionV1Schema>;
 
-const NonEmptyStringSchema = lazyZodSchema(() => z.string().min(1));
-const TimestampMsSchema = lazyZodSchema(() => z.number().int().min(0));
-export const SessionSpawnedHookPayloadV1Schema = lazyZodSchema(() => z.object({
+const NonEmptyStringSchema = lazyZodSchema(() => z.string().check(z.minLength(1)));
+const TimestampMsSchema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(0)));
+export const SessionSpawnedHookPayloadV1Schema = lazyZodSchema(() => z.looseObject({
   sessionId: NonEmptyStringSchema,
   agentId: NonEmptyStringSchema,
   runtimeTarget: BackendTargetRefV2Schema,
-  modelId: NonEmptyStringSchema.optional(),
-  cwd: z.string().optional(),
-  initialMessage: z.string().optional(),
-  tag: z.string().optional(),
-  host: z.string().optional(),
-  machineId: z.string().optional(),
+  modelId: z.optional(NonEmptyStringSchema),
+  cwd: z.optional(z.string()),
+  initialMessage: z.optional(z.string()),
+  tag: z.optional(z.string()),
+  host: z.optional(z.string()),
+  machineId: z.optional(z.string()),
   timestampMs: TimestampMsSchema,
-}).passthrough());
+}));
 
-export const SessionMessageSendHookPayloadV1Schema = lazyZodSchema(() => z.object({
+export const SessionMessageSendHookPayloadV1Schema = lazyZodSchema(() => z.looseObject({
   sessionId: NonEmptyStringSchema,
   text: z.string(),
   source: z.enum(['user', 'plugin', 'system']),
-  turnId: z.string().optional(),
+  turnId: z.optional(z.string()),
   timestampMs: TimestampMsSchema,
-}).passthrough());
+}));
 
-export const SessionInputTransformHookPayloadV1Schema = lazyZodSchema(() => z.object({
+export const SessionInputTransformHookPayloadV1Schema = lazyZodSchema(() => z.looseObject({
   sessionId: NonEmptyStringSchema,
-  localId: NonEmptyStringSchema.optional(),
+  localId: z.optional(NonEmptyStringSchema),
   text: z.string(),
-  meta: z.record(z.string(), z.unknown()).optional(),
+  meta: z.optional(z.record(z.string(), z.unknown())),
   timestampMs: TimestampMsSchema,
-}).passthrough());
+}));
 
-export const ExecutionRunStartedHookPayloadV1Schema = lazyZodSchema(() => z.object({
-  sessionId: NonEmptyStringSchema.optional(),
+export const ExecutionRunStartedHookPayloadV1Schema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.optional(NonEmptyStringSchema),
   runId: NonEmptyStringSchema,
   intent: ExecutionRunIntentSchema,
   runtimeTargetKeys: z.array(BackendTargetKeySchema),
-  permissionMode: z.string().optional(),
+  permissionMode: z.optional(z.string()),
   retentionPolicy: ExecutionRunRetentionPolicySchema,
   runClass: ExecutionRunClassSchema,
   ioMode: ExecutionRunIoModeSchema,
   timestampMs: TimestampMsSchema,
-}).passthrough());
+}));
 
-export const ExecutionRunMessageSentHookPayloadV1Schema = lazyZodSchema(() => z.object({
-  sessionId: NonEmptyStringSchema.optional(),
+export const ExecutionRunMessageSentHookPayloadV1Schema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.optional(NonEmptyStringSchema),
   runId: NonEmptyStringSchema,
   message: z.string(),
-  resume: z.boolean().optional(),
+  resume: z.optional(z.boolean()),
   timestampMs: TimestampMsSchema,
-}).passthrough());
+}));
 
-export const ExecutionRunStoppedHookPayloadV1Schema = lazyZodSchema(() => z.object({
-  sessionId: NonEmptyStringSchema.optional(),
+export const ExecutionRunStoppedHookPayloadV1Schema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.optional(NonEmptyStringSchema),
   runId: NonEmptyStringSchema,
   reason: z.enum(['user', 'plugin', 'timeout', 'error']),
   timestampMs: TimestampMsSchema,
-}).passthrough());
+}));
 
-export const ExecutionRunCompletedHookPayloadV1Schema = lazyZodSchema(() => z.object({
-  sessionId: NonEmptyStringSchema.optional(),
+export const ExecutionRunCompletedHookPayloadV1Schema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.optional(NonEmptyStringSchema),
   runId: NonEmptyStringSchema,
   status: z.enum(['succeeded', 'failed', 'canceled']),
-  errorCode: z.string().optional(),
-  error: z.string().optional(),
-  output: z.unknown().optional(),
+  errorCode: z.optional(z.string()),
+  error: z.optional(z.string()),
+  output: z.optional(z.unknown()),
   timestampMs: TimestampMsSchema,
-}).passthrough());
+}));
 
-export const AgentResolvePrerequisitesHookPayloadV1Schema = lazyZodSchema(() => z.object({
+export const AgentResolvePrerequisitesHookPayloadV1Schema = lazyZodSchema(() => z.looseObject({
   agentId: NonEmptyStringSchema,
   runtimeTarget: BackendTargetRefV2Schema,
-  sessionId: NonEmptyStringSchema.optional(),
-  cwd: z.string().optional(),
+  sessionId: z.optional(NonEmptyStringSchema),
+  cwd: z.optional(z.string()),
   timestampMs: TimestampMsSchema,
-}).passthrough());
+}));
 
-export const AgentSpawnEnvAugmentHookPayloadV1Schema = lazyZodSchema(() => z.object({
+export const AgentSpawnEnvAugmentHookPayloadV1Schema = lazyZodSchema(() => z.looseObject({
   agentId: NonEmptyStringSchema,
-  sessionId: NonEmptyStringSchema.optional(),
-  cwd: z.string().optional(),
+  sessionId: z.optional(NonEmptyStringSchema),
+  cwd: z.optional(z.string()),
   timestampMs: TimestampMsSchema,
-}).passthrough());
+}));
 
-const AgentMessageProjectionV1Schema = lazyZodSchema(() => z.object({
-  role: z.string().trim().min(1),
+const AgentMessageProjectionV1Schema = lazyZodSchema(() => z.looseObject({
+  role: z.string().check(z.trim(), z.minLength(1)),
   content: z.unknown(),
-}).passthrough());
+}));
 
-export const AgentContextBeforeHookPayloadV1Schema = lazyZodSchema(() => z.object({
+export const AgentContextBeforeHookPayloadV1Schema = lazyZodSchema(() => z.looseObject({
   sessionId: NonEmptyStringSchema,
-  agentId: NonEmptyStringSchema.optional(),
+  agentId: z.optional(NonEmptyStringSchema),
   runtimeFamily: PluginHookSupportedRuntimeFamilyV1Schema,
   prompt: z.string(),
   messages: z.array(AgentMessageProjectionV1Schema),
   timestampMs: TimestampMsSchema,
-}).passthrough());
+}));
 
-export const AgentRequestBeforeHookPayloadV1Schema = lazyZodSchema(() => z.object({
-  sessionId: NonEmptyStringSchema.optional(),
-  agentId: NonEmptyStringSchema.optional(),
+export const AgentRequestBeforeHookPayloadV1Schema = lazyZodSchema(() => z.looseObject({
+  sessionId: z.optional(NonEmptyStringSchema),
+  agentId: z.optional(NonEmptyStringSchema),
   runtimeFamily: PluginHookSupportedRuntimeFamilyV1Schema,
   method: NonEmptyStringSchema,
   request: z.record(z.string(), z.unknown()),
   timestampMs: TimestampMsSchema,
-}).passthrough());
+}));
 
-const AgentCompositionLocalIdV1Schema = lazyZodSchema(() => z.string().trim().min(1).max(256));
+const AgentCompositionLocalIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 
 /**
  * The only per-handler input for Agent turn composition. The host creates this
  * payload from the current manifest projection, so a plugin can make a choice
  * without receiving another plugin's catalog or a raw Session/runtime handle.
  */
-export const PluginAgentCompositionRequestV1Schema = lazyZodSchema(() => z.object({
+export const PluginAgentCompositionRequestV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: NonEmptyStringSchema,
   agentId: NonEmptyStringSchema,
   runtimeFamily: z.enum(['hostSession', 'acpSession']),
-  declaredToolIds: z.array(AgentCompositionLocalIdV1Schema).max(128),
-  declaredPromptAssetIds: z.array(AgentCompositionLocalIdV1Schema).max(128),
-}).strict());
+  declaredToolIds: z.array(AgentCompositionLocalIdV1Schema).check(z.maxLength(128)),
+  declaredPromptAssetIds: z.array(AgentCompositionLocalIdV1Schema).check(z.maxLength(128)),
+}));
 export type PluginAgentCompositionRequestV1 = z.infer<typeof PluginAgentCompositionRequestV1Schema>;
 
 const MAX_PLUGIN_AGENT_COMPOSITION_INSTRUCTION_BYTES = 8 * 1024;
 
-const PluginAgentCompositionInstructionsV1Schema = lazyZodSchema(() => z.string().trim().min(1)
-  .superRefine((value, context) => {
+const PluginAgentCompositionInstructionsV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.superRefine((value, context) => {
     if (new TextEncoder().encode(value).byteLength > MAX_PLUGIN_AGENT_COMPOSITION_INSTRUCTION_BYTES) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'additionalInstructions must not exceed 8 KiB UTF-8',
       });
     }
-  }));
+  })));
 
 /**
  * Bounded output for `agent.composition.resolve`. Selection authority remains
  * host-side: this schema deliberately carries local ids only, never a tool
  * definition, prompt replacement, runtime object, or persistence capability.
  */
-export const PluginAgentCompositionResultV1Schema = lazyZodSchema(() => z.object({
-  enabledToolIds: z.array(AgentCompositionLocalIdV1Schema).max(128).optional(),
-  enabledPromptAssetIds: z.array(AgentCompositionLocalIdV1Schema).max(128).optional(),
-  additionalInstructions: PluginAgentCompositionInstructionsV1Schema.optional(),
-}).strict());
+export const PluginAgentCompositionResultV1Schema = lazyZodSchema(() => z.strictObject({
+  enabledToolIds: z.optional(z.array(AgentCompositionLocalIdV1Schema).check(z.maxLength(128))),
+  enabledPromptAssetIds: z.optional(z.array(AgentCompositionLocalIdV1Schema).check(z.maxLength(128))),
+  additionalInstructions: z.optional(PluginAgentCompositionInstructionsV1Schema),
+}));
 export type PluginAgentCompositionResultV1 = z.infer<typeof PluginAgentCompositionResultV1Schema>;
 
-export const AgentStreamTokenHookPayloadV1Schema = lazyZodSchema(() => z.object({
+export const AgentStreamTokenHookPayloadV1Schema = lazyZodSchema(() => z.looseObject({
   sessionId: NonEmptyStringSchema,
-  agentId: NonEmptyStringSchema.optional(),
+  agentId: z.optional(NonEmptyStringSchema),
   runtimeFamily: PluginHookSupportedRuntimeFamilyV1Schema,
   turnId: NonEmptyStringSchema,
   tokenText: z.string(),
   streamKind: z.enum(['assistant', 'thinking', 'unknown']),
   timestampMs: TimestampMsSchema,
-}).passthrough());
+}));
 
 export const PLUGIN_HOOK_PAYLOAD_SCHEMAS_BY_ID_V1 = Object.freeze({
   'session.spawned': SessionSpawnedHookPayloadV1Schema,
@@ -366,7 +365,7 @@ export const PLUGIN_HOOK_PAYLOAD_SCHEMAS_BY_ID_V1 = Object.freeze({
   'action.execute.after': ActionExecuteAfterHookPayloadSchema,
   'agent.tool.execute.before': AgentToolExecuteBeforeHookPayloadSchema,
   'agent.tool.execute.after': AgentToolExecuteAfterHookPayloadSchema,
-} satisfies Readonly<Record<PluginHookIdV1, z.ZodType<unknown>>>);
+} satisfies Readonly<Record<PluginHookIdV1, z.ZodMiniType<unknown>>>);
 
 export type PluginHookPayloadSchemaMapV1 = typeof PLUGIN_HOOK_PAYLOAD_SCHEMAS_BY_ID_V1;
 export type PluginHookPayloadMapV1 = Readonly<{

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { BrowserContextMessagePayloadV1Schema, type BrowserContextMessagePayloadV1 } from '../../browser/context/v1.js';
 
 import { SessionIdSchema } from '../idsV1.js';
@@ -28,7 +28,7 @@ const MAX_CONTEXT_BLOCK_CODE_POINTS = 1_024;
 
 export const SessionInputPromptProvenanceV1Schema = lazyZodSchema(() => z.union([
   SessionMessageProvenanceSchema,
-  z.object({ v: z.literal(1), kind: z.literal('legacyUnknown') }).strict(),
+  z.strictObject({ v: z.literal(1), kind: z.literal('legacyUnknown') }),
 ]));
 export type SessionInputPromptProvenanceV1 = z.infer<typeof SessionInputPromptProvenanceV1Schema>;
 
@@ -48,20 +48,20 @@ export const SessionRunPromptReadActionIdV1Schema = lazyZodSchema(() => z.enum(S
 export type SessionRunPromptReadActionIdV1 = z.infer<typeof SessionRunPromptReadActionIdV1Schema>;
 
 /** Host-authored description only; neither origin nor advertised tools grant authority. */
-export const SessionRunPromptContextV1Schema = lazyZodSchema(() => z.object({
+export const SessionRunPromptContextV1Schema = lazyZodSchema(() => z.readonly(z.strictObject({
   kind: z.literal('happier_session_run'),
   // Keep SessionId validation owned by the canonical composable schema while
   // spelling out its string projection for Zod's declaration inference.
   sessionId: asProtocolZod<string, string>(SessionIdSchema),
-  origin: SessionDiscussionSelectionSourceV1Schema.pick({
+  origin: z.optional(z.readonly(z.extend(z.pick(SessionDiscussionSelectionSourceV1Schema, {
     kind: true,
     discussionId: true,
     messageIds: true,
-  }).extend({
-    messageIds: SessionDiscussionSelectionSourceV1Schema.shape.messageIds.readonly(),
-  }).readonly().optional(),
-  supportedReadActions: z.array(SessionRunPromptReadActionIdV1Schema).readonly(),
-}).strict().readonly());
+  }), {
+    messageIds: z.readonly(SessionDiscussionSelectionSourceV1Schema.shape.messageIds),
+  }))),
+  supportedReadActions: z.readonly(z.array(SessionRunPromptReadActionIdV1Schema)),
+})));
 export type SessionRunPromptContextV1 = z.infer<typeof SessionRunPromptContextV1Schema>;
 
 function normalizeBoundedContextValue(value: string): string {

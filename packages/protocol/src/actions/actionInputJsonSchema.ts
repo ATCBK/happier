@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod/mini';
 
 export type JsonSchemaObject = Readonly<Record<string, unknown>>;
 
@@ -26,7 +26,7 @@ function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
  * their advertised shape is always the canonical input projection.
  */
 export function zodSchemaToJsonSchemaObject(
-  schema: z.ZodTypeAny,
+  schema: z.core.$ZodType,
   options?: Readonly<{ target?: 'draft-2020-12' | 'draft-7'; reused?: 'inline' | 'ref' }>,
 ): JsonSchemaObject {
   try {

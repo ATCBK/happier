@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { isMap, parseDocument } from 'yaml';
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../../json/storedReadSchema.js';
@@ -15,16 +15,16 @@ export type SkillLibraryItemV1 = Readonly<{
 }>;
 
 export const SkillProvenanceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('registry'), registry: RegistryProvenanceV1Schema }).strict(),
-  z.object({ kind: z.literal('link'), url: z.string().min(1), ref: RegistryContentRefV1Schema }).strict(),
-  z.object({ kind: z.literal('machine'), machineId: z.string().min(1), agentIds: z.array(z.string()), path: z.string().min(1), importedAt: z.number().int().nonnegative() }).strict(),
-  z.object({ kind: z.literal('upload'), importedAt: z.number().int().nonnegative() }).strict(),
-  z.object({ kind: z.literal('written') }).strict(),
-  z.object({ kind: z.literal('first_party') }).strict(),
+  z.strictObject({ kind: z.literal('registry'), registry: RegistryProvenanceV1Schema }),
+  z.strictObject({ kind: z.literal('link'), url: z.string().check(z.minLength(1)), ref: RegistryContentRefV1Schema }),
+  z.strictObject({ kind: z.literal('machine'), machineId: z.string().check(z.minLength(1)), agentIds: z.array(z.string()), path: z.string().check(z.minLength(1)), importedAt: z.number().check(z.int(), z.nonnegative()) }),
+  z.strictObject({ kind: z.literal('upload'), importedAt: z.number().check(z.int(), z.nonnegative()) }),
+  z.strictObject({ kind: z.literal('written') }),
+  z.strictObject({ kind: z.literal('first_party') }),
 ]));
 export type SkillProvenanceV1 = z.infer<typeof SkillProvenanceV1Schema>;
-export const SkillLockV1Schema = lazyZodSchema(() => z.object({ provenance: SkillProvenanceV1Schema,
-  importedDigest: z.string().min(1).optional(), updatePolicy: z.enum(['manual', 'auto', 'pinned']), upstream: RegistryUpstreamV1Schema.optional() }).strict());
+export const SkillLockV1Schema = lazyZodSchema(() => z.strictObject({ provenance: SkillProvenanceV1Schema,
+  importedDigest: z.optional(z.string().check(z.minLength(1))), updatePolicy: z.enum(['manual', 'auto', 'pinned']), upstream: z.optional(RegistryUpstreamV1Schema) }));
 export type SkillLockV1 = z.infer<typeof SkillLockV1Schema>;
 const SkillLockStoredV1Schema = createStoredReadSchema(SkillLockV1Schema);
 export function readSkillLockV1(header: unknown): SkillLockV1 {
@@ -38,10 +38,10 @@ export function isSkillModifiedV1(lock: SkillLockV1, currentDigest: string): boo
   return (lock.provenance.kind === 'registry' || lock.provenance.kind === 'link')
     && lock.importedDigest !== currentDigest;
 }
-export const SkillRevisionV1Schema = lazyZodSchema(() => z.union([z.string().regex(/^sha256:[0-9a-f]{64}$/), z.string().regex(/^\d+:\d+$/).refine(value => {
+export const SkillRevisionV1Schema = lazyZodSchema(() => z.union([z.string().check(z.regex(/^sha256:[0-9a-f]{64}$/)), z.string().check(z.regex(/^\d+:\d+$/), z.refine(value => {
   const [headerVersion, bodyVersion] = value.split(':').map(Number);
   return ArtifactRevisionV1Schema.safeParse({ headerVersion, bodyVersion }).success;
-})]));
+}))]));
 export function encodeSkillRevisionV1(revision: Readonly<{ headerVersion: number; bodyVersion: number }>): string {
   const valid = ArtifactRevisionV1Schema.parse(revision);
   return `${valid.headerVersion}:${valid.bodyVersion}`;
@@ -50,26 +50,26 @@ export function decodeSkillRevisionV1(revision: string): Readonly<{ headerVersio
   const [headerVersion, bodyVersion] = revision.split(':').map(Number);
   return ArtifactRevisionV1Schema.parse({ headerVersion, bodyVersion });
 }
-export const SkillListItemV1Schema = lazyZodSchema(() => z.object({
-  skillId: z.string().min(1), name: z.string().min(1), description: z.string().nullable(), revision: SkillRevisionV1Schema,
+export const SkillListItemV1Schema = lazyZodSchema(() => z.strictObject({
+  skillId: z.string().check(z.minLength(1)), name: z.string().check(z.minLength(1)), description: z.nullable(z.string()), revision: SkillRevisionV1Schema,
   rules: z.array(SkillRuleV1Schema), trust: SkillTrustV1Schema, cost: SkillCostV1Schema,
-  provenance: SkillProvenanceV1Schema, modified: z.boolean(), updatePolicy: z.enum(['manual', 'auto', 'pinned']), upstream: RegistryUpstreamV1Schema.optional(),
-  lastUsedAt: z.number().int().nonnegative().optional(), createdAt: z.number().int().nonnegative(), migratedFromContext: z.boolean(), userInvocable: z.boolean(), folderId: z.string().nullable(),
-}).strict());
+  provenance: SkillProvenanceV1Schema, modified: z.boolean(), updatePolicy: z.enum(['manual', 'auto', 'pinned']), upstream: z.optional(RegistryUpstreamV1Schema),
+  lastUsedAt: z.optional(z.number().check(z.int(), z.nonnegative())), createdAt: z.number().check(z.int(), z.nonnegative()), migratedFromContext: z.boolean(), userInvocable: z.boolean(), folderId: z.nullable(z.string()),
+}));
 export type SkillListItemV1 = z.infer<typeof SkillListItemV1Schema>;
 /** Identity and public title remain knowable when a single stored skill cannot be opened. */
-export const SkillUnavailableItemV1Schema = lazyZodSchema(() => z.object({
-  skillId: z.string().min(1), title: z.string().min(1).nullable(),
+export const SkillUnavailableItemV1Schema = lazyZodSchema(() => z.strictObject({
+  skillId: z.string().check(z.minLength(1)), title: z.nullable(z.string().check(z.minLength(1))),
   reason: z.enum(['skill_content_unavailable', 'not_found', 'invalid_skill_lock']),
-}).strict());
+}));
 export type SkillUnavailableItemV1 = z.infer<typeof SkillUnavailableItemV1Schema>;
 
 export const SKILL_NAME_PATTERN_V1 = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const SkillFrontmatterV1Schema = lazyZodSchema(() => z.object({
-  name: z.string().regex(SKILL_NAME_PATTERN_V1).optional(),
-  description: z.string().optional(),
-  'disable-model-invocation': z.boolean().optional(),
-  'user-invocable': z.boolean().optional(),
+  name: z.optional(z.string().check(z.regex(SKILL_NAME_PATTERN_V1))),
+  description: z.optional(z.string()),
+  'disable-model-invocation': z.optional(z.boolean()),
+  'user-invocable': z.optional(z.boolean()),
 }));
 const skillFrontmatterPattern = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
 

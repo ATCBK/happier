@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 
 import { isSessionAccessActionId, type SessionAccessActionId } from './actionIds.js';
 import { getActionSpec } from './actionSpecs.js';
@@ -25,12 +25,12 @@ export function isSessionAccessActionIdV1(value: string): value is SessionAccess
 }
 
 /** The strict domain input this intent declared on its Action row. */
-export function sessionAccessActionInputSchemaV1(actionId: SessionAccessActionId): z.ZodTypeAny {
+export function sessionAccessActionInputSchemaV1(actionId: SessionAccessActionId): z.ZodMiniType {
   return getActionSpec(actionId).inputSchema;
 }
 
 /** The strict domain result this intent declared on its Action row. */
-export function sessionAccessActionOutputSchemaV1(actionId: SessionAccessActionId): z.ZodTypeAny {
+export function sessionAccessActionOutputSchemaV1(actionId: SessionAccessActionId): z.ZodMiniType {
   const outputSchema = getActionSpec(actionId).outputSchema;
   if (!outputSchema) {
     // A registered family row without a result schema is a registry defect, not

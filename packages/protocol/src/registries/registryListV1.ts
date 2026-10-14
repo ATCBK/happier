@@ -1,12 +1,12 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { RegistryItemSummaryV1Schema } from './registryItemsV1.js';
 
 export const RegistrySourceStatusV1Schema = lazyZodSchema(() => z.discriminatedUnion('state', [
-  z.object({ state: z.literal('ok'), fetchedAt: z.number().int().nonnegative() }).strict(),
-  z.object({ state: z.literal('rate_limited'), retryAt: z.number().int().nonnegative().optional() }).strict(),
-  ...(['unreachable', 'auth_failed', 'needs_machine', 'invalid_source'] as const).map(state => z.object({ state: z.literal(state) }).strict()),
-  z.object({ state: z.literal('newer_format'), found: z.string() }).strict(),
+  z.strictObject({ state: z.literal('ok'), fetchedAt: z.number().check(z.int(), z.nonnegative()) }),
+  z.strictObject({ state: z.literal('rate_limited'), retryAt: z.optional(z.number().check(z.int(), z.nonnegative())) }),
+  ...(['unreachable', 'auth_failed', 'needs_machine', 'invalid_source'] as const).map(state => z.strictObject({ state: z.literal(state) })),
+  z.strictObject({ state: z.literal('newer_format'), found: z.string() }),
 ]));
 export type RegistrySourceStatusV1 = z.infer<typeof RegistrySourceStatusV1Schema>;
 
@@ -26,10 +26,10 @@ export function readRegistryHttpRateLimitV1(input: Readonly<{ status: number;
   return Number.isFinite(timestamp) && timestamp >= 0
     ? { state: 'rate_limited', retryAt: Math.ceil(timestamp) } : { state: 'rate_limited' };
 }
-export const RegistryListPageV1Schema = lazyZodSchema(() => z.object({
-  sourceId: z.string().min(1), status: RegistrySourceStatusV1Schema, items: z.array(RegistryItemSummaryV1Schema),
-  nextCursor: z.string().nullable(), total: z.number().int().nonnegative().optional(), machineId: z.string().min(1).optional(),
-}).strict());
+export const RegistryListPageV1Schema = lazyZodSchema(() => z.strictObject({
+  sourceId: z.string().check(z.minLength(1)), status: RegistrySourceStatusV1Schema, items: z.array(RegistryItemSummaryV1Schema),
+  nextCursor: z.nullable(z.string()), total: z.optional(z.number().check(z.int(), z.nonnegative())), machineId: z.optional(z.string().check(z.minLength(1))),
+}));
 export type RegistryListPageV1 = z.infer<typeof RegistryListPageV1Schema>;
 export class RegistryFetchErrorV1 extends Error {
   readonly code: Exclude<RegistrySourceStatusV1, { state: 'ok' }>['state'];

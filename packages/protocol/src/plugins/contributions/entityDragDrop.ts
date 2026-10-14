@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PluginInvocableActionIdSchema } from '../../actions/pluginActionSurface.js';
 import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '../actions/jsonSchemaValidation.js';
 import { normalizePluginJsonSchema } from '../actions/protocolComposableSchema.js';
@@ -12,30 +13,30 @@ import { isEntityDragKindV1, type EntityDragKindV1 } from '../ui/entityDragDrop.
 export const PluginEntityDragKindV1Schema = lazyZodSchema(() => z.custom<EntityDragKindV1>(isEntityDragKindV1));
 
 const clientFields = { client: PluginClientExecutionReferenceV1Schema, platforms: PluginClientExecutionPlatformsV1Schema };
-export const PluginDragSourceContributionV1Schema = lazyZodSchema(() => z.object({
+export const PluginDragSourceContributionV1Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   title: PluginLocalizedStringV2Schema,
-  preview: z.object({ subtitle: PluginLocalizedStringV2Schema.optional() }).strict().optional(),
+  preview: z.optional(z.strictObject({ subtitle: zMini.optional(PluginLocalizedStringV2Schema) })),
   /** Selects this plugin's existing attachment declaration; never carries authority. */
-  composerAttachment: asProtocolZod(PluginContributionLocalIdSchema).optional(),
-  referenceSchema: PluginJsonSchemaV2Schema.transform((schema, ctx) => {
+  composerAttachment: zMini.optional(asProtocolZod(PluginContributionLocalIdSchema)),
+  referenceSchema: zMini.pipe(PluginJsonSchemaV2Schema, zMini.transform((schema, ctx) => {
     try { return normalizePluginJsonSchema(schema); }
-    catch (error) { ctx.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : 'Invalid reference schema' }); return z.NEVER; }
-  }),
+    catch (error) { ctx.issues.push({ code: "custom", message: error instanceof Error ? error.message : 'Invalid reference schema', input: ctx.value }); return z.NEVER; }
+  })),
   ...clientFields,
-}).strict());
+}));
 export type PluginDragSourceContributionV1 = z.infer<typeof PluginDragSourceContributionV1Schema>;
 
 export const PluginEntityDropActionReferenceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('host'), actionId: z.lazy(() => PluginInvocableActionIdSchema) }).strict(),
-  z.object({ kind: z.literal('plugin'), action: asProtocolZod(PluginContributionReferenceV2Schema) }).strict(),
+  z.strictObject({ kind: z.literal('host'), actionId: z.lazy(() => PluginInvocableActionIdSchema) }),
+  z.strictObject({ kind: z.literal('plugin'), action: asProtocolZod(PluginContributionReferenceV2Schema) }),
 ]));
-export const PluginDropTargetContributionV1Schema = lazyZodSchema(() => z.object({
+export const PluginDropTargetContributionV1Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema), title: PluginLocalizedStringV2Schema,
-  acceptedKinds: z.array(PluginEntityDragKindV1Schema).min(1),
-  actions: z.array(PluginEntityDropActionReferenceV1Schema).min(1),
+  acceptedKinds: z.array(PluginEntityDragKindV1Schema).check(z.minLength(1)),
+  actions: z.array(PluginEntityDropActionReferenceV1Schema).check(z.minLength(1)),
   ...clientFields,
-}).strict());
+}));
 export type PluginDropTargetContributionV1 = z.infer<typeof PluginDropTargetContributionV1Schema>;
 
 /** Schema admission reuses the incumbent compiler, never a feature-local validator. */

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { MENTION_BOUNDS } from '../runtime/input/mentionRefV1.js';
 
 /** Shared structural literals: the renderer and writable floor measure the same seed. */
@@ -38,8 +38,8 @@ export const HAPPIER_REPLAY_MIN_SEED_CHARS = HAPPIER_REPLAY_SEED_DISPATCH_RESERV
  * Retained wire hints stay readable; actual frame feasibility remains the
  * renderer's decision. No provider capacity ceiling is inferred here.
  */
-const PositiveReplayBudgetSchema = lazyZodSchema(() => z.number().int().positive());
+const PositiveReplayBudgetSchema = lazyZodSchema(() => z.number().check(z.int(), z.positive()));
 
-export const HappierReplayWritableMaxSeedCharsSchema = lazyZodSchema(() => z.number().int().min(HAPPIER_REPLAY_MIN_SEED_CHARS));
+export const HappierReplayWritableMaxSeedCharsSchema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(HAPPIER_REPLAY_MIN_SEED_CHARS)));
 export const HappierReplayWireMaxSeedCharsSchema = PositiveReplayBudgetSchema;
 export const HappierReplayRecentMessagesCountSchema = PositiveReplayBudgetSchema;

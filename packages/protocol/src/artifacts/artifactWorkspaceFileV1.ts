@@ -1,15 +1,15 @@
 import { ARTIFACT_HTML_BUNDLE_MIME_V1, artifactHtmlBundleFromBodyV1, type ArtifactHtmlBundleV1 } from './artifactHtmlV1.js';
 import { ArtifactWorkspaceSourceV1Schema } from './artifactBinaryV1.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { ArtifactHtmlBundleV1Schema } from './artifactHtmlV1.js';
 import { UiSurfaceCapabilityRequestV1Schema, type UiSurfaceCapabilityRequestV1 } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
 
 /** Acquisition intent is Action input only; stored HTML always carries a by-value bundle. */
-export const ArtifactWorkspacePublicationSourceV1Schema = lazyZodSchema(() => z.object({
-  path: z.string().min(1),
-  entrypoint: z.lazy(() => ArtifactHtmlBundleV1Schema.shape.entrypoint).optional(),
-}).strict());
+export const ArtifactWorkspacePublicationSourceV1Schema = lazyZodSchema(() => z.strictObject({
+  path: z.string().check(z.minLength(1)),
+  entrypoint: z.optional(z.lazy(() => ArtifactHtmlBundleV1Schema.shape.entrypoint)),
+}));
 
 /** File classification and provenance shared by the keyholding publication hosts. */
 export function prepareArtifactWorkspaceFileV1(params: Readonly<{

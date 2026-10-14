@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { EntityDragScopeV1Schema, EntityDragSessionAddressV1Schema } from '../plugins/ui/entityDragDrop.js';
 import type { PreNormalizedActionSpec } from './actionSpecs.js';
 import { WorkflowDefinitionEditOpV1Schema } from '../workflows/workflowDefinitionEditV1.js';
@@ -18,55 +19,55 @@ export {
   type WorkflowAuthoringActionId,
 } from './workflowAuthoringActionIds.js';
 
-const draftAddress = { scope: EntityDragScopeV1Schema, draftId: z.string().trim().min(1) };
-export const WorkflowDraftAddressV1Schema = lazyZodSchema(() => z.object(draftAddress).strict());
-export const WorkflowDraftGetInputV1Schema = lazyZodSchema(() => z.object({
-  scope: EntityDragScopeV1Schema, draftId: draftAddress.draftId.optional(),
-}).strict());
+const draftAddress = { scope: EntityDragScopeV1Schema, draftId: z.string().check(z.trim(), z.minLength(1)) };
+export const WorkflowDraftAddressV1Schema = lazyZodSchema(() => z.strictObject(draftAddress));
+export const WorkflowDraftGetInputV1Schema = lazyZodSchema(() => z.strictObject({
+  scope: EntityDragScopeV1Schema, draftId: z.optional(draftAddress.draftId),
+}));
 /** The desired trigger rows read by the mounted editor, not a persisted trigger writer. */
-export const WorkflowDraftTriggerSnapshotV1Schema = lazyZodSchema(() => z.object({
-  rows: z.array(z.object({
-    identity: z.object({ clientId: z.string().min(1), triggerId: AutomationTriggerIdSchema.optional() }).strict(),
-    trigger: AutomationTriggerDefinitionInputSchema.nullable(), enabled: z.boolean(),
-  }).strict()).refine(rows => {
+export const WorkflowDraftTriggerSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
+  rows: z.array(z.strictObject({
+    identity: z.strictObject({ clientId: z.string().check(z.minLength(1)), triggerId: zMini.optional(AutomationTriggerIdSchema) }),
+    trigger: zMini.nullable(AutomationTriggerDefinitionInputSchema), enabled: z.boolean(),
+  })).check(z.refine(rows => {
     const clients = new Set(rows.map(row => row.identity.clientId));
     const savedIds = rows.flatMap(row => row.identity.triggerId ? [row.identity.triggerId] : []);
     return clients.size === rows.length && new Set(savedIds).size === savedIds.length
       && rows.every(row => row.trigger === null || row.trigger.enabled === row.enabled);
-  }),
-  project: WorkflowProjectTargetV1Schema.nullable(), inputs: z.record(z.string(), StrictJsonValueSchema),
-}).strict());
-export const WorkflowDraftSettingsV1Schema = lazyZodSchema(() => z.object({
-  description: z.string(), projectTarget: WorkflowProjectTargetV1Schema.nullable(),
+  })),
+  project: zMini.nullable(WorkflowProjectTargetV1Schema), inputs: z.record(z.string(), StrictJsonValueSchema),
+}));
+export const WorkflowDraftSettingsV1Schema = lazyZodSchema(() => z.strictObject({
+  description: z.string(), projectTarget: zMini.nullable(WorkflowProjectTargetV1Schema),
   executionTarget: z.enum(['session', 'detached_run']), triggers: WorkflowDraftTriggerSnapshotV1Schema,
-}).strict());
-export const WorkflowDraftSettingsPatchV1Schema = lazyZodSchema(() => WorkflowDraftSettingsV1Schema.partial().strict());
-export const WorkflowDraftEditInputV1Schema = lazyZodSchema(() => z.object({
-  ...draftAddress, expectedDraftRevision: z.number().int().nonnegative(),
-  ops: z.array(WorkflowDefinitionEditOpV1Schema).optional(), settings: WorkflowDraftSettingsPatchV1Schema.optional(),
-}).strict().refine(input => (input.ops?.length ?? 0) > 0 || Object.keys(input.settings ?? {}).length > 0));
-export const WorkflowReviewDraftSetInputV1Schema = lazyZodSchema(() => z.object({
+}));
+export const WorkflowDraftSettingsPatchV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.partial(WorkflowDraftSettingsV1Schema)));
+export const WorkflowDraftEditInputV1Schema = lazyZodSchema(() => z.strictObject({
+  ...draftAddress, expectedDraftRevision: z.number().check(z.int(), z.nonnegative()),
+  ops: z.optional(z.array(WorkflowDefinitionEditOpV1Schema)), settings: z.optional(WorkflowDraftSettingsPatchV1Schema),
+}).check(z.refine(input => (input.ops?.length ?? 0) > 0 || Object.keys(input.settings ?? {}).length > 0)));
+export const WorkflowReviewDraftSetInputV1Schema = lazyZodSchema(() => z.strictObject({
   ...draftAddress, runId: WorkflowRunIdV1Schema, expectedContentRevision: WorkflowDecimalV1Schema,
   value: StrictJsonValueSchema,
-}).strict());
+}));
 export const WorkflowDraftMutationResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('applied'), draftRevision: z.number().int().nonnegative().optional(),
-    changedBlockIds: z.array(z.string()).optional() }).strict(),
-  z.object({ status: z.literal('unchanged'), draftRevision: z.number().int().nonnegative().optional() }).strict(),
-  z.object({ status: z.literal('unavailable') }).strict(),
-  z.object({ status: z.literal('refused'), reason: z.string().min(1), draftRevision: z.number().int().nonnegative().optional() }).strict(),
+  z.strictObject({ status: z.literal('applied'), draftRevision: z.optional(z.number().check(z.int(), z.nonnegative())),
+    changedBlockIds: z.optional(z.array(z.string())) }),
+  z.strictObject({ status: z.literal('unchanged'), draftRevision: z.optional(z.number().check(z.int(), z.nonnegative())) }),
+  z.strictObject({ status: z.literal('unavailable') }),
+  z.strictObject({ status: z.literal('refused'), reason: z.string().check(z.minLength(1)), draftRevision: z.optional(z.number().check(z.int(), z.nonnegative())) }),
 ]));
 // A draft can contain incomplete groups and invalid settings. This read is raw JSON,
 // not saved-definition admission; the existing validator supplies its repair issues.
-export const WorkflowMountedDraftV1Schema = lazyZodSchema(() => z.object({
+export const WorkflowMountedDraftV1Schema = lazyZodSchema(() => z.strictObject({
   scope: EntityDragScopeV1Schema, draftId: draftAddress.draftId, name: z.string(),
   definition: StrictJsonValueSchema,
-  blockLabels: z.array(z.object({ id: z.string(), label: z.string() }).strict()),
+  blockLabels: z.array(z.strictObject({ id: z.string(), label: z.string() })),
   settings: WorkflowDraftSettingsV1Schema,
-  validationIssues: z.array(WorkflowValidationIssueV1Schema), dirty: z.boolean(), draftRevision: z.number().int().nonnegative(),
-}).strict());
+  validationIssues: z.array(WorkflowValidationIssueV1Schema), dirty: z.boolean(), draftRevision: z.number().check(z.int(), z.nonnegative()),
+}));
 export const WorkflowDraftGetResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({ status: z.literal('available'), drafts: z.array(WorkflowMountedDraftV1Schema) }).strict(),
+  z.strictObject({ status: z.literal('available'), drafts: z.array(WorkflowMountedDraftV1Schema) }),
   WorkflowDraftMutationResultV1Schema,
 ]));
 export type WorkflowDraftEditInputV1 = z.infer<typeof WorkflowDraftEditInputV1Schema>;
@@ -86,17 +87,17 @@ const addressExample = '{"scope":{"serverId":"home-a","accountId":"account-a"},"
 const editExample = '{"scope":{"serverId":"home-a","accountId":"account-a"},"draftId":"draft-a","expectedDraftRevision":0,"ops":[{"kind":"set_step_prompt","blockId":"step-a","text":"Review this change"}]}';
 const reviewExample = '{"scope":{"serverId":"home-a","accountId":"account-a"},"draftId":"invocation-a","runId":"run-a","expectedContentRevision":"7","value":"Reviewed value"}';
 
-export const WorkflowConversationBindInputV1Schema = lazyZodSchema(() => z.object({
+export const WorkflowConversationBindInputV1Schema = lazyZodSchema(() => z.strictObject({
   scope: EntityDragScopeV1Schema,
-  draftId: z.string().trim().min(1),
-  stepId: z.string().trim().min(1).nullable(),
+  draftId: z.string().check(z.trim(), z.minLength(1)),
+  stepId: z.nullable(z.string().check(z.trim(), z.minLength(1))),
   address: EntityDragSessionAddressV1Schema,
-}).strict());
+}));
 export const WorkflowConversationBindResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('applied') }).strict(),
-  z.object({ status: z.literal('unchanged') }).strict(),
-  z.object({ status: z.literal('unavailable') }).strict(),
-  z.object({ status: z.literal('refused'), reason: z.string().min(1) }).strict(),
+  z.strictObject({ status: z.literal('applied') }),
+  z.strictObject({ status: z.literal('unchanged') }),
+  z.strictObject({ status: z.literal('unavailable') }),
+  z.strictObject({ status: z.literal('refused'), reason: z.string().check(z.minLength(1)) }),
 ]));
 export type WorkflowConversationBindInputV1 = z.infer<typeof WorkflowConversationBindInputV1Schema>;
 export type WorkflowConversationBindResultV1 = z.infer<typeof WorkflowConversationBindResultV1Schema>;

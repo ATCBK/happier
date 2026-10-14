@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { WorkspaceWorkerPreferenceV1Schema } from '../workspaces/projectWorkerPreferencesV1.js';
@@ -12,17 +12,17 @@ export const ProjectWorkerNoAcceptanceReasonV1Schema = lazyZodSchema(() => z.enu
 export type ProjectWorkerNoAcceptanceReasonV1 = z.infer<typeof ProjectWorkerNoAcceptanceReasonV1Schema>;
 
 /** Redacted pre-acceptance facts; neither this detail nor fallback intent grants execution authority. */
-export const ProjectWorkerNoAcceptanceFailureDetailsV1Schema = lazyZodSchema(() => z.object({
+export const ProjectWorkerNoAcceptanceFailureDetailsV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('no_worker_can_accept'),
-  unavailable: WorkspaceWorkerPreferenceV1Schema.options[0].shape.unavailable,
+  unavailable: WorkspaceWorkerPreferenceV1Schema._zod.def.options[0].shape.unavailable,
   reason: ProjectWorkerNoAcceptanceReasonV1Schema,
-  workerCopy: z.object({
-    serverId: z.string().trim().min(1),
-    sourceWorkspaceRefId: z.string().trim().min(1),
-    sourceMachineId: z.string().trim().min(1),
-    targetMachineId: z.string().trim().min(1),
-  }).strict().optional(),
-}).strict().refine(value => (value.reason === 'worker_copy_missing') === (value.workerCopy !== undefined)));
+  workerCopy: z.optional(z.strictObject({
+    serverId: z.string().check(z.trim(), z.minLength(1)),
+    sourceWorkspaceRefId: z.string().check(z.trim(), z.minLength(1)),
+    sourceMachineId: z.string().check(z.trim(), z.minLength(1)),
+    targetMachineId: z.string().check(z.trim(), z.minLength(1)),
+  })),
+}).check(z.refine(value => (value.reason === 'worker_copy_missing') === (value.workerCopy !== undefined))));
 export type ProjectWorkerNoAcceptanceFailureDetailsV1 = z.infer<typeof ProjectWorkerNoAcceptanceFailureDetailsV1Schema>;
 
 export function readProjectWorkerNoAcceptanceFailureV1(value: unknown):

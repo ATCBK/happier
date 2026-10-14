@@ -1,57 +1,53 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { BrowserHttpUrlV1Schema } from '../url.js';
 
-export const BrowserTargetDisplayV1Schema = lazyZodSchema(() => z
-  .object({
-    title: z.string().trim().min(1).max(256),
-    addressLabel: z.string().trim().min(1).max(256).optional(),
-    folderLabel: z.string().trim().min(1).max(256).optional(),
-    iconToken: z.string().trim().min(1).max(64).optional(),
-    tone: z.enum(['neutral', 'info', 'success', 'warning', 'danger', 'accent']).optional(),
-  })
-  .strict());
+export const BrowserTargetDisplayV1Schema = lazyZodSchema(() => z.strictObject({
+    title: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    addressLabel: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    folderLabel: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    iconToken: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(64))),
+    tone: z.optional(z.enum(['neutral', 'info', 'success', 'warning', 'danger', 'accent'])),
+  }));
 export type BrowserTargetDisplayV1 = z.infer<typeof BrowserTargetDisplayV1Schema>;
 
-const BrowserTargetBaseV1Schema = lazyZodSchema(() => z
-  .object({
-    targetId: z.string().trim().min(1).max(256),
-    display: BrowserTargetDisplayV1Schema.optional(),
-  })
-  .strict());
+const BrowserTargetBaseV1Schema = lazyZodSchema(() => z.strictObject({
+    targetId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    display: z.optional(BrowserTargetDisplayV1Schema),
+  }));
 
-export const BrowserLocalServicePreviewTargetV1Schema = lazyZodSchema(() => BrowserTargetBaseV1Schema.extend({
+export const BrowserLocalServicePreviewTargetV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BrowserTargetBaseV1Schema, {
   kind: z.literal('localServicePreview'),
-  sessionId: z.string().trim().min(1).max(256).optional(),
-  machineId: z.string().trim().min(1).max(256),
-}).strict());
+  sessionId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+  machineId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+})));
 export type BrowserLocalServicePreviewTargetV1 = z.infer<typeof BrowserLocalServicePreviewTargetV1Schema>;
 
-export const BrowserHostedPluginWebTargetV1Schema = lazyZodSchema(() => BrowserTargetBaseV1Schema.extend({
+export const BrowserHostedPluginWebTargetV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BrowserTargetBaseV1Schema, {
   kind: z.literal('hostedPluginWeb'),
-  pluginId: z.string().trim().min(1).max(256),
-  contributionId: z.string().trim().min(1).max(256),
-}).strict());
+  pluginId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+  contributionId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+})));
 export type BrowserHostedPluginWebTargetV1 = z.infer<typeof BrowserHostedPluginWebTargetV1Schema>;
 
-export const BrowserExternalUrlTargetV1Schema = lazyZodSchema(() => BrowserTargetBaseV1Schema.extend({
+export const BrowserExternalUrlTargetV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BrowserTargetBaseV1Schema, {
   kind: z.literal('externalUrl'),
   url: BrowserHttpUrlV1Schema,
-}).strict());
+})));
 export type BrowserExternalUrlTargetV1 = z.infer<typeof BrowserExternalUrlTargetV1Schema>;
 
-export const BrowserStreamedTargetV1Schema = lazyZodSchema(() => BrowserTargetBaseV1Schema.extend({
+export const BrowserStreamedTargetV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BrowserTargetBaseV1Schema, {
   kind: z.literal('streamedBrowser'),
-  streamId: z.string().trim().min(1).max(256),
-}).strict());
+  streamId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+})));
 export type BrowserStreamedTargetV1 = z.infer<typeof BrowserStreamedTargetV1Schema>;
 
-export const BrowserSimulatorPreviewTargetV1Schema = lazyZodSchema(() => BrowserTargetBaseV1Schema.extend({
+export const BrowserSimulatorPreviewTargetV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(BrowserTargetBaseV1Schema, {
   kind: z.literal('simulatorPreview'),
-  deviceId: z.string().trim().min(1).max(256),
-  sourceId: z.string().trim().min(1).max(256).optional(),
-}).strict());
+  deviceId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+  sourceId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+})));
 export type BrowserSimulatorPreviewTargetV1 = z.infer<typeof BrowserSimulatorPreviewTargetV1Schema>;
 
 export const BrowserViewTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
@@ -73,22 +69,20 @@ export const BrowserViewTargetKindV1Schema = lazyZodSchema(() => z.enum([
 export type BrowserViewTargetKindV1 = z.infer<typeof BrowserViewTargetKindV1Schema>;
 
 export const BrowserTargetSuggestionSourceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('localServiceInventory'), serviceId: z.string().trim().min(1).max(256) }).strict(),
-  z.object({ kind: z.literal('previewResource'), previewId: z.string().trim().min(1).max(256) }).strict(),
-  z.object({ kind: z.literal('hostedPluginWeb'), pluginId: z.string().trim().min(1).max(256), contributionId: z.string().trim().min(1).max(256) }).strict(),
-  z.object({ kind: z.literal('externalUrl'), url: BrowserHttpUrlV1Schema }).strict(),
-  z.object({ kind: z.literal('recentTarget'), targetId: z.string().trim().min(1).max(256) }).strict(),
+  z.strictObject({ kind: z.literal('localServiceInventory'), serviceId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)) }),
+  z.strictObject({ kind: z.literal('previewResource'), previewId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)) }),
+  z.strictObject({ kind: z.literal('hostedPluginWeb'), pluginId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)), contributionId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)) }),
+  z.strictObject({ kind: z.literal('externalUrl'), url: BrowserHttpUrlV1Schema }),
+  z.strictObject({ kind: z.literal('recentTarget'), targetId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)) }),
 ]));
 export type BrowserTargetSuggestionSourceV1 = z.infer<typeof BrowserTargetSuggestionSourceV1Schema>;
 
-export const BrowserTargetSuggestionV1Schema = lazyZodSchema(() => z
-  .object({
-    suggestionId: z.string().trim().min(1).max(256),
+export const BrowserTargetSuggestionV1Schema = lazyZodSchema(() => z.strictObject({
+    suggestionId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
     source: BrowserTargetSuggestionSourceV1Schema,
     target: BrowserViewTargetV1Schema,
     display: BrowserTargetDisplayV1Schema,
-    lastSeenAt: z.number().int().nonnegative(),
-    disabledReason: z.string().trim().min(1).max(256).optional(),
-  })
-  .strict());
+    lastSeenAt: z.number().check(z.int(), z.nonnegative()),
+    disabledReason: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+  }));
 export type BrowserTargetSuggestionV1 = z.infer<typeof BrowserTargetSuggestionV1Schema>;

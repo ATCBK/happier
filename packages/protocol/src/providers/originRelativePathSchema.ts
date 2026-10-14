@@ -1,18 +1,17 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { normalizeProviderOriginRelativePathSyntax } from './safety/url.js';
 
-export const ProviderOriginRelativePathSchema = lazyZodSchema(() => z.string().transform((value, ctx) => {
+export const ProviderOriginRelativePathSchema = lazyZodSchema(() => z.pipe(z.string(), z.transform((value, ctx) => {
   try {
     return normalizeProviderOriginRelativePathSyntax(value, { allowQuery: true });
   } catch (error) {
-    ctx.addIssue({
+    ctx.issues.push({
       code: 'custom',
-      message: error instanceof Error ? error.message : 'Invalid provider origin-relative path',
-    });
+      message: error instanceof Error ? error.message : 'Invalid provider origin-relative path', input: ctx.value });
     return z.NEVER;
   }
-}));
+})));
 
 export type ProviderOriginRelativePath = z.infer<typeof ProviderOriginRelativePathSchema>;

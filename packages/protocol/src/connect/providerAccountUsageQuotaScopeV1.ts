@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const ProviderAccountUsageQuotaScopeV1Schema = lazyZodSchema(() => z.enum([
   'account',

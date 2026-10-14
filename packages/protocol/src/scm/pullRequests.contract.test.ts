@@ -1,4 +1,5 @@
-import type { core } from 'zod';
+import * as z from 'zod/mini';
+import type { core } from 'zod/mini';
 import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 import { SessionRunStreamReadEnvelopeSchema } from '../sessions/control/contract.js';
 import { describe, expect, it } from 'vitest';
@@ -328,7 +329,7 @@ describe('pull-request references in the composed session control schema', () =>
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
       const projections = [
         zodSchemaToJsonSchemaObject(SessionRunStreamReadEnvelopeSchema, { target }),
-        SessionRunStreamReadEnvelopeSchema.toJSONSchema({ io: 'input', target, unrepresentable: 'any' }),
+        z.toJSONSchema(SessionRunStreamReadEnvelopeSchema, { io: 'input', target, unrepresentable: 'any' }),
       ];
       for (const projection of projections) {
         const schema = projection as core.JSONSchema.JSONSchema;

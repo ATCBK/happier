@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   StrictJsonValueSchema,
@@ -14,13 +14,10 @@ export type AgentSessionAuthRefreshJsonObjectV1 = Readonly<{
   [key: string]: JsonValue;
 }>;
 
-function jsonObjectSchema(label: string): z.ZodType<AgentSessionAuthRefreshJsonObjectV1> {
-  return StrictJsonValueSchema.refine(
-    (value): value is AgentSessionAuthRefreshJsonObjectV1 => (
+function jsonObjectSchema(label: string): z.ZodMiniType<AgentSessionAuthRefreshJsonObjectV1> {
+  return lazyZodSchema(() => StrictJsonValueSchema.check(z.refine((value): value is AgentSessionAuthRefreshJsonObjectV1 => (
       value !== null && typeof value === 'object' && !Array.isArray(value)
-    ),
-    `${label} must be a bounded JSON object`,
-  ) as z.ZodType<AgentSessionAuthRefreshJsonObjectV1>;
+    ), `${label} must be a bounded JSON object`))) as z.ZodMiniType<AgentSessionAuthRefreshJsonObjectV1>;
 }
 
 export const AgentSessionAuthRefreshSelectionV1Schema = jsonObjectSchema(
@@ -47,12 +44,12 @@ export type AgentSessionAuthRefreshRecoveryV1 = z.infer<
   typeof AgentSessionAuthRefreshRecoveryV1Schema
 >;
 
-export const AgentSessionAuthRefreshErrorV1Schema = lazyZodSchema(() => z.object({
-  name: z.string().trim().min(1).max(AUTH_REFRESH_NAME_MAX).optional(),
-  message: z.string().trim().min(1).max(AUTH_REFRESH_MESSAGE_MAX),
-  code: z.string().trim().min(1).max(AUTH_REFRESH_CODE_MAX).optional(),
-  details: StrictJsonValueSchema.optional(),
-}).strict());
+export const AgentSessionAuthRefreshErrorV1Schema = lazyZodSchema(() => z.strictObject({
+  name: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(AUTH_REFRESH_NAME_MAX))),
+  message: z.string().check(z.trim(), z.minLength(1), z.maxLength(AUTH_REFRESH_MESSAGE_MAX)),
+  code: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(AUTH_REFRESH_CODE_MAX))),
+  details: z.optional(StrictJsonValueSchema),
+}));
 export type AgentSessionAuthRefreshErrorV1 = z.infer<
   typeof AgentSessionAuthRefreshErrorV1Schema
 >;
@@ -77,10 +74,10 @@ export function normalizeAgentSessionAuthRefreshErrorV1(
   return { message: 'Runtime authentication refresh failed' };
 }
 
-export const ProviderTranscriptDispatchRequestV1Schema = lazyZodSchema(() => z.object({
+export const ProviderTranscriptDispatchRequestV1Schema = lazyZodSchema(() => z.strictObject({
   body: StrictJsonValueSchema,
-  meta: z.record(z.string(), StrictJsonValueSchema).optional(),
-}).strict());
+  meta: z.optional(z.record(z.string(), StrictJsonValueSchema)),
+}));
 export type ProviderTranscriptDispatchRequestV1 = z.infer<
   typeof ProviderTranscriptDispatchRequestV1Schema
 >;

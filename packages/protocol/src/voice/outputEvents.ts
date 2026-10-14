@@ -1,49 +1,49 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { VoiceAssistantActionSchema, type VoiceAssistantAction } from './actions.js';
 import { resolveVoiceSpeechSegmentLength, speechTextEndAtOrBefore } from './speechText.js';
 
-const VoiceOutputIdSchema = lazyZodSchema(() => z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/));
+const VoiceOutputIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(128), z.regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)));
 const VoiceOutputTurnIdSchema = VoiceOutputIdSchema;
-const VoiceOutputSequenceSchema = lazyZodSchema(() => z.number().int().min(0).max(4_095));
+const VoiceOutputSequenceSchema = lazyZodSchema(() => z.number().check(z.int(), z.minimum(0), z.maximum(4_095)));
 const MAX_SPEECH_SEGMENT_CHARACTERS = 16_384;
-const VoiceSpeechTextSchema = lazyZodSchema(() => z.string().min(1).max(MAX_SPEECH_SEGMENT_CHARACTERS));
-const VoiceStatusTextSchema = lazyZodSchema(() => z.string().min(1).max(1_024));
-const VoiceFinalTextSchema = lazyZodSchema(() => z.string().max(65_536));
+const VoiceSpeechTextSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(MAX_SPEECH_SEGMENT_CHARACTERS)));
+const VoiceStatusTextSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(1_024)));
+const VoiceFinalTextSchema = lazyZodSchema(() => z.string().check(z.maxLength(65_536)));
 
-const VoiceAgentOutputBaseV1Schema = lazyZodSchema(() => z.object({
+const VoiceAgentOutputBaseV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   turnId: VoiceOutputTurnIdSchema,
   seq: VoiceOutputSequenceSchema,
-}).strict());
+}));
 
-export const VoiceAgentSpeechSegmentEventV1Schema = lazyZodSchema(() => VoiceAgentOutputBaseV1Schema.extend({
+export const VoiceAgentSpeechSegmentEventV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(VoiceAgentOutputBaseV1Schema, {
   kind: z.literal('speech_segment'),
   segmentId: VoiceOutputIdSchema,
   text: VoiceSpeechTextSchema,
-}).strict());
+})));
 
-export const VoiceAgentDisplayStatusEventV1Schema = lazyZodSchema(() => VoiceAgentOutputBaseV1Schema.extend({
+export const VoiceAgentDisplayStatusEventV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(VoiceAgentOutputBaseV1Schema, {
   kind: z.literal('display_status'),
   statusId: VoiceOutputIdSchema,
   text: VoiceStatusTextSchema,
-}).strict());
+})));
 
-export const VoiceAgentSideEffectEventV1Schema = lazyZodSchema(() => VoiceAgentOutputBaseV1Schema.extend({
+export const VoiceAgentSideEffectEventV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(VoiceAgentOutputBaseV1Schema, {
   kind: z.literal('side_effect'),
   effectId: VoiceOutputIdSchema,
   action: VoiceAssistantActionSchema,
-}).strict());
+})));
 
-export const VoiceAgentTurnFinalEventV1Schema = lazyZodSchema(() => VoiceAgentOutputBaseV1Schema.extend({
+export const VoiceAgentTurnFinalEventV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(VoiceAgentOutputBaseV1Schema, {
   kind: z.literal('turn_final'),
   text: VoiceFinalTextSchema,
-}).strict());
+})));
 
-export const VoiceAgentTurnCancelledEventV1Schema = lazyZodSchema(() => VoiceAgentOutputBaseV1Schema.extend({
+export const VoiceAgentTurnCancelledEventV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(VoiceAgentOutputBaseV1Schema, {
   kind: z.literal('turn_cancelled'),
-}).strict());
+})));
 
 export const VoiceAgentOutputEventV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   VoiceAgentSpeechSegmentEventV1Schema,

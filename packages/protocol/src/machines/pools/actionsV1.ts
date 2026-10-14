@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   MachinePoolCreateInputV1Schema,
@@ -38,7 +38,7 @@ export const MachinePoolActionInputSchemasV1 = {
   'machines.pools.update': MachinePoolUpdateInputV1Schema,
   'machines.pools.delete': MachinePoolDeleteInputV1Schema,
   'machines.pools.resolve': MachinePoolResolveInputV1Schema,
-} as const satisfies Record<MachinePoolActionIdV1, z.ZodTypeAny>;
+} as const satisfies Record<MachinePoolActionIdV1, z.ZodMiniType>;
 
 export const MachinePoolActionOutputSchemasV1 = {
   'machines.pools.list': MachinePoolListOutputV1Schema,
@@ -47,7 +47,7 @@ export const MachinePoolActionOutputSchemasV1 = {
   'machines.pools.update': MachinePoolViewV1Schema,
   'machines.pools.delete': MachinePoolDeleteOutputV1Schema,
   'machines.pools.resolve': MachinePoolResolveResultV1Schema,
-} as const satisfies Record<MachinePoolActionIdV1, z.ZodTypeAny>;
+} as const satisfies Record<MachinePoolActionIdV1, z.ZodMiniType>;
 
 export type MachinePoolActionInputV1<TActionId extends MachinePoolActionIdV1 = MachinePoolActionIdV1> =
   z.infer<typeof MachinePoolActionInputSchemasV1[TActionId]>;

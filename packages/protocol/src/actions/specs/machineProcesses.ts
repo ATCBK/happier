@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { subsetNarrowing, type ApprovalNarrowing } from '../../approvals/approvalNarrowing.js';
 import {

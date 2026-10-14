@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const PromptAssetScopeV1Schema = lazyZodSchema(() => z.enum(['user', 'project']));
 export type PromptAssetScopeV1 = z.infer<typeof PromptAssetScopeV1Schema>;

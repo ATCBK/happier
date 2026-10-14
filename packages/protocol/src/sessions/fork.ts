@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { LlmTaskRunnerConfigV1Schema } from '../llm/tasks/llmTaskRunnerConfigV1.js';
 import { SessionForkPointSchema, type SessionForkPoint } from './forkPoint.js';
@@ -39,14 +39,13 @@ export const SessionForkStrategySchema = lazyZodSchema(() => z.enum([
 ]));
 export type SessionForkStrategy = z.infer<typeof SessionForkStrategySchema>;
 
-export const SessionForkRpcParamsSchema = lazyZodSchema(() => z
-  .object({
+export const SessionForkRpcParamsSchema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
-    parentSessionId: z.string().min(1),
+    parentSessionId: z.string().check(z.minLength(1)),
     forkPoint: SessionForkPointSchema,
-    strategy: SessionForkStrategySchema.optional(),
-    replaySummaryRunner: LlmTaskRunnerConfigV1Schema.optional(),
-    replayMaxSeedChars: HappierReplayWireMaxSeedCharsSchema.optional(),
+    strategy: z.optional(SessionForkStrategySchema),
+    replaySummaryRunner: z.optional(LlmTaskRunnerConfigV1Schema),
+    replayMaxSeedChars: z.optional(HappierReplayWireMaxSeedCharsSchema),
     /**
      * Stable idempotency key for the fork request. Retries of the SAME user
      * action (e.g. transport-timeout retries inside the machine RPC layer)
@@ -58,13 +57,12 @@ export const SessionForkRpcParamsSchema = lazyZodSchema(() => z
      * this `.strict()` schema; accepting it is a compatibility repair, and no
      * caller is required to send it.
      */
-    requestId: z.string().min(1).max(128).refine((value) => value.trim().length > 0).optional(),
-  })
-  .strict());
+    requestId: z.optional(z.string().check(z.minLength(1), z.maxLength(128), z.refine((value) => value.trim().length > 0))),
+  }));
 export type SessionForkRpcParams = z.infer<typeof SessionForkRpcParamsSchema>;
 
 export const SessionForkRpcResultSchema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true), childSessionId: z.string().min(1) }).strict(),
-  z.object({ ok: z.literal(false), errorCode: z.string().min(1), errorMessage: z.string().min(1) }).strict(),
+  z.strictObject({ ok: z.literal(true), childSessionId: z.string().check(z.minLength(1)) }),
+  z.strictObject({ ok: z.literal(false), errorCode: z.string().check(z.minLength(1)), errorMessage: z.string().check(z.minLength(1)) }),
 ]));
 export type SessionForkRpcResult = z.infer<typeof SessionForkRpcResultSchema>;

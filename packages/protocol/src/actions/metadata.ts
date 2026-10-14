@@ -1,12 +1,12 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export {
   ActionInputHintsSchema,
   type ActionInputHints,
 } from './actionInputHints.js';
 
-export const ActionSurfaceSchema = lazyZodSchema(() => z.object({
+export const ActionSurfaceSchema = lazyZodSchema(() => z.strictObject({
   ui: z.boolean(),
   voice: z.boolean(),
   agent: z.boolean(),
@@ -15,7 +15,7 @@ export const ActionSurfaceSchema = lazyZodSchema(() => z.object({
   rpc: z.boolean(),
   api: z.boolean(),
   plugin: z.boolean(),
-}).strict());
+}));
 export type ActionSurfaces = z.infer<typeof ActionSurfaceSchema>;
 
 /**
@@ -41,18 +41,16 @@ export type ActionToolExposureMode = z.infer<typeof ActionToolExposureModeSchema
 export const ActionToolExposureSurfaceSchema = lazyZodSchema(() => z.enum(['agent', 'mcp', 'cli']));
 export type ActionToolExposureSurface = z.infer<typeof ActionToolExposureSurfaceSchema>;
 
-export const ActionToolExposureSchema = lazyZodSchema(() => z
-  .object({
-    agent: ActionToolExposureModeSchema.optional(),
-    mcp: ActionToolExposureModeSchema.optional(),
-    cli: ActionToolExposureModeSchema.optional(),
-  })
-  .strict());
+export const ActionToolExposureSchema = lazyZodSchema(() => z.strictObject({
+    agent: z.optional(ActionToolExposureModeSchema),
+    mcp: z.optional(ActionToolExposureModeSchema),
+    cli: z.optional(ActionToolExposureModeSchema),
+  }));
 export type ActionToolExposure = z.infer<typeof ActionToolExposureSchema>;
 
 /** Authored discovery instructions; unknown fields cannot acquire prompt meaning. */
-export const ActionPromptingSchema = lazyZodSchema(() => z.object({
-  voiceHotPath: z.boolean().optional(),
-  agentGuidance: z.string().min(1).optional(),
-}).strict());
+export const ActionPromptingSchema = lazyZodSchema(() => z.strictObject({
+  voiceHotPath: z.optional(z.boolean()),
+  agentGuidance: z.optional(z.string().check(z.minLength(1))),
+}));
 export type ActionPrompting = z.infer<typeof ActionPromptingSchema>;

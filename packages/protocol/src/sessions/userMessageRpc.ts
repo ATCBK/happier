@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1, HappierStructuredInputV1Schema as HappierStructuredInputV1EnvelopeSchema, RawIngressStructuredInputV1Schema, hasAdmittedComposerAttachmentSelectionV1, readAttachmentEnvelopeLocalImagePaths, readHappierStructuredInputV1FromMeta, readIngressComposerAttachmentSelectionV1, sanitizeHappierStructuredInputV1, sanitizeSessionStructuredInputMeta, type HappierStructuredInputV1 as HappierStructuredInputV1Envelope } from '../runtime/input/structuredInputV1.js';
 import { ComposerContentHandleV1Schema, type ComposerContentHandleV1 } from '../runtime/input/composerContentV1.js';
@@ -56,75 +56,74 @@ export function sanitizeSessionUserMessageSendMeta(
   };
 }
 
-export const SessionUserMessageSendMetaSchema = lazyZodSchema(() => z
-  .record(z.string(), z.unknown())
-  .transform((value) => sanitizeSessionUserMessageSendMeta(value)));
+export const SessionUserMessageSendMetaSchema = lazyZodSchema(() => z.pipe(z
+  .record(z.string(), z.unknown()), z.transform((value) => sanitizeSessionUserMessageSendMeta(value))));
 export type SessionUserMessageSendMeta = z.infer<typeof SessionUserMessageSendMetaSchema>;
 
-export const SessionUserMessageSendRequestSchema = lazyZodSchema(() => z.object({
+export const SessionUserMessageSendRequestSchema = lazyZodSchema(() => z.looseObject({
   text: z.string(),
-  localId: PendingLocalIdSchema.optional(),
-  meta: SessionUserMessageSendMetaSchema.default({}),
-}).passthrough().superRefine((request, context) => {
+  localId: z.optional(PendingLocalIdSchema),
+  meta: z._default(SessionUserMessageSendMetaSchema, {}),
+}).check(z.superRefine((request, context) => {
   if (request.text.trim().length > 0) return;
   // Read the boundary's own preserved ingress arm, not the persisted projection: a staged
   // media attachment is a submitted attachment, and the persisted projection cannot hold one.
   if ((readIngressComposerAttachmentSelectionV1(request.meta) ?? []).length > 0) return;
   context.addIssue({
-    code: z.ZodIssueCode.custom,
+    code: "custom",
     path: ['text'],
     message: 'A blank message requires at least one admitted composer attachment.',
   });
-}));
+})));
 export type SessionUserMessageSendRequest = z.infer<typeof SessionUserMessageSendRequestSchema>;
 
 /** Invocation-scoped Pending edit preparation through the canonical Session admission lifecycle. */
-export const SessionPendingMessageComposerAdmissionPrepareRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionPendingMessageComposerAdmissionPrepareRequestV1Schema = lazyZodSchema(() => z.strictObject({
   localId: PendingLocalIdSchema,
   text: z.string(),
   structuredInput: RawIngressStructuredInputV1Schema,
-}).strict());
+}));
 export type SessionPendingMessageComposerAdmissionPrepareRequestV1 = z.infer<
   typeof SessionPendingMessageComposerAdmissionPrepareRequestV1Schema
 >;
 
 export const SessionPendingMessageComposerAdmissionPrepareResponseV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     text: z.string(),
     structuredInput: HappierStructuredInputV1EnvelopeSchema,
-    stagedMediaHandles: z.array(ComposerContentHandleV1Schema).max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1),
-    sessionMediaMetadata: z.object({
+    stagedMediaHandles: z.array(ComposerContentHandleV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)),
+    sessionMediaMetadata: z.optional(z.strictObject({
       key: z.enum(['happier', 'happierMedia']),
       envelope: SessionMediaMessageMetaV1Schema,
-    }).strict().optional(),
+    })),
     /** Existing staged-media settlement owner cleanup facts for a prepare that never PATCHes. */
-    sessionMediaCleanup: z.object({
-      workingDirectory: z.string().min(1).max(32_768),
-      createdWorkspaceRelativePaths: z.array(z.string().min(1).max(32_768)).max(64),
-    }).strict().optional(),
-  }).strict(),
-  z.object({
+    sessionMediaCleanup: z.optional(z.strictObject({
+      workingDirectory: z.string().check(z.minLength(1), z.maxLength(32_768)),
+      createdWorkspaceRelativePaths: z.array(z.string().check(z.minLength(1), z.maxLength(32_768))).check(z.maxLength(64)),
+    })),
+  }),
+  z.strictObject({
     ok: z.literal(false),
-    error: z.string().min(1),
-    errorCode: z.string().min(1),
-  }).strict(),
+    error: z.string().check(z.minLength(1)),
+    errorCode: z.string().check(z.minLength(1)),
+  }),
 ]));
 export type SessionPendingMessageComposerAdmissionPrepareResponseV1 = z.infer<
   typeof SessionPendingMessageComposerAdmissionPrepareResponseV1Schema
 >;
 
 /** The exact post-PATCH fact; the Pending writer, not the UI, owns its structured input. */
-export const SessionPendingMessageComposerAdmissionAcceptedRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionPendingMessageComposerAdmissionAcceptedRequestV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: asProtocolZod(SessionIdSchema),
   localId: PendingLocalIdSchema,
   structuredInput: HappierStructuredInputV1EnvelopeSchema,
-  stagedMediaHandles: z.array(ComposerContentHandleV1Schema).max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1),
-  sessionMediaMetadata: z.object({
+  stagedMediaHandles: z.array(ComposerContentHandleV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)),
+  sessionMediaMetadata: z.optional(z.strictObject({
     key: z.enum(['happier', 'happierMedia']),
     envelope: SessionMediaMessageMetaV1Schema,
-  }).strict().optional(),
-}).strict());
+  })),
+}));
 export type SessionPendingMessageComposerAdmissionAcceptedRequestV1 = Readonly<{
   sessionId: string;
   localId: z.infer<typeof PendingLocalIdSchema>;
@@ -137,16 +136,16 @@ export type SessionPendingMessageComposerAdmissionAcceptedRequestV1 = Readonly<{
 }>;
 
 /** Narrow abandonment of a pre-PATCH staged-media preparation. */
-export const SessionPendingMessageComposerAdmissionAbandonedRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionPendingMessageComposerAdmissionAbandonedRequestV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: asProtocolZod(SessionIdSchema),
   localId: PendingLocalIdSchema,
   structuredInput: HappierStructuredInputV1EnvelopeSchema,
-  stagedMediaHandles: z.array(ComposerContentHandleV1Schema).max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1),
-  sessionMediaCleanup: z.object({
-    workingDirectory: z.string().min(1).max(32_768),
-    createdWorkspaceRelativePaths: z.array(z.string().min(1).max(32_768)).max(64),
-  }).strict(),
-}).strict());
+  stagedMediaHandles: z.array(ComposerContentHandleV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)),
+  sessionMediaCleanup: z.strictObject({
+    workingDirectory: z.string().check(z.minLength(1), z.maxLength(32_768)),
+    createdWorkspaceRelativePaths: z.array(z.string().check(z.minLength(1), z.maxLength(32_768))).check(z.maxLength(64)),
+  }),
+}));
 export type SessionPendingMessageComposerAdmissionAbandonedRequestV1 = Readonly<{
   sessionId: string;
   localId: z.infer<typeof PendingLocalIdSchema>;
@@ -158,15 +157,15 @@ export type SessionPendingMessageComposerAdmissionAbandonedRequestV1 = Readonly<
   }>;
 }>;
 
-const SessionUserMessageSendSuccessResponseSchema = lazyZodSchema(() => z.object({
+const SessionUserMessageSendSuccessResponseSchema = lazyZodSchema(() => z.looseObject({
   ok: z.literal(true),
-}).passthrough());
+}));
 
-const SessionUserMessageSendErrorResponseSchema = lazyZodSchema(() => z.object({
+const SessionUserMessageSendErrorResponseSchema = lazyZodSchema(() => z.looseObject({
   ok: z.literal(false),
-  error: z.string().min(1),
-  errorCode: z.string().min(1),
-}).passthrough());
+  error: z.string().check(z.minLength(1)),
+  errorCode: z.string().check(z.minLength(1)),
+}));
 
 export const SessionUserMessageSendResponseSchema = lazyZodSchema(() => z.union([
   SessionUserMessageSendSuccessResponseSchema,

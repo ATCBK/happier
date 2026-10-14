@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ActionIdSchema, normalizeLegacyActionId, type ActionId } from './actionIds.js';
 import {
@@ -16,7 +16,7 @@ import {
 } from './metadata.js';
 import { ActionUiPlacementSchema, type ActionUiPlacement } from './actionUiPlacements.js';
 
-const ActionSurfaceKeySchema = lazyZodSchema(() => ActionSurfaceSchema.keyof());
+const ActionSurfaceKeySchema = lazyZodSchema(() => z.keyof(ActionSurfaceSchema));
 export type ActionSurfaceKey = z.infer<typeof ActionSurfaceKeySchema>;
 export const ACTION_SETTINGS_OPT_IN_PLACEMENTS = ['agent_input_chips'] as const satisfies readonly ActionUiPlacement[];
 const ACTION_SETTINGS_OPT_IN_PLACEMENT_SET = new Set<ActionUiPlacement>(ACTION_SETTINGS_OPT_IN_PLACEMENTS);
@@ -68,16 +68,12 @@ function normalizeActionToolExposureModes(raw: unknown): Partial<Record<ActionTo
   return next;
 }
 
-const ActionSettingsToolExposureModesSchema = lazyZodSchema(() => z.preprocess(
-  normalizeActionToolExposureModes,
-  z
+const ActionSettingsToolExposureModesSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeActionToolExposureModes), z._default(z
     .object({
-      agent: ActionToolExposureModeSchema.optional(),
-      mcp: ActionToolExposureModeSchema.optional(),
-      cli: ActionToolExposureModeSchema.optional(),
-    })
-    .default({}),
-));
+      agent: z.optional(ActionToolExposureModeSchema),
+      mcp: z.optional(ActionToolExposureModeSchema),
+      cli: z.optional(ActionToolExposureModeSchema),
+    }), {})));
 
 function normalizeLegacyActionSettingsOverride(raw: unknown): unknown {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -94,21 +90,14 @@ function normalizeLegacyActionSettingsOverride(raw: unknown): unknown {
   return next;
 }
 
-const ActionSettingsOverrideSchema = lazyZodSchema(() => z.preprocess(
-  normalizeLegacyActionSettingsOverride,
-  z
-    .object({
-      enabled: z.boolean().optional(),
-      enabledPlacements: z.array(ActionUiPlacementSchema).default([]),
-      disabledSurfaces: z.array(ActionSurfaceKeySchema).default([]),
-      disabledPlacements: z.array(ActionUiPlacementSchema).default([]),
-      approvalRequiredSurfaces: z.array(ActionSurfaceKeySchema).default([]),
+const ActionSettingsOverrideSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacyActionSettingsOverride), z.looseObject({
+      enabled: z.optional(z.boolean()),
+      enabledPlacements: z._default(z.array(ActionUiPlacementSchema), []),
+      disabledSurfaces: z._default(z.array(ActionSurfaceKeySchema), []),
+      disabledPlacements: z._default(z.array(ActionUiPlacementSchema), []),
+      approvalRequiredSurfaces: z._default(z.array(ActionSurfaceKeySchema), []),
       toolExposureModes: ActionSettingsToolExposureModesSchema,
-    })
-    // Preserve fields introduced by newer clients so older clients can
-    // round-trip an unknown Action policy without erasing it.
-    .passthrough(),
-));
+    })));
 export type ActionSettingsOverride = z.infer<typeof ActionSettingsOverrideSchema>;
 
 /** A host Action id or the canonical qualified contributed-Action identity. */
@@ -134,26 +123,22 @@ function projectKnownActionSettings(
   return next;
 }
 
-export const ActionsSettingsV1Schema = lazyZodSchema(() => z
-  .object({
+export const ActionsSettingsV1Schema = lazyZodSchema(() => z.pipe(z.looseObject({
     v: z.literal(1),
     // Accept unknown Action ids so older clients can round-trip newer policy rows.
-    actions: z.record(z.string(), ActionSettingsOverrideSchema).default({}),
+    actions: z._default(z.record(z.string(), ActionSettingsOverrideSchema), {}),
     // The 0.2 predecessor has strict Action rows but an open document root.
     // Keep this new choice outside those rows so old readers retain disable/require
     // policy. They ignore the waiver and continue requiring default confirmation.
-    approvalWaivedSurfaces: z.record(z.string(), z.array(ActionSurfaceKeySchema))
-      .optional().catch(undefined),
+    approvalWaivedSurfaces: z.catch(z.optional(z.record(z.string(), z.array(ActionSurfaceKeySchema))), undefined),
     /** One viewing Action waiver per plugin, never a retained source grant. */
-    pluginHostCaptureApprovalWaived: z.array(z.string().min(1)).optional().catch(undefined),
-  })
-  .passthrough()
-  .transform((value) => ({
+    pluginHostCaptureApprovalWaived: z.catch(z.optional(z.array(z.string().check(z.minLength(1)))), undefined),
+  }), z.transform((value) => ({
     v: 1 as const,
     actions: projectKnownActionSettings(value.actions ?? {}),
     ...(value.approvalWaivedSurfaces ? { approvalWaivedSurfaces: value.approvalWaivedSurfaces } : {}),
     ...(value.pluginHostCaptureApprovalWaived ? { pluginHostCaptureApprovalWaived: value.pluginHostCaptureApprovalWaived } : {}),
-  })));
+  }))));
 
 export type ActionsSettingsV1 = Readonly<{
   v: 1;

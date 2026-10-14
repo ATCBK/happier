@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { decodeBase64, encodeBase64 } from '../../crypto/base64.js';
 import {
@@ -30,51 +30,51 @@ export {
 } from './contentPublicKeyFingerprint.js';
 export const MachineInstallationIdentityV1Schema = lazyZodSchema(() => z.object({
     version: z.literal(1),
-    installationId: z.string().trim().min(1),
-    createdAt: z.number().int().nonnegative(),
+    installationId: z.string().check(z.trim(), z.minLength(1)),
+    createdAt: z.number().check(z.int(), z.nonnegative()),
     publicKey: MachineInstallationPublicKeySchema,
-    privateKey: z.string().trim().min(1),
-}).superRefine((identity, ctx) => {
+    privateKey: z.string().check(z.trim(), z.minLength(1)),
+}).check(z.superRefine((identity, ctx) => {
     validateBase64UrlEncodedBytes(identity.privateKey, 'privateKey', ED25519_SECRET_KEY_BYTES, ctx, ['privateKey']);
-}));
+})));
 
 export type MachineInstallationIdentityV1 = z.infer<typeof MachineInstallationIdentityV1Schema>;
 
-export const RequesterSessionCurrentnessPurposeV1Schema = lazyZodSchema(() => z.object({
+export const RequesterSessionCurrentnessPurposeV1Schema = lazyZodSchema(() => z.strictObject({
     kind: z.literal('requester_session_currentness'),
-    sessionId: z.string().min(1),
-}).strict());
+    sessionId: z.string().check(z.minLength(1)),
+}));
 export type RequesterSessionCurrentnessPurposeV1 = z.infer<typeof RequesterSessionCurrentnessPurposeV1Schema>;
 
-export const MachineInstallationProofPayloadV1Schema = lazyZodSchema(() => z.object({
+export const MachineInstallationProofPayloadV1Schema = lazyZodSchema(() => z.strictObject({
     version: z.literal(1),
-    installationId: z.string().trim().min(1),
-    machineId: z.string().trim().min(1),
-    replacesMachineId: z.string().trim().min(1).optional(),
-    replacementReason: MachineReplacementReasonSchema.optional(),
-    contentPublicKeyFingerprint: ContentPublicKeyFingerprintSchema.optional(),
-    accountId: z.string().trim().min(1).optional(),
-    externalActionOrigin: z.object({
-        homeId: z.string().trim().min(1),
+    installationId: z.string().check(z.trim(), z.minLength(1)),
+    machineId: z.string().check(z.trim(), z.minLength(1)),
+    replacesMachineId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    replacementReason: z.optional(MachineReplacementReasonSchema),
+    contentPublicKeyFingerprint: z.optional(ContentPublicKeyFingerprintSchema),
+    accountId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    externalActionOrigin: z.optional(z.strictObject({
+        homeId: z.string().check(z.trim(), z.minLength(1)),
         actionId: ExternalActionActionIdV1Schema,
         requestId: ExternalActionRequestIdV1Schema,
-        requestEnvelopeDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+        requestEnvelopeDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)),
         origin: z.union([SessionActionRpcOriginV1Schema, ExternalActionWorkflowOriginV1Schema]),
-    }).strict().optional(),
-    rpcAdmission: z.object({
+    })),
+    rpcAdmission: z.optional(z.strictObject({
         context: SocketRpcMachineAdmissionContextV1Schema,
-        method: z.string().min(1).optional(),
-        purpose: RequesterSessionCurrentnessPurposeV1Schema.optional(),
-        workspaceSyncSourceRouting: WorkspaceSyncSourceRoutingV1Schema.optional(),
-        workspaceSyncTargetRouting: WorkspaceSyncTargetRoutingV1Schema.optional(),
-        workspaceSyncSourceWriterTargetRouting: WorkspaceSyncSourceWriterTargetRoutingV1Schema.optional(),
-        workspaceSyncSourceExecution: WorkspaceSyncSourceExecutionV1Schema.optional(),
-        workspaceSyncSeedRouting: WorkspaceSyncSeedRoutingV1Schema.optional(),
-        callerInputAuthorization: ExternalActionExecutionAuthorizationV1Schema.optional(),
-        custodySubjectAccountId: z.string().min(1).optional(),
-        managedTarget: z.lazy(() => ManagedActivityReadRequestV1Schema).optional(),
-        managedIdleDecision: z.object({ kind: z.literal('idle'), since: z.number().nonnegative(), confirmedAt: z.number().nonnegative() }).strict().optional(),
-    }).strict().superRefine((admission, ctx) => {
+        method: z.optional(z.string().check(z.minLength(1))),
+        purpose: z.optional(RequesterSessionCurrentnessPurposeV1Schema),
+        workspaceSyncSourceRouting: z.optional(WorkspaceSyncSourceRoutingV1Schema),
+        workspaceSyncTargetRouting: z.optional(WorkspaceSyncTargetRoutingV1Schema),
+        workspaceSyncSourceWriterTargetRouting: z.optional(WorkspaceSyncSourceWriterTargetRoutingV1Schema),
+        workspaceSyncSourceExecution: z.optional(WorkspaceSyncSourceExecutionV1Schema),
+        workspaceSyncSeedRouting: z.optional(WorkspaceSyncSeedRoutingV1Schema),
+        callerInputAuthorization: z.optional(ExternalActionExecutionAuthorizationV1Schema),
+        custodySubjectAccountId: z.optional(z.string().check(z.minLength(1))),
+        managedTarget: z.optional(z.lazy(() => ManagedActivityReadRequestV1Schema)),
+        managedIdleDecision: z.optional(z.strictObject({ kind: z.literal('idle'), since: z.number().check(z.nonnegative()), confirmedAt: z.number().check(z.nonnegative()) })),
+    }).check(z.superRefine((admission, ctx) => {
         if ((admission.method === undefined) === (admission.purpose === undefined)) {
             ctx.addIssue({ code: 'custom', message: 'Machine admission must bind exactly one method or currentness purpose' });
         }
@@ -97,22 +97,22 @@ export const MachineInstallationProofPayloadV1Schema = lazyZodSchema(() => z.obj
             || admission.custodySubjectAccountId || admission.managedTarget || admission.managedIdleDecision)) {
             ctx.addIssue({ code: 'custom', message: 'Seed preparation requires only its exact retained Project proof' });
         }
-    }).optional(),
-    managedPolicy: z.object({
-        homeId: z.string().min(1), managedId: z.string().min(1), expectedIntentRevision: z.number().int().nonnegative(),
-        controller: z.object({ machineId: z.string().min(1), installationId: z.string().min(1) }).strict(),
-        requestId: z.string().min(1), purpose: z.enum(['retention', 'accepted-input-start', 'creation-cleanup']),
-        resourceDigest: z.string().min(1), purposeDigest: z.string().min(1),
-        method: z.literal('POST'), path: z.string().min(1), bodyDigest: z.string().min(1),
-    }).strict().optional(),
-    managedPolicyCensus: z.object({ homeId: z.string().min(1) }).strict().optional(),
-}).strict().superRefine((value, ctx) => {
+    }))),
+    managedPolicy: z.optional(z.strictObject({
+        homeId: z.string().check(z.minLength(1)), managedId: z.string().check(z.minLength(1)), expectedIntentRevision: z.number().check(z.int(), z.nonnegative()),
+        controller: z.strictObject({ machineId: z.string().check(z.minLength(1)), installationId: z.string().check(z.minLength(1)) }),
+        requestId: z.string().check(z.minLength(1)), purpose: z.enum(['retention', 'accepted-input-start', 'creation-cleanup']),
+        resourceDigest: z.string().check(z.minLength(1)), purposeDigest: z.string().check(z.minLength(1)),
+        method: z.literal('POST'), path: z.string().check(z.minLength(1)), bodyDigest: z.string().check(z.minLength(1)),
+    })),
+    managedPolicyCensus: z.optional(z.strictObject({ homeId: z.string().check(z.minLength(1)) })),
+}).check(z.superRefine((value, ctx) => {
     if (!value.externalActionOrigin) return;
     if (!value.accountId) ctx.addIssue({ code: 'custom', path: ['accountId'], message: 'Session Action origin requires the authenticated requester' });
     if (value.externalActionOrigin.requestId !== value.externalActionOrigin.origin.requestId) {
         ctx.addIssue({ code: 'custom', path: ['externalActionOrigin', 'requestId'], message: 'Session Action origin must match the admitted request' });
     }
-}));
+})));
 
 export type MachineInstallationProofPayloadV1 = z.infer<typeof MachineInstallationProofPayloadV1Schema>;
 

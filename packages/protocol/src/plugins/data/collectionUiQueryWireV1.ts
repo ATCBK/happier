@@ -1,5 +1,6 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 
 import { PluginContributionLocalIdSchema } from '../contributionIdentity.js';
@@ -25,14 +26,14 @@ function utf8ByteLength(value: string): number {
 }
 
 /** A stable Data row identity shared by direct and UI-query wire contracts. */
-export const PluginCollectionRowIdV1Schema = lazyZodSchema(() => z.string().min(1).superRefine((value, context) => {
+export const PluginCollectionRowIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.superRefine((value, context) => {
   if (value.includes('\u0000')) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Row ID must not contain NUL.' });
+    context.addIssue({ code: "custom", message: 'Row ID must not contain NUL.' });
   }
   if (utf8ByteLength(value) > MAX_COLLECTION_ROW_ID_UTF8_BYTES) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Row ID exceeds the 256-byte limit.' });
+    context.addIssue({ code: "custom", message: 'Row ID exceeds the 256-byte limit.' });
   }
-}));
+})));
 export type PluginCollectionRowIdV1 = z.infer<typeof PluginCollectionRowIdV1Schema>;
 
 export { PluginCollectionOpaqueCursorV1Schema };
@@ -42,21 +43,21 @@ export { PluginCollectionOpaqueCursorV1Schema };
  * Account qualification, contract admission, and private cursor ownership stay
  * with the direct Data client that consumes them.
  */
-export const PluginCollectionUiQueryInputV1Schema = lazyZodSchema(() => z.object({
+export const PluginCollectionUiQueryInputV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),
   collectionId: asProtocolZod(PluginContributionLocalIdSchema),
   uiQueryId: PluginCollectionMemberNameV1Schema,
-  parameters: z.record(
+  parameters: z._default(z.record(
     PluginCollectionMemberNameV1Schema,
     z.union([z.string(), PluginCollectionFiniteNumberV1Schema, z.boolean()]),
-  ).default({}),
-  cursor: asProtocolZod(PluginCollectionOpaqueCursorV1Schema).optional(),
-}).strict());
+  ), {}),
+  cursor: zMini.optional(asProtocolZod(PluginCollectionOpaqueCursorV1Schema)),
+}));
 export type PluginCollectionUiQueryInputV1 = z.infer<typeof PluginCollectionUiQueryInputV1Schema>;
 
-export const PluginCollectionUiQueryRequestV1Schema = lazyZodSchema(() => PluginCollectionUiQueryInputV1Schema.extend({
+export const PluginCollectionUiQueryRequestV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(PluginCollectionUiQueryInputV1Schema, {
   readerContext: PluginCollectionContractRefV1Schema,
-}).strict());
+})));
 export type PluginCollectionUiQueryRequestV1 = z.infer<typeof PluginCollectionUiQueryRequestV1Schema>;
 
 /**
@@ -65,31 +66,31 @@ export type PluginCollectionUiQueryRequestV1 = z.infer<typeof PluginCollectionUi
  * result avoids pulling the host-only Collection encryption codec into public
  * declarative Action consumers.
  */
-export const NormalizedPluginCollectionUiQueryDescriptorV1Schema = lazyZodSchema(() => z.object({
-  collection: z.object({
+export const NormalizedPluginCollectionUiQueryDescriptorV1Schema = lazyZodSchema(() => z.strictObject({
+  collection: z.strictObject({
     pluginId: asProtocolZod(PluginIdSchema),
     collectionId: asProtocolZod(PluginContributionLocalIdSchema),
-  }).strict(),
+  }),
   id: PluginCollectionMemberNameV1Schema,
   indexId: PluginCollectionMemberNameV1Schema,
   parameters: z.record(PluginCollectionMemberNameV1Schema, PluginCollectionUiQueryParameterV1Schema),
-  prefix: z.array(PluginCollectionUiQueryValueV1Schema).max(4),
-  range: z.object({
-    lower: PluginCollectionUiQueryValueV1Schema.optional(),
-    upper: PluginCollectionUiQueryValueV1Schema.optional(),
-  }).strict().refine((value) => value.lower !== undefined || value.upper !== undefined, 'A range needs a lower or upper bound.').optional(),
+  prefix: z.array(PluginCollectionUiQueryValueV1Schema).check(z.maxLength(4)),
+  range: z.optional(z.strictObject({
+    lower: zMini.optional(PluginCollectionUiQueryValueV1Schema),
+    upper: zMini.optional(PluginCollectionUiQueryValueV1Schema),
+  }).check(z.refine((value) => value.lower !== undefined || value.upper !== undefined, 'A range needs a lower or upper bound.'))),
   order: z.enum(['asc', 'desc']),
-  pageSize: z.number().int().min(1).max(PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1),
-  projectedFields: z.array(PluginCollectionProjectedScalarFieldRefV1Schema).min(1).max(16),
-}).strict().superRefine((value, context) => {
+  pageSize: z.number().check(z.int(), z.minimum(1), z.maximum(PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1)),
+  projectedFields: z.array(PluginCollectionProjectedScalarFieldRefV1Schema).check(z.minLength(1), z.maxLength(16)),
+}).check(z.superRefine((value, context) => {
   if (new Set(value.projectedFields.map((field) => field.field)).size !== value.projectedFields.length) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['projectedFields'],
       message: 'Projected fields must be unique.',
     });
   }
-}));
+})));
 export type NormalizedPluginCollectionUiQueryDescriptorV1 = z.infer<
   typeof NormalizedPluginCollectionUiQueryDescriptorV1Schema
 >;
@@ -125,36 +126,36 @@ export function validatePluginCollectionUiQueryParametersV1(
   }
 }
 
-export const PluginCollectionUiRowContextV1Schema = lazyZodSchema(() => z.object({
-  collection: z.object({
+export const PluginCollectionUiRowContextV1Schema = lazyZodSchema(() => z.strictObject({
+  collection: z.strictObject({
     pluginId: asProtocolZod(PluginIdSchema),
     collectionId: asProtocolZod(PluginContributionLocalIdSchema),
-  }).strict(),
+  }),
   rowId: PluginCollectionRowIdV1Schema,
-  revision: z.number().int().positive(),
-}).strict());
+  revision: z.number().check(z.int(), z.positive()),
+}));
 export type PluginCollectionUiRowContextV1 = z.infer<typeof PluginCollectionUiRowContextV1Schema>;
 
 const PluginCollectionUiRowFieldsV1Schema = lazyZodSchema(() => z.record(
   PluginCollectionMemberNameV1Schema,
   PluginCollectionProjectedScalarValueV1Schema,
-).superRefine((value, context) => {
+).check(z.superRefine((value, context) => {
   if (Object.keys(value).length > 16) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'A UI query row has too many projected fields.' });
+    context.addIssue({ code: "custom", message: 'A UI query row has too many projected fields.' });
   }
-}));
+})));
 
-export const PluginCollectionUiRowV1Schema = lazyZodSchema(() => z.object({
+export const PluginCollectionUiRowV1Schema = lazyZodSchema(() => z.strictObject({
   context: PluginCollectionUiRowContextV1Schema,
   fields: PluginCollectionUiRowFieldsV1Schema,
-}).strict());
+}));
 export type PluginCollectionUiRowV1 = z.infer<typeof PluginCollectionUiRowV1Schema>;
 
-export const PluginCollectionUiQueryResultV1Schema = lazyZodSchema(() => z.object({
-  rows: z.array(PluginCollectionUiRowV1Schema).max(200),
-  nextCursor: asProtocolZod(PluginCollectionOpaqueCursorV1Schema).optional(),
-  changeCursor: z.number().int().nonnegative(),
-}).strict());
+export const PluginCollectionUiQueryResultV1Schema = lazyZodSchema(() => z.strictObject({
+  rows: z.array(PluginCollectionUiRowV1Schema).check(z.maxLength(200)),
+  nextCursor: zMini.optional(asProtocolZod(PluginCollectionOpaqueCursorV1Schema)),
+  changeCursor: z.number().check(z.int(), z.nonnegative()),
+}));
 export type PluginCollectionUiQueryResultV1 = z.infer<typeof PluginCollectionUiQueryResultV1Schema>;
 
 /** Typed terminal outcomes for the one authenticated static UI-query operation. */
@@ -168,7 +169,7 @@ export const PluginCollectionUiQueryErrorCodeV1Schema = lazyZodSchema(() => z.en
 ]));
 export type PluginCollectionUiQueryErrorCodeV1 = z.infer<typeof PluginCollectionUiQueryErrorCodeV1Schema>;
 
-export const PluginCollectionUiQueryErrorV1Schema = lazyZodSchema(() => z.object({
+export const PluginCollectionUiQueryErrorV1Schema = lazyZodSchema(() => z.strictObject({
   error: PluginCollectionUiQueryErrorCodeV1Schema,
-}).strict());
+}));
 export type PluginCollectionUiQueryErrorV1 = z.infer<typeof PluginCollectionUiQueryErrorV1Schema>;

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 import {
@@ -16,10 +16,10 @@ import {
   inspectAccountSettingValueBounds,
 } from './catalog/accountSettingBounds.js';
 
-export const AccountSettingsMutationInvalidResultSchema = lazyZodSchema(() => z.object({
+export const AccountSettingsMutationInvalidResultSchema = lazyZodSchema(() => z.strictObject({
   status: z.literal('invalid'),
   reason: z.enum(['unknownKey', 'invalidValue', 'duplicateKey', 'tooLarge', 'tooDeep']),
-}).strict());
+}));
 export type AccountSettingsMutationInvalidReason = z.infer<typeof AccountSettingsMutationInvalidResultSchema>['reason'];
 
 export type AccountSettingsMutationResult =
@@ -47,20 +47,20 @@ export type AccountSettingsMutationResult =
   }>;
 
 const AccountSettingMutationOperationInputV1Schema = lazyZodSchema(() => z.discriminatedUnion('op', [
-  z.object({
+  z.strictObject({
     op: z.literal('set'),
-    key: z.string().min(1),
+    key: z.string().check(z.minLength(1)),
     value: StrictJsonValueSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     op: z.literal('reset'),
-    key: z.string().min(1),
-  }).strict(),
+    key: z.string().check(z.minLength(1)),
+  }),
 ]));
 
-const AccountSettingMutationInputV1Schema = lazyZodSchema(() => z.object({
-  operations: z.array(AccountSettingMutationOperationInputV1Schema).min(1).max(64),
-}).strict());
+const AccountSettingMutationInputV1Schema = lazyZodSchema(() => z.strictObject({
+  operations: z.array(AccountSettingMutationOperationInputV1Schema).check(z.minLength(1), z.maxLength(64)),
+}));
 
 function isAccountSettingKey(value: string): value is AccountSettingKey {
   return Object.hasOwn(ACCOUNT_SETTING_DEFINITIONS, value);
@@ -72,26 +72,25 @@ const AccountSettingKeySchema = lazyZodSchema(() => z.custom<AccountSettingKey>(
 ));
 
 const AccountSettingMutationOperationV1Schema = lazyZodSchema(() => z.discriminatedUnion('op', [
-  z.object({
+  z.strictObject({
     op: z.literal('set'),
     key: AccountSettingKeySchema,
     value: StrictJsonValueSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     op: z.literal('reset'),
     key: AccountSettingKeySchema,
-  }).strict(),
+  }),
 ]));
 
-export const AccountSettingMutationV1Schema = lazyZodSchema(() => z.object({
-  operations: z.array(AccountSettingMutationOperationV1Schema).min(1).max(64),
-}).strict().superRefine(
-  (mutation, context) => {
+export const AccountSettingMutationV1Schema = lazyZodSchema(() => z.strictObject({
+  operations: z.array(AccountSettingMutationOperationV1Schema).check(z.minLength(1), z.maxLength(64)),
+}).check(z.superRefine((mutation, context) => {
     const seen = new Set<string>();
     for (const [index, operation] of mutation.operations.entries()) {
       if (seen.has(operation.key)) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['operations', index, 'key'],
           message: 'Duplicate Account Setting key',
         });
@@ -102,15 +101,14 @@ export const AccountSettingMutationV1Schema = lazyZodSchema(() => z.object({
         const parsed = ACCOUNT_SETTING_DEFINITIONS[operation.key].parseMutationValue(operation.value);
         if (!parsed.success) {
           context.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ['operations', index, 'value'],
             message: 'Invalid Account Setting value',
           });
         }
       }
     }
-  },
-));
+  })));
 
 export type AccountSettingMutationV1 = z.infer<typeof AccountSettingMutationV1Schema>;
 

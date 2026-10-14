@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * The content-free closed-app wake this Home sends beside the badge refresh and
@@ -18,14 +18,14 @@ import { z } from 'zod';
  */
 export const SESSION_CHANGED_WAKE_TYPE = 'session_changed';
 
-export const SessionChangedWakeV1Schema = z.object({
+export const SessionChangedWakeV1Schema = z.strictObject({
   type: z.literal(SESSION_CHANGED_WAKE_TYPE),
   /** Originating Home, when this Home knows its own identity. */
-  serverId: z.string().trim().min(1).optional(),
-  sessionId: z.string().trim().min(1),
+  serverId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
   /** Reconcile this wake without presenting a local alert. */
-  alert: z.literal('muted').optional(),
-}).strict();
+  alert: z.optional(z.literal('muted')),
+});
 export type SessionChangedWakeV1 = z.infer<typeof SessionChangedWakeV1Schema>;
 
 /**

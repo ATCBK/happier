@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionAuthoringCheckoutCreationDraftV1Schema } from '../authoring/creationFieldsV1.js';
 import { SessionExecutionTargetV1Schema } from './sessionExecutionTargetV1.js';
@@ -12,57 +12,57 @@ import { SessionCreationTagV1Schema } from './sessionCreationIdentityV1.js';
  * never accepted from the public Session-spawn input, and is discarded once
  * the daemon has consumed it to materialize the directory.
  */
-export const SessionCreationDirectoryApprovalV1Schema = lazyZodSchema(() => z.object({
+export const SessionCreationDirectoryApprovalV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   executionTarget: SessionExecutionTargetV1Schema,
-  directory: z.string().trim().min(1),
-}).strict());
+  directory: z.string().check(z.trim(), z.minLength(1)),
+}));
 export type SessionCreationDirectoryApprovalV1 = z.infer<
   typeof SessionCreationDirectoryApprovalV1Schema
 >;
 
-export const SessionCreationTargetPreparationRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionCreationTargetPreparationRequestV1Schema = lazyZodSchema(() => z.strictObject({
   directory: SessionDirectoryIntentV1Schema,
-  sessionCreationTag: SessionCreationTagV1Schema.optional(),
-  checkoutCreationDraft: SessionAuthoringCheckoutCreationDraftV1Schema.nullable().optional(),
-}).strict().superRefine(refineSessionDirectoryIntentCheckoutV1));
+  sessionCreationTag: z.optional(SessionCreationTagV1Schema),
+  checkoutCreationDraft: z.optional(z.nullable(SessionAuthoringCheckoutCreationDraftV1Schema)),
+}).check(z.superRefine(refineSessionDirectoryIntentCheckoutV1)));
 export type SessionCreationTargetPreparationRequestV1 = z.infer<
   typeof SessionCreationTargetPreparationRequestV1Schema
 >;
 
-export const SessionCreationPreparedCheckoutV1Schema = lazyZodSchema(() => z.object({
+export const SessionCreationPreparedCheckoutV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('git_worktree'),
-  finalDirectory: z.string().trim().min(1),
-  baseRef: z.string().trim().min(1).nullable(),
+  finalDirectory: z.string().check(z.trim(), z.minLength(1)),
+  baseRef: z.nullable(z.string().check(z.trim(), z.minLength(1))),
   branchMode: z.enum(['new', 'existing']),
   /**
    * Target-owned materialization receipt. Only an explicit `true` proves this
    * preparation created the checkout and may authorize a compensating remove.
    * Older targets omit it and are therefore never cleaned up speculatively.
    */
-  created: z.boolean().optional(),
-}).strict());
+  created: z.optional(z.boolean()),
+}));
 export type SessionCreationPreparedCheckoutV1 = z.infer<
   typeof SessionCreationPreparedCheckoutV1Schema
 >;
 
 export const SessionCreationTargetPreparationResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
-    directory: z.string().trim().min(1),
+    directory: z.string().check(z.trim(), z.minLength(1)),
     directoryKind: z.enum(['path', 'managed']),
     /** Whether this direct target requires user authorization before mkdir. */
     directoryCreationRequired: z.boolean(),
-    checkout: SessionCreationPreparedCheckoutV1Schema.nullable(),
-  }).strict(),
-  z.object({
+    checkout: z.nullable(SessionCreationPreparedCheckoutV1Schema),
+  }),
+  z.strictObject({
     ok: z.literal(false),
     code: z.enum([
       'invalid_directory',
       'checkout_unavailable',
       'checkout_failed',
     ]),
-  }).strict(),
+  }),
 ]));
 export type SessionCreationTargetPreparationResultV1 = z.infer<
   typeof SessionCreationTargetPreparationResultV1Schema

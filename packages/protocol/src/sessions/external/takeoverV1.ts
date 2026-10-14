@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionIdSchema } from '../idsV1.js';
 import { NonBlankOpaqueIdentifierSchema } from '../../strings/opaqueIdentifier.js';
@@ -10,12 +10,12 @@ import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.
 export const ExternalSessionTakeoverStorageModeV1Schema = lazyZodSchema(() => z.enum(['external-linked', 'persisted']));
 export type ExternalSessionTakeoverStorageModeV1 = z.infer<typeof ExternalSessionTakeoverStorageModeV1Schema>;
 
-export const ExternalSessionTakeoverInputV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionTakeoverInputV1Schema = lazyZodSchema(() => z.strictObject({
   linkedSessionId: asProtocolZod(SessionIdSchema),
-  machineId: z.string().trim().min(1).max(2_000).optional(),
+  machineId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000))),
   targetRuntimeMode: HappierManagedSessionRuntimeModeV1Schema,
   storageMode: ExternalSessionTakeoverStorageModeV1Schema,
-}).strict());
+}));
 export type ExternalSessionTakeoverInputV1 = z.infer<typeof ExternalSessionTakeoverInputV1Schema>;
 
 export const ExternalSessionDestructiveQuiescenceStatusV1Schema = lazyZodSchema(() => z.enum([
@@ -27,38 +27,38 @@ export type ExternalSessionDestructiveQuiescenceStatusV1 = z.infer<
   typeof ExternalSessionDestructiveQuiescenceStatusV1Schema
 >;
 
-export const ExternalSessionDestructiveSourceIdentityV1Schema = lazyZodSchema(() => z.object({
-  machineId: z.string().trim().min(1).max(2_000),
+export const ExternalSessionDestructiveSourceIdentityV1Schema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000)),
   linkedSessionId: asProtocolZod(SessionIdSchema),
-  remoteSessionId: NonBlankOpaqueIdentifierSchema.max(2_000),
-  linkGeneration: z.string().trim().min(1).max(2_000),
-  sourceKey: z.string().trim().min(1).max(10_000),
+  remoteSessionId: NonBlankOpaqueIdentifierSchema.check(z.maxLength(2_000)),
+  linkGeneration: z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000)),
+  sourceKey: z.string().check(z.trim(), z.minLength(1), z.maxLength(10_000)),
   qualifiedIdentity: LinkedExternalSessionQualifiedIdentityV1Schema,
-}).strict());
+}));
 export type ExternalSessionDestructiveSourceIdentityV1 = z.infer<
   typeof ExternalSessionDestructiveSourceIdentityV1Schema
 >;
 
-export const ExternalSessionDestructiveProcessIdentityV1Schema = lazyZodSchema(() => z.object({
-  machineId: z.string().trim().min(1).max(2_000),
-  pid: z.number().int().positive(),
-  startedAtMs: z.number().int().nonnegative(),
-}).strict());
+export const ExternalSessionDestructiveProcessIdentityV1Schema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000)),
+  pid: z.number().check(z.int(), z.positive()),
+  startedAtMs: z.number().check(z.int(), z.nonnegative()),
+}));
 export type ExternalSessionDestructiveProcessIdentityV1 = z.infer<
   typeof ExternalSessionDestructiveProcessIdentityV1Schema
 >;
 
-export const ExternalSessionDestructiveQuiescenceEvidenceV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionDestructiveQuiescenceEvidenceV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.enum([
     'happier_managed_process_state',
     'agent_native_process_state',
     'operating_system_process_state',
   ]),
   processState: ExternalSessionDestructiveQuiescenceStatusV1Schema,
-  observedAtMs: z.number().int().nonnegative(),
+  observedAtMs: z.number().check(z.int(), z.nonnegative()),
   sourceIdentity: ExternalSessionDestructiveSourceIdentityV1Schema,
   processIdentity: ExternalSessionDestructiveProcessIdentityV1Schema,
-}).strict());
+}));
 export type ExternalSessionDestructiveQuiescenceEvidenceV1 = z.infer<
   typeof ExternalSessionDestructiveQuiescenceEvidenceV1Schema
 >;
@@ -87,12 +87,12 @@ function hasSameDestructiveProcessIdentity(
     && left.startedAtMs === right.startedAtMs;
 }
 
-export const ExternalSessionDestructiveQuiescenceResultV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionDestructiveQuiescenceResultV1Schema = lazyZodSchema(() => z.strictObject({
   status: ExternalSessionDestructiveQuiescenceStatusV1Schema,
   sourceIdentity: ExternalSessionDestructiveSourceIdentityV1Schema,
   processIdentity: ExternalSessionDestructiveProcessIdentityV1Schema,
   evidence: ExternalSessionDestructiveQuiescenceEvidenceV1Schema,
-}).strict().superRefine((result, context) => {
+}).check(z.superRefine((result, context) => {
   if (result.sourceIdentity.machineId !== result.processIdentity.machineId) {
     context.addIssue({
       code: 'custom',
@@ -121,7 +121,7 @@ export const ExternalSessionDestructiveQuiescenceResultV1Schema = lazyZodSchema(
       message: 'Destructive quiescence evidence must match the exact process identity.',
     });
   }
-}));
+})));
 export type ExternalSessionDestructiveQuiescenceResultV1 = z.infer<
   typeof ExternalSessionDestructiveQuiescenceResultV1Schema
 >;
@@ -159,13 +159,13 @@ export const ExternalSessionTakeoverErrorCodeV1Schema = lazyZodSchema(() => z.un
 ]));
 export type ExternalSessionTakeoverErrorCodeV1 = z.infer<typeof ExternalSessionTakeoverErrorCodeV1Schema>;
 
-export const ExternalSessionTakeoverFailureDetailsV1Schema = lazyZodSchema(() => z.object({
-  machineId: z.string().trim().min(1).max(2_000),
-  observedAtMs: z.number().int().nonnegative(),
+export const ExternalSessionTakeoverFailureDetailsV1Schema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000)),
+  observedAtMs: z.number().check(z.int(), z.nonnegative()),
   evidenceKind: ExternalSessionDestructiveQuiescenceEvidenceV1Schema.shape.kind,
-  process: ExternalSessionDestructiveProcessIdentityV1Schema.optional(),
-  sourceKind: z.string().trim().min(1).max(256).optional(),
-}).strict().superRefine((details, context) => {
+  process: z.optional(ExternalSessionDestructiveProcessIdentityV1Schema),
+  sourceKind: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+}).check(z.superRefine((details, context) => {
   if (details.process && details.process.machineId !== details.machineId) {
     context.addIssue({
       code: 'custom',
@@ -173,31 +173,31 @@ export const ExternalSessionTakeoverFailureDetailsV1Schema = lazyZodSchema(() =>
       message: 'Portable takeover process details must match the reported machine.',
     });
   }
-}));
+})));
 export type ExternalSessionTakeoverFailureDetailsV1 = z.infer<
   typeof ExternalSessionTakeoverFailureDetailsV1Schema
 >;
 
 export const ExternalSessionTakeoverResultV1Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.looseObject({
     ok: z.literal(true),
     sessionId: asProtocolZod(SessionIdSchema),
     targetRuntimeMode: HappierManagedSessionRuntimeModeV1Schema,
     storageMode: ExternalSessionTakeoverStorageModeV1Schema,
     converted: z.boolean(),
-  }).passthrough(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(false),
     errorCode: ExternalSessionTakeoverSafetyErrorCodeV1Schema,
-    error: z.string().trim().min(1).max(2_000),
+    error: z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000)),
     gracefulStopAvailable: z.boolean(),
     details: ExternalSessionTakeoverFailureDetailsV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.looseObject({
     ok: z.literal(false),
     errorCode: ExternalSessionTakeoverExistingErrorCodeV1Schema,
-    error: z.string().trim().min(1).max(2_000),
-    trustedPid: z.number().int().positive().optional(),
-  }).passthrough(),
+    error: z.string().check(z.trim(), z.minLength(1), z.maxLength(2_000)),
+    trustedPid: z.optional(z.number().check(z.int(), z.positive())),
+  }),
 ]));
 export type ExternalSessionTakeoverResultV1 = z.infer<typeof ExternalSessionTakeoverResultV1Schema>;

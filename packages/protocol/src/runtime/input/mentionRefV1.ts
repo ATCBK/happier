@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * `MentionRefV1` is the one-way persisted, transmitted and publicly exported shape
@@ -129,13 +129,12 @@ export function parseMentionRefV1(ref: string): Readonly<{ scheme: string; opaqu
  *
  * `token` is deliberately NOT trimmed: it must occur in the text exactly as inserted.
  */
-export const MentionRefV1Schema = lazyZodSchema(() => z.object({
-  kind: z.string().trim().min(1).max(MENTION_BOUNDS.maxKindChars),
-  ref: z.string().trim().min(1).max(MENTION_BOUNDS.maxRefChars),
-  token: z.string().min(1).max(MENTION_BOUNDS.maxTokenChars),
-  label: z.string().trim().min(1).max(MENTION_BOUNDS.maxLabelChars).optional(),
-}).passthrough()
-  .refine((mention) => parseMentionRefV1(mention.ref) !== null, { path: ['ref'] }));
+export const MentionRefV1Schema = lazyZodSchema(() => z.looseObject({
+  kind: z.string().check(z.trim(), z.minLength(1), z.maxLength(MENTION_BOUNDS.maxKindChars)),
+  ref: z.string().check(z.trim(), z.minLength(1), z.maxLength(MENTION_BOUNDS.maxRefChars)),
+  token: z.string().check(z.minLength(1), z.maxLength(MENTION_BOUNDS.maxTokenChars)),
+  label: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(MENTION_BOUNDS.maxLabelChars))),
+}).check(z.refine((mention) => parseMentionRefV1(mention.ref) !== null, { path: ['ref'] })));
 
 export type MentionRefV1 = z.infer<typeof MentionRefV1Schema>;
 

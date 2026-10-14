@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { RunnerResourceIdSchema, RunnerSha256CommitmentSchema } from './activation.js';
 import { RunnerConsentV1Schema } from './consent.js';
@@ -13,44 +13,44 @@ import {
   isPlainMachineDataKeyMarker,
 } from '../machines/machineStoredContent.js';
 
-const BoundedStoredStringSchema = z.string().max(4 * 1024 * 1024);
+const BoundedStoredStringSchema = z.string().check(z.maxLength(4 * 1024 * 1024));
 
-export const RunnerSessionMaterializationInputV1Schema = z.object({
-  tag: z.string().trim().min(1).max(191),
+export const RunnerSessionMaterializationInputV1Schema = z.strictObject({
+  tag: z.string().check(z.trim(), z.minLength(1), z.maxLength(191)),
   metadata: BoundedStoredStringSchema,
   ownerMetadata: SessionOwnerMetadataEnvelopeV1Schema,
-  agentState: BoundedStoredStringSchema.nullable(),
-  dataEncryptionKey: z.string().min(1).max(4096).nullable(),
+  agentState: z.nullable(BoundedStoredStringSchema),
+  dataEncryptionKey: z.nullable(z.string().check(z.minLength(1), z.maxLength(4096))),
   requestedEncryptionMode: z.enum(['plain', 'e2ee']),
-  requestedStorageState: z.literal('machine_only').optional(),
-  organizationPlacement: SessionOrganizationPlacementV1Schema.optional(),
-  initialAccess: SessionInitialAccessMaterializedV1Schema.optional(),
-  primaryTeamId: RunnerResourceIdSchema.nullable().optional(),
-  teamCredentialBindings: SessionTeamCredentialBindingIntentsV1Schema.optional(),
-}).strict();
+  requestedStorageState: z.optional(z.literal('machine_only')),
+  organizationPlacement: z.optional(SessionOrganizationPlacementV1Schema),
+  initialAccess: z.optional(SessionInitialAccessMaterializedV1Schema),
+  primaryTeamId: z.optional(z.nullable(RunnerResourceIdSchema)),
+  teamCredentialBindings: z.optional(SessionTeamCredentialBindingIntentsV1Schema),
+});
 
-export const RunnerMachineMaterializationInputV1Schema = z.object({
+export const RunnerMachineMaterializationInputV1Schema = z.strictObject({
   metadata: BoundedStoredStringSchema,
-  dataEncryptionKey: z.string().min(1).max(4096),
-  runnerContentKeyBinding: RunnerMachineContentKeyBindingV1Schema.nullable(),
-}).strict().superRefine((value, context) => {
+  dataEncryptionKey: z.string().check(z.minLength(1), z.maxLength(4096)),
+  runnerContentKeyBinding: z.nullable(RunnerMachineContentKeyBindingV1Schema),
+}).check(z.superRefine((value, context) => {
   const plain = isPlainMachineDataKeyMarker(value.dataEncryptionKey);
   if (plain !== (value.runnerContentKeyBinding === null)) {
     context.addIssue({ code: 'custom', path: ['runnerContentKeyBinding'], message: 'Runner Machine content mode and creator key binding must agree' });
   }
-});
+}));
 
-export const RunnerMaterializationRequestV1Schema = z.object({
+export const RunnerMaterializationRequestV1Schema = z.strictObject({
   v: z.literal(1),
-  activationId: z.string().uuid(),
+  activationId: z.string().check(z.uuid()),
   launchManifestCommitment: RunnerSha256CommitmentSchema,
   consent: RunnerConsentV1Schema,
   readiness: RunnerReadinessV1Schema,
-  sealedBootstrap: z.string().min(1).max(1024 * 1024),
+  sealedBootstrap: z.string().check(z.minLength(1), z.maxLength(1024 * 1024)),
   session: RunnerSessionMaterializationInputV1Schema,
   machine: RunnerMachineMaterializationInputV1Schema,
   accessKeyData: BoundedStoredStringSchema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
   const machineIsPlain = isPlainMachineDataKeyMarker(value.machine.dataEncryptionKey);
   if (machineIsPlain !== (value.session.requestedEncryptionMode === 'plain')) {
     context.addIssue({ code: 'custom', path: ['machine', 'dataEncryptionKey'], message: 'Runner Session and Machine content modes must agree' });
@@ -70,24 +70,24 @@ export const RunnerMaterializationRequestV1Schema = z.object({
   if (value.session.requestedEncryptionMode === 'e2ee' && value.session.dataEncryptionKey === null) {
     context.addIssue({ code: 'custom', path: ['session', 'dataEncryptionKey'], message: 'An E2EE Runner Session requires its creator owner envelope' });
   }
-});
+}));
 export type RunnerMaterializationRequestV1 = z.infer<typeof RunnerMaterializationRequestV1Schema>;
 
-export const RunnerMaterializationResultV1Schema = z.object({
+export const RunnerMaterializationResultV1Schema = z.strictObject({
   v: z.literal(1),
-  activationId: z.string().uuid(),
+  activationId: z.string().check(z.uuid()),
   sessionId: RunnerResourceIdSchema,
   machineId: RunnerResourceIdSchema,
-}).strict();
+});
 export type RunnerMaterializationResultV1 = z.infer<typeof RunnerMaterializationResultV1Schema>;
 
 export const RunnerMaterializationResponseV1Schema = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('materialized'), result: RunnerMaterializationResultV1Schema }).strict(),
-  z.object({
+  z.strictObject({ status: z.literal('materialized'), result: RunnerMaterializationResultV1Schema }),
+  z.strictObject({
     status: z.literal('unavailable'),
     reason: z.enum(['activation_closed', 'activation_expired', 'creator_unavailable', 'consent_required', 'readiness_required']),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('conflict'),
     reason: z.enum([
       'binding_mismatch',
@@ -102,6 +102,6 @@ export const RunnerMaterializationResponseV1Schema = z.discriminatedUnion('statu
        */
       'session_create_rejected',
     ]),
-  }).strict(),
+  }),
 ]);
 export type RunnerMaterializationResponseV1 = z.infer<typeof RunnerMaterializationResponseV1Schema>;

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   QualifiedConnectedAccountRefSchema,
@@ -32,12 +32,12 @@ export const SCM_PULL_REQUEST_REVIEW_SCOPE_INPUT_KEY = 'scmPullRequestReviewScop
  * provider-native revision it saw at `observedAtMs`. A scope assembled from
  * two reads, or completed with a locally guessed revision, is not this value.
  */
-export const ScmPullRequestReviewObservationV1Schema = lazyZodSchema(() => z.object({
-  baseSha: z.string().min(1),
-  headSha: z.string().min(1),
-  nativeRevision: z.string().min(1),
-  observedAtMs: z.number().int(),
-}).strict());
+export const ScmPullRequestReviewObservationV1Schema = lazyZodSchema(() => z.strictObject({
+  baseSha: z.string().check(z.minLength(1)),
+  headSha: z.string().check(z.minLength(1)),
+  nativeRevision: z.string().check(z.minLength(1)),
+  observedAtMs: z.number().check(z.int()),
+}));
 export type ScmPullRequestReviewObservationV1 = z.infer<typeof ScmPullRequestReviewObservationV1Schema>;
 
 /**
@@ -60,8 +60,8 @@ const scmPullRequestReviewScopeFieldsV1 = {
   observed: ScmPullRequestReviewObservationV1Schema,
 };
 export const ScmPullRequestReviewScopeV1Schema = lazyZodSchema(() => z.union([
-  z.object({ ...scmPullRequestReviewScopeFieldsV1, account: asProtocolZod(QualifiedConnectedAccountRefSchema) }).strict(),
-  z.object({ ...scmPullRequestReviewScopeFieldsV1, nativeService: asProtocolZod(PluginContributionIdentityV1Schema) }).strict(),
+  z.strictObject({ ...scmPullRequestReviewScopeFieldsV1, account: asProtocolZod(QualifiedConnectedAccountRefSchema) }),
+  z.strictObject({ ...scmPullRequestReviewScopeFieldsV1, nativeService: asProtocolZod(PluginContributionIdentityV1Schema) }),
 ]));
 export type ScmPullRequestReviewScopeV1 = z.infer<typeof ScmPullRequestReviewScopeV1Schema>;
 

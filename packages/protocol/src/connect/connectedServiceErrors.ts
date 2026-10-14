@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const CONNECTED_SERVICE_ERROR_CODES = {
     credentialNotFound: 'connect_credential_not_found',

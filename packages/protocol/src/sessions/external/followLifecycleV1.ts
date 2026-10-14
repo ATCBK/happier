@@ -1,7 +1,7 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   buildLinkedExternalSessionMetadataV1,
@@ -30,10 +30,10 @@ export type {
   ExternalSessionFollowStatusValueV1,
 } from './linkedSessionMetadata.js';
 
-export const ExternalSessionCompletedBoundaryV1Schema = lazyZodSchema(() => z.object({
-  id: z.string().trim().min(1).max(1_024),
-  observedAtMs: z.number().int().min(0),
-}).strict());
+export const ExternalSessionCompletedBoundaryV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.trim(), z.minLength(1), z.maxLength(1_024)),
+  observedAtMs: z.number().check(z.int(), z.minimum(0)),
+}));
 
 export type ExternalSessionCompletedBoundaryV1 = z.infer<
   typeof ExternalSessionCompletedBoundaryV1Schema
@@ -51,24 +51,18 @@ export type ExternalSessionCompletedBoundaryReservationV1 =
 
 export const EXTERNAL_SESSIONS_AUTO_LINK_SOURCE_POLICIES_MAX_V1 = 128;
 
-const ExternalSessionsMachineIdV1Schema = lazyZodSchema(() => z.string().trim().min(1).max(256));
+const ExternalSessionsMachineIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 
-export const ExternalSessionsAutoLinkSourcePolicyIdV1Schema = lazyZodSchema(() => z.string().regex(
-  /^es-source-policy:v1:[0-9a-f]{64}$/,
-  'External-session auto-link source policy ids must be v1 lowercase SHA-256 identities.',
-));
+export const ExternalSessionsAutoLinkSourcePolicyIdV1Schema = lazyZodSchema(() => z.string().check(z.regex(/^es-source-policy:v1:[0-9a-f]{64}$/, 'External-session auto-link source policy ids must be v1 lowercase SHA-256 identities.')));
 export type ExternalSessionsAutoLinkSourcePolicyIdV1 = z.infer<
   typeof ExternalSessionsAutoLinkSourcePolicyIdV1Schema
 >;
 
-const ExternalSessionsAutoLinkSourcePolicyIdInputV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionsAutoLinkSourcePolicyIdInputV1Schema = lazyZodSchema(() => z.strictObject({
   machineId: ExternalSessionsMachineIdV1Schema,
   qualifiedIdentity: LinkedExternalSessionQualifiedIdentityV1Schema,
-  canonicalResolvedSourceKey: z.string()
-    .min(1)
-    .max(10_000)
-    .refine((value) => value.trim().length > 0),
-}).strict());
+  canonicalResolvedSourceKey: z.string().check(z.minLength(1), z.maxLength(10_000), z.refine((value) => value.trim().length > 0)),
+}));
 
 const EXTERNAL_SESSIONS_AUTO_LINK_SOURCE_POLICY_ID_DOMAIN_V1 =
   'happier.external-sessions.auto-link-source-policy.v1';
@@ -95,12 +89,12 @@ export function deriveExternalSessionsAutoLinkSourcePolicyIdV1(
   );
 }
 
-export const ExternalSessionsAutoLinkSourcePolicyV1Schema = lazyZodSchema(() => z.object({
+export const ExternalSessionsAutoLinkSourcePolicyV1Schema = lazyZodSchema(() => z.strictObject({
   machineId: ExternalSessionsMachineIdV1Schema,
   qualifiedIdentity: LinkedExternalSessionQualifiedIdentityV1Schema,
   sourcePolicyId: ExternalSessionsAutoLinkSourcePolicyIdV1Schema,
-  enabledAtMs: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-}).strict());
+  enabledAtMs: z.number().check(z.int(), z.minimum(0), z.maximum(Number.MAX_SAFE_INTEGER)),
+}));
 
 export type ExternalSessionsAutoLinkSourcePolicyV1 = z.infer<
   typeof ExternalSessionsAutoLinkSourcePolicyV1Schema
@@ -112,11 +106,11 @@ export type ExternalSessionsAutoLinkSourcePolicyIdentityV1 = Readonly<{
   sourcePolicyId: ExternalSessionsAutoLinkSourcePolicyIdV1;
 }>;
 
-const ExternalSessionsAutoLinkSourcePolicyIdentityV1Schema = lazyZodSchema(() => z.object({
+const ExternalSessionsAutoLinkSourcePolicyIdentityV1Schema = lazyZodSchema(() => z.strictObject({
   machineId: ExternalSessionsMachineIdV1Schema,
   qualifiedIdentity: LinkedExternalSessionQualifiedIdentityV1Schema,
   sourcePolicyId: ExternalSessionsAutoLinkSourcePolicyIdV1Schema,
-}).strict());
+}));
 
 function autoLinkSourcePolicyScopeKey(
   policy: ExternalSessionsAutoLinkSourcePolicyIdentityV1,
@@ -133,9 +127,7 @@ function autoLinkSourcePolicyScopeKey(
 
 export const ExternalSessionsAutoLinkSourcePoliciesV1Schema = lazyZodSchema(() => z.array(
   ExternalSessionsAutoLinkSourcePolicyV1Schema,
-)
-  .max(EXTERNAL_SESSIONS_AUTO_LINK_SOURCE_POLICIES_MAX_V1)
-  .superRefine((policies, ctx) => {
+).check(z.maxLength(EXTERNAL_SESSIONS_AUTO_LINK_SOURCE_POLICIES_MAX_V1), z.superRefine((policies, ctx) => {
     const seen = new Set<string>();
     for (let index = 0; index < policies.length; index += 1) {
       const key = autoLinkSourcePolicyScopeKey(policies[index]);
@@ -148,15 +140,13 @@ export const ExternalSessionsAutoLinkSourcePoliciesV1Schema = lazyZodSchema(() =
       }
       seen.add(key);
     }
-  }));
+  })));
 
-export const ExternalSessionsSettingsV1Schema = lazyZodSchema(() => z.object({
-  v: z.literal(1).default(1),
-  keepPassivelyFollowingAfterRestart: z.boolean().default(false),
-  autoLinkSourcePolicies: ExternalSessionsAutoLinkSourcePoliciesV1Schema
-    .default([])
-    .catch([]),
-}).passthrough());
+export const ExternalSessionsSettingsV1Schema = lazyZodSchema(() => z.looseObject({
+  v: z._default(z.literal(1), 1),
+  keepPassivelyFollowingAfterRestart: z._default(z.boolean(), false),
+  autoLinkSourcePolicies: z.catch(z._default(ExternalSessionsAutoLinkSourcePoliciesV1Schema, []), []),
+}));
 
 export type ExternalSessionsSettingsV1 = z.infer<
   typeof ExternalSessionsSettingsV1Schema
@@ -167,10 +157,10 @@ export type ExternalSessionsSettingsPatchV1 = Readonly<{
   autoLinkSourcePolicies?: readonly ExternalSessionsAutoLinkSourcePolicyV1[];
 }>;
 
-const ExternalSessionsSettingsPatchV1Schema = lazyZodSchema(() => z.object({
-  keepPassivelyFollowingAfterRestart: z.boolean().optional(),
-  autoLinkSourcePolicies: ExternalSessionsAutoLinkSourcePoliciesV1Schema.optional(),
-}).strict());
+const ExternalSessionsSettingsPatchV1Schema = lazyZodSchema(() => z.strictObject({
+  keepPassivelyFollowingAfterRestart: z.optional(z.boolean()),
+  autoLinkSourcePolicies: z.optional(ExternalSessionsAutoLinkSourcePoliciesV1Schema),
+}));
 
 export function readExternalSessionsSettingsV1(
   value: unknown,

@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { InputOptionValueSchema } from '../../inputs/inputFields.js';
 import { QualifiedConnectedAccountRefSchema } from '../../connect/qualifiedConnectedAccountPersistence.js';
 
@@ -48,28 +48,17 @@ export {
   type PluginActionSurfaceV2,
 };
 
-export const PluginActionDefinitionExamplesV1Schema = lazyZodSchema(() => z
-  .object({
-    voice: z
-      .object({
-        argsExample: z.string().min(1).optional(),
-      })
-      .strict()
-      .optional(),
-    mcp: z
-      .object({
-        argsExample: z.string().min(1).optional(),
-      })
-      .strict()
-      .optional(),
-    sdk: z
-      .object({
-        codeExample: z.string().min(1).optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict());
+export const PluginActionDefinitionExamplesV1Schema = lazyZodSchema(() => z.strictObject({
+    voice: z.optional(z.strictObject({
+        argsExample: z.optional(z.string().check(z.minLength(1))),
+      })),
+    mcp: z.optional(z.strictObject({
+        argsExample: z.optional(z.string().check(z.minLength(1))),
+      })),
+    sdk: z.optional(z.strictObject({
+        codeExample: z.optional(z.string().check(z.minLength(1))),
+      })),
+  }));
 export type PluginActionDefinitionExamplesV1 = z.infer<typeof PluginActionDefinitionExamplesV1Schema>;
 
 export const PluginActionScopeV2Schema = lazyZodSchema(() => z.enum([
@@ -98,14 +87,14 @@ export type PluginToolSurfaceV2 = z.infer<typeof PluginToolSurfaceV2Schema>;
  * identifies the exact client activation module entitled to register it.
  */
 export const PluginActionExecutionV2Schema = lazyZodSchema(() => z.discriminatedUnion('target', [
-  z.object({
+  z.strictObject({
     target: z.literal('daemon'),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     target: z.literal('client'),
     client: PluginClientExecutionReferenceV1Schema,
     platforms: PluginClientExecutionPlatformsV1Schema,
-  }).strict(),
+  }),
 ]));
 export type PluginActionExecutionV2 = z.infer<typeof PluginActionExecutionV2Schema>;
 
@@ -135,47 +124,43 @@ export type PluginActionPlacementV2 = z.infer<typeof PluginActionPlacementV2Sche
  */
 export const PluginActionPlacementBindingsV2Schema = lazyZodSchema(() => z.array(
   PluginActionPlacementV2Schema,
-).max(11).superRefine((bindings, context) => {
+).check(z.maxLength(11), z.superRefine((bindings, context) => {
   const seen = new Set<PluginActionPlacementV2>();
   bindings.forEach((binding, index) => {
     if (seen.has(binding)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: [index],
         message: 'Duplicate Action placement binding.',
       });
     }
     seen.add(binding);
   });
-}));
+})));
 export type PluginActionPlacementBindingsV2 = z.infer<
   typeof PluginActionPlacementBindingsV2Schema
 >;
 
-export const PluginActionIconV2Schema = lazyZodSchema(() => z.string().trim().regex(/^[a-z][a-z0-9.-]*$/i));
+export const PluginActionIconV2Schema = lazyZodSchema(() => z.string().check(z.trim(), z.regex(/^[a-z][a-z0-9.-]*$/i)));
 
-const PluginActionSlashTokenV2Schema = lazyZodSchema(() => z.string()
-  .trim()
-  .min(2)
-  .max(128)
-  .regex(/^\/\S+$/u, 'Composer slash tokens must begin with "/" and contain no whitespace.'));
+const PluginActionSlashTokenV2Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(2), z.maxLength(128), z.regex(/^\/\S+$/u, 'Composer slash tokens must begin with "/" and contain no whitespace.')));
 
 /**
  * Bounded composer-command presentation metadata for a contributed Action.
  * The Action remains the sole execution owner; this only declares slash-picker
  * presentation for UI-mounted actions.
  */
-export const PluginActionSlashV2Schema = lazyZodSchema(() => z.object({
-  tokens: z.array(PluginActionSlashTokenV2Schema).min(1).max(8).superRefine((tokens, ctx) => {
+export const PluginActionSlashV2Schema = lazyZodSchema(() => z.strictObject({
+  tokens: z.array(PluginActionSlashTokenV2Schema).check(z.minLength(1), z.maxLength(8), z.superRefine((tokens, ctx) => {
     const seen = new Set<string>();
     tokens.forEach((token, index) => {
       if (seen.has(token)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [index], message: 'Duplicate composer slash token.' });
+        ctx.addIssue({ code: "custom", path: [index], message: 'Duplicate composer slash token.' });
       }
       seen.add(token);
     });
-  }),
-}).strict());
+  })),
+}));
 export type PluginActionSlashV2 = z.infer<typeof PluginActionSlashV2Schema>;
 
 /**
@@ -207,11 +192,11 @@ export const PLUGIN_ACTION_CONFIRMATION_PRESENTATION_LIMITS_V2 = Object.freeze({
 
 function createPluginActionConfirmationPresentationTextSchema(maxUtf16Units: number) {
   return z.union([
-    z.string().trim().min(1).max(maxUtf16Units),
-    z.object({
-      key: z.string().trim().min(1).max(maxUtf16Units),
-      fallback: z.string().trim().min(1).max(maxUtf16Units),
-    }).strict(),
+    z.string().check(z.trim(), z.minLength(1), z.maxLength(maxUtf16Units)),
+    z.strictObject({
+      key: z.string().check(z.trim(), z.minLength(1), z.maxLength(maxUtf16Units)),
+      fallback: z.string().check(z.trim(), z.minLength(1), z.maxLength(maxUtf16Units)),
+    }),
   ]);
 }
 
@@ -222,19 +207,16 @@ const PluginActionConfirmationBodyV2Schema = createPluginActionConfirmationPrese
   PLUGIN_ACTION_CONFIRMATION_PRESENTATION_LIMITS_V2.bodyUtf16Units,
 );
 
-export const PluginActionConfirmationV2Schema = lazyZodSchema(() => z.object({
+export const PluginActionConfirmationV2Schema = lazyZodSchema(() => z.strictObject({
   title: PluginActionConfirmationTitleV2Schema,
-  body: PluginActionConfirmationBodyV2Schema.optional(),
-  confirmLabel: PluginActionConfirmationTitleV2Schema.optional(),
-}).strict());
+  body: z.optional(PluginActionConfirmationBodyV2Schema),
+  confirmLabel: z.optional(PluginActionConfirmationTitleV2Schema),
+}));
 export type PluginActionConfirmationV2 = z.infer<typeof PluginActionConfirmationV2Schema>;
 
 // Only the purpose-derived field capability may offer Connected Account choices.
 // Other typed choices still carry strict JSON through the neutral value owner.
-const PluginActionStaticOptionValueV2Schema = lazyZodSchema(() => InputOptionValueSchema.refine(
-  value => !QualifiedConnectedAccountRefSchema.safeParse(value).success,
-  { message: 'Static Connected Account choices require the purpose-derived field capability.' },
-));
+const PluginActionStaticOptionValueV2Schema = lazyZodSchema(() => InputOptionValueSchema.check(z.refine(value => !QualifiedConnectedAccountRefSchema.safeParse(value).success, { message: 'Static Connected Account choices require the purpose-derived field capability.' })));
 
 const PluginActionInputHintsSchemasV2 = createActionInputHintsSchemasWithoutOptionsSource(
   PluginLocalizedStringV2Schema,
@@ -243,7 +225,7 @@ const PluginActionInputHintsSchemasV2 = createActionInputHintsSchemasWithoutOpti
 
 const PluginToolInputHintsSchemasV2 = createActionInputHintsSchemasWithStaticOptionsOnly(
   PluginLocalizedStringV2Schema,
-  z.string().trim().min(1),
+  z.string().check(z.trim(), z.minLength(1)),
 );
 
 /** Plugin authors have no arbitrary option-source selector. */
@@ -497,54 +479,54 @@ export function normalizePluginActionSlashV2(
   return slash ? { tokens: [...slash.tokens] } : null;
 }
 
-export const PluginActionContributionV2Schema = lazyZodSchema(() => z.object({
+export const PluginActionContributionV2Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   title: PluginLocalizedStringV2Schema,
-  description: PluginLocalizedStringV2Schema.optional(),
-  icon: PluginActionIconV2Schema.optional(),
-  scopes: z.array(PluginActionScopeV2Schema).min(1),
-  surfaces: z.array(PluginActionSurfaceV2Schema).min(1),
+  description: z.optional(PluginLocalizedStringV2Schema),
+  icon: z.optional(PluginActionIconV2Schema),
+  scopes: z.array(PluginActionScopeV2Schema).check(z.minLength(1)),
+  surfaces: z.array(PluginActionSurfaceV2Schema).check(z.minLength(1)),
   execution: PluginActionDeclaredExecutionV2Schema,
-  operation: ActionOperationDeclarationV1Schema.optional(),
-  placementBindings: PluginActionPlacementBindingsV2Schema.optional(),
-  slash: PluginActionSlashV2Schema.optional(),
-  inputSchema: PluginJsonSchemaV2Schema.optional(),
-  contextualDefaults: ActionContextualDefaultsSchema.optional(),
-  inputHints: PluginActionInputHintsV2Schema.optional(),
-  connectedAccountPurposeBindings: z.array(
+  operation: z.optional(ActionOperationDeclarationV1Schema),
+  placementBindings: z.optional(PluginActionPlacementBindingsV2Schema),
+  slash: z.optional(PluginActionSlashV2Schema),
+  inputSchema: z.optional(PluginJsonSchemaV2Schema),
+  contextualDefaults: z.optional(ActionContextualDefaultsSchema),
+  inputHints: z.optional(PluginActionInputHintsV2Schema),
+  connectedAccountPurposeBindings: z.optional(z.array(
     PluginActionConnectedAccountPurposeBindingV2Schema,
-  ).max(8).optional(),
-  resultSchema: PluginJsonSchemaV2Schema.optional(),
-  availability: PluginActionAvailabilityV2Schema.optional(),
-  hostAccess: z.array(z.string().regex(/^[a-z0-9]+(?:[-/][a-z0-9]+)*$/)).min(1).superRefine((values, ctx) => {
+  ).check(z.maxLength(8))),
+  resultSchema: z.optional(PluginJsonSchemaV2Schema),
+  availability: z.optional(PluginActionAvailabilityV2Schema),
+  hostAccess: z.optional(z.array(z.string().check(z.regex(/^[a-z0-9]+(?:[-/][a-z0-9]+)*$/))).check(z.minLength(1), z.superRefine((values, ctx) => {
     const seen = new Set<string>();
     values.forEach((value, index) => {
       if (seen.has(value)) ctx.addIssue({ code: 'custom', path: [index], message: 'Duplicate hostAccess request id.' });
       seen.add(value);
     });
-  }).optional(),
-  priority: z.number().int().optional(),
+  }))),
+  priority: z.optional(z.number().check(z.int())),
   dangerLevel: PluginActionDangerLevelV2Schema,
-  confirmation: PluginActionConfirmationV2Schema.optional(),
-  metadata: z.record(z.string(), PluginJsonValueV2Schema).optional(),
-}).strict().superRefine((value, ctx) => {
+  confirmation: z.optional(PluginActionConfirmationV2Schema),
+  metadata: z.optional(z.record(z.string(), PluginJsonValueV2Schema)),
+}).check(z.superRefine((value, ctx) => {
   if (value.operation && value.execution.target !== 'daemon') {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['operation'],
       message: 'Tracked operations require daemon Action execution.',
     });
   }
   if (value.slash && !value.surfaces.includes('ui')) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['slash'],
       message: 'Composer slash metadata requires the UI Action surface.',
     });
   }
   if (pluginActionRequiresPlacement(value.surfaces) && !value.placementBindings) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['placementBindings'],
       message: 'UI plugin actions must declare an explicit placement decision.',
     });
@@ -553,7 +535,7 @@ export const PluginActionContributionV2Schema = lazyZodSchema(() => z.object({
   // not whether disclosure needs a present-user decision.
   if (pluginActionRequiresConfirmationPresentation(value.surfaces, value.dangerLevel) && !value.confirmation) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['confirmation'],
       message: 'Non-safe plugin actions must declare host confirmation metadata.',
     });
@@ -563,7 +545,7 @@ export const PluginActionContributionV2Schema = lazyZodSchema(() => z.object({
   if (value.contextualDefaults) {
     if (!declaresTraversableObjectInput(inputSchema)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['inputSchema'],
         message: 'Contextual defaults require an object inputSchema.',
       });
@@ -572,7 +554,7 @@ export const PluginActionContributionV2Schema = lazyZodSchema(() => z.object({
         const leaves = resolveDeclaredInputLeaves(inputSchema!, field);
         if (!leaves || !leaves.every((leaf) => leaf.type === 'string')) {
           ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ['contextualDefaults', field],
             message: 'Contextual defaults must target a declared root string input field.',
           });
@@ -587,7 +569,7 @@ export const PluginActionContributionV2Schema = lazyZodSchema(() => z.object({
     if (bindingPaths.has(binding.path) || binding.nativeServicePath === binding.path
       || (binding.nativeServicePath !== undefined && bindingPaths.has(binding.nativeServicePath))) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['connectedAccountPurposeBindings', index, 'path'],
         message: 'Connected Account credential-ref paths must map to exactly one purpose.',
       });
@@ -596,7 +578,7 @@ export const PluginActionContributionV2Schema = lazyZodSchema(() => z.object({
     if (binding.nativeServicePath) bindingPaths.add(binding.nativeServicePath);
     if (bindingPurposes.has(binding.purpose)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['connectedAccountPurposeBindings', index, 'purpose'],
         message: 'Connected Account purposes must map to exactly one credential-ref path.',
       });
@@ -606,7 +588,7 @@ export const PluginActionContributionV2Schema = lazyZodSchema(() => z.object({
   const traversableInputSchema = declaresTraversableObjectInput(inputSchema) ? inputSchema : undefined;
   if (purposeBindings.length > 0 && !traversableInputSchema) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['inputSchema'],
       message: 'Connected Account purpose bindings require an object inputSchema.',
     });
@@ -615,7 +597,7 @@ export const PluginActionContributionV2Schema = lazyZodSchema(() => z.object({
     purposeBindings.forEach((binding, index) => {
       if (!hasValidPurposeBindingInputLeaves(traversableInputSchema, binding)) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['connectedAccountPurposeBindings', index, 'path'],
           message: 'Connected Account purpose bindings must target one exact qualified account ref or declared native service in every input arm.',
         });
@@ -627,7 +609,7 @@ export const PluginActionContributionV2Schema = lazyZodSchema(() => z.object({
   if (!inputHints || inputHints.fields.length === 0) return;
   if (!traversableInputSchema) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['inputSchema'],
       message: 'Plugin Actions with input fields must declare an object inputSchema.',
     });
@@ -638,7 +620,7 @@ export const PluginActionContributionV2Schema = lazyZodSchema(() => z.object({
       field.visibleWhen !== undefined && field.connectedAccountOptions !== true ? 'conditional-field' : 'every-arm');
     if (!inputLeaves) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['inputHints', 'fields', index, 'path'],
         message: 'Plugin Action input fields must resolve to a declared inputSchema leaf.',
       });
@@ -646,38 +628,35 @@ export const PluginActionContributionV2Schema = lazyZodSchema(() => z.object({
     }
     if (inputLeaves.every((inputLeaf) => widgetMatchesInputLeaf(field, inputLeaf))) return;
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['inputHints', 'fields', index, 'widget'],
       message: 'Plugin Action input widget does not match its declared inputSchema leaf.',
     });
   });
-}));
+})));
 export type PluginActionContributionV2 = z.infer<typeof PluginActionContributionV2Schema>;
 
-const PluginToolJsonObjectSchemaV2Schema = lazyZodSchema(() => PluginJsonSchemaV2Schema.refine(
-  (schema) => schema.type === 'object',
-  'Tool schemas must declare type "object" at the root',
-));
+const PluginToolJsonObjectSchemaV2Schema = lazyZodSchema(() => PluginJsonSchemaV2Schema.check(z.refine((schema) => schema.type === 'object', 'Tool schemas must declare type "object" at the root')));
 
-export const PluginToolContributionV2Schema = lazyZodSchema(() => z.object({
+export const PluginToolContributionV2Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
-  name: z.string().trim().min(1),
+  name: z.string().check(z.trim(), z.minLength(1)),
   title: PluginLocalizedStringV2Schema,
-  description: PluginLocalizedStringV2Schema.optional(),
-  safety: ActionSafetySchema.default('safe'),
-  surfaces: z.array(PluginToolSurfaceV2Schema).default([]),
-  inputSchema: PluginToolJsonObjectSchemaV2Schema.optional(),
-  outputSchema: PluginToolJsonObjectSchemaV2Schema.optional(),
-  inputHints: PluginToolInputHintsV2Schema.optional(),
-  compatibility: z.record(z.string(), PluginJsonValueV2Schema).optional(),
-  examples: PluginActionDefinitionExamplesV1Schema.optional(),
+  description: z.optional(PluginLocalizedStringV2Schema),
+  safety: z._default(ActionSafetySchema, 'safe'),
+  surfaces: z._default(z.array(PluginToolSurfaceV2Schema), []),
+  inputSchema: z.optional(PluginToolJsonObjectSchemaV2Schema),
+  outputSchema: z.optional(PluginToolJsonObjectSchemaV2Schema),
+  inputHints: z.optional(PluginToolInputHintsV2Schema),
+  compatibility: z.optional(z.record(z.string(), PluginJsonValueV2Schema)),
+  examples: z.optional(PluginActionDefinitionExamplesV1Schema),
   promptSnippet: PluginOptionalStringSchema,
-  promptGuidelines: z.array(z.string().trim().min(1)).optional(),
+  promptGuidelines: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
   action: z.union([
-    z.string().trim().min(1),
-    z.object({ pluginId: z.string().trim().min(1), localId: z.string().trim().min(1) }).strict(),
+    z.string().check(z.trim(), z.minLength(1)),
+    z.strictObject({ pluginId: z.string().check(z.trim(), z.minLength(1)), localId: z.string().check(z.trim(), z.minLength(1)) }),
   ]),
-  availability: PluginActionAvailabilityV2Schema.optional(),
-  metadata: z.record(z.string(), PluginJsonValueV2Schema).optional(),
-}).strict());
+  availability: z.optional(PluginActionAvailabilityV2Schema),
+  metadata: z.optional(z.record(z.string(), PluginJsonValueV2Schema)),
+}));
 export type PluginToolContributionV2 = z.infer<typeof PluginToolContributionV2Schema>;

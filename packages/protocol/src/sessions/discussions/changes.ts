@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * The advisory AccountChange hint for discussion writes.
@@ -10,10 +10,10 @@ import { z } from 'zod';
  * surface must still reread canonical state. The hint may only skip work when
  * it is present.
  */
-export const SessionDiscussionChangeHintV1Schema = z.object({
+export const SessionDiscussionChangeHintV1Schema = z.strictObject({
   v: z.literal(1),
   sessionDiscussions: z.literal(true),
-}).strict();
+});
 export type SessionDiscussionChangeHintV1 = z.infer<typeof SessionDiscussionChangeHintV1Schema>;
 
 export const SESSION_DISCUSSION_CHANGE_HINT_V1: SessionDiscussionChangeHintV1 = Object.freeze({

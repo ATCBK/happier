@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ParticipantExecutionRunRecipientRoutingIdentityV1Schema } from '../../messages/structured/participantMessageV1.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
@@ -16,14 +16,14 @@ import { StrictSessionStoredMessageContentEnvelopeSchema } from './sessionStored
 import { SessionMessageAcceptedDeliveryContentV1Schema } from './sessionMessageDeliveryResolutionV1.js';
 
 /** Account input has no authority to supply host-derived equality evidence. */
-export const SessionExecutionRunPendingEnqueueRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionExecutionRunPendingEnqueueRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   localId: PendingLocalIdSchema,
-  targetMachineId: z.string().trim().min(1).max(256),
+  targetMachineId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
   content: StrictSessionStoredMessageContentEnvelopeSchema,
-  messageRole: z.unknown().optional(),
-  requestedAction: PendingRequestedActionV1Schema.optional(),
-}).strict());
+  messageRole: z.optional(z.unknown()),
+  requestedAction: z.optional(PendingRequestedActionV1Schema),
+}));
 export type SessionExecutionRunPendingEnqueueRequestV1 = z.infer<typeof SessionExecutionRunPendingEnqueueRequestV1Schema>;
 
 export const SESSION_PENDING_EXECUTION_RUN_ENQUEUE_BY_MACHINE_EVENT_V2 =
@@ -35,17 +35,17 @@ export const SESSION_PENDING_EXECUTION_RUN_ACCEPTED_EVENT_V2 =
 export const SESSION_PENDING_EXECUTION_RUN_BLOCK_EVENT_V2 =
   'session-pending-execution-run-delivery-block-v2' as const;
 
-export const SessionPendingExecutionRunEnqueueByMachineRequestV2Schema = lazyZodSchema(() => z.object({
+export const SessionPendingExecutionRunEnqueueByMachineRequestV2Schema = lazyZodSchema(() => z.strictObject({
   ...SessionPendingEnqueueByMachineFieldsV1,
   v: z.literal(2),
   recipient: ParticipantExecutionRunRecipientRoutingIdentityV1Schema,
   content: StrictSessionStoredMessageContentEnvelopeSchema,
-}).strict().superRefine(refineSessionPendingMachineEqualityEvidenceV1));
+}).check(z.superRefine(refineSessionPendingMachineEqualityEvidenceV1)));
 export type SessionPendingExecutionRunEnqueueByMachineRequestV2 = z.infer<typeof SessionPendingExecutionRunEnqueueByMachineRequestV2Schema>;
-export const SessionPendingExecutionRunEnqueueByMachineResponseV2Schema = lazyZodSchema(() => z.object({
+export const SessionPendingExecutionRunEnqueueByMachineResponseV2Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2),
   result: SessionInputAdmissionResultV1Schema,
-}).strict());
+}));
 export type SessionPendingExecutionRunEnqueueByMachineResponseV2 = z.infer<typeof SessionPendingExecutionRunEnqueueByMachineResponseV2Schema>;
 
 const executionRunTargetFields = {
@@ -54,18 +54,18 @@ const executionRunTargetFields = {
   recipient: ParticipantExecutionRunRecipientRoutingIdentityV1Schema,
   sidechainId: SidechainIdSchema,
 };
-export const SessionPendingExecutionRunMaterializeNextRequestV2Schema = lazyZodSchema(() => z.object({
+export const SessionPendingExecutionRunMaterializeNextRequestV2Schema = lazyZodSchema(() => z.strictObject({
   ...executionRunTargetFields,
   deliveryTiming: z.enum(['after_foreground_ready', 'after_runtime_idle']),
   foregroundState: z.enum(['ready', 'active_steerable', 'active_unsteerable']),
-}).strict());
+}));
 export type SessionPendingExecutionRunMaterializeNextRequestV2 = z.infer<typeof SessionPendingExecutionRunMaterializeNextRequestV2Schema>;
 
-export const SessionPendingExecutionRunAcceptedRequestV2Schema = lazyZodSchema(() => z.object({
+export const SessionPendingExecutionRunAcceptedRequestV2Schema = lazyZodSchema(() => z.strictObject({
   ...executionRunTargetFields,
   localId: PendingLocalIdSchema,
-  acceptedDelivery: SessionMessageAcceptedDeliveryContentV1Schema.optional(),
-}).strict());
+  acceptedDelivery: z.optional(SessionMessageAcceptedDeliveryContentV1Schema),
+}));
 export type SessionPendingExecutionRunAcceptedRequestV2 = z.infer<typeof SessionPendingExecutionRunAcceptedRequestV2Schema>;
 
 const targetEchoFields = {
@@ -74,80 +74,80 @@ const targetEchoFields = {
   sidechainId: SidechainIdSchema,
 };
 const pendingCounts = {
-  pendingCount: z.number().int().nonnegative(),
-  pendingBlockedCount: z.number().int().nonnegative(),
-  pendingVersion: z.number().int().nonnegative(),
+  pendingCount: z.number().check(z.int(), z.nonnegative()),
+  pendingBlockedCount: z.number().check(z.int(), z.nonnegative()),
+  pendingVersion: z.number().check(z.int(), z.nonnegative()),
 };
-const providerDeliveryState = z.object({ mode: z.literal('provider'), unresolved: z.boolean() }).strict();
-const materializedMessage = z.object({
-  id: z.string().min(1).nullable(),
-  seq: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
+const providerDeliveryState = z.strictObject({ mode: z.literal('provider'), unresolved: z.boolean() });
+const materializedMessage = z.strictObject({
+  id: z.nullable(z.string().check(z.minLength(1))),
+  seq: z.nullable(z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER))),
   localId: PendingLocalIdSchema,
-  messageRole: SessionMessageRoleSchema.optional(),
+  messageRole: z.optional(SessionMessageRoleSchema),
   content: StrictSessionStoredMessageContentEnvelopeSchema,
   requestedAction: PendingRequestedActionV1Schema,
   providerAction: PendingProviderActionSchema,
-  inputAdmissionReceipt: SessionInputAdmissionReceiptV1Schema.nullable().optional(),
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-}).strict();
+  inputAdmissionReceipt: z.optional(z.nullable(SessionInputAdmissionReceiptV1Schema)),
+  createdAt: z.number().check(z.int(), z.nonnegative()),
+  updatedAt: z.number().check(z.int(), z.nonnegative()),
+});
 
 export const SessionPendingExecutionRunMaterializeNextResponseV2Schema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     ...targetEchoFields, ...pendingCounts,
     ok: z.literal(true), didMaterialize: z.literal(true), didWrite: z.boolean(),
-    authorAccountId: z.string().min(1).nullable(),
+    authorAccountId: z.nullable(z.string().check(z.minLength(1))),
     message: materializedMessage,
     deliveryState: providerDeliveryState,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ...targetEchoFields, ...pendingCounts,
     ok: z.literal(true), didMaterialize: z.literal(false),
-    authorAccountId: z.string().min(1).nullable(),
-    localId: PendingLocalIdSchema.optional(),
-    deferredReason: z.enum(['waiting_for_foreground_turn', 'waiting_for_runtime_activity', 'runtime_activity_unknown', 'waiting_for_predecessor', 'steering_unavailable']).optional(),
+    authorAccountId: z.nullable(z.string().check(z.minLength(1))),
+    localId: z.optional(PendingLocalIdSchema),
+    deferredReason: z.optional(z.enum(['waiting_for_foreground_turn', 'waiting_for_runtime_activity', 'runtime_activity_unknown', 'waiting_for_predecessor', 'steering_unavailable'])),
     deliveryState: providerDeliveryState,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     v: z.literal(2), ok: z.literal(false),
     error: z.enum(['session-not-found', 'forbidden', 'invalid-params', 'transcript-conflict', 'internal', 'session_input_target_update_required']),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     v: z.literal(2), ok: z.literal(false), error: z.literal('transaction-unavailable'),
-    retryAfterMs: z.number().int().nonnegative(),
-  }).strict(),
-]).superRefine((value, context) => {
+    retryAfterMs: z.number().check(z.int(), z.nonnegative()),
+  }),
+]).check(z.superRefine((value, context) => {
   if (!value.ok || !value.didMaterialize) return;
   const receipt = value.message.inputAdmissionReceipt;
   if (receipt?.issuer === 'authenticatedAccount' && receipt.actorAccountId !== value.authorAccountId) {
     context.addIssue({ code: 'custom', path: ['authorAccountId'], message: 'Input author must agree with the authenticated admission receipt' });
   }
-}));
+})));
 export type SessionPendingExecutionRunMaterializeNextResponseV2 = z.infer<typeof SessionPendingExecutionRunMaterializeNextResponseV2Schema>;
 
 /** Reuses the established settlement outcome without widening its V1 envelope. */
-export const SessionPendingExecutionRunAcceptedResponseV2Schema = lazyZodSchema(() => z.object({
+export const SessionPendingExecutionRunAcceptedResponseV2Schema = lazyZodSchema(() => z.strictObject({
   ...targetEchoFields,
   result: AcceptedPendingSettlementResponseV1Schema,
-}).strict());
+}));
 export type SessionPendingExecutionRunAcceptedResponseV2 = z.infer<typeof SessionPendingExecutionRunAcceptedResponseV2Schema>;
 
 /** The current publisher supplies registry evidence; the existing Pending lifecycle owns the transition. */
-export const SessionPendingExecutionRunBlockRequestV2Schema = lazyZodSchema(() => z.object({
+export const SessionPendingExecutionRunBlockRequestV2Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2),
   sessionId: asProtocolZod(SessionIdSchema),
   recipient: ParticipantExecutionRunRecipientRoutingIdentityV1Schema,
   localId: PendingLocalIdSchema,
   reason: PendingDeliveryBlockedReasonSchema,
-}).strict());
+}));
 export type SessionPendingExecutionRunBlockRequestV2 = z.infer<typeof SessionPendingExecutionRunBlockRequestV2Schema>;
-export const SessionPendingExecutionRunBlockResponseV2Schema = lazyZodSchema(() => z.object({
+export const SessionPendingExecutionRunBlockResponseV2Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2),
   recipient: ParticipantExecutionRunRecipientRoutingIdentityV1Schema,
   localId: PendingLocalIdSchema,
   result: z.union([
-    z.object({ ok: z.literal(true), didUpdate: z.boolean(), ...pendingCounts }).strict(),
-    z.object({ ok: z.literal(false), error: z.enum(['session-not-found', 'forbidden', 'invalid-params', 'not-found', 'delivery-settlement-conflict', 'internal']) }).strict(),
+    z.strictObject({ ok: z.literal(true), didUpdate: z.boolean(), ...pendingCounts }),
+    z.strictObject({ ok: z.literal(false), error: z.enum(['session-not-found', 'forbidden', 'invalid-params', 'not-found', 'delivery-settlement-conflict', 'internal']) }),
   ]),
-}).strict());
+}));
 export type SessionPendingExecutionRunBlockResponseV2 = z.infer<typeof SessionPendingExecutionRunBlockResponseV2Schema>;

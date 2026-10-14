@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
 import { PluginManifestV2Schema } from '../manifest/v2.js';
@@ -18,11 +18,11 @@ export type PluginPortableReleaseManifestV1 = z.infer<typeof PluginPortableRelea
  * artifact facts: host/SDK build provenance is not an author-controlled
  * compatibility switch and therefore has no field here.
  */
-export const PluginCompatibilityProjectionV1Schema = lazyZodSchema(() => z.object({
+export const PluginCompatibilityProjectionV1Schema = lazyZodSchema(() => z.strictObject({
   version: z.literal(1),
   manifest: PluginPortableReleaseManifestV1Schema,
   uiArtifacts: PluginUiArtifactsManifestV2Schema,
-}).strict());
+}));
 export type PluginCompatibilityProjectionV1 = z.infer<typeof PluginCompatibilityProjectionV1Schema>;
 
 /**

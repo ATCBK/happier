@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { checkRegistryUpstreamV1, compareRegistryContentRefV1, registryUpstreamEqualV1, RegistryUpdateCheckResultV1Schema } from './registryUpdatesV1.js';
 import { RegistryProvenanceV1Schema, type RegistryContentRefV1 } from './registryItemsV1.js';
 import { githubRegistryAdapterV1 } from './formats/github.js';

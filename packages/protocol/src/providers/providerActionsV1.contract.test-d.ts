@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { PROVIDER_ACTION_INPUT_SCHEMAS_V1 } from './providerActionsV1.js';
 import type {
   DaemonProviderConnectionMutationRequestV1Schema,

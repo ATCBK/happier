@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { AutomationDefinitionCreateRequestSchema } from '../../automations/automationApiV3.js';
 import { AutomationStoredWorkflowDefinitionRecipeV2Schema } from '../../automations/automationWorkflowRecipeV2.js';
 import { AutomationTriggerIdSchema } from '../../automations/automationTriggerIdentity.js';
@@ -7,13 +7,13 @@ import { SessionInitialTriggerDefinitionV1Schema } from '../../workflows/trigger
 /** Host-sealed Automation intent, consumed only inside the Session birth transaction. */
 export const SessionInitialTriggerAdmissionV1Schema = z.lazy(() => {
   const { scopeSessionId: _birthScope, triggers: _birthTriggers, ...fields } = AutomationDefinitionCreateRequestSchema.shape;
-  return z.object({
+  return z.strictObject({
     ...fields,
     executionRecipe: AutomationStoredWorkflowDefinitionRecipeV2Schema,
-    triggers: z.array(z.object({
+    triggers: z.array(z.strictObject({
       triggerId: AutomationTriggerIdSchema,
       trigger: SessionInitialTriggerDefinitionV1Schema,
-    }).strict()),
-  }).strict();
+    })),
+  });
 });
 export type SessionInitialTriggerAdmissionV1 = z.infer<typeof SessionInitialTriggerAdmissionV1Schema>;

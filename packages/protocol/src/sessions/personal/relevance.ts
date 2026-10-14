@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * The closed set of reasons one Session can be part of one Account's work
@@ -23,12 +23,10 @@ export type SessionPersonalRelevanceReasonV1 = z.infer<
   typeof SessionPersonalRelevanceReasonV1Schema
 >;
 
-export const SessionPersonalRelevanceV1Schema = lazyZodSchema(() => z
-  .object({
+export const SessionPersonalRelevanceV1Schema = lazyZodSchema(() => z.strictObject({
     relevant: z.boolean(),
-    reasons: z.array(SessionPersonalRelevanceReasonV1Schema).readonly(),
-  })
-  .strict());
+    reasons: z.readonly(z.array(SessionPersonalRelevanceReasonV1Schema)),
+  }));
 export type SessionPersonalRelevanceV1 = Readonly<{
   relevant: boolean;
   reasons: readonly SessionPersonalRelevanceReasonV1[];

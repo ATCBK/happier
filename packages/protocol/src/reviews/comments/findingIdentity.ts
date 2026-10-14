@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { computeCanonicalDomainSeparatedHexDigest } from '../../crypto/canonicalDigest.js';
 import type { ReviewCommentFingerprintV1, ReviewCommentV1 } from './v1.js';
@@ -18,7 +18,7 @@ export function reviewCommentFindingScopeV1(comment: Pick<ReviewCommentV1,
     comment.findingIdentity, comment.sessionId ?? null];
 }
 
-export const ReviewFindingIdentityV1Schema = lazyZodSchema(() => z.string().regex(/^[a-f0-9]{64}$/));
+export const ReviewFindingIdentityV1Schema = lazyZodSchema(() => z.string().check(z.regex(/^[a-f0-9]{64}$/)));
 export type ReviewFindingIdentityV1 = z.infer<typeof ReviewFindingIdentityV1Schema>;
 
 /** Whitespace and casing are presentation; file bytes, location and engine are currentness. */

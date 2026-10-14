@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { VoiceDictationLanguageSchema } from '../recognitionLanguage.js';
 
 import {
@@ -6,9 +6,9 @@ import {
 } from './localStt.js';
 
 export const VoiceDictationSettingsSchema = z.object({
-  sttBinding: z.enum(['explicit', 'same_as_local']).default('explicit'),
-  language: VoiceDictationLanguageSchema.default(null),
-  stt: VoiceLocalSttSchema.prefault({ provider: 'device' }),
+  sttBinding: z._default(z.enum(['explicit', 'same_as_local']), 'explicit'),
+  language: z._default(VoiceDictationLanguageSchema, null),
+  stt: z.prefault(VoiceLocalSttSchema, { provider: 'device' }),
 });
 
 export type VoiceDictationSettings = z.infer<typeof VoiceDictationSettingsSchema>;

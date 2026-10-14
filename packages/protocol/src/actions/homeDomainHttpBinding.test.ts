@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { bindHomeDomainHttpRequestV1 } from './homeDomainHttpBinding.js';
 
 describe('Home-domain HTTP binding', () => {
-  const schema = z.object({
+  const schema = z.strictObject({
     v: z.literal(1),
     teamId: z.string(),
     sourceId: z.string(),
-    limit: z.number().int().optional(),
-    query: z.string().optional(),
-  }).strict();
+    limit: z.optional(z.number().check(z.int())),
+    query: z.optional(z.string()),
+  });
 
   it('binds exact path parameters and remaining GET input as a query', () => {
     expect(bindHomeDomainHttpRequestV1({

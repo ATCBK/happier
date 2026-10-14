@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ZodError } from 'zod';
+import { z as zodMiniCore0 } from 'zod/mini';
 
 import * as protocol from '../../index.js';
 import { normalizeLegacyContinueWithReplayRpcParamsInput } from './compat/continueWithReplayRpcParamsCompat.js';
@@ -7,7 +7,7 @@ import { backendTargetKeysMatch, buildBackendTargetKeyV2, BackendTargetKeyV2Inpu
 
 describe('BackendTargetRefV2 compatibility', () => {
   it('refuses an abstract configured Agent key at strict target resolution', () => {
-    expect(() => resolveBackendTargetKeyV2('backend:custom-acp')).toThrow(ZodError);
+    expect(() => resolveBackendTargetKeyV2('backend:custom-acp')).toThrow(zodMiniCore0.core.$ZodError);
   });
 
   it('does not admit a retained routing reference that cannot produce a target key', () => {
@@ -222,8 +222,8 @@ describe('BackendTargetRefV2 compatibility', () => {
     // A configured Agent lowered to its current container id must remain an
     // invalid input. UI compatibility readers classify this exact error;
     // executable admission must not reinterpret the container as a definition.
-    expect(() => resolveBackendTargetKeyV2('agent:happier.agent.custom-acp/custom-acp')).toThrow(ZodError);
-    expect(() => resolveBackendTargetKeyV2({ kind: 'builtInAgent', agentId: 'custom-acp' })).toThrow(ZodError);
+    expect(() => resolveBackendTargetKeyV2('agent:happier.agent.custom-acp/custom-acp')).toThrow(zodMiniCore0.core.$ZodError);
+    expect(() => resolveBackendTargetKeyV2({ kind: 'builtInAgent', agentId: 'custom-acp' })).toThrow(zodMiniCore0.core.$ZodError);
 
     expect(() => (protocol as any).readBackendTargetRefV2({
       kind: 'backend',

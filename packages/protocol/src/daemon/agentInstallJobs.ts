@@ -1,90 +1,90 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 // Development install-job operation, independent of the package version. Every
 // envelope is closed: caller-supplied commands and consent extensions are rejected.
 export const AgentInstallJobIntentSchema = lazyZodSchema(() => z.enum(['install', 'update', 'uninstall']));
-export const AgentInstallJobConsentSchema = lazyZodSchema(() => z.object({ vendorRecipe: z.boolean() }).strict());
-export const AgentInstallJobStepSchema = lazyZodSchema(() => z.object({
-  stepId: z.string().min(1),
-  label: z.string().min(1),
+export const AgentInstallJobConsentSchema = lazyZodSchema(() => z.strictObject({ vendorRecipe: z.boolean() }));
+export const AgentInstallJobStepSchema = lazyZodSchema(() => z.strictObject({
+  stepId: z.string().check(z.minLength(1)),
+  label: z.string().check(z.minLength(1)),
   state: z.enum(['running', 'done', 'failed']),
-}).strict());
-export const AgentInstallJobProgressSchema = lazyZodSchema(() => z.object({
-  stepId: z.string().min(1),
-  bytesDone: z.number().int().nonnegative(),
-  bytesTotal: z.number().int().nonnegative().nullable(),
-}).strict());
+}));
+export const AgentInstallJobProgressSchema = lazyZodSchema(() => z.strictObject({
+  stepId: z.string().check(z.minLength(1)),
+  bytesDone: z.number().check(z.int(), z.nonnegative()),
+  bytesTotal: z.nullable(z.number().check(z.int(), z.nonnegative())),
+}));
 export const AgentInstallJobFailureCodeSchema = lazyZodSchema(() => z.enum([
   'consent_required', 'unsupported_platform', 'install_not_available',
   'download_failed', 'verification_failed', 'timeout', 'cancelled',
   'install_failed', 'update_not_available', 'not_managed', 'in_use',
 ]));
 export const AgentInstallJobOutcomeSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('succeeded'), version: z.string().nullable(),
-    checksum: z.enum(['verified', 'not_published']).optional() }).strict(),
-  z.object({
+  z.strictObject({ kind: z.literal('succeeded'), version: z.nullable(z.string()),
+    checksum: z.optional(z.enum(['verified', 'not_published'])) }),
+  z.strictObject({
     kind: z.literal('failed'),
     code: AgentInstallJobFailureCodeSchema,
-    stepId: z.string().min(1),
-    message: z.string().min(1),
-    guideUrl: z.string().url().optional(),
-  }).strict(),
+    stepId: z.string().check(z.minLength(1)),
+    message: z.string().check(z.minLength(1)),
+    guideUrl: z.optional(z.string().check(z.url())),
+  }),
 ]));
 export const AgentInstallJobEventSchema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  AgentInstallJobStepSchema.extend({ t: z.literal('step') }),
-  AgentInstallJobProgressSchema.extend({ t: z.literal('progress') }),
-  z.object({ t: z.literal('log'), line: z.string() }).strict(),
+  z.extend(AgentInstallJobStepSchema, { t: z.literal('step') }),
+  z.extend(AgentInstallJobProgressSchema, { t: z.literal('progress') }),
+  z.strictObject({ t: z.literal('log'), line: z.string() }),
 ]));
-export const AgentInstallJobSchema = lazyZodSchema(() => z.object({
-  jobId: z.string().min(1),
-  agentId: z.string().min(1),
-  definitionId: z.string().min(1).optional(),
+export const AgentInstallJobSchema = lazyZodSchema(() => z.strictObject({
+  jobId: z.string().check(z.minLength(1)),
+  agentId: z.string().check(z.minLength(1)),
+  definitionId: z.optional(z.string().check(z.minLength(1))),
   intent: AgentInstallJobIntentSchema,
-  startedAt: z.number().int().nonnegative(),
+  startedAt: z.number().check(z.int(), z.nonnegative()),
   steps: z.array(AgentInstallJobStepSchema),
   progress: z.array(AgentInstallJobProgressSchema),
   done: z.boolean(),
-  outcome: AgentInstallJobOutcomeSchema.nullable(),
-}).strict());
-export const DaemonAgentInstallErrorSchema = lazyZodSchema(() => z.object({
+  outcome: z.nullable(AgentInstallJobOutcomeSchema),
+}));
+export const DaemonAgentInstallErrorSchema = lazyZodSchema(() => z.strictObject({
   ok: z.literal(false),
   errorCode: z.enum(['invalid_request', 'job_not_found', 'install_unavailable', 'not_managed', 'in_use', 'definition_version_changed']),
-  error: z.string().min(1),
-}).strict());
-export const DaemonAgentInstallStartRequestSchema = lazyZodSchema(() => z.object({
-  agentId: z.string().min(1),
-  definitionId: z.string().min(1).optional(),
+  error: z.string().check(z.minLength(1)),
+}));
+export const DaemonAgentInstallStartRequestSchema = lazyZodSchema(() => z.strictObject({
+  agentId: z.string().check(z.minLength(1)),
+  definitionId: z.optional(z.string().check(z.minLength(1))),
   /** Private registry-install precondition; the daemon still owns the executable declaration. */
-  expectedDefinitionVersion: z.string().min(1).optional(),
+  expectedDefinitionVersion: z.optional(z.string().check(z.minLength(1))),
   intent: AgentInstallJobIntentSchema,
   consent: AgentInstallJobConsentSchema,
-  force: z.boolean().optional(),
-}).strict());
+  force: z.optional(z.boolean()),
+}));
 export const DaemonAgentInstallStartResponseSchema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true), jobId: z.string().min(1) }).strict(),
+  z.strictObject({ ok: z.literal(true), jobId: z.string().check(z.minLength(1)) }),
   DaemonAgentInstallErrorSchema,
 ]));
-export const DaemonAgentInstallReadRequestSchema = lazyZodSchema(() => z.object({
-  jobId: z.string().min(1), cursor: z.number().int().nonnegative(),
-}).strict());
+export const DaemonAgentInstallReadRequestSchema = lazyZodSchema(() => z.strictObject({
+  jobId: z.string().check(z.minLength(1)), cursor: z.number().check(z.int(), z.nonnegative()),
+}));
 export const DaemonAgentInstallReadResponseSchema = lazyZodSchema(() => z.union([
-  z.object({
+  z.strictObject({
     ok: z.literal(true), events: z.array(AgentInstallJobEventSchema),
     steps: AgentInstallJobSchema.shape.steps,
     progress: AgentInstallJobSchema.shape.progress,
-    nextCursor: z.number().int().nonnegative(), done: z.boolean(),
-    outcome: AgentInstallJobOutcomeSchema.nullable(),
-  }).strict(),
+    nextCursor: z.number().check(z.int(), z.nonnegative()), done: z.boolean(),
+    outcome: z.nullable(AgentInstallJobOutcomeSchema),
+  }),
   DaemonAgentInstallErrorSchema,
 ]));
-export const DaemonAgentInstallCancelRequestSchema = lazyZodSchema(() => z.object({ jobId: z.string().min(1) }).strict());
+export const DaemonAgentInstallCancelRequestSchema = lazyZodSchema(() => z.strictObject({ jobId: z.string().check(z.minLength(1)) }));
 export const DaemonAgentInstallCancelResponseSchema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true) }).strict(), DaemonAgentInstallErrorSchema,
+  z.strictObject({ ok: z.literal(true) }), DaemonAgentInstallErrorSchema,
 ]));
-export const DaemonAgentInstallListRequestSchema = lazyZodSchema(() => z.object({}).strict());
+export const DaemonAgentInstallListRequestSchema = lazyZodSchema(() => z.strictObject({}));
 export const DaemonAgentInstallListResponseSchema = lazyZodSchema(() => z.union([
-  z.object({ ok: z.literal(true), jobs: z.array(AgentInstallJobSchema) }).strict(), DaemonAgentInstallErrorSchema,
+  z.strictObject({ ok: z.literal(true), jobs: z.array(AgentInstallJobSchema) }), DaemonAgentInstallErrorSchema,
 ]));
 
 export type AgentInstallJobIntent = z.infer<typeof AgentInstallJobIntentSchema>;

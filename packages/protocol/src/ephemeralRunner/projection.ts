@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
   RunnerActivationBindingV1Schema,
   RunnerActivationCloseReasonV1Schema,
@@ -15,37 +15,25 @@ import { RunnerActivationReviewV1Schema } from './review.js';
 import { RunnerActivationProgressPhaseV1Schema } from './progress.js';
 
 export const RunnerEndpointFactsProjectionV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('available'), facts: RunnerEndpointFactsV1Schema }).strict(),
-  z.object({ status: z.literal('unavailable'), reason: z.enum(['creator_unavailable', 'recipient_mismatch', 'invalid_content']) }).strict(),
+  z.strictObject({ status: z.literal('available'), facts: RunnerEndpointFactsV1Schema }),
+  z.strictObject({ status: z.literal('unavailable'), reason: z.enum(['creator_unavailable', 'recipient_mismatch', 'invalid_content']) }),
 ]));
 
-export const RunnerActivationProjectionV1Schema = lazyZodSchema(() => RunnerActivationBindingV1Schema.safeExtend({
+export const RunnerActivationProjectionV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(RunnerActivationBindingV1Schema, {
   draftId: RunnerResourceIdSchema,
   state: RunnerActivationStateV1Schema,
-  closeReason: RunnerActivationCloseReasonV1Schema.nullable(),
-  progressPhase: RunnerActivationProgressPhaseV1Schema.nullable().default(null),
-  claim: RunnerClaimV1Schema.nullable(),
-  endpointFacts: RunnerEndpointFactsProjectionV1Schema.nullable(),
-  review: RunnerActivationReviewV1Schema.nullable().default(null),
-  consent: RunnerConsentV1Schema.nullable().default(null),
-  readiness: RunnerReadinessV1Schema.nullable().default(null),
-  materialization: z.object({
+  closeReason: z.nullable(RunnerActivationCloseReasonV1Schema),
+  progressPhase: z._default(z.nullable(RunnerActivationProgressPhaseV1Schema), null),
+  claim: z.nullable(RunnerClaimV1Schema),
+  endpointFacts: z.nullable(RunnerEndpointFactsProjectionV1Schema),
+  review: z._default(z.nullable(RunnerActivationReviewV1Schema), null),
+  consent: z._default(z.nullable(RunnerConsentV1Schema), null),
+  readiness: z._default(z.nullable(RunnerReadinessV1Schema), null),
+  materialization: z._default(z.nullable(z.strictObject({
     sessionId: RunnerResourceIdSchema,
     machineId: RunnerResourceIdSchema,
-  }).strict().nullable().default(null),
-}).strict().refine(
-  (activation) => (activation.state === 'closed') === (activation.closeReason !== null),
-  'Only closed activations have a close reason',
-).refine(
-  (activation) => !['claimed', 'consented', 'materialized'].includes(activation.state) || activation.claim !== null,
-  'Claimed activations retain the signed endpoint claim',
-).refine(
-  (activation) => !['consented', 'materialized'].includes(activation.state) || (activation.review !== null && activation.consent !== null),
-  'Consented activations retain their immutable review and consent',
-).refine(
-  (activation) => activation.state !== 'materialized' || (activation.readiness !== null && activation.materialization !== null),
-  'Materialized activations retain readiness and final identity projection',
-));
+  })), null),
+})).check(z.refine((activation) => (activation.state === 'closed') === (activation.closeReason !== null), 'Only closed activations have a close reason'), z.refine((activation) => !['claimed', 'consented', 'materialized'].includes(activation.state) || activation.claim !== null, 'Claimed activations retain the signed endpoint claim'), z.refine((activation) => !['consented', 'materialized'].includes(activation.state) || (activation.review !== null && activation.consent !== null), 'Consented activations retain their immutable review and consent'), z.refine((activation) => activation.state !== 'materialized' || (activation.readiness !== null && activation.materialization !== null), 'Materialized activations retain readiness and final identity projection')));
 export type RunnerActivationProjectionV1 = z.infer<typeof RunnerActivationProjectionV1Schema>;
 
 /** Extract only the immutable binding; callers still verify it against local creating-device custody. */

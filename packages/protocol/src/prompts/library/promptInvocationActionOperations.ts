@@ -1,6 +1,6 @@
 import { isPromptInvocationAvailable, PromptInvocationEntryV1Schema, PromptInvocationsV1Schema, validatePromptInvocationTokenV1, type PromptInvocationEntryV1 } from './promptInvocationsV1.js';
 import { readPromptLibraryCatalogRecordV1, type PromptLibraryStackActionPortV1 } from './promptLibraryCatalogV1.js';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { PromptInvocationCreateInputSchema, PromptInvocationCreateOutputSchema } from '../../actions/promptInvocationCreateActionSpecs.js';
 import { readPromptDocInLibrary, type PromptLibraryArtifactStore, type PromptLibraryStoredArtifact } from './promptLibraryActionOperations.js';
 import type { PromptDocArtifactRefV1 } from './promptArtifactRefsV1.js';
@@ -48,7 +48,7 @@ export async function createPromptInvocationInLibrary(params: Readonly<{
 }
 
 export function listPromptInvocationsInLibrary(params: Readonly<{ invocations: unknown; request: Readonly<{ limit?: number }> }>): PromptInvocationsListResult {
-  const parsed = PromptInvocationsV1Schema.removeCatch().safeParse(params.invocations ?? {});
+  const parsed = PromptInvocationsV1Schema._zod.def.innerType.safeParse(params.invocations ?? {});
   if (!parsed.success) return { items: [], coverage: 'unavailable' as const };
   const items = parsed.data.entries.map(({ id, token, title, behavior, allowArgs, availableIn }) =>
     ({ id, token, title, behavior, allowArgs, availableIn }));
@@ -70,7 +70,7 @@ export async function resolvePromptInvocationInLibrary(params: Readonly<{
   params.signal?.throwIfAborted();
   const invocationId = params.request.invocationId.trim();
   const unavailable = { status: 'unavailable' as const, invocationId };
-  const parsed = PromptInvocationsV1Schema.removeCatch().safeParse(params.invocations ?? {});
+  const parsed = PromptInvocationsV1Schema._zod.def.innerType.safeParse(params.invocations ?? {});
   if (!parsed.success) return unavailable;
   const entry = parsed.data.entries.find((candidate) => candidate.id === invocationId);
   if (!entry) return { status: 'unknownInvocation' as const, invocationId };

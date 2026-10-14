@@ -1,5 +1,5 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { asProtocolZod } from '../../actions/internalProtocolZodAdapter.js';
 import {
@@ -9,16 +9,13 @@ import {
 import { PluginAvailabilityDescriptorV2Schema } from '../publicTypes.js';
 
 /** A Resource-backed declarative document mounted inline in Session info. */
-export const PluginSessionInfoSectionContributionV1Schema = lazyZodSchema(() => z.object({
+export const PluginSessionInfoSectionContributionV1Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   resourceId: asProtocolZod(PluginContributionLocalIdSchema),
-  order: z.number().int().optional(),
-  availability: PluginAvailabilityDescriptorV2Schema.optional(),
-  actions: z.array(asProtocolZod(PluginContributionLocalIdSchema))
-    .max(32)
-    .refine((values) => new Set(values).size === values.length, 'Entries must be unique.')
-    .default([]),
-}).strict());
+  order: z.optional(z.number().check(z.int())),
+  availability: z.optional(PluginAvailabilityDescriptorV2Schema),
+  actions: z._default(z.array(asProtocolZod(PluginContributionLocalIdSchema)).check(z.maxLength(32), z.refine((values) => new Set(values).size === values.length, 'Entries must be unique.')), []),
+}));
 
 export type PluginSessionInfoSectionContributionV1 = z.infer<
   typeof PluginSessionInfoSectionContributionV1Schema

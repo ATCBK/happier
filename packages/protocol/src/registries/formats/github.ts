@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { readSkillFrontmatterV1 } from '../../prompts/library/skills/skillLibraryItemV1.js';
 import { RegistryFetchErrorV1, type RegistryListPageV1 } from '../registryListV1.js';
 import type { RegistrySourceV1 } from '../registrySourcesV1.js';
@@ -18,15 +18,15 @@ function requireHttp<T>(result: RegistryHttpResultV1<T>): T {
   if (!result.ok) throw new RegistryFetchErrorV1(result.status);
   return result.value;
 }
-const treeSchema = z.object({ sha: z.string().min(1), truncated: z.boolean().optional(), tree: z.array(z.object({
-  path: z.string(), mode: z.string(), type: z.string(), sha: z.string(), size: z.number().optional(),
+const treeSchema = z.object({ sha: z.string().check(z.minLength(1)), truncated: z.optional(z.boolean()), tree: z.array(z.object({
+  path: z.string(), mode: z.string(), type: z.string(), sha: z.string(), size: z.optional(z.number()),
 })) });
 async function readCommit(ctx: RegistryFetchContextV1, source: RegistrySourceV1, version?: string, credentials = source) {
   ctx.signal?.throwIfAborted();
   const repo = readGitHubRepositoryV1(source.url);
   if (!repo) throw new RegistryFetchErrorV1({state:'invalid_source'});
   const base = `https://api.github.com/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}`;
-  const commitResult=z.object({sha:z.string().min(1)}).safeParse(requireHttp(await ctx.http.getJson(`${base}/commits/${encodeURIComponent(version ?? source.ref ?? repo.ref ?? 'HEAD')}`, {source:credentials})));
+  const commitResult=z.object({sha:z.string().check(z.minLength(1))}).safeParse(requireHttp(await ctx.http.getJson(`${base}/commits/${encodeURIComponent(version ?? source.ref ?? repo.ref ?? 'HEAD')}`, {source:credentials})));
   if(!commitResult.success)throw new RegistryFetchErrorV1({state:'invalid_source'});
   const commit=commitResult.data.sha;
   if (version !== undefined && /^[a-f0-9]{40}$/i.test(version) && commit !== version) throw new RegistryFetchErrorV1({state:'invalid_source'});
