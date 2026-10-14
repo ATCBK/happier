@@ -115,6 +115,42 @@ function invocation(overrides: Readonly<{
 }
 
 describe('Codex public Agent External Sessions contribution', () => {
+  it('yields content work at its cooperative scan deadline while retaining hard invocation enforcement', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-public-content-deadline-'));
+    const clock = Date.now;
+    let now = clock();
+    try {
+      const codexHome = join(root, 'codex-home');
+      const sessionsDir = join(codexHome, 'sessions', '2026', '07', '23');
+      const remoteSessionId = '11111111-1111-1111-1111-111111111111';
+      const rolloutPath = join(sessionsDir, `rollout-2026-07-23T08-00-00-${remoteSessionId}.jsonl`);
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(rolloutPath, [
+        jsonl({ type: 'session_meta', timestamp: '2026-07-23T08:00:00.000Z', payload: { id: remoteSessionId, cwd: '/repo' } }),
+        jsonl({ type: 'response_item', timestamp: '2026-07-23T08:01:00.000Z', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'body-only phrase' }] } }),
+      ].join(''));
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: codexHome } });
+      const request = {
+        ...invocation(), source: { kind: 'codexHome', home: 'user', homePath: codexHome }, maxItems: 10,
+        searchTarget: 'content' as const, searchTerm: 'body-only phrase', scanDeadlineAtMs: now + 100,
+        // Only the host subprocess/clock boundaries are substituted; native scanning and decoding remain real.
+        ripgrep: { run: async () => { now += 100; return { exitCode: 0, stdout: `${rolloutPath}\0`, stderr: '' }; } },
+      };
+      Date.now = () => now;
+      const first = await contribution.listCandidates(request);
+      expect(first).toMatchObject({ ok: true, value: { candidates: [], contentCoverage: 'partial', nextCursor: expect.any(String) } });
+      if (!first.ok || !first.value.nextCursor) throw new Error('Expected content continuation');
+      await expect(contribution.listCandidates({ ...request, deadlineAtMs: now, scanDeadlineAtMs: now + 100 })).resolves.toMatchObject({ ok: false, code: 'timeout' });
+      const hardDeadlineAtMs = now + 30_000;
+      await expect(contribution.listCandidates({ ...request, deadlineAtMs: hardDeadlineAtMs, scanDeadlineAtMs: now + 100,
+        ripgrep: { run: async () => { now = hardDeadlineAtMs; return { exitCode: 0, stdout: `${rolloutPath}\0`, stderr: '' }; } } })).resolves.toMatchObject({ ok: false, code: 'timeout' });
+      const resumed = await contribution.listCandidates({ ...request, scanDeadlineAtMs: now + 1000, cursor: first.value.nextCursor,
+        deadlineAtMs: now + 30_000,
+        ripgrep: { run: async () => ({ exitCode: 0, stdout: `${rolloutPath}\0`, stderr: '' }) } });
+      expect(resumed).toMatchObject({ ok: true, value: { candidates: [{ remoteSessionId, match: { snippet: expect.stringContaining('body-only phrase') } }], contentCoverage: 'complete' } });
+    } finally { Date.now = clock; await rm(root, { recursive: true, force: true }); }
+  });
+
   it('uses the invocation ExecService to list native app-server threads', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-public-native-threads-'));
     try {

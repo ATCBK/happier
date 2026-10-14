@@ -73,19 +73,22 @@ describe('pi direct conversation content search', () => {
     });
   });
 
-  it('yields a resumable partial page at the host deadline and binds it to its query and target', async () => {
+  it('yields at the cooperative scan deadline while the hard invocation remains valid and binds continuation to query and target', async () => {
     const { contribution, request } = await fixture();
     const now = Date.now();
     let clock = now;
     vi.spyOn(Date, 'now').mockImplementation(() => clock);
-    request.deadlineAtMs = now + 1000;
+    const scanDeadlineAtMs = now + 1000;
     request.ripgrep.run.mockImplementation(async () => {
-      clock = request.deadlineAtMs;
+      clock = scanDeadlineAtMs;
       return { exitCode: 0, stdout: 'hit\0', stderr: '', stdoutTruncated: false };
     });
-    const first = await contribution.listCandidates({ ...request, searchTerm: 'body-only' });
+    const first = await contribution.listCandidates({ ...request, scanDeadlineAtMs, searchTerm: 'body-only' });
     expect(first).toMatchObject({ ok: true, value: { contentCoverage: 'partial', searchIncomplete: true, nextCursor: expect.any(String) } });
     if (!first.ok || !first.value.nextCursor) return;
+    await expect(contribution.listCandidates({ ...request, deadlineAtMs: clock, scanDeadlineAtMs: clock + 1000, searchTerm: 'body-only' })).resolves.toMatchObject({ ok: false, code: 'timeout' });
+    clock = now;
+    await expect(contribution.listCandidates({ ...request, deadlineAtMs: scanDeadlineAtMs, scanDeadlineAtMs, searchTerm: 'body-only' })).resolves.toMatchObject({ ok: false, code: 'timeout' });
     clock = now;
     const nextRequest = { ...request, ripgrep: { run: vi.fn(async () => ({ exitCode: 0, stdout: 'hit\0', stderr: '', stdoutTruncated: false })) }, cursor: first.value.nextCursor };
     await expect(contribution.listCandidates({ ...nextRequest, searchTerm: 'different' })).resolves.toMatchObject({ ok: false });

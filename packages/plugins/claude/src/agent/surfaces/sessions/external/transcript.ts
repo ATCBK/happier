@@ -16,6 +16,7 @@ import {
     type ExternalSessionContentSearchControl,
     searchExternalSessionContent,
     ExternalSessionContentSearchYield,
+    createExternalSessionContentSearchControl,
 } from '@happier-dev/plugin-sdk/sessions/file-stores';
 
 import { readClaudeTaskLifecycleEnvelope } from '../../../transcripts/taskNotification.js';
@@ -268,6 +269,9 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
         title: { customTitle: null, aiTitle: null, fallbackTitle: null },
     };
     const remoteSessionId = params.fileRelPath.split('/').at(-1)!.slice(0, -'.jsonl'.length);
+    // JSONL rows are indivisible continuation units. Cancellation reaches every
+    // native read; cooperative time is checked after a decoded row is retained.
+    const nativeFileSystem = createExternalSessionContentSearchControl({ signal: params.signal }).fileSystem;
     // EOF closes cooperative scanning. Native-row verification and response
     // assembly finish under the containing operation's cancellation lifetime.
     const scanControl: ExternalSessionContentSearchControl = {
@@ -283,16 +287,17 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
             decode: async (matchText) => {
                 while (progress.endOffsetBytes > 0) {
                     throwIfAborted(params.signal);
+                    scanControl.checkWork();
                     const initialEndOffsetBytes = progress.endOffsetBytes;
                     const page = await readJsonlFileBackwardPage({ filePath: params.filePath, endOffsetBytes: progress.endOffsetBytes,
-                        maxBytes: params.maxBytes, maxItems: Math.max(1, params.maxBytes), fileSystem: params.control.fileSystem,
+                        maxBytes: params.maxBytes, maxItems: Math.max(1, params.maxBytes), fileSystem: nativeFileSystem,
                         onDiagnostic: () => { progress = { ...progress, partial: true }; },
-                        onLine: (line) => {
-                            params.control.checkWork();
+                        onLine: (line, tailOffsetBytes) => {
+                            throwIfAborted(params.signal);
                             const selected = selectClaudeExternalBranchLine(line.value, progress.branchParentUuid === false ? undefined : progress.branchParentUuid);
                             let count = progress.count;
                             let match = progress.match;
-                            let partial = progress.partial;
+                            let partial = progress.partial || (tailOffsetBytes !== null && tailOffsetBytes < initialEndOffsetBytes);
                             if (selected.selected) {
                                 const projected = projectClaudeJsonlLineRecord({ fileRelPath: params.fileRelPath, lineStartOffsetBytes: line.startOffsetBytes, lineValue: line.value });
                                 partial ||= projected.disposition === 'unsupported';
@@ -324,6 +329,7 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
                                 branchParentUuid: selected.parentUuid === undefined ? false : selected.parentUuid,
                                 count, partial, title,
                                 ...(match ? { match } : {}) };
+                            scanControl.checkWork();
                         },
                     });
                     throwIfAborted(params.signal);
@@ -332,7 +338,9 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
                         progress = { ...progress, partial: true };
                         break;
                     }
-                    progress = { ...progress, endOffsetBytes: page.nextEndOffsetBytes, partial: progress.partial || Boolean(page.diagnostics?.length) };
+                    progress = { ...progress, endOffsetBytes: page.nextEndOffsetBytes,
+                        partial: progress.partial || Boolean(page.diagnostics?.length)
+                            || (page.tailOffsetBytes !== null && page.tailOffsetBytes < initialEndOffsetBytes) };
                     if (page.reachedStart) break;
                 }
                 // A caller's opaque continuation carries positions, never
@@ -367,7 +375,7 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
     async function readSearchRow(row: z.infer<typeof ClaudeContentSearchRowSchema>) {
         throwIfAborted(params.signal);
         const page = await readJsonlFileForward({ filePath: params.filePath, offsetBytes: row.startOffsetBytes,
-            maxBytes: Math.max(1, row.endOffsetBytes - row.startOffsetBytes + 1), maxItems: 1 });
+            maxBytes: Math.max(1, row.endOffsetBytes - row.startOffsetBytes + 1), maxItems: 1, fileSystem: nativeFileSystem });
         throwIfAborted(params.signal);
         const line = page.items[0];
         return line?.startOffsetBytes === row.startOffsetBytes ? line : null;

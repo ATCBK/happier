@@ -1482,12 +1482,22 @@ escaped and NUL text retain decoded fallback. Client-backed sources can omit
 paths and ripgrep, as OpenCode does. Claude, Codex, Pi, OhMyPi and Antigravity
 use the file path; all six bundled Agents declare positive content search.
 Decoders still own branch/rollback selection and native item identity. The
-control inherits caller cancellation/deadline and yields cooperatively;
+control inherits caller cancellation and the cooperative scan deadline and yields;
 plugins publish partial coverage with a continuation for unfinished work.
 The canonical forward JSONL scanner can hand each parsed line to a decoder
 without retaining source bodies. Codex consumes that path and shares root-family
 discovery across its requested candidate page; complete native rollback selection
 still precedes publication of a match.
+
+Claude uses the existing backward JSONL scanner to retain in-transcript progress
+across equally budgeted candidate pages. Its continuation binds row locations and
+branch-selection progress to the observed file identity; returned text is decoded
+from the source, not trusted from the cursor. A native row is decoded and its progress
+retained before a cooperative yield, so a row can cross the scan deadline; native
+reads and finalization still observe cancellation. Recency continuations also bind the
+unvisited ordering suffix. A changed source or ordering invalidates that continuation
+and the host returns the existing `cursorReset` result instead of reporting complete
+coverage while skipping an unvisited file.
 
 Opt-in native indexing is a separate consumer of the same External Sessions
 contribution's existing `pageTranscript` / `readAfterTranscript` readers, not
@@ -1507,6 +1517,22 @@ budgets are optional for source and identity resolution, and required for paged
 candidate/transcript reads. Explicit caller paging budgets are preserved rather
 than clipped to a second host ceiling. Wire and persisted-data schemas still own
 their declared limits.
+
+For 0.3 content-candidate pages, optional `budgetMs` is charged from RPC receipt
+through source preparation and scanning. The host forwards it as
+`scanDeadlineAtMs`, separate from the invocation's hard `deadlineAtMs` and abort
+signal. Scan exhaustion yields partial coverage; it does not retire the invocation
+before decoding and terminal delivery finish. The client uses the existing
+operation-owned terminal wait and explicit cancellation, as filename search does.
+Other RPCs retain their full receipt-anchored hard lifetime; no global transport
+margin is deducted from valid work.
+
+Link/import annotation enriches an already-found candidate page. If cancellation
+interrupts its Account reads, the annotation owner stops further reads and retains
+the candidates, any verified positive annotations, and the native continuation;
+`annotationsIncomplete: true` prevents treating absent annotations as negative facts.
+Other annotation failures still propagate. Explicit client cancellation still stops
+the caller's wait and does not publish a cancelled result into the UI.
 
 External Sessions contributions can also declare optional `readAccounting` in
 0.3 development. This source-wide auxiliary read uses the same occurrence,

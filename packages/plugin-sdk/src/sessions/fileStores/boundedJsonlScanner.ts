@@ -414,7 +414,7 @@ export async function readJsonlFileBackwardPage(params: Readonly<{
   maxOversizeLineBytes?: number;
   fileSystem?: JsonlScannerFileSystemV1;
   /** Consume parsed lines newest first, preserving progress before a read yields. */
-  onLine?: (line: JsonlParsedLineV1) => void;
+  onLine?: (line: JsonlParsedLineV1, tailOffsetBytes: number | null) => void;
   onDiagnostic?: (diagnostic: JsonlSourceDiagnosticV1) => void;
 }>): Promise<Readonly<{
   items: readonly JsonlParsedLineV1[];
@@ -453,7 +453,7 @@ export async function readJsonlFileBackwardPage(params: Readonly<{
   let oldestConsumedOffsetBytes: number | undefined;
   const acceptLine = (line: JsonlParsedLineV1) => {
     itemCount += 1;
-    if (params.onLine) params.onLine(line);
+    if (params.onLine) params.onLine(line, tailOffsetBytes);
     else collectedNewestFirst.push(line);
     oldestConsumedOffsetBytes = line.startOffsetBytes;
   };

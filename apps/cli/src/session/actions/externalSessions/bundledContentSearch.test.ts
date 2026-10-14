@@ -10,7 +10,8 @@ import { resolveExternalSessionSourceFromAgentProjection } from '@/plugins/proje
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { registerMachineExternalSessionsRpcHandlers } from '@/api/machine/rpcHandlers.externalSessions';
 
-const fixture = vi.hoisted(() => ({ activeServerDir: '', slowPath: '', nowMs: 0 }));
+const fixture = vi.hoisted(() => ({ activeServerDir: '', slowPath: '', nowMs: 0,
+    cancelDuringAnnotation: null as (() => void) | null, annotationSignalAborted: false }));
 vi.mock('@/configuration', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/configuration')>();
     return { ...actual, configuration: { ...actual.configuration, get activeServerDir() { return fixture.activeServerDir; } } };
@@ -34,7 +35,11 @@ vi.mock('@/persistence', async (importOriginal) => ({
 }));
 vi.mock('@/api/client/connectedServiceCredentialApi', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/api/client/connectedServiceCredentialApi')>(),
-    fetchAccountEncryptionCurrentness: async () => ({ mode: 'plain' as const }),
+    fetchAccountEncryptionCurrentness: async ({ signal }: { signal?: AbortSignal }) => {
+        fixture.cancelDuringAnnotation?.();
+        if (fixture.cancelDuringAnnotation) fixture.annotationSignalAborted = signal?.aborted === true;
+        return { mode: 'plain' as const };
+    },
 }));
 vi.mock('@/session/transport/http/sessionsHttp', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/session/transport/http/sessionsHttp')>(),
@@ -161,9 +166,30 @@ describe('bundled conversation content search', () => {
                 params: { ...input, limit: 1, cursor: recency.nextCursor }, timeoutMs: null,
             }));
             expect(reset).toMatchObject({ ok: true, candidates: [], nextCursor: null, cursorReset: true });
+            // Annotation is optional enrichment of an already decoded native
+            // page. A transport cancellation here must not replace found hits.
+            await utimes(fixture.slowPath, new Date('2026-01-01'), new Date('2026-01-01'));
+            const beforeAnnotationCancellation = ExternalSessionsCandidatesListResponseSchema.parse(await rpc.handleRequest({
+                method: 'fixture-machine:daemon.externalSessions.candidates.list', params: input, timeoutMs: null,
+            }));
+            if (!beforeAnnotationCancellation.ok) throw new Error('Expected a found partial native page');
+            expect(beforeAnnotationCancellation).toMatchObject({ contentCoverage: 'partial',
+                candidates: [{ remoteSessionId: 'session' }], nextCursor: expect.any(String) });
+            fixture.cancelDuringAnnotation = () => rpc.onSocketDisconnect();
+            const annotationCancelled = ExternalSessionsCandidatesListResponseSchema.parse(await rpc.handleRequest({
+                method: 'fixture-machine:daemon.externalSessions.candidates.list', params: input, timeoutMs: null,
+            }));
+            expect(fixture.annotationSignalAborted).toBe(true);
+            expect(annotationCancelled).toMatchObject({ ok: true,
+                candidates: beforeAnnotationCancellation.candidates,
+                nextCursor: beforeAnnotationCancellation.nextCursor,
+                contentCoverage: 'partial', annotationsIncomplete: true });
+            fixture.cancelDuringAnnotation = null;
             clock.mockRestore();
         } finally {
             fixture.slowPath = '';
+            fixture.cancelDuringAnnotation = null;
+            fixture.annotationSignalAborted = false;
             vi.restoreAllMocks();
             await registration?.dispose();
             await runtime?.dispose();
