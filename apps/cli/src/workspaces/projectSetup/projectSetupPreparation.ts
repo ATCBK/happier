@@ -7,6 +7,8 @@ import type { ProjectManifestFileSnapshot } from '@happier-dev/protocol/workspac
 import { QualifiedProjectTrustProjectV1Schema, type QualifiedProjectTrustProjectV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectTrustRowV1';
 import type { ProjectSetupSuccessV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectSetupSuccessV1';
 import type { ProjectSetupReadinessV1 } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
+import { ProjectSetupReviewV1Schema, type ProjectSetupReviewV1 } from '@happier-dev/protocol/actions/projectSetupConsentFailure';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { normalizeActionsSettingsV1, type ActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
@@ -366,10 +368,23 @@ export async function reviewProjectSetupEffect(input: ProjectSetupPreparationInp
 
 /** Passive target readiness, inside the admitted requester's review/native lifetime. Trust is separate. */
 export async function inspectProjectSetupReadiness(input: ProjectSetupPreparationInput): Promise<ProjectSetupReadinessV1> {
-    if (input.purpose !== 'setup') return { kind: 'unknown', code: 'project_setup_review_unavailable' };
+    return (await inspectProjectSetup(input)).setupReadiness;
+}
+
+export type ProjectSetupInspection = Readonly<{ setupReadiness: ProjectSetupReadinessV1; setupReview?: ProjectSetupReviewV1 }>;
+
+/** One passive review supplies readiness and approval facts without producing native effects. */
+export async function inspectProjectSetup(input: ProjectSetupPreparationInput): Promise<ProjectSetupInspection> {
+    if (input.purpose !== 'setup') return { setupReadiness: { kind: 'unknown', code: 'project_setup_review_unavailable' } };
     const reviewed = await reviewProjectSetupEffect(input);
-    if (reviewed.kind === 'refused') return { kind: 'needsReview', code: reviewed.code };
-    const plan = reviewed.plan;
+    if (reviewed.kind === 'refused') return { setupReadiness: { kind: 'needsReview', code: reviewed.code } };
+    // reviewedEffect is the canonical non-secret effect, not the private executable plan.
+    const setupReview = ProjectSetupReviewV1Schema.parse({ reviewedEffect: projectNativeJsonValueForTransport(reviewed.plan.reviewedEffect),
+        reviewedEffectDigest: reviewed.plan.reviewedEffectDigest });
+    return { setupReview, setupReadiness: await readReviewedProjectSetupReadiness(input, reviewed.plan) };
+}
+
+async function readReviewedProjectSetupReadiness(input: ProjectSetupPreparationInput, plan: PreparedProjectSetupPlan): Promise<ProjectSetupReadinessV1> {
     if (plan.commands.some(command => command.kind === 'pluginNativeReference')) {
         return { kind: 'unknown', code: 'native_setup_readiness_unresolved' };
     }

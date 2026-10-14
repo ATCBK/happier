@@ -8,7 +8,7 @@ import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { ProjectDefinitionInspectOutputSchema } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import type { ProjectNativeCommandIo } from '@/workspaces/projectSetup/projectNativeResolution';
-import { inspectProjectSetupReadiness, reviewProjectSetupEffect, type ProjectSetupPreparationInput } from '@/workspaces/projectSetup/projectSetupPreparation';
+import { inspectProjectSetup, reviewProjectSetupEffect, type ProjectSetupPreparationInput } from '@/workspaces/projectSetup/projectSetupPreparation';
 import { createProjectSetupSuccessStore } from '@/workspaces/projectSetup/projectSetupSuccess';
 import { createProjectDefinitionAction, registerProjectDefinitionHandlers } from './projectDefinitions';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
@@ -30,7 +30,7 @@ async function setup(nativeIo?: ProjectNativeCommandIo, reviewInput?: (root: str
     serverId: profileId, machineId: workspace.machineId, workingDirectory: root,
     accessPolicy: { kind: 'restrictedRoots', roots: [root] },
     ...(nativeIo ? { nativeIo } : {}),
-    ...(reviewInput ? { inspectSetupReadiness: async () => inspectProjectSetupReadiness(reviewInput(root)) } : {}),
+    ...(reviewInput ? { inspectSetup: async () => inspectProjectSetup(reviewInput(root)) } : {}),
   });
   const executor = createActionExecutor({ ...createCliActionDeps({ token: 'fixture-token', mode: 'plain', ctx: null,
     sessionId: 'project-definition-fixture', serverId: profileId, serverHttpBaseUrl: 'https://project-definition.example' }),
@@ -106,11 +106,17 @@ describe('project definition Actions through registered Machine RPC', () => {
       const workspace = { id: 'workspace-a', serverId: 'home-a', machineId: 'machine-a', rootPath: root, projectKey: 'project', createdAtMs: 1 };
       return { workspace, projectAssociation: { workspace, project: { serverId: 'home-a', projectId: 'project' } },
         requester: { credentials: { token: 'fixture-requester', encryption: null }, serverHttpBaseUrl: 'https://requester.example' },
-        purpose: 'setup', platform: { os: process.platform, arch: process.arch }, nativeIo: { resolveTool: async () => null }, successHomeDir: root };
+        purpose: 'setup', platform: { os: process.platform, arch: process.arch }, nativeIo: { resolveTool: async () => ({ executablePath: '/managed/make', version: '1' }) }, successHomeDir: root,
+        configEnvironment: { MODE: 'development', PRIVATE: 'must-not-leak' } };
     };
     const { root, workspace, handlers } = await setup(undefined, reviewInput);
     await mkdir(join(root, '.happier'));
-    await writeFile(join(root, '.happier/project.json'), JSON.stringify({ version: 1, workspace: { setup: [{ kind: 'command', command: 'touch must-not-execute' }] } }));
+    await writeFile(join(root, 'Makefile'), 'bootstrap:\n\ttouch must-not-execute\n');
+    await writeFile(join(root, '.happier/project.json'), JSON.stringify({ version: 1,
+      environmentVariables: [{ name: 'MODE', kind: 'config', required: true }], workspace: { setup: [
+        { kind: 'command', command: 'touch must-not-execute' },
+        { kind: 'native', tool: 'make', file: 'Makefile', target: 'bootstrap' },
+      ] } }));
     const inspect = handlers.get('daemon.projects.inspect.v1')!;
     expect(await inspect({ workspace })).toMatchObject({ setupReadiness: { kind: 'unprepared' } });
     const reviewed = await reviewProjectSetupEffect(reviewInput(root));
@@ -119,6 +125,11 @@ describe('project definition Actions through registered Machine RPC', () => {
       { v: 1, workspaceRefId: workspace.workspaceId, completedAtMs: 123, ...reviewed.plan.successBasis });
     const result = ProjectDefinitionInspectOutputSchema.parse(await inspect({ workspace }));
     expect(result).toMatchObject({ setupReadiness: { kind: 'current', completedAtMs: 123, reviewedEffectDigest: reviewed.plan.reviewedEffectDigest } });
+    expect(result.setupReview).toMatchObject({ reviewedEffectDigest: reviewed.plan.reviewedEffectDigest, reviewedEffect: {
+      commands: [{ kind: 'command', command: 'touch must-not-execute' }, { source: { tool: 'make', target: 'bootstrap' } }],
+      configEnvironment: { MODE: 'development' },
+    } });
+    expect(JSON.stringify(result.setupReview)).not.toContain('must-not-leak');
     expect(JSON.stringify(result)).not.toContain('environmentBindingReferences');
     await expect(readFile(join(root, 'must-not-execute'))).rejects.toMatchObject({ code: 'ENOENT' });
     await writeFile(join(root, '.happier/project.json'), JSON.stringify({ version: 1, workspace: { setup: [{ kind: 'command', command: 'touch changed' }] } }));
