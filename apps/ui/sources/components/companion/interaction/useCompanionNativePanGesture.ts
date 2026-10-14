@@ -68,6 +68,8 @@ export type UseCompanionNativePanGestureResult<TDragState> = Readonly<{
      */
     translateX: ReturnType<typeof useSharedValue<number>>;
     translateY: ReturnType<typeof useSharedValue<number>>;
+    /** Settle geometry resolved by a companion's other binding using this same motion owner. */
+    settleToPoint: (target: CompanionPoint) => void;
     dragState: TDragState | null;
     point: CompanionPoint;
     shouldSuppressPress: () => boolean;
@@ -247,6 +249,10 @@ export function useCompanionNativePanGesture<TDragState = never>(
         translateX.value = snapMotion ? target.x : withSpring(target.x, resolveCompanionReleaseSpringConfig(releaseMotion, velocityX));
         translateY.value = snapMotion ? target.y : withSpring(target.y, resolveCompanionReleaseSpringConfig(releaseMotion, velocityY));
     }, [releaseMotion, snapMotion, targetX, targetY, translateX, translateY]);
+    const settleToPoint = React.useCallback((target: CompanionPoint) => {
+        'worklet';
+        animateToPoint(target, 0, 0);
+    }, [animateToPoint]);
 
     const settleRelease = React.useCallback((released: CompanionPoint, velocityX: number, velocityY: number) => {
         'worklet';
@@ -384,6 +390,7 @@ export function useCompanionNativePanGesture<TDragState = never>(
         dragProgress,
         translateX,
         translateY,
+        settleToPoint,
         dragState,
         point,
         shouldSuppressPress,

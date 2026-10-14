@@ -27,7 +27,7 @@ export function NativeFloatingFrame(props: HappierFloatingFrameNativeBindingProp
     React.useEffect(() => {
         width.value = rect.width;
         height.value = rect.height;
-    }, [rect.width, rect.height, width, height]);
+    }, [rect.width, rect.height, props.mode, moveInput, width, height]);
     const bounds = React.useMemo(() => ({
         minX: availableRect.x, maxX: Math.max(availableRect.x, availableRect.x + availableRect.width - rect.width),
         minY: availableRect.y, maxY: Math.max(availableRect.y, availableRect.y + availableRect.height - rect.height),
@@ -72,7 +72,7 @@ export function NativeFloatingFrame(props: HappierFloatingFrameNativeBindingProp
             else props.onModeChange('docked');
         },
     });
-    const { translateX, translateY } = pan;
+    const { translateX, translateY, settleToPoint } = pan;
     // Movement and resize are two bindings over the same companion pan/lifecycle owner, just as
     // web uses two companion pointer sessions. Resize never projects a throw or publishes frames.
     const resize = useCompanionNativePanGesture({
@@ -110,8 +110,7 @@ export function NativeFloatingFrame(props: HappierFloatingFrameNativeBindingProp
             if (!placement.fits) { props.onModeChange('docked'); return; }
             width.value = placement.rect.width;
             height.value = placement.rect.height;
-            translateX.value = placement.rect.x;
-            translateY.value = placement.rect.y;
+            settleToPoint(placement.rect);
             props.onRectChange(placement.rect, { kind: 'settle' });
         },
     });
