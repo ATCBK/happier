@@ -4,6 +4,8 @@ import type { ParticipantRecipientV1 } from '@happier-dev/protocol';
 import type { SessionParticipantTarget } from '@/sync/domains/session/participants/participantTargets';
 import type { DeferredPromise } from './testUtils/deferredPromise';
 import { createDeferredPromise } from './testUtils/deferredPromise';
+import { measureScreenContentBottom, PublishBottomChromeHeight } from './testUtils/bottomChromeViewport';
+import { SessionCockpitChromeRegistryProvider } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
 import {
   flushHookEffects,
@@ -180,11 +182,6 @@ vi.mock('@/sync/domains/input/participants/resolveParticipantRoutedSend', async 
     resolveParticipantRoutedSend: () => null,
   };
 });
-vi.mock('@/sync/ops/sessionExecutionRuns', () => ({
-  sessionExecutionRunSend: async () => ({ ok: true }),
-  sessionExecutionRunList: async () => ({ runs: [] }),
-  isExecutionRunNotRunningSendError: () => false,
-}));
 
 const {
   default: MessageScreen,
@@ -225,6 +222,27 @@ describe('Session message route hydration', () => {
   async function renderMessageScreen(Screen: React.ComponentType<any>) {
     return renderScreen(React.createElement(Screen));
   }
+
+  it('keeps the focused transcript viewport above measured bottom chrome as its height changes', async () => {
+    mockMessage = {
+      kind: 'tool-call', id: 'm1', localId: null, createdAt: 1,
+      tool: { id: 'task-1', name: 'Task', input: {}, result: null, state: 'completed' }, children: [],
+    };
+    const render = (height: number) => (
+      <SessionCockpitChromeRegistryProvider>
+        <PublishBottomChromeHeight height={height} />
+        <MessageScreen />
+      </SessionCockpitChromeRegistryProvider>
+    );
+    const screen = await renderScreen(render(94));
+    for (const height of [94, 121, 0]) {
+      await screen.update(render(height));
+      // Native text/list measurement is outside this test; Yoga exercises the screen's real frame.
+      const route = screen.findAllByType('View').find((node) => node.props.style?.flex === 1 && node.props.style?.minHeight === 0);
+      expect(route).toBeTruthy();
+      expect(measureScreenContentBottom(route!.props.style, 700)).toBe(700 - height);
+    }
+  });
 
   it('renders invalid link fallback when session id param is missing', async () => {
     mockSearchParams = { id: '', messageId: 'message-1' };
@@ -424,7 +442,9 @@ describe('Session message route hydration', () => {
   });
 
   it('keeps the focused tool transcript container shrinkable so the sidechain list can measure on web', async () => {
-    const styles = createSessionMessageRouteStyles(mockTheme);
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    const theme = (await createUnistylesMock({ theme: mockTheme })).useUnistyles().theme;
+    const styles = createSessionMessageRouteStyles(theme);
 
     expect(styles.routeContent).toEqual(
       expect.objectContaining({
