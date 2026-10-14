@@ -17,6 +17,8 @@ import { useMachineStorageViewSetting } from '@/components/machines/storage/useM
 import { createMachineFixture, pressTestInstanceAsync } from '@/dev/testkit';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
+import { useApplySettings } from '@/sync/store/settingsWriters';
+import { useSettingMutable } from '@/sync/store/hooks';
 
 const routerPush = vi.hoisted(() => vi.fn());
 
@@ -42,6 +44,73 @@ const originalState = storage.getState();
 afterEach(() => { standardCleanup(); storage.setState(originalState, true); });
 
 describe('declared setting Action writer', () => {
+    it('admits Profiles and other direct Account preferences at the shared settings ingress', async () => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({
+            useProfiles: false, useMachinePickerSearch: false, analyticsOptOut: false,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+        }) });
+        let profile: ReturnType<typeof useSettingMutable<'useProfiles'>> | undefined;
+        let apply: ReturnType<typeof useApplySettings> | undefined;
+        function Probe() { profile = useSettingMutable('useProfiles'); apply = useApplySettings(); return null; }
+        try {
+            await renderScreen(<Probe />);
+            await act(async () => {
+                profile![1](true);
+                await apply!({ useMachinePickerSearch: true, analyticsOptOut: true });
+            });
+            expect(storage.getState().settings).toMatchObject({ useProfiles: false, useMachinePickerSearch: false, analyticsOptOut: false });
+            expect(account.settingsWrites).toEqual([]);
+            await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings,
+                actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
+            })); });
+            const retained = profile![1];
+            await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings, useProfiles: true })); });
+            await act(async () => { retained(current => !current); });
+            await vi.waitFor(() => expect(account.persistedSettings.useProfiles).toBe(false));
+            await act(async () => { await apply!({ useMachinePickerSearch: true, analyticsOptOut: true, sessionTmuxTmpDir: null }); });
+            await vi.waitFor(() => expect(account.persistedSettings).toMatchObject({ useMachinePickerSearch: true, analyticsOptOut: true, sessionTmuxTmpDir: null }));
+            const writes = account.settingsWrites.length;
+            await act(async () => { profile![1](() => null); });
+            expect(account.settingsWrites).toHaveLength(writes);
+            await act(async () => {
+                // The Action consumer must reject malformed runtime values, rather than storage coercing them.
+                // @ts-expect-error Deliberate runtime boundary input with the wrong scalar type.
+                await apply!({ useProfiles: 'true' });
+            });
+            expect(account.persistedSettings.useProfiles).toBe(false);
+            expect(account.settingsWrites).toHaveLength(writes);
+        } finally { standardCleanup(); await account.dispose(); }
+    });
+    it('preserves JSON values, equivalent aliases and incumbent sparse writes without reviving a retired ingress', async () => {
+        const features = createRootLayoutFeaturesResponse();
+        expect(tryWriteServerEnabledBitInPlace(features, 'connectedServices.quotas', true)).toBe(true);
+        const account = await createSecretSettingsTestHarness({ features, settings: settingsParse({
+            useProfiles: false,
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
+        }) });
+        let apply: ReturnType<typeof useApplySettings> | undefined;
+        function Probe() { apply = useApplySettings(); return null; }
+        try {
+            const screen = await renderScreen(<Probe />);
+            await act(async () => { await apply!({ useProfiles: true, sessionListSectionModeV1: 'activity',
+                usageCoachPreferencesV1: settingsParse({ usageCoachPreferencesV1: { modelSuggestion: 'off' } }).usageCoachPreferencesV1,
+                sessionUsageGaugeLabels: true }); });
+            await vi.waitFor(() => expect(account.persistedSettings).toMatchObject({
+                useProfiles: true, sessionListSectionModeV1: 'activity', usageCoachPreferencesV1: { modelSuggestion: 'off' }, sessionUsageGaugeLabels: true,
+            }));
+            const retained = apply!;
+            const writes = account.settingsWrites.length;
+            await act(async () => { screen.tree.update(<></>); });
+            await act(async () => { await retained({ useProfiles: false }); });
+            expect(account.persistedSettings.useProfiles).toBe(true);
+            expect(account.settingsWrites).toHaveLength(writes);
+            const updater = vi.fn(() => ({ useProfiles: false }));
+            await act(async () => { storage.setState({ settingsScope: { serverId: account.scope.serverId, accountId: 'another-account' } }); });
+            await act(async () => { await retained(updater); });
+            expect(updater).not.toHaveBeenCalled();
+            expect(account.settingsWrites).toHaveLength(writes);
+        } finally { standardCleanup(); await account.dispose(); }
+    });
     it('routes the mounted Machine connection choice through admitted keyed Settings Actions in the exact Home', async () => {
         const preferences = { v: 1, flows: { machine_rpc: { direct: 'disabled' } },
             byMachineId: { other: { flows: { machine_rpc: { direct: 'enabled' } } } } } as const;
