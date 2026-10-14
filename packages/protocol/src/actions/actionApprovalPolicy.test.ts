@@ -140,7 +140,7 @@ describe('isApprovalRequiredByActionsSettings', () => {
 
   it('keeps Fork D confirmation defaults user-waivable on every automation surface', () => {
     for (const actionId of ['notifications.desktop.permission.request', 'notifications.push.permission.request',
-      'session.view.toolCalls.set', 'browser.automation.cancelActive', 'computer.target.close',
+      'browser.automation.cancelActive', 'computer.target.close',
       'plugin.webhook.delivery.replay', 'plugin.webhook.delivery.discard'] as const) {
       const spec = getActionSpec(actionId);
       for (const surface of ['agent', 'mcp', 'plugin', 'api'] as const) {
@@ -161,8 +161,8 @@ describe('isApprovalRequiredByActionsSettings', () => {
     }
     const actionId = 'session.view.toolCalls.set';
     const spec = getActionSpec(actionId);
-    const context = { surface: 'cli', authority: 'account_automation' } as const;
-    expect(resolveActionApprovalRouting({ actionId, spec, settings: EMPTY_SETTINGS, context }).required).toBe(true);
+    const context = { surface: 'cli', authority: 'present_user' } as const;
+    expect(resolveActionApprovalRouting({ actionId, spec, settings: EMPTY_SETTINGS, context }).required).toBe(false);
     const settings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: ['cli'] } });
     expect(resolveActionApprovalRouting({ actionId, spec, settings, context }).required).toBe(false);
     const required = normalizeActionsSettingsV1({ ...settings, actions: { [actionId]: { approvalRequiredSurfaces: ['cli'] } } });

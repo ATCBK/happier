@@ -59,7 +59,7 @@ const canonicalSessionSpawnInput = {
 } as const;
 
 describe('createActionExecutor (session control)', () => {
-  it('applies a waived automation transcript view preference through the registered field owner', async () => {
+  it('refuses automation tool visibility even when Action approval is waived', async () => {
     const writes: unknown[] = [];
     const executor = createExecutor({
       sessionStateFieldSet: async request => { writes.push(request); return { ok: true }; },
@@ -70,13 +70,37 @@ describe('createActionExecutor (session control)', () => {
       const input = { sessionId: 's1', showToolCalls: false };
       const context = { surface, authority: 'account_automation', defaultSessionId: 's1', actionCaller: { kind: 'host' } } as const;
       expect(await executor.execute('session.view.toolCalls.set', input, context))
-        .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+        .toMatchObject({ ok: false, errorCode: 'action_disabled' });
       expect(writes).toEqual([]);
       const actionsSettings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'session.view.toolCalls.set': [surface] } });
       expect(await executor.execute('session.view.toolCalls.set', input, { ...context, actionsSettings }))
-        .toEqual({ ok: true, result: { ok: true } });
-      expect(writes.pop()).toMatchObject({ sessionId: 's1', fieldId: 'view.transcriptToolCalls', value: false });
+        .toMatchObject({ ok: false, errorCode: 'action_disabled' });
+      expect(writes).toEqual([]);
     }
+    expect(await executor.execute('session.view.toolCalls.set', { sessionId: 's1', showToolCalls: false },
+      { surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' }, bypassApprovals: true }))
+      .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(writes).toEqual([]);
+  });
+  it('refuses Agent and MCP Account tool visibility set, reset and invoke before the settings host', async () => {
+    const settingsDeclarationAction = vi.fn(async () => ({ ok: true as const, result: {} }));
+    const executor = createExecutor({ settingsDeclarationAction });
+    for (const surface of ['agent', 'mcp'] as const) {
+      for (const actionId of ['settings.set', 'settings.reset', 'settings.invoke'] as const) {
+        const input = { anchor: 'transcript.showToolCalls', ...(actionId === 'settings.set' ? { value: false } : {}) };
+        const context = { surface, authority: 'account_automation', actionCaller: { kind: 'host' },
+          actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } }) } as const;
+        expect(await executor.execute(actionId, input, context))
+          .toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+      }
+    }
+    for (const actionId of ['settings.set', 'settings.reset', 'settings.invoke'] as const) {
+      const input = { anchor: 'transcript.showToolCalls', ...(actionId === 'settings.set' ? { value: false } : {}) };
+      expect(await executor.execute(actionId, input,
+        { surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' }, bypassApprovals: true }))
+        .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    }
+    expect(settingsDeclarationAction).not.toHaveBeenCalled();
   });
   it.each([
     { error: 'Session not found or not owned by user', code: 'session_absent' },
@@ -145,18 +169,18 @@ describe('createActionExecutor (session control)', () => {
     outcome = 'deleted';
     expect(await executor.execute('session.pending.withdraw', { sessionId: 'session', localId: 'pending' }, { surface: 'cli' })).toMatchObject({ ok: false, errorCode: 'invalid_action_output' });
   });
-  it('exposes view preferences for human approval and admits only the strict Bot input shape', async () => {
+  it('exposes view preferences only to people and admits only the strict Bot input shape', async () => {
     // Metadata writes are the host boundary; keep the approval policy real.
     const sessionStateFieldSet = vi.fn(async () => ({ ok: true }));
     const executor = createExecutor({ isActionApprovalRequired: undefined, sessionStateFieldSet });
     expect(getActionSpec('session.view.toolCalls.set').surfaces).toMatchObject({
-      ui: true, voice: true, cli: true, agent: true, mcp: true,
+      ui: true, voice: true, cli: true, agent: false, mcp: false,
     });
     for (const surface of ['agent', 'mcp'] as const) {
       const result = await executor.execute('session.view.toolCalls.set', { sessionId: 's1', showToolCalls: true },
-        { surface, defaultSessionId: 's1' });
+        { surface, authority: 'present_user', defaultSessionId: 's1' });
       expect(result, JSON.stringify(result))
-        .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+        .toMatchObject({ ok: false, errorCode: 'action_disabled' });
     }
     expect(sessionStateFieldSet).not.toHaveBeenCalled();
     const actionCaller = AgentStartSessionCallerV1Schema.parse({ kind: 'session', sessionId: 's1', starterDepth: 0, turnDepth: 0 });
@@ -165,9 +189,9 @@ describe('createActionExecutor (session control)', () => {
       for (const showToolCalls of [false, null]) {
         const input = { sessionId: 's1', showToolCalls };
         expect(await executor.prepare('session.view.toolCalls.set', input, context))
-          .toMatchObject({ kind: 'settled', result: { ok: false, errorCode: 'approvals_not_supported' } });
+          .toMatchObject({ kind: 'ready' });
         expect(await executor.execute('session.view.toolCalls.set', input, context))
-          .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+          .toEqual({ ok: true, result: { ok: true } });
       }
     }
     expect(await executor.execute('session.bot.set', { sessionId: 's1', bot: { kind: 'bot', role: 'admin' } }, { surface: 'cli' }))

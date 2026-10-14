@@ -8,6 +8,20 @@ import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1,
   readBuiltInSettingsOperationPolicyV1 } from './settingsDeclarations.js';
 
 describe('portable built-in Settings declarations', () => {
+  it('keeps Account tool visibility human-owned across settings mutation routes', () => {
+    const declaration = readBuiltInSettingDeclarationV1('transcript.showToolCalls');
+    expect(declaration).toMatchObject({ presentUserOnly: true, surfaces: { agent: false, mcp: false } });
+    for (const actionId of ['settings.set', 'settings.reset', 'settings.invoke'] as const) {
+      const input = { anchor: 'transcript.showToolCalls', value: false };
+      expect(isPresentUserSettingWriteV1(actionId, input)).toBe(true);
+      for (const surface of ['agent', 'mcp'] as const) {
+        expect(isAccountSettingActionSurfaceAllowedV1(actionId, input, surface)).toBe(false);
+      }
+      for (const surface of ['ui', 'voice', 'cli'] as const) {
+        expect(isAccountSettingActionSurfaceAllowedV1(actionId, input, surface)).toBe(true);
+      }
+    }
+  });
   it('owns MCP startup failure policy on Sessions and preserves its Account storage key', () => {
     const declaration = readBuiltInSettingDeclarationV1('session.mcpServersStrictMode');
     expect(declaration).toMatchObject({ pageId: 'session', sectionId: 'session.mcpServersReliability',
