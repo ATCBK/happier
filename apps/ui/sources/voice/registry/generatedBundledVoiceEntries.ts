@@ -161,7 +161,11 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             "externalSessions"
           ],
           "tools": {
-            "delivery": "native_mcp"
+            "delivery": "native_mcp",
+            "mcpToolControl": {
+              "approval": "host",
+              "off": "hidden"
+            }
           }
         },
         "catalog": {
