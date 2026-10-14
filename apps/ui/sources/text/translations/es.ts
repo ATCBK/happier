@@ -15191,6 +15191,7 @@ settingsSession: {
             capacityTightestUnit: ({ name }: { name: string | number }) => `quedan en ${name}, el más ajustado`,
             capacityResets: ({ time }: { time: string | number }) => `se restablece ${time}`,
             capacityAccounts: ({ count }: { count: string | number }) => `${count} cuentas leídas`,
+            capacityReading: ({ count }: { count: string | number }) => `Leyendo ${count} cuentas…`,
             capacityNoReads: "Aún no se han leído cupos de planes",
             capacityNoReadsReason: "Conecta una cuenta de suscripción para ver lo que le queda a cada plan.",
             openConnectedServices: "Servicios conectados",

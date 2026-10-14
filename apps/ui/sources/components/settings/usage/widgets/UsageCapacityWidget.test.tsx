@@ -78,3 +78,27 @@ it('keeps each reset and renewal as an exact point when the shared plot cannot f
   expect(screen.getTextContent()).toContain('Weekly');
   expect(screen.getTextContent()).toContain('Monthly');
 });
+
+it('holds the headline row while the first allowance is still being read, and drops it once nothing is pending', async () => {
+  const service = { pluginId: 'happier.agent.claude', localId: 'claude-subscription' };
+  const query = normalizeUsageQuery({});
+  const recordKey = { providerId: 'anthropic', accountSubjectId: 'work', subjectKind: 'account', quotaScope: 'account' } as const;
+  const read = ConnectedServiceQuotaGetResultV1Schema.parse({
+    source: { ref: { service, accountId: 'work' }, bindingKind: 'account' },
+    current: { v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+      providerId: 'anthropic', accountSubject: { kind: 'providerSubject', id: 'work' },
+      observedAtMs: Date.now(), fetchedAtMs: Date.now(), staleAfterMs: 60_000,
+      source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data', meters: [], planLabel: null },
+    pace: [], targets: [], waitingWork: { status: 'unavailable', reason: 'unsupported' },
+  });
+  const settled = resolveUsagePageAggregation({ queries: [query], quota: { status: 'available', value: [read] } }).results[0]!;
+  const reading = { ...settled, sources: [...settled.sources, { source: 'quota:work', status: 'pending' as const }] };
+  const { UsageCapacityWidget } = await import('./UsageCapacityWidget');
+  const render = (slice: typeof settled) => renderScreen(<InjectedAuthProvider credentials={null}>
+    <UsageCapacityWidget id="usage_capacity" slice={slice} query={query} serverId="home" testID="capacity"
+      model={{ requestedQuery: null, shownQuery: null, slice, pending: false, error: null, freshness: 'fresh',
+        updatingPreviousPeriod: false, refreshing: false, refresh: async () => {} } satisfies UsageWidgetBodyModel} />
+  </InjectedAuthProvider>);
+  expect((await render(reading)).findByTestId('capacity.reading')).not.toBeNull();
+  expect((await render(settled)).findByTestId('capacity.reading')).toBeNull();
+});

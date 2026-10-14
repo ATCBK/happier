@@ -15063,6 +15063,7 @@ settingsSession: {
             capacityTightestUnit: ({ name }: { name: string | number }) => `restant sur ${name}, le plus serré`,
             capacityResets: ({ time }: { time: string | number }) => `réinitialisé ${time}`,
             capacityAccounts: ({ count }: { count: string | number }) => `${count} comptes lus`,
+            capacityReading: ({ count }: { count: string | number }) => `Lecture de ${count} comptes…`,
             capacityNoReads: "Aucun quota de forfait lu pour l'instant",
             capacityNoReadsReason: "Connecte un compte d'abonnement pour voir ce qu'il reste à chaque forfait.",
             openConnectedServices: "Services connectés",

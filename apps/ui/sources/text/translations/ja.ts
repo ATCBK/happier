@@ -15463,6 +15463,7 @@ settingsSession: {
             capacityTightestUnit: ({ name }: { name: string | number }) => `${name} の残り（最も少ない）`,
             capacityResets: ({ time }: { time: string | number }) => `${time}にリセット`,
             capacityAccounts: ({ count }: { count: string | number }) => `${count} 件のアカウントを読み込み済み`,
+            capacityReading: ({ count }: { count: string | number }) => `${count} 件のアカウントを読み込み中…`,
             capacityNoReads: "プランの利用枠はまだ読み込まれていません",
             capacityNoReadsReason: "サブスクリプションアカウントを接続すると、各プランの残りが表示されます。",
             openConnectedServices: "接続済みサービス",

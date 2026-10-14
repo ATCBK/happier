@@ -15122,6 +15122,7 @@ settingsSession: {
             capacityTightestUnit: ({ name }: { name: string | number }) => `осталось у ${name}, самого загруженного`,
             capacityResets: ({ time }: { time: string | number }) => `сброс ${time}`,
             capacityAccounts: ({ count }: { count: string | number }) => `прочитано аккаунтов: ${count}`,
+            capacityReading: ({ count }: { count: string | number }) => `Чтение аккаунтов: ${count}…`,
             capacityNoReads: "Лимиты тарифов ещё не прочитаны",
             capacityNoReadsReason: "Подключите аккаунт с подпиской, чтобы видеть остаток каждого тарифа.",
             openConnectedServices: "Подключённые сервисы",

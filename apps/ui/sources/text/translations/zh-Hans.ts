@@ -14811,6 +14811,7 @@ settingsSession: {
             capacityTightestUnit: ({ name }: { name: string | number }) => `${name} 剩余，最紧张`,
             capacityResets: ({ time }: { time: string | number }) => `${time} 重置`,
             capacityAccounts: ({ count }: { count: string | number }) => `已读取 ${count} 个账号`,
+            capacityReading: ({ count }: { count: string | number }) => `正在读取 ${count} 个账号…`,
             capacityNoReads: "尚未读取任何套餐额度",
             capacityNoReadsReason: "连接订阅账号即可查看每个套餐的剩余额度。",
             openConnectedServices: "已连接的服务",

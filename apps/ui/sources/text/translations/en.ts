@@ -18853,6 +18853,7 @@ const enUsage = {
       capacityTightestUnit: ({ name }: { name: string | number }) => `left on ${name}, the tightest`,
       capacityResets: ({ time }: { time: string | number }) => `resets ${time}`,
       capacityAccounts: ({ count }: { count: string | number }) => `${count} ${Number(count) === 1 ? 'account' : 'accounts'} read`,
+      capacityReading: ({ count }: { count: string | number }) => `Reading ${count} ${Number(count) === 1 ? 'account' : 'accounts'}…`,
       capacityNoReads: "No plan allowances read yet",
       capacityNoReadsReason: "Connect a subscription account to see what each plan has left.",
       openConnectedServices: "Connected services",

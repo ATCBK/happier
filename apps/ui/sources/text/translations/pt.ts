@@ -15316,6 +15316,7 @@ settingsSession: {
             capacityTightestUnit: ({ name }: { name: string | number }) => `restante em ${name}, o mais apertado`,
             capacityResets: ({ time }: { time: string | number }) => `renova ${time}`,
             capacityAccounts: ({ count }: { count: string | number }) => `${count} contas lidas`,
+            capacityReading: ({ count }: { count: string | number }) => `Lendo ${count} contas…`,
             capacityNoReads: "Nenhuma cota de plano lida ainda",
             capacityNoReadsReason: "Conecte uma conta de assinatura para ver o que resta em cada plano.",
             openConnectedServices: "Serviços conectados",

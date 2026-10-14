@@ -15318,6 +15318,7 @@ settingsSession: {
             capacityTightestUnit: ({ name }: { name: string | number }) => `übrig bei ${name}, dem knappsten`,
             capacityResets: ({ time }: { time: string | number }) => `wird ${time} zurückgesetzt`,
             capacityAccounts: ({ count }: { count: string | number }) => `${count} Konten gelesen`,
+            capacityReading: ({ count }: { count: string | number }) => `${count} Konten werden gelesen…`,
             capacityNoReads: "Noch keine Tarifkontingente gelesen",
             capacityNoReadsReason: "Verbinde ein Abo-Konto, um zu sehen, was jedem Tarif bleibt.",
             openConnectedServices: "Verbundene Dienste",

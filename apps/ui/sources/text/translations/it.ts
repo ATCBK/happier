@@ -15561,6 +15561,7 @@ settingsSession: {
             capacityTightestUnit: ({ name }: { name: string | number }) => `rimasto su ${name}, il più stretto`,
             capacityResets: ({ time }: { time: string | number }) => `si azzera ${time}`,
             capacityAccounts: ({ count }: { count: string | number }) => `${count} account letti`,
+            capacityReading: ({ count }: { count: string | number }) => `Lettura di ${count} account…`,
             capacityNoReads: "Nessuna quota di piano ancora letta",
             capacityNoReadsReason: "Collega un account in abbonamento per vedere cosa resta a ogni piano.",
             openConnectedServices: "Servizi collegati",
