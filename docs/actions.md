@@ -222,7 +222,15 @@ Declared review hints retain their intentional omissions, including private retr
 A domain can declare `approvalPresentation.projectInput`
 for private review operands (such as a saved Profile definition) that its shared
 `projectObservationInput` must omit. Missing review context produces a typed
-refusal consumed by both the Approve control and the executor. An executed invocation is not proof that
+refusal consumed by both the Approve control and the executor. Settled private history retains the declared
+`approvalPresentation.projectInput` when the spec declares `retainInputOnSettlement`,
+falling back to the observation projection otherwise. Rules and registry source
+specs retain their review; other input-redaction contracts stay unchanged. Live-only input custody remains
+redacted. Settled Details reads that history without re-running Approve admission
+or offering another decision; operands already removed from historical records
+remain unavailable. Capability rule fields name the skill or MCP server, place,
+and change through the existing spec hints and typed reference reader; exact
+identities remain in Technical details. An executed invocation is not proof that
 its domain effect succeeded: the shared failure reader validates Machine-family
 results against their canonical output schemas and presents typed refusals,
 conflicts and unavailable selections as failures. The durable execution receipt
