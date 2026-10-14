@@ -7966,7 +7966,7 @@ export const es: TranslationStructure = {
         invalidActionSubtitle: 'Esta acción ya no está disponible en esta compilación.',
         configureActionAccessibilityLabel: 'Configurar acción',
         approvalHelpTitle: 'Modos de aprobación',
-        approvalHelpBody: '“Preguntar primero” crea una solicitud de aprobación antes de que esta acción se ejecute desde esa superficie. Para las sesiones de IA, esa solicitud queda en la superficie de aprobaciones existente y no espera en un modal. “Permitido” deja que la acción se ejecute desde esa superficie sin una solicitud de aprobación.',
+        approvalHelpBody: "“Preguntar primero” requiere aprobación antes de ejecutar esta acción desde esa superficie. Los controles de la aplicación pueden mostrar un diálogo de confirmación. Para las sesiones de IA, la solicitud queda en la superficie de aprobaciones existente y no espera en un modal. “Permitido” deja ejecutar la acción sin una solicitud de aprobación.",
         toolExposure: {
             title: 'Exposición de herramienta',
             footer: 'Controla si las acciones compatibles aparecen como herramientas directas o solo quedan disponibles mediante descubrimiento de acciones.',

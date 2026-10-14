@@ -6687,7 +6687,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         invalidActionSubtitle: '此動作在此版本中不再可用。',
         configureActionAccessibilityLabel: '設定操作',
         approvalHelpTitle: '核准模式',
-        approvalHelpBody: '「先詢問」會在此操作從該介面執行前建立核准請求。對於 AI 工作階段，該請求會排入現有核准介面，而不會在強制回應視窗中等待。「允許」則讓此操作從該介面執行，而不需要核准請求。',
+        approvalHelpBody: "「先詢問」要求在此操作從該介面執行前取得核准。應用程式內的控制項可能顯示確認對話框。對於 AI 工作階段，核准請求會排入現有核准介面，而不會在強制回應視窗中等待。「允許」則讓此操作不需核准請求即可執行。",
         toolExposure: {
             title: '工具公開',
             footer: '控制符合條件的動作是顯示為直接工具，還是只可透過動作探索使用。',
