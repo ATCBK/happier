@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import {
@@ -14,22 +14,20 @@ import {
   type SessionCapabilitySelectionV1,
 } from './sessionCapabilitySelectionV1.js';
 
-export const SessionSkillSelectionRestartRequiredAuthoringV1Schema = lazyZodSchema(() => z.object({
+export const SessionSkillSelectionRestartRequiredAuthoringV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1), appliedSelection: SessionSkillSelectionAuthoringV1Schema,
-}).strict());
+}));
 export const SessionSkillSelectionRestartRequiredV1Schema = createStoredReadSchema(SessionSkillSelectionRestartRequiredAuthoringV1Schema);
 export type SessionSkillSelectionRestartRequiredV1 = z.infer<typeof SessionSkillSelectionRestartRequiredV1Schema>;
 
-const CapabilitySelectionApplyReasonV1Schema = lazyZodSchema(() => z.object({
-  reason: z.string().min(1), restartBy: z.enum(['user', 'terminal']).optional(),
-}).strict());
-const SkillCapabilitySelectionApplyReasonV1Schema = lazyZodSchema(() => CapabilitySelectionApplyReasonV1Schema.extend({
-  source: z.literal('rules').optional(),
-}).strict());
+const CapabilitySelectionApplyReasonV1Schema = lazyZodSchema(() => z.strictObject({
+  reason: z.string().check(z.minLength(1)), restartBy: z.optional(z.enum(['user', 'terminal'])),
+  source: z.optional(z.literal('rules')),
+}));
 /** Status projection only. Desired policy and applied baselines stay in their existing keys. */
-export const CapabilitySelectionApplyAuthoringV1Schema = lazyZodSchema(() => z.object({
-  mcp: CapabilitySelectionApplyReasonV1Schema.optional(), skills: SkillCapabilitySelectionApplyReasonV1Schema.optional(),
-}).strict());
+export const CapabilitySelectionApplyAuthoringV1Schema = lazyZodSchema(() => z.strictObject({
+  mcp: z.optional(CapabilitySelectionApplyReasonV1Schema), skills: z.optional(CapabilitySelectionApplyReasonV1Schema),
+}));
 export const CapabilitySelectionApplyV1Schema = createStoredReadSchema(CapabilitySelectionApplyAuthoringV1Schema);
 export type CapabilitySelectionApplyV1 = z.infer<typeof CapabilitySelectionApplyV1Schema>;
 
@@ -70,16 +68,17 @@ export function readPendingCapabilityApplyV1(metadata: unknown): Readonly<{ mcp:
   const desired = readSessionCapabilitySelectionFromMetadataV1(metadata);
   const applied = readAppliedSessionCapabilitySelectionFromMetadataV1(metadata);
   return {
-    mcp: !areSessionCapabilitySelectionsEquivalentV1({ mcp: desired.mcp }, { mcp: applied.mcp }),
+    mcp: !areSessionCapabilitySelectionsEquivalentV1({ mcp: desired.mcp }, { mcp: applied.mcp })
+      || readPendingCapabilityRuleApplyV1(metadata, 'mcp'),
     skills: !areSessionCapabilitySelectionsEquivalentV1({ skills: desired.skills }, { skills: applied.skills })
-      || readPendingSkillRuleApplyV1(metadata),
+      || readPendingCapabilityRuleApplyV1(metadata, 'skills'),
   };
 }
 
 /** Retained rule refusals are not positive evidence of the runtime's applied rules. */
-export function readPendingSkillRuleApplyV1(metadata: unknown): boolean {
+export function readPendingCapabilityRuleApplyV1(metadata: unknown, kind: 'mcp' | 'skills'): boolean {
   const status = CapabilitySelectionApplyV1Schema.safeParse(metadataRecord(metadata).capabilitySelectionApplyV1);
-  return status.success && status.data.skills?.source === 'rules';
+  return status.success && status.data[kind]?.source === 'rules';
 }
 
 function readCapabilitySelectionApplyStateV1(metadata: unknown): CapabilitySelectionApplyV1 {
@@ -92,9 +91,10 @@ function readCapabilitySelectionApplyStateV1(metadata: unknown): CapabilitySelec
 /** Public refusal projection; the rule trigger remains owned by the metadata codec. */
 export function readCapabilitySelectionApplyV1(metadata: unknown): CapabilitySelectionApplyV1 {
   const status = readCapabilitySelectionApplyStateV1(metadata);
-  return { ...(status.mcp ? { mcp: status.mcp } : {}), ...(status.skills ? { skills: {
-    reason: status.skills.reason, ...(status.skills.restartBy ? { restartBy: status.skills.restartBy } : {}),
-  } } : {}) };
+  const publicStatus = (value: NonNullable<CapabilitySelectionApplyV1['mcp']>) => ({
+    reason: value.reason, ...(value.restartBy ? { restartBy: value.restartBy } : {}),
+  });
+  return { ...(status.mcp ? { mcp: publicStatus(status.mcp) } : {}), ...(status.skills ? { skills: publicStatus(status.skills) } : {}) };
 }
 
 export function writeCapabilitySelectionApplyV1<TMetadata extends object>(metadata: TMetadata,
@@ -142,7 +142,8 @@ export function writeSessionCapabilitySelectionToMetadataV1<TMetadata extends ob
     } else delete result.skillSelectionRestartRequiredV1;
   }
   return writeCapabilitySelectionApplyV1(result, {
-    ...(selection.mcp === undefined ? { mcp: readCapabilitySelectionApplyStateV1(result).mcp } : {}),
+    ...(selection.mcp === undefined ? { mcp: readCapabilitySelectionApplyStateV1(result).mcp }
+      : opts.sessionActive && previousApply.mcp?.source === 'rules' ? { mcp: previousApply.mcp } : {}),
     ...(selection.skills === undefined ? { skills: readCapabilitySelectionApplyStateV1(result).skills }
       : opts.sessionActive && previousApply.skills?.source === 'rules' ? { skills: previousApply.skills } : {}),
   });
@@ -167,6 +168,7 @@ export function resolveSelectionRestartMarkersForStartupV1<TMetadata extends obj
     } else result.skillSelectionRestartRequiredV1 = { v: 1, appliedSelection: applied.skills };
   }
   const status = readCapabilitySelectionApplyStateV1(result);
+  if (applied.mcp !== undefined && status.mcp?.source === 'rules') delete status.mcp;
   if (applied.skills !== undefined && status.skills?.source === 'rules') delete status.skills;
   return writeCapabilitySelectionApplyV1(result, status);
 }
