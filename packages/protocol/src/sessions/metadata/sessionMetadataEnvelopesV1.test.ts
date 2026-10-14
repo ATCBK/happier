@@ -870,6 +870,9 @@ describe('session metadata privacy envelopes v1', () => {
   });
 
   it('admits only the exact canonical padded Base64 spelling of kind-26 ciphertext', () => {
+    for (const nonString of [undefined, null, 1, {}, []]) {
+      expect(Reflect.apply(isSessionOwnerMetadataCiphertextV1, undefined, [nonString])).toBe(false);
+    }
     const canonicalCiphertext =
       'oRoBAgMEBQYHCAkKCwwNDg8QERITFBUWFxh8aC0+8+YDECLScN6uQTItPyWVR7XbQA==';
     const caseOnlyDistinctCiphertext =

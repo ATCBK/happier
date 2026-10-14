@@ -10,7 +10,7 @@ import { SessionForkVisualCopyV1Schema, SessionForkVisualsV1Schema } from '../bo
 
 import type { AccountEncryptionMode } from '../../features/payload/capabilities/encryptionCapabilities.js';
 import { readAccountScopedCiphertextKindByte } from '../../crypto/accountScopedCipherEnvelope.js';
-import { decodeBase64, encodeBase64 } from '../../crypto/base64.js';
+import { readCanonicalPaddedBase64DecodedLength } from '../../crypto/base64.js';
 import { AgentModelOptionOverrideRuleSchema } from '../../models/descriptor.js';
 import { AgentNativeResumeIdentityV1Schema } from '../../agents/nativeResumeIdentityV1.js';
 import {
@@ -2689,13 +2689,7 @@ export function validateSessionOwnerMetadataEnvelopeForAccountModeV1(
 export function isSessionOwnerMetadataCiphertextV1(
   ciphertext: string,
 ): boolean {
-  let decoded: Uint8Array;
-  try {
-    decoded = decodeBase64(ciphertext, 'base64');
-  } catch {
-    return false;
-  }
-  if (encodeBase64(decoded, 'base64') !== ciphertext) {
+  if (typeof ciphertext !== 'string' || readCanonicalPaddedBase64DecodedLength(ciphertext) === null) {
     return false;
   }
   return readAccountScopedCiphertextKindByte(ciphertext)

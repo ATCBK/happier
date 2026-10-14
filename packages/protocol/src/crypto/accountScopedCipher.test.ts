@@ -710,6 +710,33 @@ describe('accountScopedCipher', () => {
     expect(readAccountScopedCiphertextKindByte('not-base64')).toBeNull();
   });
 
+  it('preserves lenient envelope inspection and the minimum complete envelope boundary', () => {
+    for (const nonString of [undefined, null, 1, {}, []]) {
+      expect(Reflect.apply(readAccountScopedCiphertextKindByte, undefined, [nonString])).toBeNull();
+    }
+    for (const length of [41, 42, 43, 44]) {
+      const bytes = new Uint8Array(length).fill(251);
+      bytes[0] = 0xa1;
+      bytes[1] = 26;
+      const canonical = encodeBase64(bytes);
+      const aliases = [canonical, `${canonical}\n`, `${canonical.slice(0, 8)}!${canonical.slice(8)}`,
+        canonical.replace(/=+$/, ''), `${canonical}!!!`, `${canonical}====`,
+        `${canonical.slice(0, 8)}=${canonical.slice(8)}`];
+      for (const ciphertext of aliases) {
+        const decoded = decodeBase64(ciphertext);
+        expect(readAccountScopedCiphertextKindByte(ciphertext)).toBe(decoded.length < 42 ? null : 26);
+      }
+      bytes[0] = 0xa0;
+      expect(readAccountScopedCiphertextKindByte(encodeBase64(bytes))).toBeNull();
+    }
+    const completeEnvelope = new Uint8Array(42).fill(251);
+    completeEnvelope[0] = 0xa1;
+    for (let kindByte = 0; kindByte <= 255; kindByte += 1) {
+      completeEnvelope[1] = kindByte;
+      expect(readAccountScopedCiphertextKindByte(encodeBase64(completeEnvelope))).toBe(kindByte);
+    }
+  });
+
   it('opens the exact remote-dev@9b097966 Account draft ciphertext under its predecessor domain', () => {
     const material: AccountScopedCryptoMaterial = {
       type: 'dataKey',
