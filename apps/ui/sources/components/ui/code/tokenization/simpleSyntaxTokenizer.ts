@@ -114,6 +114,9 @@ const HASH_COMMENT_LANGUAGES: ReadonlySet<string> = new Set([
     'yaml', 'yml', 'toml', 'dockerfile', 'makefile', 'dotenv',
 ]);
 
+// Shell languages, where a word such as `host-01.example` or `ubuntu-24.04` is one argument.
+const SHELL_WORD_LANGUAGES: ReadonlySet<string> = new Set(['bash', 'sh', 'shell', 'zsh', 'fish', 'powershell', 'ps1']);
+
 function pushToken(out: SimpleSyntaxToken[], token: SimpleSyntaxToken) {
     const prev = out[out.length - 1];
     if (prev && prev.type === token.type) {
@@ -184,7 +187,7 @@ export function tokenizeSimpleSyntaxLine(params: {
         }
 
         // Shell-family words: a digit inside a word (`host-01.example`, `ubuntu-24.04`) is part of that word, not a number.
-        if (hashComments && !isPython && isDigit(ch) && i > 0 && !/[\s=([{,:;|&<>"']/.test(raw[i - 1] ?? '')) {
+        if (SHELL_WORD_LANGUAGES.has(lang) && isDigit(ch) && i > 0 && !/[\s=([{,:;|&<>"']/.test(raw[i - 1] ?? '')) {
             let j = i + 1;
             while (j < raw.length && !/\s/.test(raw[j] ?? '')) j += 1;
             pushToken(out, { type: 'default', text: raw.slice(i, j) });
