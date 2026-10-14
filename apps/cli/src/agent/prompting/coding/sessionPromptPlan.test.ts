@@ -331,7 +331,7 @@ describe('session prompt-plan producer', () => {
       readNativeSessionId: () => 'native', daemonBridge,
     });
     await resolve();
-    const preparedBehavior = resolve.readCodingPromptBehavior?.();
+    let preparedBehavior = resolve.readCodingPromptBehavior?.();
     expect(preparedBehavior).not.toBeNull();
     if (profileId) expect(preparedBehavior?.sessionTitleUpdates).toBe('ongoing');
     const catalog = getActiveAccountSettingsSnapshot()?.profileCatalog;
@@ -344,6 +344,23 @@ describe('session prompt-plan producer', () => {
     } });
     expect(resolve.readCodingPromptBehavior?.()).toEqual(preparedBehavior);
     expect(resolve.assertPreparedPlanCurrent).not.toThrow();
+    commitActiveProfileCatalog({ scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), catalog: {
+      ...catalog, referenceGuardRevision: 3, records: catalog.records.map(row => row.record.id !== 'focused'
+        || row.record.definition.kind !== 'inline' ? row : { revision: row.revision + 1, record: ProfileRecordV1Schema.parse({
+          ...row.record, definition: { ...row.record.definition, profile: { ...row.record.definition.profile,
+            codingPromptBehaviorOverrides: { sessionTitleUpdates: 'disabled' } } },
+        }) }),
+    } });
+    if (profileId) {
+      expect(resolve.readCodingPromptBehavior?.()).toBeNull();
+      expect(resolve.assertPreparedPlanCurrent).toThrow(expect.objectContaining({ reason: 'active-account-profile-changed' }));
+      await resolve();
+      preparedBehavior = resolve.readCodingPromptBehavior?.();
+      expect(preparedBehavior?.sessionTitleUpdates).toBe('disabled');
+    } else {
+      expect(resolve.readCodingPromptBehavior?.()).toEqual(preparedBehavior);
+      expect(resolve.assertPreparedPlanCurrent).not.toThrow();
+    }
     beginActiveProfileCatalogRefresh({ scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() });
     if (profileId) {
       expect(resolve.readCodingPromptBehavior?.()).toBeNull();

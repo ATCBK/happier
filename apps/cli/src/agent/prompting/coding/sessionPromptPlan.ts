@@ -13,7 +13,7 @@ import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import { resolvePluginPromptAssetBlocks, resolvePluginToolPromptContributions } from '@/plugins/runtime/hooks/execution/dispatchAgentTurnHooks';
 import { resolveEffectiveCodingPromptPlan } from './resolveEffectiveCodingPrompt';
 import { prepareSessionPromptStackInputs } from './sessionPromptStack';
-import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, isActiveAccountSettingsSnapshotLifetimeCurrent, readAccountPromptStackSources } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, isActiveAccountSettingsSnapshotLifetimeCurrent, readAccountPromptStackSources, readAccountProfilePromptStackSources } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { PromptStackAdmittedEntryV1 } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { createPromptCompositionScope, type PromptPlanComposition } from '../promptComposition';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
@@ -29,8 +29,24 @@ export type SessionPromptPlanWithdrawalReason = 'plan-unprepared' | 'account-lif
   | `active-${PromptPreparationAccountChange}` | `captured-${PromptPreparationAccountChange}`
   | 'prepared-settings-changed' | 'profile-selection-changed';
 
+function readPromptPreparationProfileBasis(snapshot: NonNullable<PromptPreparationAccountSnapshot>, profileId: string | null) {
+  if (!profileId) return null;
+  const catalog = snapshot.profileCatalog;
+  return {
+    sources: readAccountProfilePromptStackSources(snapshot, { profileId }),
+    catalog: catalog?.status === 'ready' ? {
+      status: catalog.status, authority: catalog.authority, source: catalog.source,
+      controlPhase: catalog.control?.record.phase ?? null,
+      // The canonical source reader chooses native rows only after activation.
+      // Another Profile's row and the census revision cannot change this layer.
+      selectedRows: catalog.authority === 'active' || catalog.source === 'destination'
+        ? catalog.records.filter(({ record }) => record.id === profileId) : [],
+    } : catalog,
+  };
+}
+
 function readPromptPreparationAccountChange(prepared: PromptPreparationAccountSnapshot,
-  current: PromptPreparationAccountSnapshot): PromptPreparationAccountChange | null {
+  current: PromptPreparationAccountSnapshot, profileId: string | null): PromptPreparationAccountChange | null {
   if (prepared === current) return null;
   if (!prepared || !current) return 'account-snapshot-unavailable';
   if (prepared.scopeKey !== current.scopeKey) return 'account-scope-changed';
@@ -39,7 +55,8 @@ function readPromptPreparationAccountChange(prepared: PromptPreparationAccountSn
   if (prepared.source !== 'none' && current.source === 'none') return 'account-availability-changed';
   if (!isDeepStrictEqual(prepared.settings, current.settings)) return 'account-settings-changed';
   if (!isDeepStrictEqual(prepared.settingsSecretsReadKeys, current.settingsSecretsReadKeys)) return 'account-keys-changed';
-  if (!isDeepStrictEqual(prepared.profileCatalog, current.profileCatalog)) return 'account-profile-changed';
+  if (!isDeepStrictEqual(readPromptPreparationProfileBasis(prepared, profileId),
+    readPromptPreparationProfileBasis(current, profileId))) return 'account-profile-changed';
   // Prompt rows are retained for this dispatch. Independent catalog hydration
   // and source/history bookkeeping do not change its prompt authority facts.
   return null;
@@ -218,10 +235,10 @@ export function createSessionPromptPlanResolver(params: Readonly<{
     const capturedAccount = preparedBehavior.operationContext?.readSnapshot();
     if (accountScopeKey) {
       if (getActiveAccountSettingsSnapshotLifetimeToken() !== accountLifetimeToken) return 'account-lifetime-changed';
-      const activeChange = readPromptPreparationAccountChange(preparedBehavior.activeAccountSnapshot, activeAccount);
+      const activeChange = readPromptPreparationAccountChange(preparedBehavior.activeAccountSnapshot, activeAccount, preparedBehavior.profileId);
       if (activeChange) return `active-${activeChange}`;
       const capturedChange = readPromptPreparationAccountChange(preparedBehavior.accountSnapshot,
-        preparedBehavior.operationContext ? capturedAccount ?? null : activeAccount);
+        preparedBehavior.operationContext ? capturedAccount ?? null : activeAccount, preparedBehavior.profileId);
       if (capturedChange) return `captured-${capturedChange}`;
     }
     const currentSettings = preparedBehavior.operationContext ? capturedAccount?.settings

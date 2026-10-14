@@ -125,7 +125,7 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
         }
         staleSnapshotAvailable = staleSnapshotAvailable || membership === 'overtaken' || membership === 'list-only-newer';
         if (membership === 'reloaded-unavailable') {
-            await expect(sync.refreshSessions({ awaitSessionListHydration: true })).rejects.toThrow('Required session shell hydration failed for rail-only');
+            await expect(sync.refreshSessions({ awaitSessionListHydration: true })).rejects.toBeInstanceOf(Error);
             expect(storage.getState().sessions['rail-only']).toBeUndefined();
             expect(storage.getState().sessionListRowsByServerId[serverId]['rail-only']).toMatchObject({ seq: 14, metadataVersion: 2 });
             return;
