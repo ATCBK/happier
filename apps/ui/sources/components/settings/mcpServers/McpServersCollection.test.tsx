@@ -101,7 +101,6 @@ vi.doUnmock('@/sync/domains/state/storage');
 // Load the real owners during collection rather than spending a test's deadline
 // transforming the cold Home/action graph.
 const { storage } = await import('@/sync/domains/state/storageStore');
-const { listMcpPreviewAgentIds } = await import('./mcpServerScreenHelpers');
 const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { upsertServerProfileOnly } = await import('@/sync/domains/server/serverRuntime');
 const { setServerProfileIdentityForUrl, resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
@@ -113,8 +112,7 @@ const { settingsParse } = await import('@/sync/domains/settings/settings');
 const { McpSettingsIndex } = await import('./McpSettingsIndex');
 const { McpServerCollection } = await import('./collection/McpServerCollection');
 const { McpDetectedServersScreen } = await import('./McpDetectedServersScreen');
-const { McpSessionPreviewScreen } = await import('./McpSessionPreviewScreen');
-const { McpPreviewServersTab } = await import('./McpPreviewServersTab');
+const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
 const initialState = storage.getState();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 let disposeActionExecutorModuleLoader: (() => void) | undefined;
@@ -297,24 +295,29 @@ describe('MCP servers collection and tools', () => {
         vi.mocked(Modal.confirm).mockResolvedValue(true);
     });
 
-    it.each(['land', 'list'] as const)('invites an empty collection with one primary way to add and retains machine tools (%s)', async (view) => {
+    it('invites an empty collection on the list page with Browse first and Paste a config beside it', async () => {
         settingsState.value = { v: 1, strictMode: false, servers: [], bindings: [] };
         await refreshCatalogFixture();
-        const screen = await renderInCollectionLayout(React.createElement(McpSettingsIndex), view === 'land' ? 'split' : 'stacked');
-        const addMenu = screen.find((node) => node.props?.testID === 'settings.mcpServers.addMenu' && typeof node.props?.onSelect === 'function');
-        // One primary: "Add MCP server" is the add menu's own trigger; no other way to add sits beside it.
-        const trigger = addMenu.props.trigger({ open: false, toggle: () => {}, openMenu: () => {}, closeMenu: () => {}, selectedItem: null });
-        expect(trigger.props.testID).toBe('settings.mcpServers.invitation.add');
-        const otherWays = screen.findAll((node) => node.props?.testID?.startsWith?.('settings.mcpServers.invitation.')
-            && (typeof node.props?.onPress === 'function' || typeof node.props?.action === 'function')
-            && node.props.testID !== 'settings.mcpServers.invitation.add');
-        expect(otherWays).toHaveLength(0);
-        // The menu holds every way: configure, paste JSON, from this machine (and presets).
-        expect(addMenu.props.items.map((item: { id: string }) => item.id)).toEqual(
-            expect.arrayContaining(['configure', 'import-json', 'from-machine']),
-        );
-        expect(screen.findByTestId('settings.mcpServers.tool.onMachine')).not.toBeNull();
-        expect(screen.findByTestId('settings.mcpServers.tool.preview')).not.toBeNull();
+        const screen = await renderInCollectionLayout(React.createElement(McpSettingsIndex), 'stacked');
+        const invitation = screen.find((node) => node.props?.testID === 'settings.mcpServers.invitation' && node.props?.primaryAction !== undefined);
+        expect(invitation!.props.primaryAction.testID).toBe('settings.mcpServers.invitation.add');
+        expect(invitation!.props.secondaryAction.testID).toBe('settings.mcpServers.invitation.paste');
+        // Both open the one Add modal (P7 U7.10), never a page of their own.
+        const { Modal } = await import('@/modal');
+        await act(async () => { invitation!.props.primaryAction.onPress(); });
+        await act(async () => { invitation!.props.secondaryAction.onPress(); });
+        expect(vi.mocked(Modal.show)).toHaveBeenCalledTimes(2);
+        expect(routerPushSpy).not.toHaveBeenCalled();
+    });
+
+    it('beside the rail, an empty collection is the brand-new homepage', async () => {
+        settingsState.value = { v: 1, strictMode: false, servers: [], bindings: [] };
+        await refreshCatalogFixture();
+        const screen = await renderInCollectionLayout(React.createElement(McpSettingsIndex), 'split');
+        expect(screen.find((node) => node.props?.testID === 'mcp.home.header' && typeof node.props?.title === 'string')!.props.title)
+            .toBe('capabilities.mcpHome.newTitle');
+        expect(screen.findByTestId('mcp.home.browse')).not.toBeNull();
+        expect(screen.findByTestId('mcp.home.paste')).not.toBeNull();
     });
 
     it('lists each server with where it applies, flags one that applies nowhere, and adds in the collection', async () => {
@@ -352,13 +355,12 @@ describe('MCP servers collection and tools', () => {
         await screen.pressRow('mcp.server.card.server-2');
         await vi.waitFor(() => expect(routerReplaceSpy).toHaveBeenLastCalledWith('/settings/mcp/server-2'));
 
-        const addMenu = screen.find((node) => node.props?.testID === 'settings.mcpServers.addMenu' && typeof node.props?.onSelect === 'function');
-        await act(async () => { addMenu.props.onSelect('preset:playwright'); });
-        expect(routerReplaceSpy).toHaveBeenLastCalledWith('/settings/mcp/new?addMode=quick-install&presetId=playwright');
-        await act(async () => { addMenu.props.onSelect('configure'); });
-        expect(routerReplaceSpy).toHaveBeenLastCalledWith('/settings/mcp/new');
-        await act(async () => { addMenu.props.onSelect('from-machine'); });
-        expect(routerReplaceSpy).toHaveBeenLastCalledWith('/settings/mcp/on-machine');
+        // The rail's "+" opens the one Add modal; nothing navigates until a server is added.
+        const { Modal } = await import('@/modal');
+        await act(async () => { screen.findByTestId('settings.mcpServers.addServer')!.props.onPress(); });
+        expect(vi.mocked(Modal.show)).toHaveBeenCalledWith(expect.objectContaining({
+            chrome: expect.objectContaining({ testID: 'mcp.add' }),
+        }));
     });
 
     it('scans every discovery source on the managed machine and imports a found server into the collection', async () => {
@@ -404,50 +406,6 @@ describe('MCP servers collection and tools', () => {
         expect(accountSettingsWrites).toEqual([]);
     });
 
-    it('offers every agent that receives MCP tools in the session preview and records the failure policy', async () => {
-        const screen = await renderSettingsView(React.createElement(McpSessionPreviewScreen));
-
-        const agentDropdown = screen.find((node) => node.props?.itemTrigger?.title === 'settings.mcpServersPreviewAgentTitle');
-        expect(agentDropdown!.props.items.map((item: { id: string }) => item.id)).toEqual(listMcpPreviewAgentIds());
-
-        await act(async () => {
-            screen.find((node) => node.props?.testIDPrefix === 'settings.mcpServers.strictMode' && typeof node.props?.onChange === 'function').props.onChange('stop');
-        });
-        await vi.waitFor(() => expect(accountSettingsWrites).toHaveLength(1));
-        expect(accountSettings).toMatchObject({ mcpServersStrictMode: true });
-        expect(catalogWrites).toEqual([]);
-    });
-
-    it('says nothing would be delivered when a check finds no server, and names the agent\'s tool delivery', async () => {
-        const common = {
-            agentItems: [],
-            selectedAgentTools: { delivery: 'native_mcp' } as never,
-            selectedMachineId: 'machine-1',
-            selectedServerId: 'server-1',
-            canExecute: true,
-            selectedAgentId: 'claude' as never,
-            onSelectAgentId: vi.fn(),
-            agentMenuOpen: false,
-            onAgentMenuOpenChange: vi.fn(),
-            directory: '/repo',
-            onChangeDirectory: vi.fn(),
-            loading: false,
-            onRefresh: vi.fn(),
-        };
-        const unchecked = await renderSettingsView(React.createElement(McpPreviewServersTab, { ...common, preview: null }));
-        expect(unchecked.findRow('settings.mcpServers.preview.empty')).toBeTruthy();
-        expect(unchecked.findRow('settings.mcpServers.preview.nothing')).toBeFalsy();
-        const delivery = unchecked.findRow('settings.mcpServers.preview.delivery');
-        expect(delivery!.props.detail).toBe('settings.mcpServersDeliveryNativeTitle');
-
-        const checked = await renderSettingsView(React.createElement(McpPreviewServersTab, {
-            ...common,
-            preview: { ok: true, builtIn: [], managed: [], detected: [] } as never,
-        }));
-        expect(checked.findRow('settings.mcpServers.preview.nothing')).toBeTruthy();
-        expect(checked.findRow('settings.mcpServers.preview.empty')).toBeFalsy();
-    });
-
     it.each([
         ['a future settings version', {
             v: 2,
@@ -490,14 +448,21 @@ describe('MCP servers collection and tools', () => {
     ] satisfies ReadonlyArray<readonly [string, unknown]>)('changes failure policy without overwriting retained legacy MCP data (%s)', async (_case, rawSettings) => {
         accountSettings = { ...accountSettings, mcpServersSettingsV1: rawSettings };
         storage.setState({ settings: settingsParse(accountSettings) });
-        const screen = await renderSettingsView(React.createElement(McpSessionPreviewScreen));
-
+        // Exercise the Settings owner independently of the catalog observer's legitimate legacy transfer.
         await act(async () => {
-            screen.find((node) => node.props?.testIDPrefix === 'settings.mcpServers.strictMode' && typeof node.props?.onChange === 'function').props.onChange('stop');
+            const result = await createFrontDoorActionExecute()('settings.set', {
+                anchor: 'session.mcpServersStrictMode', value: true,
+            }, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+                serverId: connection!.home.id, expectedAccountId: 'collection-owner' });
+            expect(result).toMatchObject({ ok: true });
         });
 
-        await vi.waitFor(() => expect(accountSettingsWrites).toHaveLength(1));
-        expect(accountSettings).toMatchObject({ mcpServersStrictMode: true, mcpServersSettingsV1: rawSettings });
+        await vi.waitFor(() => expect(accountSettings).toMatchObject({ mcpServersStrictMode: true, mcpServersSettingsV1: rawSettings }));
+        expect(accountSettingsWrites).toEqual(expect.arrayContaining([
+            expect.objectContaining({ content: { t: 'plain', v: expect.objectContaining({
+                mcpServersStrictMode: true, mcpServersSettingsV1: rawSettings,
+            }) } }),
+        ]));
         expect(accountSettings.mcpServersSettingsV1).toEqual(rawSettings);
         expect(catalogWrites).toEqual([]);
     });

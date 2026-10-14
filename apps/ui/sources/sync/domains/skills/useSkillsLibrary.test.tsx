@@ -206,6 +206,10 @@ it('surfaces a failed rules catalog without a read-refresh-cancel loop and recov
         dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
     }) });
     expect(seed?.status).toBe(200);
+    expect((await home.boundary.handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({ id: 'unreadable-skill',
+        header: encodePlainArtifactStoredContent({ ...header, title: 'Retained unreadable skill' }),
+        body: encodePlainArtifactStoredContent({ body: '{malformed' }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+    }) }))?.status).toBe(200);
     storage.setState({ isDataReady: true, artifactsLoaded: true });
     let hook: Awaited<ReturnType<typeof renderHook<ReturnType<typeof useSkillsLibrary>>>> | undefined;
     try {
@@ -223,12 +227,15 @@ it('surfaces a failed rules catalog without a read-refresh-cancel loop and recov
             rules: getPromptLibraryCatalogValue({ serverId: home.home.id, accountId: 'artifact-account' }, 'skill-rules'),
         }).toMatchObject({ library: { status: 'ready', errorCode: null }, rules: { status: 'ready' } }), { timeout: 10_000 });
         expect(hook.getCurrent().items.map(item => item.skillId)).toContain('fixture-skill');
+        const failures = [{ skillId: 'unreadable-skill', title: 'Retained unreadable skill', reason: 'skill_content_unavailable' }];
+        expect(hook.getCurrent().unavailableItems).toEqual(failures);
         const lastKnown = hook.getCurrent().items;
         miswiredArtifacts = true;
         await act(async () => hook!.getCurrent().retry());
         await vi.waitFor(() => expect(hook!.getCurrent()).toMatchObject({ status: 'unavailable', stale: true }));
         expect(getPromptLibraryCatalogValue({ serverId: home.home.id, accountId: 'artifact-account' }, 'skill-rules').status).toBe('ready');
         expect(hook.getCurrent().items).toBe(lastKnown);
+        expect(hook.getCurrent().unavailableItems).toEqual(failures);
         miswiredArtifacts = false;
         await act(async () => hook!.getCurrent().retry());
         await vi.waitFor(() => expect(hook!.getCurrent().status).toBe('ready'));

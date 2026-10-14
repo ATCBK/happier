@@ -1,30 +1,11 @@
-import React from 'react';
-import { useLocalSearchParams } from '@/components/appShell/workspace/destinationRoute';
+import * as React from 'react';
 
-import { PromptRegistryItemDetailsScreen } from '@/components/settings/prompts/registries/PromptRegistryItemDetailsScreen';
+import { Redirect, useLocalSearchParams } from '@/components/appShell/workspace/destinationRoute';
 
-function readParam(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? value[0] ?? '' : value ?? '';
-}
-
-export const WorkspaceRouteBody = React.memo(function PromptRegistryItemDetailsRoute() {
-  const params = useLocalSearchParams<{
-    sourceId?: string | string[];
-    itemId?: string | string[];
-    title?: string | string[];
-    displayPath?: string | string[];
-    workspacePath?: string | string[];
-  }>();
-
-  return (
-    <PromptRegistryItemDetailsScreen
-      sourceId={readParam(params.sourceId)}
-      itemId={readParam(params.itemId)}
-      title={readParam(params.title)}
-      displayPath={readParam(params.displayPath)}
-      workspacePath={readParam(params.workspacePath)}
-    />
-  );
+/** 0.2's registry item page: an item's details now open inside Add a skill → Browse (P6 §4.9). */
+export const WorkspaceRouteBody = React.memo(function LegacyPromptRegistryItemRoute() {
+    const { serverId } = useLocalSearchParams<{ serverId?: string | string[] }>();
+    return <Redirect href={{ pathname: '/settings/skills', params: { add: 'browse', serverId: Array.isArray(serverId) ? serverId[0] : serverId } }} />;
 });
 import { WorkspaceRouteEntry } from '@/components/appShell/workspace/createWorkspaceRouteEntry';
 export default function RouteEntry() { return <WorkspaceRouteEntry Body={WorkspaceRouteBody} />; }

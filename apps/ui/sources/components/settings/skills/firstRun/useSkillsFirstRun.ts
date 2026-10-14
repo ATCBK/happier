@@ -7,6 +7,10 @@ import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
 import { resolveSkillsFirstVisit } from './firstRunEligibility';
 import { buildSkillsFirstRunSelection, skillsFirstRunTurnOnInput } from './skillsFirstRunSelection';
+import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
+
+/** First run's checklist (P6 §4.7): reached from the homepage hero and the rail's pinned destination. */
+export const SKILLS_CHOOSE_ROUTE = SETTINGS_ROUTES.skillsChoose;
 
 /** First-run reads the existing Account rule owner; only dismissal lives on this device. */
 export function useSkillsFirstRun(items: readonly SkillListItemV1[]) {
@@ -57,3 +61,5 @@ export function useSkillsFirstRun(items: readonly SkillListItemV1[]) {
   return { eligible: firstVisit !== null, firstVisit, items: selection.items, migrated, selectedIds, selectedCount: selectedIds.length,
     setSelected, turnOn, notNow, pending, errorCode };
 }
+
+export type SkillsFirstRun = ReturnType<typeof useSkillsFirstRun>;

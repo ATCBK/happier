@@ -24,7 +24,7 @@ import { mcpServerRoute } from './collection/mcpServerCollectionModel';
 import { useMcpServersSettings, useMcpServerCatalogForServer } from './useMcpServersSettings';
 
 /**
- * `/settings/mcp/on-machine`: the MCP servers other agents configure on the managed machine, with an
+ * `/settings/mcp/found`: the MCP servers other agents configure on the managed machine, with an
  * Import for each. The machine chip in the header scopes the whole page; it stays through loading,
  * offline and error states because it is the control that recovers them.
  */

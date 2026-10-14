@@ -25,10 +25,9 @@ describe('legacy MCP server editor links', () => {
         expect(await redirectTargetFor({ serverId: 'server-1' })).toBe('/settings/mcp/server-1');
     });
 
-    it('open the same add flow as a draft in the MCP collection', async () => {
-        expect(await redirectTargetFor({ addMode: 'quick-install', presetId: 'github' }))
-            .toBe('/settings/mcp/new?addMode=quick-install&presetId=github');
-        expect(await redirectTargetFor({ addMode: 'import-json' })).toBe('/settings/mcp/new?addMode=import-json');
+    it('open the matching Add mode, or the custom draft', async () => {
+        expect(await redirectTargetFor({ addMode: 'quick-install', presetId: 'github' })).toBe('/settings/mcp?add=catalog');
+        expect(await redirectTargetFor({ addMode: 'import-json' })).toBe('/settings/mcp?add=paste');
         expect(await redirectTargetFor({})).toBe('/settings/mcp/new');
     });
 });

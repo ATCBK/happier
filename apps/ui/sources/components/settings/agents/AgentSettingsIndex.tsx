@@ -32,6 +32,9 @@ export const AgentSettingsIndex = React.memo(function AgentSettingsIndex() {
             <SettingsPageHeader
                 testID="settings.agents.index.header"
                 description={t('settingsAgents.collection.overviewDescription')}
+                // The machine chip and "+" are this page's own controls: on a phone they stay in the page,
+                // so Add's menu is never a popover nested in the navigation overflow.
+                actionsPlacement="page"
                 actions={(
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                         <MachineAdministrationTargetSelector

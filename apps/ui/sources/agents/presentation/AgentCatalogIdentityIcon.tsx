@@ -8,6 +8,7 @@ import { useInstalledPluginBrandPresentation } from '@/components/plugins/shared
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { useUnistyles } from 'react-native-unistyles';
+import { isCustomAcpAgentContributionIdentityV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 
 /**
  * The one Agent catalog identity mark. External Agents use only the package
@@ -65,7 +66,7 @@ export function AgentCatalogIdentityIcon(props: Readonly<{
             />
         ) : (
             <Icon
-                name="stack-simple"
+                name={isCustomAcpAgentContributionIdentityV1(props.entry.identity) ? props.entry.iconName as IconName : 'stack-simple'}
                 size={props.size ?? 29}
                 color={color}
                 testID={props.testID}

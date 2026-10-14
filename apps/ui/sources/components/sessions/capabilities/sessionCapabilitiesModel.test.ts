@@ -28,6 +28,17 @@ function fixture() {
         cost: (kind: 'skill' | 'mcp_server') => kind === 'skill' ? { tokensWhenUsed: 42 } : { toolCount: 3, tokensPerTurn: 123 } };
 }
 describe('the session capability sheet data owner', () => {
+    it('keeps inherited rows and their scope unknown until rules arrive, then resolves the actual scope', () => {
+        const input = fixture();
+        const inherited = { ...input, selection: setSessionCapabilitySelectionItemV1(input.selection, 'skill', 'review', 'inherit') };
+        const loading = buildSessionCapabilitiesModel({ ...inherited, context: undefined, rules: () => [] });
+        expect(loading.groups[0]?.rows[0]).toMatchObject({ id: 'review', dimmed: false, scope: '' });
+        expect(loading.addItems.some(item => item.id === 'review')).toBe(false);
+        expect(buildSessionCapabilitiesModel({ ...inherited, rules: () => null }).groups[0]?.rows[0]).toMatchObject({ id: 'review', dimmed: false, scope: '' });
+        expect(buildSessionCapabilitiesModel(inherited).groups[0]?.rows[0]?.scope).toBe('Only in Project');
+        // A decided-by reference can arrive before its catalog row, including during refresh.
+        expect(buildSessionCapabilitiesModel({ ...inherited, context: undefined, rules: () => [] }).groups[0]?.rows[0]?.scope).toBe('');
+    });
     it('keeps Off MCP items in the add source, then projects a draft/session include through the same selection owner', () => {
         const input = fixture();
         const initial = buildSessionCapabilitiesModel(input);
@@ -79,5 +90,8 @@ describe('the session capability sheet data owner', () => {
             machineOnline: true, machineName: 'MacBook', turnSettled: true });
         expect(expected?.key).toBe('leavesNextTurn');
         expect(model.pendingNote).toBe(expected?.text);
+        const withoutNativeCatalog = buildSessionCapabilitiesModel({ ...input, change,
+            view: { ...input.view, pendingApply, applyTiming: { mcp: nativeTiming, skills: libraryTiming } } });
+        expect(withoutNativeCatalog.applyNotice?.key).toBe('leavesNextTurn');
     });
 });

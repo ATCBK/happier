@@ -13,7 +13,8 @@ import { createSessionOwnerMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1
 import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { SkillListItemV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { buildSkillComposerGroups, pickSkillComposerRow } from '@/sync/domains/skills/skillComposerGroups';
-import { resolveSelectionRestartMarkersForStartupV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { resolveSelectionRestartMarkersForStartupV1, writeCapabilitySelectionApplyV1, clearCapabilitySelectionApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { MetadataSchema } from '@happier-dev/session-core/state';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -68,7 +69,7 @@ it('reuses the Session Action owner for rollback, previous-override Undo and rea
         ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(initial.ownerMetadata), agentState: null, agentStateVersion: 1,
         dataEncryptionKey: null, share: null, responsibleAccountId: null, responsibleAccount: null,
         effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionAccessFixture().capabilities } });
-    const metadata = () => row.ownerMetadata?.t === 'plain' ? projectSessionOwnerCompatibilityViewV1({ sharedMetadata: { v: 1 }, ownerMetadata: row.ownerMetadata.v }) : null;
+    const metadata = () => row.ownerMetadata?.t === 'plain' ? MetadataSchema.parse(projectSessionOwnerCompatibilityViewV1({ sharedMetadata: { v: 1 }, ownerMetadata: row.ownerMetadata.v })) : null;
     getStorage().setState({ sessions: { [sessionId]: createSessionFixture({ id: sessionId, serverId, active: true, metadataLayoutVersion: 1,
         metadata: { path: '', host: '' }, ownerMetadataView: metadata() }) }, sessionLocalStateScope: { serverId, accountId: 'owner' } });
     let conflict = false;
@@ -122,6 +123,18 @@ it('reuses the Session Action owner for rollback, previous-override Undo and rea
     const dollarNotice = hook.getCurrent().model.pendingNote;
     await act(async () => { expect(await hook.getCurrent().setItem('skill', 'happier:happier', 'on', 'happier')).toEqual({ ok: true }); });
     expect(hook.getCurrent().model.pendingNote).toBe(dollarNotice);
+    // A later rule change supersedes that old local receipt; its acknowledgment
+    // must clear the single line instead of resurrecting the earlier edit.
+    const rulePending = writeCapabilitySelectionApplyV1(metadata() ?? {}, { skills: { source: 'rules', reason: 'next_turn' } });
+    for (const [value, key] of [[rulePending, 'pendingNextTurn'], [clearCapabilitySelectionApplyV1(rulePending, 'skills'), null]] as const) {
+        const owner = createSessionOwnerMetadataV1({ metadata: value });
+        if (!owner.ok) throw new Error('Invalid rule status fixture');
+        row = { ...row, ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(owner.ownerMetadata) };
+        await act(async () => getStorage().setState(current => ({ sessions: { ...current.sessions, [sessionId]: {
+            ...current.sessions[sessionId]!, ownerMetadataView: metadata(),
+        } } })));
+        expect(hook.getCurrent().model.applyNotice?.key ?? null).toBe(key);
+    }
     await hook.rerender(true);
     await expect(hook.getCurrent().setItem('native_skill', 'native-review', 'on')).resolves.toEqual({ ok: false, message: 'read_only' });
     await expect(hook.getCurrent().undoLast()).resolves.toEqual({ ok: false, message: 'read_only' });

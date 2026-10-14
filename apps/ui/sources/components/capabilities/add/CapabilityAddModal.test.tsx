@@ -33,6 +33,8 @@ async function renderBody(
   primary: (
     skill: Skill,
   ) => Promise<Readonly<{ itemId: string; then?: 'close' | 'stay' }>>,
+  catalogOverrides: Readonly<Record<string, unknown>> = {},
+  footerOverrides: Readonly<Record<string, unknown>> = {},
 ) {
   const { CapabilityAddModalBody } = await import('./CapabilityAddModal');
   const { buildCapabilityCollectionAnatomy } =
@@ -64,12 +66,14 @@ async function renderBody(
       }),
       loading: false,
       empty: null,
+      ...catalogOverrides,
     },
     renderDetail: (skill: Skill) => (
       <React.Fragment>{skill.description}</React.Fragment>
     ),
     detailFooter: (skill: Skill) => ({
       primary: { label: 'Add to library', onPress: () => primary(skill) },
+      ...footerOverrides,
     }),
     onAdded,
     testID: 'add',
@@ -102,7 +106,14 @@ async function renderBody(
       await button.props.onPress();
     });
   };
-  return { screen, nodes, select, pressPrimary, onClose, onAdded };
+  const press = async (testID: string) => {
+    const button = pressable(testID);
+    if (!button) throw new Error(`${testID} is not pressable`);
+    await act(async () => {
+      await button.props.onPress();
+    });
+  };
+  return { screen, nodes, select, pressPrimary, press, onClose, onAdded };
 }
 
 describe('CapabilityAddModalBody', () => {
@@ -129,6 +140,32 @@ describe('CapabilityAddModalBody', () => {
     expect(body.nodes('add:detail:pdf').length).toBeGreaterThan(0);
   });
 
+  it('after a stay add, the footer offers the added item and Done, and Done closes the dialog', async () => {
+    const openAdded = vi.fn();
+    const body = await renderBody(
+      async (skill) => ({ itemId: `skill-${skill.name}`, then: 'stay' }),
+      {},
+      { afterAdd: { open: { label: 'Open pdf', onPress: openAdded } } },
+    );
+    await body.select('pdf');
+    expect(body.nodes('add:done')).toHaveLength(0);
+    await body.pressPrimary();
+    expect(body.nodes('add:primary')).toHaveLength(0);
+    await body.press('add:open-added');
+    expect(openAdded).toHaveBeenCalledTimes(1);
+    expect(body.onClose).toHaveBeenCalledTimes(1);
+    await body.press('add:done');
+    expect(body.onClose).toHaveBeenCalledTimes(2);
+    expect(body.onAdded).not.toHaveBeenCalled();
+  });
+
+  it('pins the list footer while no details are open', async () => {
+    const body = await renderBody(async () => ({ itemId: 'x' }), { footer: 'The registry checks each entry.' });
+    expect(body.nodes('add:list-footer').length).toBeGreaterThan(0);
+    await body.select('docx');
+    expect(body.nodes('add:list-footer')).toHaveLength(0);
+  });
+
   it('shows a failed add on the footer line and keeps the details', async () => {
     const body = await renderBody(async () => {
       throw new Error('registry_unreachable');
@@ -138,6 +175,28 @@ describe('CapabilityAddModalBody', () => {
     expect(body.nodes('add:primary-error').length).toBeGreaterThan(0);
     expect(body.onClose).not.toHaveBeenCalled();
     expect(body.nodes('add:detail:docx').length).toBeGreaterThan(0);
+  });
+
+  it('keeps a failed registry as one line with its own Retry while the other rows stay', async () => {
+    const onRetry = vi.fn();
+    const { screen } = await renderBody(async () => ({ itemId: 'x' }), {
+      sourceFailures: [{ sourceId: 'acme', message: 'Acme · Limited until 14:05', onRetry }],
+    });
+    const line = screen.findAll((node) => node.props?.testID === 'add:sourceFailure:acme')[0];
+    expect(line?.props.title).toBe('Acme · Limited until 14:05');
+    await act(async () => { await line!.props.action.onPress(); });
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the failure itself, not "no results", when every registry failed', async () => {
+    const { screen } = await renderBody(async () => ({ itemId: 'x' }), {
+      items: [],
+      empty: <React.Fragment>No skills match</React.Fragment>,
+      sourceFailures: [{ sourceId: 'acme', message: 'Acme · Token rejected', onRetry: () => {} }],
+    });
+    const collection = screen.findAll((node) => node.props?.testID === 'add:collection' && 'empty' in (node.props ?? {}))[0];
+    expect(JSON.stringify(collection?.props.empty?.props?.children?.[0]?.props?.title)).toBe('"Acme · Token rejected"');
+    expect(screen.findAll((node) => node.props?.testID === 'add:sourceFailure:acme')).not.toHaveLength(0);
   });
 
   it('lets Escape close the details before the dialog, whatever has focus', async () => {

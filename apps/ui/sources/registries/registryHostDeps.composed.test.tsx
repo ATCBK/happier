@@ -7,7 +7,7 @@ import { createPlainPromptLibraryCatalogHomeFixture, createPromptLibraryCatalogB
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createPromptRegistrySkillFixture } from '@/dev/testkit/harness/promptMachineTransferBoundary';
 import { PromptBundleArtifactHeaderV1Schema, PromptBundleBodyV1Schema } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
-import { SkillLockV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { SkillLockV1Schema, encodeSkillRevisionV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { createUiPromptLibraryArtifactStore } from '@/sync/ops/promptLibrary/promptLibraryArtifactStore';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { projectPluginRegistrySourceDeclarationV1, REGISTRY_ACTION_OUTPUT_SCHEMAS_V1, RegistryFetchRequestV1Schema, type RegistryFetchRequestV1, type RegistrySourceV1 } from '@happier-dev/protocol/registries';
@@ -56,6 +56,73 @@ const { readCurrentAppShellPluginUiProjection } = await import('@/components/app
 const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
 const { useRegistrySuggestions } = await import('./useRegistrySuggestions');
 const { waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+
+it.each([false, true])('previews a multi-plugin skill link with one repository read (manifest absent: %s)', async absentManifest => {
+    const requests: string[] = [];
+    const commit = '1'.repeat(40);
+    const names = ['review', 'release', 'debug'];
+    const skills = names.map(name => createPromptRegistrySkillFixture({ sourceId: 'marketplace', itemId: `plugins/${name}/skills/${name}`, title: name,
+        files: [{ path: 'SKILL.md', content: `---\nname: ${name}\n---\nInstructions for ${name}` }] }));
+    const fixture = await createPlainPromptLibraryCatalogHomeFixture('https://registry-link-preview.test', {
+        key: 'registry-sources', value: { v: 2, sources: [], disabledSourceIds: [] },
+    }, 'updated', { handleExternalRequest: async input => {
+        const url = String(input);
+        requests.push(url);
+        if (url.endsWith('/marketplace.json')) return Response.json({ plugins: names.map(name => ({ name, source: `./plugins/${name}` })) });
+        if (url.includes('/commits/')) return Response.json({ sha: commit });
+        if (url.includes('/git/trees/')) return Response.json({ sha: '2'.repeat(40), tree: skills.flatMap(fixture => {
+            if (fixture.item.payload.kind !== 'skill') throw new Error('Expected canonical skill fixture');
+            const skill = fixture.item.payload.skill;
+            return [{ path: skill.ref.path, type: 'tree', mode: '040000', sha: skill.ref.treeSha },
+                ...skill.files.map(file => ({ path: `${skill.ref.path}/${file.path}`, type: 'blob', mode: '100644', sha: file.blobSha, size: file.size }))];
+        }) });
+        if (url.endsWith('/plugin.json')) return absentManifest ? new Response('', { status: 404 }) : Response.json({});
+        const index = names.findIndex(name => url.endsWith(`/skills/${name}/SKILL.md`));
+        const payload = skills[index]?.item.payload;
+        if (payload?.kind === 'skill') return new Response(payload.skill.skillMarkdown);
+        throw new Error(`Unexpected external registry request: ${url}`);
+    } });
+    onTestFinished(async () => { await standardCleanup(); await fixture.dispose(); });
+    transport.calls.length = 0;
+    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+    const result = await createDefaultActionExecutor().execute('skills.install', {
+        source: { kind: 'link', url: 'https://github.com/owner/market' }, dryRun: true,
+    }, { surface: 'ui', authority: 'present_user', serverId: fixture.home.id });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error(JSON.stringify(result));
+    const preview = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].parse(result.result);
+    expect(preview).toMatchObject({ items: names.map(name => ({ name })) });
+    expect(requests.filter(url => url.includes('/commits/'))).toHaveLength(1);
+    expect(requests.filter(url => url.includes('/git/trees/'))).toHaveLength(1);
+    expect(requests.filter(url => url.endsWith('/plugin.json'))).toHaveLength(names.length);
+    expect(transport.calls).toEqual([]);
+});
+
+it.each([403, 429])('preserves an upstream %s quota failure during link detection or repository read without another API request', async status => {
+    const requests: string[] = [];
+    const fixture = await createPlainPromptLibraryCatalogHomeFixture(`https://registry-link-quota-${status}.test`, {
+        key: 'registry-sources', value: { v: 2, sources: [], disabledSourceIds: [] },
+    }, 'updated', { handleExternalRequest: async url => {
+        requests.push(url);
+        if (status === 403 && !url.startsWith('https://api.github.com/')) return Response.json({ plugins: [
+            { name: 'review', source: './plugins/review' }, { name: 'release', source: './plugins/release' },
+        ] });
+        return new Response('', { status, ...(status === 403 ? { headers: { 'x-ratelimit-remaining': '0' } } : {}) });
+    } });
+    onTestFinished(async () => { await standardCleanup(); await fixture.dispose(); });
+    transport.calls.length = 0;
+    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+    const result = await createDefaultActionExecutor().execute('skills.install', {
+        source: { kind: 'link', url: 'https://github.com/owner/limited' }, dryRun: true,
+    }, { surface: 'ui', authority: 'present_user', serverId: fixture.home.id });
+    expect(result).toMatchObject({ ok: false, details: { registryStatus: { state: 'rate_limited' } } });
+    if (status === 403) {
+        expect(requests.filter(url => url.startsWith('https://api.github.com/')))
+            .toEqual(['https://api.github.com/repos/owner/limited/commits/HEAD']);
+        expect(requests.some(url => url.endsWith('/SKILL.md') || url.endsWith('/plugin.json'))).toBe(false);
+    } else expect(requests).toEqual(['https://raw.githubusercontent.com/owner/limited/HEAD/.claude-plugin/marketplace.json']);
+    expect(transport.calls).toEqual([]);
+});
 
 it('opens an empty web skill recommendation shelf without a daemon browse even with a reachable Machine', async () => {
     const fixture = await createPlainPromptLibraryCatalogHomeFixture('https://registry-homepage-direct.test', {
@@ -166,7 +233,7 @@ it('reads a tokened source on a shared Machine through the captured requester Ac
     const fixture = createPromptRegistrySkillFixture({ sourceId: source.id, itemId: 'private-skill', title: 'Requester skill',
         files: [{ path: 'SKILL.md', content: '---\nname: requester-skill\n---\nPrivate content' }] });
     const store = createUiPromptLibraryArtifactStore(account.workflowArtifacts, account);
-    const skillId = await store.create!({ header: PromptBundleArtifactHeaderV1Schema.parse({ v: 1, kind: 'prompt_bundle.v2',
+    const created = await store.create!({ header: PromptBundleArtifactHeaderV1Schema.parse({ v: 1, kind: 'prompt_bundle.v2',
         title: 'Requester skill', bundleSchemaId: 'skills.skill_md_v1', skillLock: SkillLockV1Schema.parse({ updatePolicy: 'manual',
             upstream: { state: 'update_available', latest: fixture.item.payload.kind === 'skill' ? fixture.item.payload.skill.ref : undefined },
             provenance: { kind: 'registry', registry: { sourceId: source.id, format: source.format, sourceUrl: source.url, importedAt: 0,
@@ -174,13 +241,15 @@ it('reads a tokened source on a shared Machine through the captured requester Ac
                 ? fixture.item.payload.skill.ref : undefined } } }) }),
         body: JSON.stringify(PromptBundleBodyV1Schema.parse({ v: 1, createdAtMs: 0, updatedAtMs: 0,
             entries: fixture.files.map(file => ({ ...file, contentKind: 'utf8' })) })) });
+    const skillId = typeof created === 'string' ? created : created.artifactId;
+    const expectedRevision = typeof created === 'string' ? '1:1' : encodeSkillRevisionV1(created.revision);
     onTestFinished(() => storage.getState().deleteArtifact(skillId));
     const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
     const executor = createDefaultActionExecutor();
     for (const [actionId, input] of [
         ['skills.install', { source: { kind: 'registry', sourceId: source.id, itemId: 'private-skill', version: '1'.repeat(40) }, dryRun: true }],
         ['skills.updates.diff', { skillId }],
-        ['skills.updates.apply', { skillId, expectedRevision: '1:1' }],
+        ['skills.updates.apply', { skillId, expectedRevision }],
         ['prompt_registry.install', { machineId, sourceId: source.id, itemId: 'private-skill' }],
     ] as const) {
         expect.soft(await executor.execute(actionId, input, { surface: 'ui', authority: 'present_user', serverId: account.serverId }))

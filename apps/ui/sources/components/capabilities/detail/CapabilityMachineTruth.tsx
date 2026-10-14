@@ -34,7 +34,10 @@ export type CapabilityMachineTruthRow = Readonly<{
  */
 export function CapabilityMachineTruth(props: Readonly<{
     rows: readonly CapabilityMachineTruthRow[];
+    /** The closed line: one line that shortens with an ellipsis when the room is short. */
     summary: string;
+    /** Kept whole after the summary ("2 offline"), so the ellipsis never takes it. */
+    summaryNote?: string;
     description?: string;
     sectionAction?: Readonly<{ label: string; onPress: () => void; busy?: boolean; icon?: IconName }>;
     /** Open on arrival (a machine needs the person). */
@@ -78,7 +81,12 @@ export function CapabilityMachineTruth(props: Readonly<{
                             testID={`${props.testID}:summary`}
                             title={t('capabilities.detail.byMachine')}
                             leftElement={<ExpandableItemCaret expanded={open} />}
-                            rightElement={open ? null : <Text variant="meta" style={styles.summary}>{props.summary}</Text>}
+                            rightElement={open ? null : (
+                                <View style={styles.summaryLine}>
+                                    <Text variant="meta" numberOfLines={1} style={styles.summaryText}>{props.summary}</Text>
+                                    {props.summaryNote ? <Text variant="meta" numberOfLines={1} style={styles.summaryNote}>{`· ${props.summaryNote}`}</Text> : null}
+                                </View>
+                            )}
                             showChevron={false}
                         />
                     )}
@@ -110,7 +118,9 @@ export function CapabilityMachineTruth(props: Readonly<{
 }
 
 const styles = StyleSheet.create((theme) => ({
-    summary: { color: theme.colors.text.secondary, fontVariant: ['tabular-nums'] },
+    summaryLine: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4, minWidth: 0, flexShrink: 1 },
+    summaryText: { color: theme.colors.text.secondary, fontVariant: ['tabular-nums'], flexShrink: 1, minWidth: 0 },
+    summaryNote: { color: theme.colors.text.secondary, fontVariant: ['tabular-nums'], flexShrink: 0 },
     end: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, flexShrink: 1, flexWrap: 'wrap', justifyContent: 'flex-end' },
     note: { color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'] },
     offline: { color: theme.colors.text.secondary },

@@ -2,24 +2,15 @@ import type { McpServerRuleV1, McpServerCatalogEntryV1, McpServersSettingsV1 } f
 
 import { t } from '@/text';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
-import { createHappierCollectionDraftTitleStore, createHappierCollectionVisitMemory, resolveHappierCollectionInitialKey } from '@happier-dev/plugin-ui/presentation';
+import { createHappierCollectionDraftTitleStore } from '@happier-dev/plugin-ui/presentation';
 
 /** The collection's own route; its detail routes resolve beneath it. */
 export const MCP_COLLECTION_ROUTE = SETTINGS_ROUTES.mcp;
 export const MCP_NEW_SERVER_ROUTE = `${MCP_COLLECTION_ROUTE}/new`;
-export const MCP_ON_MACHINE_ROUTE = SETTINGS_ROUTES.mcpOnMachine;
-export const MCP_SESSION_PREVIEW_ROUTE = SETTINGS_ROUTES.mcpPreview;
-
-export type McpAddMode = 'configure' | 'import-json' | 'quick-install';
+export const MCP_FOUND_ROUTE = SETTINGS_ROUTES.mcpFound;
 
 export function mcpServerRoute(serverId: string): string {
     return `${MCP_COLLECTION_ROUTE}/${encodeURIComponent(serverId)}`;
-}
-
-export function newMcpServerRoute(mode: McpAddMode = 'configure', presetId?: string): string {
-    if (mode === 'configure') return MCP_NEW_SERVER_ROUTE;
-    const preset = presetId ? `&presetId=${encodeURIComponent(presetId)}` : '';
-    return `${MCP_NEW_SERVER_ROUTE}?addMode=${mode}${preset}`;
 }
 
 export type McpServerCollectionRow = Readonly<{
@@ -57,16 +48,6 @@ export function buildMcpServerCollection(settings: McpServersSettingsV1, query: 
             || row.title.toLocaleLowerCase().includes(normalizedQuery)
             || row.server.name.toLocaleLowerCase().includes(normalizedQuery))
         .sort((a, b) => a.title.localeCompare(b.title));
-}
-
-/** Session memory of the server last opened, so returning to a wide collection lands on it. */
-const mcpServerVisits = createHappierCollectionVisitMemory<string>();
-
-export const recordMcpServerVisit = mcpServerVisits.record;
-
-/** Beside the rail a server is always selected: the last one visited, else the first. */
-export function resolveMcpServerLandingId(rows: readonly McpServerCollectionRow[]): string | null {
-    return resolveHappierCollectionInitialKey({ keys: rows.map((row) => row.server.id), lastVisited: mcpServerVisits.read() });
 }
 
 /** The name typed into a new server's editor, shown on the collection's draft row. */

@@ -4,12 +4,28 @@ import type { ConnectedAccountAttemptResponse } from '@happier-dev/protocol/conn
 import type { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import type { runConnectedAccountAuthenticationAction } from './connectedAccountDaemon';
 
+/** The only origin the callback page posts to, and the only origin an opener accepts it from (C34). */
+export const MCP_OAUTH_CALLBACK_ORIGIN = new URL(MCP_OAUTH_CALLBACK_URL_V1).origin;
+export const MCP_OAUTH_OPENER_MESSAGE_TYPE = 'happier.mcp.oauth';
+
+export type McpOAuthOpenerMessage = Readonly<{ type: typeof MCP_OAUTH_OPENER_MESSAGE_TYPE; code: string; state: string; iss?: string }>;
+
+/** Reads an opener message posted by the callback page; anything else (another origin, another shape) is `null`. */
+export function readMcpOAuthOpenerMessage(event: Readonly<{ origin: string; data: unknown }>): McpOAuthOpenerMessage | null {
+    if (event.origin !== MCP_OAUTH_CALLBACK_ORIGIN) return null;
+    const data = event.data as Partial<Record<string, unknown>> | null;
+    if (!data || typeof data !== 'object' || data.type !== MCP_OAUTH_OPENER_MESSAGE_TYPE) return null;
+    if (typeof data.code !== 'string' || !data.code || typeof data.state !== 'string' || !data.state) return null;
+    if (data.iss !== undefined && typeof data.iss !== 'string') return null;
+    return { type: MCP_OAUTH_OPENER_MESSAGE_TYPE, code: data.code, state: data.state, ...(data.iss === undefined ? {} : { iss: data.iss as string }) };
+}
+
 export type McpOAuthCallbackInput = Readonly<{
     callbackUrl: string;
     browser?: Readonly<{
         replaceUrl(path: string): void;
         close(): void;
-        opener?: Readonly<{ postMessage(message: unknown, origin: string): void }>;
+        opener?: Readonly<{ origin?: string; postMessage(message: unknown, origin: string): void }>;
     }>;
     account?: Readonly<{
         serverId: string;
@@ -41,14 +57,16 @@ export async function completeMcpOAuthCallback(input: McpOAuthCallbackInput): Pr
     const attemptId = response.state.slice(0, separator);
     const completion = { code: response.code, state: response.state, callbackUrl: MCP_OAUTH_CALLBACK_URL_V1,
         ...(response.iss === undefined ? {} : { iss: response.iss }) };
+    const paste = { kind: 'paste' as const, callbackUrl: input.callbackUrl };
     if (input.browser?.opener) {
-        input.browser.opener.postMessage({ type: 'happier.mcp.oauth', code: response.code, state: response.state,
-            ...(response.iss === undefined ? {} : { iss: response.iss }) }, '*');
+        if (input.browser.opener.origin !== MCP_OAUTH_CALLBACK_ORIGIN) return paste;
+        const message: McpOAuthOpenerMessage = { type: MCP_OAUTH_OPENER_MESSAGE_TYPE, code: response.code, state: response.state,
+            ...(response.iss === undefined ? {} : { iss: response.iss }) };
+        input.browser.opener.postMessage(message, MCP_OAUTH_CALLBACK_ORIGIN);
         input.browser.close();
         return { kind: 'opener' };
     }
     const account = input.account;
-    const paste = { kind: 'paste' as const, callbackUrl: input.callbackUrl };
     if (!account) return paste;
     const assertCurrent = () => { account.signal?.throwIfAborted(); account.assertCurrent(); };
     assertCurrent();

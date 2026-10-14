@@ -1,5 +1,6 @@
 import type { McpServerCatalogEntryV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
-import type { ValueRefV1 } from '@happier-dev/protocol/valueRefs/valueRefV1';
+import { listValueRefSecretIdsV1 } from '@happier-dev/protocol/valueRefs/valueRefV1';
+import type { SavedSecretCatalogProjection } from '@/components/secrets/useSavedSecretCatalog';
 
 import type { CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
 
@@ -38,25 +39,24 @@ export type McpServerStatusInput = Readonly<{
     signIn: McpServerSignInFact;
     tests: Readonly<Record<string, McpServerTestFact | undefined>>;
     machines: readonly McpServerMachineFact[];
-    /** Saved Secrets this Account holds, by id: a reference to anything else is a missing key. */
-    savedSecretIds: ReadonlySet<string>;
+    savedSecretCatalog: McpSavedSecretAvailability;
     fixes: McpServerStatusFixes;
 }>;
 
-function* secretIdsOf(ref: ValueRefV1): Generator<string> {
-    if (ref.t === 'savedSecret') yield ref.secretId;
-    if (ref.t === 'template') for (const variable of Object.values(ref.vars)) if (variable.t === 'savedSecret') yield variable.secretId;
-}
+/** The Saved Secret owner alone decides whether a reference is usable. */
+export type McpSavedSecretAvailability = Pick<SavedSecretCatalogProjection, 'resolveReference'>;
 
-export function mcpServerNeedsKey(entry: McpServerCatalogEntryV1, savedSecretIds: ReadonlySet<string>): boolean {
-    return mcpServerMissingKeyNames(entry, savedSecretIds).size > 0;
+export function mcpServerNeedsKey(entry: McpServerCatalogEntryV1, catalog: McpSavedSecretAvailability): boolean {
+    return mcpServerMissingKeyNames(entry, catalog).size > 0;
 }
 
 /** The env and header names whose Saved Secret is missing: where the banner's "Add key" lands. */
-export function mcpServerMissingKeyNames(entry: McpServerCatalogEntryV1, savedSecretIds: ReadonlySet<string>): ReadonlySet<string> {
+export function mcpServerMissingKeyNames(entry: McpServerCatalogEntryV1, catalog: McpSavedSecretAvailability): ReadonlySet<string> {
     const names = new Set<string>();
     const named = [...Object.entries(entry.env), ...Object.entries(entry.remote?.headers ?? {})];
-    for (const [name, ref] of named) for (const secretId of secretIdsOf(ref)) if (!savedSecretIds.has(secretId)) names.add(name);
+    for (const [name, ref] of named) for (const secretId of listValueRefSecretIdsV1(ref)) {
+        if (catalog.resolveReference(secretId).status !== 'ready') names.add(name);
+    }
     return names;
 }
 
@@ -94,7 +94,7 @@ export function mcpServerStatus(input: McpServerStatusInput): readonly Capabilit
                 break;
         }
     }
-    if (mcpServerNeedsKey(input.entry, input.savedSecretIds)) {
+    if (mcpServerNeedsKey(input.entry, input.savedSecretCatalog)) {
         statuses.push({ kind: 'key', fix: { kind: 'add_key', onPress: fixes.addKey } });
     }
     statuses.push(...mcpServerMachineStatuses(input).values());

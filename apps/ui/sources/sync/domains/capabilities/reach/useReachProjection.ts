@@ -13,7 +13,8 @@ import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useProjectAccountRows } from '@/sync/domains/workspaces/projectAccountRows';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
-import { readInstalledMachineAgentIds } from './installedMachineAgents';
+import { readInstalledMachineAgentInventory } from './installedMachineAgents';
+import { getAcpCatalogSnapshot, subscribeAcpCatalogSnapshots } from '@/sync/store/settings/acpCatalogSnapshot';
 import type { PluginProjectionV2 } from '@happier-dev/protocol';
 import {
   readDaemonMergedProjectionSummary,
@@ -22,7 +23,7 @@ import {
 } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 
 export type ReachMachineProjection = Readonly<
-  ReachProjectionV1[number] & { offline: boolean; projectKey?: string }
+  ReachProjectionV1[number] & { offline: boolean; projectKey?: string; agentInventoryComplete?: boolean }
 >;
 const empty: readonly ReachMachineProjection[] = Object.freeze([]);
 
@@ -30,7 +31,12 @@ const empty: readonly ReachMachineProjection[] = Object.freeze([]);
 export type ReachMachine = Readonly<{
   machineId: string;
   platform: 'win32' | 'posix' | null;
+  /** The machine's own published OS and CPU (`darwin`/`linux`/`win32`, `arm64`/`x64`): platform-fit facts, null while unknown. */
+  os?: string | null;
+  arch?: string | null;
   agentIds: readonly string[];
+  /** Configured instance inventory may still be unknown even while its factory is published. */
+  agentInventoryComplete?: boolean;
   /** Per-Machine declarations from the existing inert catalog cache; absent while cold. */
   agentDeclarationsById?: PluginProjectionV2['agentsById'] | null;
   /** Display name from the presence owner; null while unknown. */
@@ -91,23 +97,32 @@ export function useReachMachines(): Readonly<{
     return () => { for (const dispose of disposers) dispose(); };
   }, [machineIds, serverId]);
   const declarations = React.useSyncExternalStore(subscribeDeclarations, readDeclarations, readDeclarations);
+  const readAcp = React.useCallback(() => getAcpCatalogSnapshot(scope), [scope]);
+  const acp = React.useSyncExternalStore(subscribeAcpCatalogSnapshots, readAcp, readAcp);
+  const definitionIds = React.useMemo(() => acp?.data?.definitions.map(definition => definition.id), [acp?.data]);
   const reach = React.useMemo(
     () =>
-      machines.map((machine, index): ReachMachine => ({
-        machineId: machine.id,
-        platform:
-          machine.metadata?.platform === 'win32'
-            ? 'win32'
-            : machine.metadata?.platform
-              ? 'posix'
-              : null,
-        agentIds: readInstalledMachineAgentIds(machine.metadata?.agentInventory, installed.get(machine.id)),
-        agentDeclarationsById: declarations[index]?.inputs?.agentDeclarationsById ?? null,
-        name: presence[index]?.name ?? null,
-        offline: presence[index]?.reachability === 'unreachable',
-        lastSeenAt: presence[index]?.lastSeenAt ?? null,
-      })),
-    [machines, installed, presence, declarations],
+      machines.map((machine, index): ReachMachine => {
+        const inventory = readInstalledMachineAgentInventory(machine.metadata?.agentInventory, installed.get(machine.id), definitionIds);
+        return {
+          machineId: machine.id,
+          platform:
+            machine.metadata?.platform === 'win32'
+              ? 'win32'
+              : machine.metadata?.platform
+                ? 'posix'
+                : null,
+          os: machine.metadata?.platform ?? null,
+          arch: machine.metadata?.arch ?? null,
+          agentIds: inventory.agentIds,
+          agentInventoryComplete: inventory.complete,
+          agentDeclarationsById: declarations[index]?.inputs?.agentDeclarationsById ?? null,
+          name: presence[index]?.name ?? null,
+          offline: presence[index]?.reachability === 'unreachable',
+          lastSeenAt: presence[index]?.lastSeenAt ?? null,
+        };
+      }),
+    [machines, installed, presence, declarations, definitionIds],
   );
   return React.useMemo(() => ({ scope, machines: reach }), [scope, reach]);
 }
@@ -120,7 +135,8 @@ export function projectReachOnMachines(
   workspaceRefs: readonly WorkspaceRefV1[] = [],
 ): readonly ReachMachineProjection[] {
   const projected: ReachMachineProjection[] = projectReachForMachinesV1(rules, { projectKey, machines }).map(
-    (row, index) => ({ ...row, offline: machines[index]?.offline ?? false }),
+    (row, index) => ({ ...row, offline: machines[index]?.offline ?? false,
+      agentInventoryComplete: machines[index]?.agentInventoryComplete }),
   );
   if (projectKey) return projected;
   const projectKeys = new Set(rules.flatMap(rule => rule.target.t === 'project' ? [rule.target.projectKey] : []));
@@ -128,7 +144,8 @@ export function projectReachOnMachines(
     const machineIds = new Set(workspaceRefs.filter(ref => (ref.projectKey ?? ref.id) === key).map(ref => ref.machineId));
     const members = machines.filter(machine => machineIds.has(machine.machineId));
     projected.push(...projectReachForMachinesV1(rules, { projectKey: key, machines: members })
-      .map((row, index) => ({ ...row, projectKey: key, offline: members[index]?.offline ?? false })));
+      .map((row, index) => ({ ...row, projectKey: key, offline: members[index]?.offline ?? false,
+        agentInventoryComplete: members[index]?.agentInventoryComplete })));
   }
   return projected;
 }

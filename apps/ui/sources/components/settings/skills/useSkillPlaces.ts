@@ -1,0 +1,53 @@
+import * as React from 'react';
+
+import { useWhereItsOnNames } from '@/components/capabilities/where/useWhereItsOnNames';
+import { useReachMachines } from '@/sync/domains/capabilities/reach/useReachProjection';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+
+import { skillPlanOnMachine } from './skillsCollectionModel';
+
+export const NO_PROJECTS: readonly Readonly<{
+  projectKey: string;
+  name: string;
+  machineCount: number;
+}>[] = [];
+
+/** Machines, their names and which Agents can take skills there: shared by the saved page, the draft and the Add modal. */
+export function useSkillPlaces() {
+  const scope = useAccountSettingsScope();
+  const { machines } = useReachMachines();
+  const placeMachines = React.useMemo(
+    () =>
+      machines.map((machine) => ({
+        machineId: machine.machineId,
+        name: machine.name ?? machine.machineId,
+        online: !machine.offline,
+      })),
+    [machines],
+  );
+  const agentIds = React.useMemo(
+    () => [...new Set(machines.flatMap((machine) => machine.agentIds))],
+    [machines],
+  );
+  const { names } = useWhereItsOnNames({
+    agentIds,
+    machines: placeMachines,
+    projects: NO_PROJECTS,
+    serverId: scope?.serverId ?? null,
+  });
+  // IR-80: an Agent takes skills when some machine's plan for it is not `none`.
+  const agentTakes = React.useCallback(
+    (agentId: string): 'full' | 'index' | 'none' => {
+      let seen = false;
+      for (const machine of machines) {
+        if (!machine.agentIds.includes(agentId)) continue;
+        seen = true;
+        const kind = skillPlanOnMachine(machine, agentId);
+        if (kind !== 'none') return kind === 'session_dir' ? 'full' : kind;
+      }
+      return seen ? 'none' : 'full';
+    },
+    [machines],
+  );
+  return { machines, placeMachines, agentIds, names, agentTakes } as const;
+}

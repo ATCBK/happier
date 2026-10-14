@@ -7,10 +7,10 @@ import { readSessionCapabilityApplyChange, type SessionCapabilityChange } from '
 export type NewSessionCapabilitiesDraft = Parameters<typeof useNewSessionCapabilities>[0];
 export type SessionCapabilitiesTarget = Readonly<{ kind: 'draft'; draft: NewSessionCapabilitiesDraft }>
     | Readonly<{ kind: 'session'; sessionId: string; serverId: string | null; readOnly: boolean }>;
-type Presentation = Omit<SessionCapabilitiesModelInput, 'view' | 'selection' | 'state' | 'readOnly' | 'change'>;
+export type SessionCapabilitiesPresentation = Omit<SessionCapabilitiesModelInput, 'view' | 'selection' | 'state' | 'readOnly' | 'change'>;
 
 /** Detail hooks belong inside the open popover/sheet leaf; P2 remains the only selection store. */
-export function useExistingSessionCapabilitiesPopover(target: Extract<SessionCapabilitiesTarget, { kind: 'session' }>, presentation: Presentation) {
+export function useExistingSessionCapabilitiesPopover(target: Extract<SessionCapabilitiesTarget, { kind: 'session' }>, presentation: SessionCapabilitiesPresentation) {
     const state = useSessionCapabilities(target.sessionId, undefined, { serverId: target.serverId });
     const [change, setChange] = React.useState<SessionCapabilityChange | null>(null);
     const key = state.scopeKey;
@@ -22,6 +22,9 @@ export function useExistingSessionCapabilitiesPopover(target: Extract<SessionCap
     }), [state.metadata, state.preview]);
     const changeForTarget = metadataChange ?? (receiptKey.current === key ? change : null);
     React.useEffect(() => { receiptKey.current = key; setChange(null); }, [key]);
+    React.useEffect(() => {
+        if (metadataChange && 'source' in metadataChange) setChange(null);
+    }, [metadataChange]);
     const setItem = React.useCallback(async (kind: SessionCapabilityChange['kind'], id: string, value: SessionCapabilityChange['state'], suppliedTitle?: string) => {
         if (target.readOnly) return { ok: false as const, message: 'read_only' };
         const item = (kind === 'mcp_server' ? state.preview?.mcp.items : state.preview?.skills.items)?.find(item => item.id === id);
@@ -30,23 +33,26 @@ export function useExistingSessionCapabilitiesPopover(target: Extract<SessionCap
         if (result.ok && title && receiptKey.current === key) setChange({ kind, title, state: value });
         return result;
     }, [target.readOnly, state.setItem, state.preview, key]);
-    const model = React.useMemo(() => buildSessionCapabilitiesModel({ ...presentation,
+    const modelInput = React.useMemo(() => ({
         view: state.preview ? { ...state.preview, pendingApply: state.pendingApply } : null, selection: state.selection,
-        state: state.status === 'ready' ? 'ready' : state.status === 'unavailable' ? 'error' : 'resolving',
-        readOnly: target.readOnly, change: changeForTarget }), [presentation, state.preview, state.pendingApply, state.selection, state.status, target.readOnly, changeForTarget]);
+        applyState: { pendingApply: state.pendingApply, applyTiming: state.applyTiming },
+        state: state.status === 'ready' ? 'ready' as const : state.status === 'unavailable' ? 'error' as const : 'resolving' as const,
+        readOnly: target.readOnly, change: changeForTarget }), [state.preview, state.pendingApply, state.applyTiming, state.selection, state.status, target.readOnly, changeForTarget]);
+    const model = React.useMemo(() => buildSessionCapabilitiesModel({ ...presentation, ...modelInput }), [presentation, modelInput]);
     const dismissNotice = React.useCallback(() => setChange(null), []);
     const undoLast = React.useCallback(() => target.readOnly
         ? Promise.resolve({ ok: false as const, message: 'read_only' })
         : state.undoLast(), [target.readOnly, state.undoLast]);
-    return { model, setItem, metadata: state.metadata, selection: state.selection, pendingApply: state.pendingApply, applyTiming: state.applyTiming,
+    return { model, modelInput, setItem, metadata: state.metadata, selection: state.selection, pendingApply: state.pendingApply, applyTiming: state.applyTiming,
         undoLast, demandPreview: state.demandPreview, refresh: state.refresh, error: state.error, dismissNotice };
 }
 
 /** Draft/Workflow/Trigger edits reuse the same P2 draft owner and never write an existing Session. */
-export function useNewSessionCapabilitiesPopover(draft: NewSessionCapabilitiesDraft, presentation: Presentation) {
+export function useNewSessionCapabilitiesPopover(draft: NewSessionCapabilitiesDraft, presentation: SessionCapabilitiesPresentation) {
     const state = useNewSessionCapabilities(draft);
-    const model = React.useMemo(() => buildSessionCapabilitiesModel({ ...presentation, view: state.preview, selection: state.selection,
-        state: state.previewStatus === 'ready' ? 'ready' : state.previewStatus === 'unreachable' ? 'machine_unreachable'
-            : state.previewStatus === 'error' ? 'error' : 'resolving', readOnly: false }), [presentation, state.preview, state.selection, state.previewStatus]);
-    return { model, setItem: state.setItem, demandPreview: state.demandPreview, refresh: state.refresh, error: state.error };
+    const modelInput = React.useMemo(() => ({ view: state.preview, selection: state.selection,
+        state: state.previewStatus === 'ready' ? 'ready' as const : state.previewStatus === 'unreachable' ? 'machine_unreachable' as const
+            : state.previewStatus === 'error' ? 'error' as const : 'resolving' as const, readOnly: false }), [state.preview, state.selection, state.previewStatus]);
+    const model = React.useMemo(() => buildSessionCapabilitiesModel({ ...presentation, ...modelInput }), [presentation, modelInput]);
+    return { model, modelInput, setItem: state.setItem, demandPreview: state.demandPreview, refresh: state.refresh, error: state.error };
 }

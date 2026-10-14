@@ -5,8 +5,11 @@ import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
 import { projectMachineAgent } from '@/agents/machineAgents/machineAgentModel';
 import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
 
+import { AcpBackendDefinitionV1Schema } from '@happier-dev/protocol/acp/catalog/settingsV1';
+
 import {
     buildAgentCollection,
+    isCommandAgentDefinition,
     resolveAgentCollectionLandingId,
     resolveSelectedAgentCollectionId,
 } from './agentCollectionModel';
@@ -124,6 +127,40 @@ describe('buildAgentCollection', () => {
         expect(collection.onMachine.map((row) => [row.status, row.trouble])).toEqual([
             ['installing', false], ['failed', false], ['needsSignIn', false],
         ]);
+    });
+});
+
+describe('buildAgentCollection · registry definitions', () => {
+    const capabilities = { supportsLoadSession: false, supportsModes: 'unknown', supportsModels: 'unknown', supportsConfigOptions: 'unknown', promptImageSupport: 'unknown' } as const;
+    const provenance = (itemId: string, version: string) => ({ sourceId: 'builtin:acp-registry', format: 'acp-registry' as const,
+        sourceUrl: 'https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json', itemId, ref: { kind: 'version' as const, version }, importedAt: 1 });
+    const registry = (id: string, title: string) => AcpBackendDefinitionV1Schema.parse({
+        id, name: id, title, env: {}, capabilities, createdAt: 1, updatedAt: 1,
+        launch: { kind: 'npm', package: `@acme/${id}`, version: '1.0.0', args: [] },
+        origin: { kind: 'registry', provenance: provenance(id, '1.0.0') },
+    });
+    const command = AcpBackendDefinitionV1Schema.parse({ id: 'kiro', name: 'kiro', title: 'Kiro', env: {}, capabilities, createdAt: 1, updatedAt: 1,
+        launch: { kind: 'command', command: 'kiro-cli', args: ['acp'] } });
+    const custom = { pluginId: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.pluginId, localId: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.localId };
+    const definitionEntry = (title: string) => entry('custom-acp', { identity: custom, title, isBuiltIn: false, cli: null });
+
+    it('lists a registry agent with the agents by its detected state; one not installed says it installs on first use', () => {
+        const goose = registry('goose', 'goose');
+        const vibe = registry('mistral-vibe', 'Mistral Vibe');
+        const collection = buildAgentCollection({
+            entries: [entry('claude')],
+            agents: [agent('claude', 'ready'), agent('custom-acp', 'needsSignIn', { definitionId: goose.id })],
+            definitions: [{ definition: goose, entry: definitionEntry('goose') }, { definition: vibe, entry: definitionEntry('Mistral Vibe') }],
+            query: '',
+        });
+        expect(collection.onMachine.map((row) => [row.key, row.status])).toEqual([['claude', 'ready'], [`definition:${goose.id}`, 'needsSignIn']]);
+        expect(collection.available.map((row) => [row.entry.title, row.status, row.definition?.id])).toEqual([['Mistral Vibe', 'installsOnFirstUse', vibe.id]]);
+        expect(collection.total).toBe(3);
+    });
+
+    it('keeps "Custom agents" to agents started from a command', () => {
+        expect(isCommandAgentDefinition(command)).toBe(true);
+        expect(isCommandAgentDefinition(registry('goose', 'goose'))).toBe(false);
     });
 });
 

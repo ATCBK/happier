@@ -30,7 +30,7 @@ describe('optional bundled Agent without a published UI core', () => {
         expect(getAgentCore('antigravity')).toBeNull();
         const entries = getResolvedBackendCatalogEntries({
             enabledAgentIds: ['claude', 'antigravity'],
-            acpCatalogSettingsV1: { v: 2, backends: [] },
+            acpCatalogSnapshot: { status: 'ready', revision: 1, record: { v: 1, definitions: [] } },
         });
         expect(entries.map((entry) => entry.agentId)).toEqual(['claude']);
         expect(resolveAgentCatalogProjection('antigravity', { enabledAgentIds: [] })).toMatchObject({
@@ -50,7 +50,7 @@ describe('optional bundled Agent without a published UI core', () => {
     it('uses the selected machine declaration when its bundled Agent has no local UI core', () => {
         const entries = getResolvedBackendCatalogEntries({
             enabledAgentIds: ['antigravity'],
-            acpCatalogSettingsV1: { v: 2, backends: [] },
+            acpCatalogSnapshot: { status: 'ready', revision: 1, record: { v: 1, definitions: [] } },
             mergedProviderProjectionById: {
                 antigravity: { agentId: 'antigravity', title: 'Antigravity on this machine', isBuiltIn: true },
             },

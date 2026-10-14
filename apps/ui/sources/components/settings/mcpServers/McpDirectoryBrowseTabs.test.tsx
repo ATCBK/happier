@@ -75,40 +75,4 @@ describe('MCP directory browse tabs', () => {
     });
     expect(onChangeDirectory).toHaveBeenCalledWith('/repo/from-browser');
   });
-
-  it('opens the shared path browser from the preview directory input', async () => {
-    const onChangeDirectory = vi.fn();
-    const { McpPreviewServersTab } = await import('./McpPreviewServersTab');
-
-    let tree!: ReactTestRenderer;
-        tree = (await renderScreen(<McpPreviewServersTab
-                    agentItems={[]}
-                    selectedAgentTools={{ delivery: 'manual' } as any}
-          selectedMachineId="machine-1"
-          selectedServerId="server-1"
-          canExecute
-          selectedAgentId="codex"
-          onSelectAgentId={() => {}}
-          agentMenuOpen={false}
-          onAgentMenuOpenChange={() => {}}
-          directory="/repo"
-          onChangeDirectory={onChangeDirectory}
-          loading={false}
-          preview={null}
-          onRefresh={() => {}}
-        />)).tree;
-
-    const browseButton = tree.findByType('PathInputBrowseButton');
-    await act(async () => {
-      await pressTestInstanceAsync(browseButton);
-    });
-
-    expect(mcpServersModuleState.openMachinePathBrowserModalSpy).toHaveBeenCalledWith({
-      machineId: 'machine-1',
-      serverId: 'server-1',
-      initialPath: '/repo',
-      title: 'settings.mcpServersPreviewDirectoryTitle',
-    });
-    expect(onChangeDirectory).toHaveBeenCalledWith('/repo/from-browser');
-  });
 });

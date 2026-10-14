@@ -48,8 +48,7 @@ export function createCapabilitiesActionChip(
     key: SESSION_CAPABILITIES_CHIP_KEY,
     onIntent: params.onIntent,
     stabilityKey: `${params.stabilityKey}:${params.label}:${params.attention ? 1 : 0}`,
-    // PD1 renames this control id to 'capabilities' when Lane 12 Main mounts the chip (C6).
-    controlId: 'mcp',
+    controlId: 'capabilities',
     collapsedContentPopover: {
       title,
       label: params.label,

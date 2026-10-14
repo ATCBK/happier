@@ -13,7 +13,13 @@ import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runti
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { readMcpServerCatalogInContext } from '@/sync/api/account/apiMcpServerCatalog';
+import { readPromptLibraryCatalogProjectionInContext } from '@/sync/api/account/apiPromptLibraryCatalog';
+import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
+import { resolveSessionCapabilitiesV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
+import { projectManagedMcpSelectionV1, projectManagedMcpPreviewEntriesV1 } from '@happier-dev/protocol/mcp/servers/previewV1';
+import { EPHEMERAL_RUNNER_UNMATERIALIZED_MACHINE_ID_V1 } from '@happier-dev/protocol/ephemeralRunner/runnerMcpMaterial';
+import { agentReceivesUserMcpServersV1 } from '@happier-dev/protocol/plugins/contributions/v2';
 import { readCachedDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { readCurrentProjectedAgentCapabilities } from '@/agents/backendCatalog/currentAgentCapabilities';
 import { readMcpPluginItemMetadataFromProjectionV1 } from '@happier-dev/protocol/mcp/servers/pluginItemsV1';
@@ -106,6 +112,36 @@ export function createUiSessionCapabilityActionDeps(account: LazyActionAccountCo
     const preview: NonNullable<ActionExecutorDeps['spawnCapabilitiesPreview']> = async (input, context) => {
         assertCurrent(context);
         try {
+            if (input.machineId === EPHEMERAL_RUNNER_UNMATERIALIZED_MACHINE_ID_V1) {
+                const [catalog, library, projection] = await Promise.all([
+                    readMcpServerCatalogInContext(account, context.signal),
+                    readSkillLibraryCatalog({ list: options => account.listArtifacts(options) }, context.signal),
+                    readPromptLibraryCatalogProjectionInContext(account, context.signal),
+                ]);
+                assertCurrent(context);
+                const rules = readPromptLibraryCatalogRecordV1({ ...projection, key: 'skill-rules' });
+                if (catalog.status !== 'ready' || rules.status !== 'ready' || rules.record.key !== 'skill-rules') {
+                    return { ok: false, reason: 'invalid_input' };
+                }
+                const settings = { ...catalog.catalog, strictMode: false };
+                const reachContext = { machineId: input.machineId, machinePlatform: null,
+                    directory: null, projectKey: null, agentId: input.agentId };
+                const selection = input.capabilitySelection ?? {};
+                const effective = resolveSessionCapabilitiesV1({ context: reachContext, mcp: settings,
+                    skills: { items: library.map(item => ({ skillId: item.id, name: item.name })), rules: rules.record.value.rules },
+                    selection, agentAcceptsUserMcp: agentReceivesUserMcpServersV1(getAgentCore(input.agentId)?.tools.delivery) });
+                const managed = projectManagedMcpPreviewEntriesV1(projectManagedMcpSelectionV1(effective, {
+                    settings, context: reachContext, selection: selection.mcp,
+                }));
+                const managedById = new Map(managed.map(item => [item.serverId, item]));
+                // Account selection is knowable before the runner exists; native scans and delivery are not.
+                return SpawnCapabilitiesPreviewOutputV1Schema.parse({ ok: true, machinePlatform: null,
+                    mcp: { strictMode: effective.mcp.strictMode, detected: [],
+                        items: effective.mcp.items.map(({ effectiveConfig: _config, ...item }) => ({ ...item, preview: managedById.get(item.id) })) },
+                    skills: { items: effective.skills.items, plan: { plan: 'none', items: [], nativeDisables: [], diagnostics: [] } },
+                    applyTiming: { mcp: { t: 'session_not_running' }, skills: { t: 'session_not_running' } },
+                });
+            }
             const response = record(await machineRpcWithServerScope({ machineId: input.machineId, serverId: account.serverId, accountId: account.accountId,
                 method: RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, payload: input, signal: context.signal }));
             assertCurrent(context);

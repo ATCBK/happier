@@ -13,6 +13,7 @@ import {
   encodePlainArtifactStoredContent,
 } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import type { PromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 
 // The person's answer to Remove's confirmation is the boundary (the shared modal presenter).
 const modalSpies = vi.hoisted(() => ({
@@ -23,6 +24,10 @@ vi.mock('@/modal', async () => {
   const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
   return createModalModuleMock({ spies: modalSpies }).module;
 });
+
+// The browser download / share sheet is the platform boundary of Export.
+const fileSaves = vi.hoisted(() => ({ saveFileBytes: vi.fn(async (_input: { bytes: Uint8Array; fileName: string; mimeType: string }) => 'saved' as const) }));
+vi.mock('@/sync/runtime/files/saveFileBytes', () => fileSaves);
 
 installDisconnectedServerSocketBoundary();
 const { storage } = await import('@/sync/domains/state/storage');
@@ -36,7 +41,7 @@ const { useSkillsLibrary } = await import('@/sync/domains/skills/useSkillsLibrar
 const { getPromptLibraryCatalogValue } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
 const { readPresentationNotice, retirePresentationNotice } = await import('@/components/sessions/presentation/presentationNotices');
 const { useSkillTextAutosave } = await import('./SkillInstructionsSection');
-const { skillTextFile } = await import('./skillFileContent');
+const { skillTextFile, readSkillText } = await import('./skillFileContent');
 
 afterEach(() => {
   standardCleanup();
@@ -49,8 +54,12 @@ afterEach(() => {
 const SKILL_MD =
   '---\nname: release-notes\ndescription: Draft release notes from merged pull requests.\n---\n\n# Release notes\n';
 
-async function seededHome(origin: string, handleRequest?: (path: string, init?: RequestInit) => Promise<Response | null>) {
-  const catalog = createPromptLibraryCatalogBoundary();
+async function seededHome(
+  origin: string,
+  handleRequest?: (path: string, init?: RequestInit) => Promise<Response | null>,
+  options: Readonly<{ records?: readonly PromptLibraryRecordV1[]; header?: Record<string, unknown> }> = {},
+) {
+  const catalog = createPromptLibraryCatalogBoundary({ records: options.records });
   const home = await createPlainArtifactHomeFixture(origin, {
     serverFeatures: createRootLayoutFeaturesResponse(),
     handleRequest: async (path, init) => {
@@ -66,6 +75,7 @@ async function seededHome(origin: string, handleRequest?: (path: string, init?: 
     kind: 'prompt_bundle.v2',
     title: 'release-notes',
     bundleSchemaId: 'skills.skill_md_v1',
+    ...options.header,
   });
   const body = PromptBundleBodyV1Schema.parse({
     v: 1,
@@ -79,7 +89,7 @@ async function seededHome(origin: string, handleRequest?: (path: string, init?: 
       },
     ],
   });
-  const seed = await home.boundary.handle('/v1/artifacts', {
+  const seeded = await home.boundary.handle('/v1/artifacts', {
     method: 'POST',
     body: JSON.stringify({
       id: 'release-notes',
@@ -88,7 +98,7 @@ async function seededHome(origin: string, handleRequest?: (path: string, init?: 
       dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
     }),
   });
-  expect(seed?.status).toBe(200);
+  expect(seeded?.status).toBe(200);
   storage.setState({ isDataReady: true, artifactsLoaded: true });
   return home;
 }
@@ -266,6 +276,46 @@ describe('SkillDetailScreen over the real skills Actions', () => {
       await stale.unmount();
       await mine.unmount();
       await home.dispose();
+    }
+  });
+
+  it('moves the skill to another folder through artifact.folder.set and the reloaded library lists it there, even when its old placement was only a legacy header', async () => {
+    const home = await seededHome('https://skill-folder-move.test', undefined, {
+      records: [{ key: 'folders', value: { v: 1, folders: [
+        { id: 'old', name: 'Old', parentId: null }, { id: 'work', name: 'Work', parentId: null },
+      ] } }],
+      header: { folderId: 'old' },
+    });
+    const detail = await renderHook(() => useSkillDetail('release-notes'));
+    const library = await renderHook(() => useSkillsLibrary());
+    try {
+      await vi.waitFor(() => expect(library.getCurrent().items.find((item) => item.skillId === 'release-notes')?.folderId).toBe('old'), { timeout: 10_000 });
+      await vi.waitFor(() => expect(detail.getCurrent().folders.status).toBe('ready'), { timeout: 10_000 });
+      let moved: boolean | undefined;
+      await act(async () => { moved = await detail.getCurrent().moveToFolder('work'); });
+      expect(moved).toBe(true);
+      await vi.waitFor(() => expect(library.getCurrent().items.find((item) => item.skillId === 'release-notes')?.folderId).toBe('work'), { timeout: 10_000 });
+    } finally {
+      await library.unmount(); await detail.unmount(); await home.dispose();
+    }
+  });
+
+  it('exports the skill as an Agent Skills zip through skills.export and hands those bytes to the person', async () => {
+    const home = await seededHome('https://skill-export.test');
+    const detail = await renderHook(() => useSkillDetail('release-notes'));
+    try {
+      await vi.waitFor(() => expect(detail.getCurrent().status).toBe('ready'), { timeout: 10_000 });
+      let exported: boolean | undefined;
+      await act(async () => { exported = await detail.getCurrent().exportZip(); });
+      expect(exported).toBe(true);
+      const saved = fileSaves.saveFileBytes.mock.calls[0]![0];
+      expect(saved).toMatchObject({ fileName: 'release-notes.zip', mimeType: 'application/zip' });
+      const { readSkillZipFilesV1 } = await import('@happier-dev/protocol/prompts/library/skills/skillZipV1');
+      const files = await readSkillZipFilesV1(saved.bytes);
+      expect(files.map((file) => file.path)).toEqual(['release-notes/SKILL.md']);
+      expect(readSkillText(files[0]!.contentBase64)).toBe(SKILL_MD);
+    } finally {
+      await detail.unmount(); await home.dispose();
     }
   });
 });

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ScrollView, View } from 'react-native';
+import { Platform, ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
   Collection,
@@ -9,15 +9,19 @@ import {
   type CollectionDetailRenderContext,
 } from '@happier-dev/plugin-ui/components';
 
-import { useHappierCollectionLayout } from '@happier-dev/plugin-ui/presentation';
+import { HappierPressable, useHappierCollectionLayout } from '@happier-dev/plugin-ui/presentation';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { Icon, type IconName } from '@/components/ui/icons/Icon';
+import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { RoundButton, RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
+import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { ESCAPE_LAYER_PRIORITIES, useEscapeLayer } from '@/keyboard/escape';
 import { Text } from '@/components/ui/text/Text';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
+import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
+import { useLocalSearchParams, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { Modal } from '@/modal';
 import {
   CATALOG_SURFACE_CARD_DIMENSIONS,
@@ -57,6 +61,8 @@ export type CapabilityAddDetailContext = Readonly<{
 
 export type CapabilityAddModalConfig<Item> = Readonly<{
   title: string;
+  /** The header's purpose line ("From a registry, a Happier plugin, or your own command."). */
+  subtitle?: string;
   modes: readonly CapabilityAddMode[];
   initialModeKey?: string;
   sources?: Readonly<{
@@ -66,6 +72,8 @@ export type CapabilityAddModalConfig<Item> = Readonly<{
     renderRegistriesView: (
       ctx: Readonly<{ intent: 'manage' | 'add'; back: () => void }>,
     ) => React.ReactNode;
+    /** The header one level in ("Registries" · "Where Browse looks for skills."); the back link names this dialog. */
+    registriesHeader: Readonly<{ title: string; subtitle?: string }>;
   }>;
   catalog: Readonly<{
     query: string;
@@ -88,6 +96,8 @@ export type CapabilityAddModalConfig<Item> = Readonly<{
       onRetry: () => void;
     }>[];
     empty: React.ReactNode;
+    /** One quiet line pinned under the list while no details are open (what the source checks, lab aa L). */
+    footer?: React.ReactNode;
   }>;
   renderDetail: (
     item: Item,
@@ -97,11 +107,21 @@ export type CapabilityAddModalConfig<Item> = Readonly<{
     provenance?: React.ReactNode;
     primary: Readonly<{
       label: string;
+      /** `null`: the person backed out (declined the confirm); nothing changes. */
       onPress: () => Promise<
-        Readonly<{ itemId: string; then?: 'close' | 'stay' }>
+        Readonly<{ itemId: string; then?: 'close' | 'stay' }> | null
       >;
       busy?: boolean;
       disabledReason?: string;
+    }>;
+    /**
+     * After the primary resolved `then: 'stay'`: the footer's note, an optional way to the added item (bordered),
+     * and Done (the primary), which closes the dialog (lab aa X: "Open Junie · Done").
+     */
+    afterAdd?: Readonly<{
+      start?: React.ReactNode;
+      open?: Readonly<{ label: string; onPress: () => void }>;
+      onDone?: () => void;
     }>;
   }>;
   onAdded?: (result: Readonly<{ itemId: string }>) => void;
@@ -128,22 +148,47 @@ export function openCapabilityAddModal<Item>(
     >,
     props: { config: config as unknown as CapabilityAddModalConfig<unknown> },
     closeOnBackdrop: true,
-    chrome: {
-      kind: 'card',
-      title: config.title,
-      testID: config.testID,
-      closeButtonTestID: `${config.testID}:close`,
-      scrollHost: 'body',
-      bodyScroll: 'none',
-      dimensions: CATALOG_SURFACE_CARD_DIMENSIONS,
-      phonePresentation: 'fullscreen',
-    },
+    chrome: capabilityAddChrome(config),
   });
   return {
         close: () => Modal.hide(id),
         // The catalog is live (search, loading, results): the opener hands the next config to the open dialog.
         update: (next) => Modal.update(id, { config: next as unknown as CapabilityAddModalConfig<unknown> }),
     };
+}
+
+/**
+ * The same dialog with its live state owned inside it: `Host` runs the kind's hooks (catalog, search, selection)
+ * and renders `CapabilityAddModalBody` with the injected props, so any page entry can open it without holding
+ * the catalog state itself. Same frame, size and phone presentation as `openCapabilityAddModal`.
+ */
+export function openCapabilityAddModalHost<P extends Readonly<Record<string, unknown>>>(
+  Host: React.ComponentType<CustomModalInjectedProps & P>,
+  props: P,
+  frame: Readonly<{ title: string; subtitle?: string; testID: string; onRequestClose?: () => void }>,
+): Readonly<{ close: () => void }> {
+  const id = Modal.show({
+    component: Host as unknown as React.ComponentType<CustomModalInjectedProps & Readonly<Record<string, unknown>>>,
+    props,
+    closeOnBackdrop: true,
+    chrome: capabilityAddChrome(frame),
+    ...(frame.onRequestClose ? { onRequestClose: frame.onRequestClose } : {}),
+  });
+  return { close: () => Modal.hide(id) };
+}
+
+function capabilityAddChrome(frame: Readonly<{ title: string; subtitle?: string; testID: string }>) {
+  return {
+    kind: 'card' as const,
+    title: frame.title,
+    ...(frame.subtitle === undefined ? {} : { subtitle: frame.subtitle }),
+    testID: frame.testID,
+    closeButtonTestID: `${frame.testID}:close`,
+    scrollHost: 'body' as const,
+    bodyScroll: 'none' as const,
+    dimensions: CATALOG_SURFACE_CARD_DIMENSIONS,
+    phonePresentation: 'fullscreen' as const,
+  };
 }
 
 type BodyProps<Item> = CustomModalInjectedProps &
@@ -180,28 +225,22 @@ export function CapabilityAddModalBody<Item>(
   React.useEffect(() => {
     if (setChrome === undefined) return;
     setChrome({
-      kind: 'card',
-      title: config.title,
-      testID: config.testID,
-      closeButtonTestID: `${config.testID}:close`,
-      scrollHost: 'body',
-      bodyScroll: 'none',
-      dimensions: CATALOG_SURFACE_CARD_DIMENSIONS,
-      phonePresentation: 'fullscreen',
-      ...(registries === null
+      ...capabilityAddChrome(config),
+      ...(registries === null || config.sources === undefined
         ? {}
         : {
+            title: config.sources.registriesHeader.title,
+            ...(config.sources.registriesHeader.subtitle === undefined ? {} : { subtitle: config.sources.registriesHeader.subtitle }),
             leading: (
-              <IconButton
-                iconName="caret-left"
-                accessibilityLabel={t('capabilities.add.back')}
+              <CapabilityAddBackLink
+                label={config.title}
                 onPress={() => setRegistries(null)}
                 testID={`${config.testID}:back`}
               />
             ),
           }),
     });
-  }, [config.testID, config.title, registries, setChrome]);
+  }, [config.sources, config.testID, config.title, registries, setChrome]);
 
   const groups = React.useMemo(() => {
     const declared = catalog.groups;
@@ -251,7 +290,7 @@ export function CapabilityAddModalBody<Item>(
         onSelect={selectMode}
         testID={config.testID}
       />
-      {config.sources === undefined
+      {config.sources === undefined || mode?.kind !== 'catalog'
         ? null
         : config.sources.renderSelect({ openRegistries: setRegistries })}
       <View style={styles.search}>{search}</View>
@@ -272,6 +311,7 @@ export function CapabilityAddModalBody<Item>(
         pushed={context.pushed}
         added={added.has(key)}
         onCloseDetail={() => setOpenKey(null)}
+        onCloseDialog={onClose}
         onPrimaryDone={(result) => {
           if (result.then === 'stay') {
             setAdded((previous) => new Set(previous).add(key));
@@ -300,6 +340,8 @@ export function CapabilityAddModalBody<Item>(
       <View style={styles.fill}>
         <View style={styles.toolsBand}>{tools(null)}</View>
         <View style={styles.fill}>
+          {/* An input mode's body is a contained column like the details: sections keep its edge, not a page's. */}
+          <ListPresentationProvider value="page" pageInsets="contained">
           {mode.renderBody({
             showDetail: (key) => {
               setModeKey(
@@ -308,10 +350,30 @@ export function CapabilityAddModalBody<Item>(
               setOpenKey(key);
             },
           })}
+          </ListPresentationProvider>
         </View>
       </View>
     );
   }
+
+  // One registry failing never empties the others: each failed source keeps one quiet line with its own Retry. When
+  // nothing came back at all, that line is the state, never "no results".
+  const failures = catalog.sourceFailures ?? [];
+  const onlyFailures = failures.length > 0 && catalog.items.length === 0 && !catalog.loading;
+  const failureLines = failures.length === 0 ? null : (
+    <View style={onlyFailures ? styles.failuresAlone : styles.failures}>
+      {failures.map((failure) => (
+        <SurfaceStateCard
+          key={failure.sourceId}
+          kind="warning"
+          size="line"
+          title={failure.message}
+          action={{ label: t('common.retry'), onPress: failure.onRetry, testID: `${config.testID}:sourceFailure:${failure.sourceId}:retry` }}
+          testID={`${config.testID}:sourceFailure:${failure.sourceId}`}
+        />
+      ))}
+    </View>
+  );
 
   return (
     <CoreCollectionScope>
@@ -327,7 +389,7 @@ export function CapabilityAddModalBody<Item>(
           minDetailWidth={CATALOG_SURFACE_LIST_ROLE.minDetailWidthPx}
           preferredListRatio={CATALOG_SURFACE_LIST_ROLE.preferredListRatio}
           loading={catalog.loading}
-          empty={catalog.empty}
+          empty={onlyFailures ? failureLines : catalog.empty}
           search={{
             label: t('capabilities.add.searchLabel'),
             value: catalog.query,
@@ -336,12 +398,15 @@ export function CapabilityAddModalBody<Item>(
             width: 'fill',
             testID: `${config.testID}:search`,
           }}
-          header={(slots) => <CatalogToolsBand open={openKey !== null}>{tools(slots.search)}</CatalogToolsBand>}
+          header={(slots) => <CatalogToolsBand open={openKey !== null}>{tools(slots.search)}{onlyFailures ? null : failureLines}</CatalogToolsBand>}
           testID={`${config.testID}:collection`}
           listTestID={`${config.testID}:list`}
           detailTestID={`${config.testID}:detail`}
         />
       </View>
+      {catalog.footer === undefined || openKey !== null ? null : (
+        <View style={styles.listFooter} testID={`${config.testID}:list-footer`}>{catalog.footer}</View>
+      )}
     </CoreCollectionScope>
   );
 }
@@ -376,11 +441,51 @@ function CatalogModes(props: Readonly<{
   );
 }
 
+/** One level in, the way back names where it leads ("‹ Add a skill"), on the header's title line. */
+function CapabilityAddBackLink(props: Readonly<{ label: string; onPress: () => void; testID: string }>): React.ReactElement {
+  const { theme } = useUnistyles();
+  return (
+    <HappierPressable
+      testID={props.testID}
+      onPress={props.onPress}
+      accessibilityRole="button"
+      accessibilityLabel={t('capabilities.add.backTo', { title: props.label })}
+      style={styles.backLink}
+    >
+      <Icon name="caret-left" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />
+      <Text variant="body" style={{ color: theme.colors.text.secondary }} numberOfLines={1}>{props.label}</Text>
+    </HappierPressable>
+  );
+}
+
 /** The tools band; on a phone the pushed details are the page, so the band steps aside while they show. */
 function CatalogToolsBand(props: Readonly<{ open: boolean; children: React.ReactNode }>): React.ReactElement | null {
     const layout = useHappierCollectionLayout();
     if (props.open && layout?.mode === 'stacked') return null;
     return <View style={styles.toolsBand}>{props.children}</View>;
+}
+
+/**
+ * The pinned footer of the Add dialog: a quiet note (or the failure) at the start, the actions at the end. Where the
+ * details are a phone page (`stacked`) the note reads on its own line and the actions share the full width.
+ */
+export function CapabilityAddFooter(
+  props: Readonly<{ start: React.ReactNode; children: React.ReactNode; stacked?: boolean }>,
+): React.ReactElement {
+  if (props.stacked) {
+    return (
+      <View style={[styles.footer, styles.footerStacked]}>
+        {props.start === null || props.start === undefined ? null : props.start}
+        <View style={styles.footerActionsStacked}>{props.children}</View>
+      </View>
+    );
+  }
+  return (
+    <View style={styles.footer}>
+      <View style={styles.footerStart}>{props.start}</View>
+      {props.children}
+    </View>
+  );
 }
 
 function CapabilityAddDetail<Item>(
@@ -391,6 +496,7 @@ function CapabilityAddDetail<Item>(
     pushed: boolean;
     added: boolean;
     onCloseDetail: () => void;
+    onCloseDialog: () => void;
     onPrimaryDone: (
       result: Readonly<{ itemId: string; then?: 'close' | 'stay' }>,
     ) => void;
@@ -408,7 +514,7 @@ function CapabilityAddDetail<Item>(
     setError(null);
     try {
       const result = await footer.primary.onPress();
-      props.onPrimaryDone(result);
+      if (result !== null) props.onPrimaryDone(result);
     } catch (failure) {
       setError(
         failure instanceof Error && failure.message
@@ -419,7 +525,36 @@ function CapabilityAddDetail<Item>(
       setBusy(false);
     }
   }, [footer.primary, props]);
-  const primary = (
+  const afterAdd = props.added ? footer.afterAdd : undefined;
+  // On a phone page each action takes an equal share of the row (lab aa Xp).
+  const slot = (node: React.ReactNode) => (props.pushed ? <View style={styles.footerSlot}>{node}</View> : node);
+  const primary = afterAdd !== undefined ? (
+    <RoundButtonSizeScope size="normal" presentation="uniform">
+    <View style={props.pushed ? styles.footerActionsFill : styles.footerActions}>
+      {afterAdd.open === undefined ? null : slot(
+        <RoundButton
+          title={afterAdd.open.label}
+          display="secondary"
+          onPress={() => {
+            props.onCloseDialog();
+            afterAdd.open?.onPress();
+          }}
+          testID={`${props.config.testID}:open-added`}
+        />
+      )}
+      {slot(
+        <RoundButton
+          title={t('capabilities.add.done')}
+          onPress={() => {
+            props.onCloseDialog();
+            afterAdd.onDone?.();
+          }}
+          testID={`${props.config.testID}:done`}
+        />,
+      )}
+    </View>
+    </RoundButtonSizeScope>
+  ) : slot(
     <RoundButton
       title={props.added ? t('capabilities.add.added') : footer.primary.label}
       size="normal"
@@ -432,13 +567,14 @@ function CapabilityAddDetail<Item>(
         void press();
       }}
       testID={`${props.config.testID}:primary`}
-    />
+    />,
   );
   const footerRow = (
-    <View style={styles.footer}>
-      <View style={styles.footerStart}>
-        {error === null ? (
-          (footer.provenance ?? null)
+    <CapabilityAddFooter
+      stacked={props.pushed}
+      start={
+        error === null ? (
+          (afterAdd?.start ?? footer.provenance ?? null)
         ) : (
           <Text
             variant="meta"
@@ -447,10 +583,11 @@ function CapabilityAddDetail<Item>(
           >
             {error}
           </Text>
-        )}
-      </View>
+        )
+      }
+    >
       {primary}
-    </View>
+    </CapabilityAddFooter>
   );
   return (
     <View
@@ -479,10 +616,13 @@ function CapabilityAddDetail<Item>(
         </View>
       )}
       <ScrollView style={styles.fill} contentContainerStyle={[styles.detailBody, props.pushed ? styles.detailBodyPushed : null]}>
-        {props.config.renderDetail(props.item, {
-          pushed: props.pushed,
-          added: props.added,
-        })}
+        {/* The details are a detail page: sections read their description above the rows, in the body's own inset. */}
+        <ListPresentationProvider value="page" pageInsets="contained">
+          {props.config.renderDetail(props.item, {
+            pushed: props.pushed,
+            added: props.added,
+          })}
+        </ListPresentationProvider>
       </ScrollView>
       {props.pushed ? (
         <DetailsPaneFooter>{footerRow}</DetailsPaneFooter>
@@ -506,6 +646,8 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.space.s12,
   },
   search: { flexGrow: 1, flexBasis: 240, minWidth: 0 },
+  failures: { paddingTop: theme.space.s12 },
+  failuresAlone: { paddingHorizontal: theme.space.s24, paddingTop: theme.space.s16 },
   detail: { flex: 1, minHeight: 0 },
   detailBack: {
     paddingHorizontal: theme.space.s16,
@@ -519,7 +661,8 @@ const styles = StyleSheet.create((theme) => ({
   },
   detailBody: {
     paddingHorizontal: theme.space.s32,
-    paddingTop: theme.space.s24,
+    // The details' header carries its own top space; the title row then sits level with the close button.
+    paddingTop: theme.space.s8,
     paddingBottom: theme.space.s24,
     gap: theme.space.s24,
   },
@@ -534,4 +677,60 @@ const styles = StyleSheet.create((theme) => ({
     borderTopColor: theme.colors.border.subtle,
   },
   footerStart: { flex: 1, minWidth: 0 },
+  footerActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
+  footerStacked: { flexDirection: 'column', alignItems: 'stretch', gap: theme.space.s12 },
+  footerActionsStacked: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, alignSelf: 'stretch' },
+  footerActionsFill: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
+  footerSlot: { flex: 1, minWidth: 0 },
+  listFooter: {
+    paddingHorizontal: theme.space.s24,
+    paddingVertical: theme.space.s12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border.subtle,
+  },
+  backLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s4,
+    minHeight: resolveMinimumInteractiveTargetSize(Platform.OS),
+    paddingRight: theme.space.s16,
+  },
 }));
+
+/**
+ * Page-level deep link (P5 §4.5): `?add=<modeKey>&source=<sourceId>&q=<query>` opens the Add modal once on the page
+ * route, then the page replaces its own URL without the params (no mount write to synced state). `?install=<payload>`
+ * is the install-link form (MCP servers): it opens the dialog with that payload for its paste mode.
+ */
+export function useCapabilityAddRouteParams(
+  open: (params: Readonly<{ modeKey?: string; sourceId?: string; query?: string; install?: string }>) => void,
+  clearHref: string,
+): void {
+  const params = useLocalSearchParams<{ add?: string | string[]; source?: string | string[]; q?: string | string[]; install?: string | string[] }>();
+  const router = useRouter();
+  const first = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value) || undefined;
+  const add = first(params.add);
+  const sourceId = first(params.source);
+  const query = first(params.q);
+  const install = first(params.install);
+  const openRef = React.useRef(open);
+  openRef.current = open;
+  const handled = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (add === undefined && install === undefined) return;
+    const key = JSON.stringify([add, sourceId, query, install]);
+    if (handled.current === key) return;
+    // On a cold deep link the page mounts before the modal host registers: open on the next turn.
+    const timer = setTimeout(() => {
+      handled.current = key;
+      openRef.current({
+        ...(add ? { modeKey: add } : {}),
+        ...(sourceId ? { sourceId } : {}),
+        ...(query ? { query } : {}),
+        ...(install ? { install } : {}),
+      });
+      router.replace(clearHref as never);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [add, clearHref, install, query, router, sourceId]);
+}

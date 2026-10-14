@@ -17,6 +17,9 @@ const MARK_SIZE_PX = 13;
  */
 export function AgentNameRun(props: Readonly<{
     agentIds: readonly string[];
+    machineId?: string | null;
+    serverId?: string | null;
+    machines?: readonly Readonly<{ machineId: string; agentIds: readonly string[] }>[];
     tone?: 'primary' | 'secondary';
     /**
      * `sentence` joins as the reader's language joins a list, inside a sentence; `legend` is a label line
@@ -27,7 +30,8 @@ export function AgentNameRun(props: Readonly<{
     testID?: string;
 }>): React.ReactElement | null {
     const { theme } = useUnistyles();
-    const identities = useAgentCatalogIdentities({ agentIds: props.agentIds, machineId: null, serverId: null });
+    const identities = useAgentCatalogIdentities({ agentIds: props.agentIds, machineId: props.machineId ?? null,
+        serverId: props.serverId ?? null, machines: props.machines });
     const legend = props.form === 'legend';
     const parts = React.useMemo(() => {
         const names = identities.map((identity) => identity.entry.title);
@@ -46,8 +50,8 @@ export function AgentNameRun(props: Readonly<{
                     if (part.kind === 'literal') return part.text;
                     const identity = identities[part.index]!;
                     return (
-                        <Text key={`${identity.entry.agentId}:${position}`}>
-                            <AgentCatalogIdentityIcon entry={identity.entry} machineId={null} serverId={null}
+                        <Text key={`${identity.entry.backendTargetKey ?? identity.entry.qualifiedId}:${position}`}>
+                            <AgentCatalogIdentityIcon entry={identity.entry} machineId={props.machineId ?? null} serverId={props.serverId ?? null}
                                 current={identity.current} size={MARK_SIZE_PX} />
                             {`\u2009${identity.entry.title}`}
                         </Text>
@@ -62,8 +66,8 @@ export function AgentNameRun(props: Readonly<{
                 if (part.kind === 'literal') return part.text;
                 const identity = identities[part.index]!;
                 return (
-                    <Text key={`${identity.entry.agentId}:${position}`} style={[styles.name, { color }]}>
-                        <AgentCatalogIdentityIcon entry={identity.entry} machineId={null} serverId={null}
+                    <Text key={`${identity.entry.backendTargetKey ?? identity.entry.qualifiedId}:${position}`} style={[styles.name, { color }]}>
+                        <AgentCatalogIdentityIcon entry={identity.entry} machineId={props.machineId ?? null} serverId={props.serverId ?? null}
                             current={identity.current} size={MARK_SIZE_PX} />
                         {` ${identity.entry.title}`}
                     </Text>

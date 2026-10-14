@@ -1,5 +1,4 @@
 import { DaemonMcpServersDetectRequestSchema, DaemonMcpServersDetectResponseSchema, DaemonMcpServersTestRequestSchema, DaemonMcpServersTestResponseSchema, type DaemonMcpServersDetectRequest, type DaemonMcpServersDetectResponse, type DaemonMcpServersTestRequest, type DaemonMcpServersTestResponse } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
-import { DaemonMcpServersPreviewRequestSchema, DaemonMcpServersPreviewResponseSchema, type DaemonMcpServersPreviewRequest, type DaemonMcpServersPreviewResponse } from '@happier-dev/protocol/mcp/servers/previewV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
@@ -61,26 +60,6 @@ export async function machineMcpServersTest(
     const parsed = DaemonMcpServersTestResponseSchema.safeParse(response);
     if (!parsed.success) {
         throwUnsupportedResponse(RPC_METHODS.DAEMON_MCP_SERVERS_TEST);
-    }
-    return parsed.data;
-}
-
-export async function machineMcpServersPreview(
-    machineId: string,
-    input: Omit<DaemonMcpServersPreviewRequest, 'machineId'>,
-    opts?: MachineMcpServersOpts,
-): Promise<DaemonMcpServersPreviewResponse> {
-    const payload = DaemonMcpServersPreviewRequestSchema.parse({ ...input, machineId });
-    const response = await machineRpcWithServerScope<unknown, DaemonMcpServersPreviewRequest>({
-        machineId,
-        serverId: opts?.serverId,
-        timeoutMs: opts?.timeoutMs ?? undefined,
-        method: RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW,
-        payload,
-    });
-    const parsed = DaemonMcpServersPreviewResponseSchema.safeParse(response);
-    if (!parsed.success) {
-        throwUnsupportedResponse(RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW);
     }
     return parsed.data;
 }

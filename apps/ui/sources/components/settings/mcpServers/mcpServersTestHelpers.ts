@@ -187,6 +187,7 @@ export function installMcpServersCommonModuleMocks(
 
     vi.mock('@/components/ui/buttons/RoundButton', () => ({
         RoundButton: (props: Record<string, unknown>) => React.createElement('RoundButton', props),
+        RoundButtonSizeScope: (props: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, props.children),
     }));
 
     vi.mock('@/components/ui/navigation/SegmentedTabBar', () => ({

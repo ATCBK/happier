@@ -88,6 +88,7 @@ describe('resolveAgentExecutionTargetForBackendTarget', () => {
         expect(resolveAgentExecutionTargetForBackendTarget({
             backendTarget: { kind: 'backend', backendId: 'custom-acp' },
             daemonMergedProjectionInputs: {
+                mergedBackendProjectionById: {},
                 mergedProviderProjectionById: {
                     'custom-acp': { agentId: 'custom-acp',
                         identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' } },

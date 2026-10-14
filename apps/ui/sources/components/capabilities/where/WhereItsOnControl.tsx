@@ -69,7 +69,7 @@ export type WhereItsOnControlProps = Readonly<{
   rules: ReachRulesV1;
   status: 'ready' | 'loading' | 'unavailable';
   /** From P2 `useReachProjection(kind, itemId)`; null while resolving (the consequence keeps its slot). */
-  projection: readonly Readonly<ReachProjectionV1[number] & { projectKey?: string }>[] | null;
+  projection: readonly Readonly<ReachProjectionV1[number] & { projectKey?: string; agentInventoryComplete?: boolean }>[] | null;
   /** What "Add an exception" / "Add a place" offers. `online` is REACH's one predicate, read by the caller (C4). */
   places: Readonly<{
     agentIds: readonly string[];
@@ -197,7 +197,16 @@ function ConsequenceLine(
   }>,
 ) {
   const { theme } = useUnistyles();
-  if (props.projection === null) {
+  const machines = React.useMemo(() => props.projection?.map(row => ({ machineId: row.machineId,
+    agentIds: row.agents.filter(agent => agent.enabled).map(agent => agent.agentId) })) ?? [], [props.projection]);
+  const consequence = props.projection === null ? null : describeReach(
+    props.projection,
+    props.machines,
+    props.names,
+    props.agentTakes,
+    props.kind,
+  );
+  if (consequence === null || consequence.availabilityUnknown) {
     return (
       <Text
         variant="body"
@@ -208,13 +217,6 @@ function ConsequenceLine(
       </Text>
     );
   }
-  const consequence = describeReach(
-    props.projection,
-    props.machines,
-    props.names,
-    props.agentTakes,
-    props.kind,
-  );
   const nowhere =
     consequence.availableAgentIds.length === 0 ||
     consequence.onlineMachineNames.length === 0;
@@ -236,6 +238,7 @@ function ConsequenceLine(
           {before}
           <AgentNameRun
             agentIds={consequence.availableAgentIds}
+            machines={machines}
             testID={`${props.testID}:agents`}
           />
           {after}

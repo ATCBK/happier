@@ -20,7 +20,8 @@ export type CapabilityReachLegendRow = Readonly<{
   /** It has Agents, but none of them can take this kind of item (said in words, never as "no agents"). */
   noSkillAgents?: boolean;
   /** How many items reach it; last known for an offline machine. */
-  count: number;
+  count: number | null;
+  inventoryUnknown?: boolean;
 }>;
 
 /**
@@ -56,7 +57,9 @@ export const CapabilityReachLegend = React.memo(function CapabilityReachLegend(
             t('capabilities.skills.home.offline')
           )
         ) : agents.length > 0 ? (
-          <AgentNameRun agentIds={agents} tone="primary" form="legend" />
+          <AgentNameRun agentIds={agents} machineId={row.machineId} tone="primary" form="legend" />
+        ) : row.inventoryUnknown ? (
+          '—'
         ) : previewAgents ? (
           '—'
         ) : row.noSkillAgents ? (
@@ -85,7 +88,7 @@ export const CapabilityReachLegend = React.memo(function CapabilityReachLegend(
                   variant="label"
                   style={[styles.count, row.offline ? styles.offline : null]}
                 >
-                  {String(row.count)}
+                  {row.count === null ? '—' : String(row.count)}
                 </Text>
               )
             }

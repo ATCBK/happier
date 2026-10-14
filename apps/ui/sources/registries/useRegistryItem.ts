@@ -7,5 +7,5 @@ const parse = (value: unknown) => REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.
 export function useRegistryItem(input: { kind: RegistryKindV1; sourceId: string; itemId: string; version?: string }) {
     const revision = useRegistrySourceRevision();
     const read = useRegistryActionRead('registries.items.read', input, parse, revision, Boolean(input.sourceId));
-    return { item: read.value?.item ?? null, loading: read.loading, error: read.error, refresh: read.refresh };
+    return { item: read.value?.item ?? null, loading: read.loading, error: read.error, status: read.status, refresh: read.refresh };
 }

@@ -19,7 +19,7 @@ import {
   WhereItsOnControl,
   useDraftReachRules,
 } from '@/components/capabilities/where/WhereItsOnControl';
-import { useWhereItsOnNames } from '@/components/capabilities/where/useWhereItsOnNames';
+import { useFoundSkillsCache } from '@/sync/domains/skills/useFoundSkills';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import type { PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { PageLeaveActions } from '@/components/ui/layout/PageLeaveActions';
@@ -33,7 +33,6 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { Typography } from '@/constants/Typography';
 import {
   projectReachOnMachines,
-  useReachMachines,
   useReachProjection,
   type ReachMachine,
 } from '@/sync/domains/capabilities/reach/useReachProjection';
@@ -44,7 +43,6 @@ import { t } from '@/text';
 import {
   SKILLS_COLLECTION_ROUTE,
   skillHref,
-  skillPlanOnMachine,
   skillSource,
 } from '../skillsCollectionModel';
 import { skillStatus } from '../status/skillStatus';
@@ -62,16 +60,13 @@ import {
   useSkillDetail,
   type SkillDetailModel,
 } from './useSkillDetail';
+import { summarizeMachines } from './skillMachineSummary';
 import {
   useSkillMachineTruth,
   type SkillMachineTruth,
 } from './useSkillMachineTruth';
+import { NO_PROJECTS, useSkillPlaces } from '../useSkillPlaces';
 
-const NO_PROJECTS: readonly Readonly<{
-  projectKey: string;
-  name: string;
-  machineCount: number;
-}>[] = [];
 
 function formatDay(ms: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -93,45 +88,6 @@ function lastKnown(ms: number | null): string | undefined {
   });
 }
 
-/** Machines, their names and which Agents can take skills there: shared by the saved page and the draft. */
-function useSkillPlaces() {
-  const scope = useAccountSettingsScope();
-  const { machines } = useReachMachines();
-  const placeMachines = React.useMemo(
-    () =>
-      machines.map((machine) => ({
-        machineId: machine.machineId,
-        name: machine.name ?? machine.machineId,
-        online: !machine.offline,
-      })),
-    [machines],
-  );
-  const agentIds = React.useMemo(
-    () => [...new Set(machines.flatMap((machine) => machine.agentIds))],
-    [machines],
-  );
-  const { names } = useWhereItsOnNames({
-    agentIds,
-    machines: placeMachines,
-    projects: NO_PROJECTS,
-    serverId: scope?.serverId ?? null,
-  });
-  // IR-80: an Agent takes skills when some machine's plan for it is not `none`.
-  const agentTakes = React.useCallback(
-    (agentId: string): 'full' | 'index' | 'none' => {
-      let seen = false;
-      for (const machine of machines) {
-        if (!machine.agentIds.includes(agentId)) continue;
-        seen = true;
-        const kind = skillPlanOnMachine(machine, agentId);
-        if (kind !== 'none') return kind;
-      }
-      return seen ? 'none' : 'full';
-    },
-    [machines],
-  );
-  return { machines, placeMachines, agentIds, names, agentTakes } as const;
-}
 
 /**
  * A skill (sd D order, all P5 parts): who it is, the one thing blocking it, Where it's on, its
@@ -154,6 +110,22 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
   const router = useRouter();
   const detail = useSkillDetail(skillId);
   const places = useSkillPlaces();
+  const foundCache = useFoundSkillsCache(
+    React.useMemo(() => places.placeMachines.map((machine) => machine.machineId), [places.placeMachines]),
+  );
+  // Where Happier's own copies of this skill sit, per machine (the Found scan's receipts).
+  const installedPaths = React.useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(foundCache).map(([machineId, result]) => [
+          machineId,
+          (result?.items ?? [])
+            .filter((item) => item.inLibrary === skillId && item.happierInstalled)
+            .map((item) => item.path),
+        ]),
+      ),
+    [foundCache, skillId],
+  );
   const reach = useReachRules('skill', skillId);
   const projection = useReachProjection('skill', skillId);
   const rulesKey = React.useMemo(
@@ -242,6 +214,19 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
         })),
       });
     }
+    items.push({
+      id: 'exportZip',
+      testID: 'skill.detail.exportZip',
+      title: t('capabilities.skillDetail.menu.exportZip'),
+      onSelect: async () => {
+        try {
+          if (!(await detail.exportZip()))
+            Modal.alert(t('common.error'), t('errors.unknownError'));
+        } catch {
+          Modal.alert(t('common.error'), t('errors.unknownError'));
+        }
+      },
+    });
     const link =
       provenance?.kind === 'link'
         ? provenance.url
@@ -310,7 +295,8 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
         purpose={purpose}
         facts={facts}
         status={headerStatus}
-        menuItems={menuItems}
+        // Nothing to act on until the library has answered for this skill.
+        menuItems={read || listItem ? menuItems : undefined}
       />
       {unavailable ? (
         <CapabilityBlockingBanner
@@ -397,6 +383,7 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
           onlineMachines={places.placeMachines.filter(
             (machine) => machine.online,
           )}
+          installedPaths={installedPaths}
           execute={detail.execute}
         />
       ) : null}
@@ -423,11 +410,11 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
 }
 
 /** A machine's Agents as one line of the row's subtitle, the joining words in the subtitle's ink. */
-function MachineAgents(props: Readonly<{ agentIds: readonly string[]; quiet?: boolean }>) {
+function MachineAgents(props: Readonly<{ agentIds: readonly string[]; machineId: string; quiet?: boolean }>) {
   const { theme } = useUnistyles();
   return (
     <Text variant="body" style={{ color: theme.colors.text.secondary }}>
-      <AgentNameRun agentIds={props.agentIds} tone={props.quiet ? 'secondary' : 'primary'} />
+      <AgentNameRun agentIds={props.agentIds} machineId={props.machineId} tone={props.quiet ? 'secondary' : 'primary'} />
     </Text>
   );
 }
@@ -447,7 +434,7 @@ function machineRow(
       offline: true,
       who:
         entry.projectedAgents.length > 0 ? (
-          <MachineAgents agentIds={entry.projectedAgents} quiet />
+          <MachineAgents agentIds={entry.projectedAgents} machineId={machine.machineId} quiet />
         ) : (
           t('capabilities.skillDetail.machines.noAgent')
         ),
@@ -496,9 +483,9 @@ function machineRow(
     // While its previews answer, the row keeps what the rules say (no flash of "no agent").
     who:
       delivered.length > 0 ? (
-        <MachineAgents agentIds={delivered} />
+        <MachineAgents agentIds={delivered} machineId={machine.machineId} />
       ) : pending && entry.projectedAgents.length > 0 ? (
-        <MachineAgents agentIds={entry.projectedAgents} quiet />
+        <MachineAgents agentIds={entry.projectedAgents} machineId={machine.machineId} quiet />
       ) : (
         t('capabilities.skillDetail.machines.noAgent')
       ),
@@ -519,24 +506,14 @@ function SkillMachines(
     .filter((entry) => entry.machine.agentIds.length > 0)
     .sort((a, b) => Number(a.machine.offline) - Number(b.machine.offline));
   const rows = shown.map((entry) => machineRow(entry, agentName));
-  // Closed: the online machines that get it, by name and Agents (two at most), then how many are offline.
-  const online = shown.filter((entry) => !entry.machine.offline);
-  const offline = shown.length - online.length;
-  const summary = [
-    ...online.slice(0, 2).map((entry) => {
-      const name = entry.machine.name ?? entry.machine.machineId;
-      const delivered = entry.skillAgents.filter((agentId) => entry.facts.get(agentId)?.kind === 'delivered');
-      return delivered.length > 0 ? `${name}: ${delivered.map(agentName).join(', ')}` : name;
-    }),
-    ...(online.length > 2 ? [t('capabilities.skillDetail.machines.moreOnline', { count: online.length - 2 })] : []),
-    ...(offline > 0 ? [t('capabilities.skillDetail.machines.offlineCount', { count: offline })] : []),
-  ].join(' · ');
+  const { summary, note } = summarizeMachines(shown, agentName);
   return (
     <CapabilityMachineTruth
       testID="skill.detail.machines"
       description={`${t('capabilities.skillDetail.machines.description')} ${t('capabilities.skillDetail.machines.projectNote')}`}
       rows={rows}
       summary={summary}
+      {...(note ? { summaryNote: note } : {})}
       emptyLabel={t('capabilities.skillDetail.machines.nowhere')}
       defaultExpanded={rows.length > 0 && rows.length <= 6}
     />

@@ -9,10 +9,11 @@ import type { AccountSettingsScope } from '@/sync/domains/settings/scope/account
 import { t } from '@/text';
 
 import { McpServerConfigurationSection, type McpConfigurationSaveState } from '../McpServerConfigureForm';
-import { mcpServerMissingKeyNames } from '../status/mcpServerStatus';
+import { mcpServerMissingKeyNames, type McpSavedSecretAvailability } from '../status/mcpServerStatus';
 import { mcpServerDisplayName } from '../collection/mcpServerCollectionModel';
 import { McpServerMark } from '../identity/McpServerMark';
 import { McpServerMachineDifferences } from './McpServerMachineDifferences';
+import { McpSignInSection } from '../signIn/McpSignInSection';
 import {
   McpServerBanner,
   McpServerMachinesAndDetails,
@@ -30,6 +31,7 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
     draftServer: McpServerCatalogEntryV1;
     catalogRevision: number | 'absent' | null;
     secrets: SavedSecret[];
+    secretAvailability: McpSavedSecretAvailability;
     scope: AccountSettingsScope | null | undefined;
     /** A Configuration value was committed (blur, a type or secret chosen): save it now. */
     onCommitConfiguration: () => void;
@@ -42,18 +44,15 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
   }>,
 ) {
   const { server } = props;
-  const savedSecretIds = React.useMemo(
-    () => new Set(props.secrets.map((secret) => secret.id)),
-    [props.secrets],
-  );
+  const { secretAvailability } = props;
   const detail = useMcpServerDetail(
     server,
     props.catalogRevision,
-    savedSecretIds,
+    secretAvailability,
   );
   const missingKeys = React.useMemo(
-    () => mcpServerMissingKeyNames(server, savedSecretIds),
-    [savedSecretIds, server],
+    () => mcpServerMissingKeyNames(server, secretAvailability),
+    [secretAvailability, server],
   );
   const name = mcpServerDisplayName(server);
   const list = detail.tools.list;
@@ -106,6 +105,9 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
       />
       {props.approvalNotice}
       <McpServerBanner detail={detail} name={name} toolCount={toolCount} />
+      {detail.signIn.view ? (
+        <McpSignInSection name={name} signIn={{ ...detail.signIn, view: detail.signIn.view }} />
+      ) : null}
       <McpServerWhereAndTools detail={detail} />
       <McpServerConfigurationSection
         title={t('capabilities.mcp.detail.configurationTitle')}
@@ -122,6 +124,9 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
       <McpServerMachineDifferences
         server={props.draftServer}
         machineName={detail.names.machineName}
+        machines={detail.placeMachines}
+        secrets={props.secrets}
+        scope={props.scope}
         onChangeServer={props.onChangeServer}
         onCommit={props.onCommitConfiguration}
       />

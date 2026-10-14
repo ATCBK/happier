@@ -12,7 +12,7 @@ const SKILLS_DETAIL_MIN_WIDTH_PX = 480;
 function resolveSkillsChildRoute(pathname: string): string {
     if (pathname === SKILLS_COLLECTION_ROUTE) return 'index';
     const rest = pathname.slice(SKILLS_COLLECTION_ROUTE.length + 1);
-    return rest === 'new' ? 'new' : '[skillId]';
+    return rest === 'new' || rest === 'found' || rest === 'updates' || rest === 'choose' ? rest : '[skillId]';
 }
 
 /**

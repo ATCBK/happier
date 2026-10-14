@@ -33,11 +33,13 @@ import { t } from '@/text';
 import {
   mcpServerMachineStatuses,
   mcpServerStatus,
+  type McpSavedSecretAvailability,
   type McpServerMachineFact,
 } from '../status/mcpServerStatus';
 import { useMcpServerMachineTests } from '../status/useMcpServerMachineTests';
 import { McpServerToolsSection } from '../tools/McpServerToolsSection';
 import { useMcpServerTools } from '../tools/useMcpServerTools';
+import { useMcpServerSignIn } from '../signIn/useMcpServerSignIn';
 
 const NO_PROJECTS: readonly Readonly<{
   projectKey: string;
@@ -66,7 +68,7 @@ function formatDay(ms: number): string {
 export function useMcpServerDetail(
   server: McpServerCatalogEntryV1,
   catalogRevision: number | 'absent' | null,
-  savedSecretIds: ReadonlySet<string>,
+  savedSecretCatalog: McpSavedSecretAvailability,
 ) {
   const serverId = server.id;
   const reach = useReachRules('mcp_server', serverId);
@@ -117,29 +119,30 @@ export function useMcpServerDetail(
       }));
   }, [machines, projection]);
 
+  const signIn = useMcpServerSignIn(server, placeMachines);
+  const startSignIn = signIn.start;
   const runTest = tests.run;
   const fixes = React.useMemo(
     () => ({
-      signIn: () => undefined,
-      reconnect: () => undefined,
-      grantAccess: () => undefined,
+      signIn: () => void startSignIn(),
+      reconnect: () => void startSignIn(),
+      grantAccess: () => void startSignIn({ stepUp: true }),
       addKey: () => undefined,
       howToFix: () => undefined,
       tryAgain: (machineId: string) => runTest([machineId]),
     }),
-    [runTest],
+    [runTest, startSignIn],
   );
   const statusInput = React.useMemo(
     () => ({
       entry: server,
-      // U7.9 lands the sign-in owner; until then a server's sign-in does not speak.
-      signIn: null,
+      signIn: signIn.fact,
       tests: tests.results,
       machines: onMachines,
-      savedSecretIds,
+      savedSecretCatalog,
       fixes,
     }),
-    [fixes, onMachines, savedSecretIds, server, tests.results],
+    [fixes, onMachines, savedSecretCatalog, server, signIn.fact, tests.results],
   );
   const statuses = React.useMemo(
     () => mcpServerStatus(statusInput),
@@ -168,6 +171,7 @@ export function useMcpServerDetail(
     onMachines,
     tests,
     tools,
+    signIn,
     statuses,
     machineStatuses,
     testOnline,
@@ -234,6 +238,8 @@ function bannerCopy(
   }
 }
 
+const SIGN_IN_KINDS: ReadonlySet<CapabilityStatus['kind']> = new Set(['signin', 'signing', 'connected', 'more_access', 'expired', 'revoked']);
+
 /** The banner: the one most blocking status, said once with its fix. */
 export function McpServerBanner(
   props: Readonly<{
@@ -242,7 +248,11 @@ export function McpServerBanner(
     toolCount?: number;
   }>,
 ) {
-  const top = pickMostBlockingCapabilityStatus(props.detail.statuses, 'header');
+  // The Sign-in section, right under the header, already says any sign-in state with its one action.
+  const statuses = props.detail.signIn.view
+    ? props.detail.statuses.filter((status) => !SIGN_IN_KINDS.has(status.kind))
+    : props.detail.statuses;
+  const top = pickMostBlockingCapabilityStatus(statuses, 'header');
   const copy = top ? bannerCopy(top, props.name, props.toolCount) : null;
   if (!top || !copy) return null;
   return (
