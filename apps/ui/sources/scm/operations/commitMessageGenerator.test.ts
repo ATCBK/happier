@@ -77,7 +77,7 @@ describe('commitMessageGenerator', () => {
         const executionRunGet = vi.fn(async () => successfulTerminalResult().result);
         const executionRunWait = vi.fn(async () => ({ ok: true as const, status: 'succeeded' as const, result: successfulTerminalResult().result }));
         const executor = createActionExecutor(createActionExecutorBoundaryFixture({
-            executionRunCheckProtocolV2: async (_sessionId, _requirements, opts) => ({ ok: true, exactMachineId: opts?.targetMachineId }),
+            executionRunCheckProtocolV2: async (_sessionId, _requirements, opts) => ({ ok: true, exactMachineId: opts?.targetMachineId ?? undefined }),
             executionRunStart,
             executionRunGet,
             executionRunWait,
@@ -116,7 +116,7 @@ describe('commitMessageGenerator', () => {
         const executionRunGet = vi.fn(async () => successfulTerminalResult().result);
         const executionRunStop = vi.fn(async () => ({ ok: true as const }));
         const executor = createActionExecutor(createActionExecutorBoundaryFixture({
-            executionRunCheckProtocolV2: async (_sessionId, _requirements, opts) => ({ ok: true, exactMachineId: opts?.targetMachineId }),
+            executionRunCheckProtocolV2: async (_sessionId, _requirements, opts) => ({ ok: true, exactMachineId: opts?.targetMachineId ?? undefined }),
             executionRunGet, executionRunStop,
         }));
         actionExecuteMock.mockImplementation(executor.execute);

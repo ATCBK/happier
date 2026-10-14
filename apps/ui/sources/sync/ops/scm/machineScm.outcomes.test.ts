@@ -1,17 +1,42 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpc';
 import { createScmCapabilities } from '@happier-dev/protocol/scm';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 
 const rpc = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: rpc }));
 
-import { storage } from '@/sync/domains/state/storage';
-import { machineScmCommitCreate, machineScmRemotePush, machineScmPullRequestOpenOrReuse, machineScmStashCreate } from './machineScm';
+const harness = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(harness);
+const { storage } = await import('@/sync/domains/state/storage');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { machineScmCommitCreate, machineScmRemotePush, machineScmPullRequestOpenOrReuse, machineScmStashCreate } = await import('./machineScm');
+let serverId: string;
 
-beforeEach(() => {
+beforeEach(async () => {
     storage.setState(storage.getInitialState(), true);
     rpc.mockReset();
+    await harness.reset();
+    serverId = await harness.addHome({ name: 'SCM Home', serverUrl: 'https://scm-outcomes.test',
+        accountId: 'scm-account', serverIdentityId: 'srv_scm_outcomes', currentAccount: true });
+    const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'scm-account' };
+    const settings = { ...storage.getState().settings, actionsSettingsV1: normalizeActionsSettingsV1({
+        v: 1,
+        // These tests exercise acknowledged/lost transport outcomes after the
+        // user's persisted approval policy has admitted the mutation.
+        approvalWaivedSurfaces: Object.fromEntries(['scm.commit.create', 'scm.commit.undoLast',
+            'scm.remote.push', 'scm.pullRequest.openOrReuse', 'scm.stash.create'].map(actionId => [actionId, ['ui']])),
+    }) };
+    storage.setState({ settingsScope: scope, profileScope: scope });
+    storage.getState().applySettingsForScope(scope, settings, 1);
+    harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
 });
+afterEach(() => { standardCleanup(); });
 
 describe('SCM mutation transport outcomes', () => {
     it('refuses explicit commit-base authority when the target cannot honor it before sending a mutation', async () => {
@@ -26,9 +51,9 @@ describe('SCM mutation transport outcomes', () => {
         rpc.mockImplementation(async (request: { method: string }) => request.method === 'scm.backend.describe'
             ? { success: true, capabilities: createScmCapabilities({ writeCommitUndoLast: true }) }
             : { success: true, undoneCommitSha: expectedHeadOid, headOid: 'b'.repeat(40) });
-        const result = await machineScmCommitUndoLast('machine-other', { cwd: '/repo', expectedHeadOid }, { serverId: 'home-other' });
-        expect(result).toMatchObject({ success: true, undoneCommitSha: expectedHeadOid, headOid: 'b'.repeat(40) });
-        expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-other', serverId: 'home-other', method: 'scm.commit.undoLast', payload: { cwd: '/repo', expectedHeadOid, outcomeVersion: 1 } }));
+        const result = await machineScmCommitUndoLast('machine-other', { cwd: '/repo', expectedHeadOid }, { serverId });
+        expect(result, JSON.stringify(result)).toMatchObject({ success: true, undoneCommitSha: expectedHeadOid, headOid: 'b'.repeat(40) });
+        expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-other', serverId: resolveServerProfileScopeIdForIdentifier(serverId), method: 'scm.commit.undoLast', payload: { cwd: '/repo', expectedHeadOid, outcomeVersion: 1 } }));
 
         rpc.mockImplementation(async (request: { method: string }) => {
             if (request.method === 'scm.backend.describe') return { success: true, capabilities: createScmCapabilities({ writeCommitUndoLast: true }) };
@@ -50,7 +75,7 @@ describe('SCM mutation transport outcomes', () => {
     it('preserves uncertainty after a lost mutation response and names the read needed before retry', async () => {
         rpc.mockRejectedValue(new Error('lost response with private diagnostics'));
         const commit = await machineScmCommitCreate('m', { cwd: '/repo', message: 'commit' });
-        expect(commit).toMatchObject({ success: false, outcome: { kind: 'outcome_unknown', reconciliation: { kind: 'repository_status', cwd: '/repo' }, nextActions: [{ kind: 'refresh' }] } });
+        expect(commit, JSON.stringify(commit)).toMatchObject({ success: false, outcome: { kind: 'outcome_unknown', reconciliation: { kind: 'repository_status', cwd: '/repo' }, nextActions: [{ kind: 'refresh' }] } });
         const push = await machineScmRemotePush('m', { cwd: '/repo', remote: 'upstream', branch: 'feature' });
         expect(push).toMatchObject({ outcome: { kind: 'outcome_unknown', reconciliation: { kind: 'remote_ref', remote: 'upstream', branch: 'feature' } } });
         const pr = await machineScmPullRequestOpenOrReuse('m', { cwd: '/repo', head: 'feature', base: 'main' });

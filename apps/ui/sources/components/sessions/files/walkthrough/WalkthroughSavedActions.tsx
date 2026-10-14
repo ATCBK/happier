@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import {
     isScmCommitPlanApplicationLocked,
-    type ScmDiffSummaryResult, type ScmDiffSummaryResultFailure, type ScmDiffSummaryResultResponse,
+    type ScmDiffSummaryResult,
     type ScmDiffSummaryResultEdit, type ScmDiffSummaryWalkthrough,
 } from '@happier-dev/protocol/scm';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -12,7 +12,7 @@ import { FIELD_BOX_METRICS } from '@/components/ui/forms/fieldBox';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import type { createScmDiffSummaryResultOperations } from '@/sync/ops/scmDiffSummary/results';
+import type { createScmDiffSummaryResultOperations, ScmCommitPlanOperationResult } from '@/sync/ops/scmDiffSummary/results';
 import { t } from '@/text';
 
 export type WalkthroughSavedActionsProps = Readonly<{
@@ -20,7 +20,7 @@ export type WalkthroughSavedActionsProps = Readonly<{
     cwd: string;
     operations: ReturnType<typeof createScmDiffSummaryResultOperations>;
     onResult: (result: ScmDiffSummaryResult) => void;
-    onError?: (failure: ScmDiffSummaryResultFailure) => void;
+    onError?: (failure: Extract<ScmCommitPlanOperationResult, { success: false }>) => void;
     disabledReason?: string | null;
     canGenerate?: boolean;
     onUndo?: () => void;
@@ -46,7 +46,7 @@ export function WalkthroughSavedActions(props: WalkthroughSavedActionsProps) {
     const [discussing, setDiscussing] = React.useState(false);
     const [message, setMessage] = React.useState('');
     const [instructions, setInstructions] = React.useState('');
-    const [failure, setFailure] = React.useState<ScmDiffSummaryResultFailure | null>(null);
+    const [failure, setFailure] = React.useState<Extract<ScmCommitPlanOperationResult, { success: false }> | null>(null);
     const [busy, setBusy] = React.useState(false);
     const pending = React.useRef(false);
     const lifetime = React.useRef(0);
@@ -71,7 +71,7 @@ export function WalkthroughSavedActions(props: WalkthroughSavedActionsProps) {
     const canGenerate = Boolean(props.result.generator) && props.canGenerate !== false;
     const revisionInput = (expectedRevision = props.result.revision) => ({ cwd: props.cwd, resultId: props.result.resultId, expectedRevision });
 
-    async function invoke(operation: () => Promise<ScmDiffSummaryResultResponse>, options?: Readonly<{ rebaseDraft?: boolean }>) {
+    async function invoke(operation: () => Promise<ScmCommitPlanOperationResult>, options?: Readonly<{ rebaseDraft?: boolean }>) {
         if (pending.current || disabledReason) return;
         pending.current = true;
         setBusy(true);

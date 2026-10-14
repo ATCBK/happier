@@ -61,8 +61,9 @@ export function ScmComparisonPhoneHeader(props: Readonly<{
     ];
     const subtitle = [props.scope.currentLabel, props.scope.fileCount === null ? null
         : t('scmComparison.fileCount', { count: props.scope.fileCount })].filter(Boolean).join(' · ');
+    const onBack = props.onBack;
     return <Header safeAreaEnabled={false} headerShadowVisible={false}
-        headerLeft={props.onBack ? () => <DefaultBackButton testID="scm-comparison-phone-back" tintColor={theme.colors.text.primary} onPress={props.onBack ?? undefined} /> : null}
+        headerLeft={onBack ? () => <DefaultBackButton testID="scm-comparison-phone-back" tintColor={theme.colors.text.primary} onPress={onBack} /> : null}
         title={<ScmComparisonScopePicker {...props.scope} renderTrigger={({ toggle, open: scopeOpen }) => <HeaderTitleWithAction
             title={resolveSessionScmReviewViewLabel(props.view)} subtitle={subtitle} actionLabel={t('scmComparison.scopePicker.a11y')}
             actionIconName={scopeOpen ? 'caret-up' : 'caret-down'} onActionPress={toggle} />} />}

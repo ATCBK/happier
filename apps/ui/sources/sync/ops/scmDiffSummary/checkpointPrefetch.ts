@@ -46,7 +46,7 @@ export async function prefetchCompletedCheckpointMessages(params: Readonly<{
     if (catalog?.catalog.status !== 'ready' || catalog.stale) return;
     const projection = readCachedDaemonMergedProjectionCacheEntry({ machineId: metadata?.machineId, serverId: params.lifetime.scope.serverId });
     const inputs = projection && 'inputs' in projection ? projection.inputs : null;
-    const entries = getResolvedBackendCatalogEntries({ enabledAgentIds: getEnabledAgentIds(params.settings),
+    const entries = getResolvedBackendCatalogEntries({ enabledAgentIds: getEnabledAgentIds({ backendEnabledByTargetKey: params.settings.backendEnabledByTargetKey }),
         acpCatalogSnapshot: catalog.catalog, backendEnabledByTargetKey: params.settings.backendEnabledByTargetKey,
         mergedProviderProjectionById: inputs?.mergedProviderProjectionById,
         mergedBackendProjectionById: inputs?.mergedBackendProjectionById, discoveredBackendIds: inputs?.discoveredBackendIds });

@@ -668,19 +668,22 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                     title={t('connectedServices.title')}
                     description={t('settingsSourceControl.page.services.description')}
                 >
-                    {hostingProviders.map((provider) => (
+                    {hostingProviders.map((provider) => {
+                        const serviceId = provider.serviceId;
+                        return (
                         <Item
                             key={provider.providerId}
                             title={provider.title}
                             subtitle={describeProjectedMetadata(provider.description)}
-                            onPress={!contributionCatalogIsStale && provider.serviceId ? () => push({
+                            onPress={!contributionCatalogIsStale && serviceId ? () => push({
                                 pathname: '/(app)/settings/connected-services/[serviceId]',
-                                params: { serviceId: provider.serviceId },
+                                params: { serviceId },
                             }) : undefined}
                             disabled={contributionCatalogIsStale}
                             showChevron={!contributionCatalogIsStale && provider.serviceId !== null}
                         />
-                    ))}
+                        );
+                    })}
                 </ItemGroup>
             ) : null}
 
