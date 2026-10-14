@@ -13,6 +13,8 @@ import {
   ConversationObservationV1Schema, ConversationPollResultV1Schema, ConversationDeliveryInputV1Schema,
   ConversationProvidersContributionProtocolV1, type ConversationObservationV1, type ConversationDeliveryInputV1,
   ConversationBindingTargetV1Schema,
+  ConversationDeliveryResolveInputV1Schema,
+  ConversationDeliveryResolveResultV1Schema,
 } from '@happier-dev/channels-protocol/v1';
 import { createConversationProviderSetupResultV1Fixture } from '@happier-dev/channels-protocol/testing/v1';
 import { compilePluginJsonSchema, isValidPluginJsonSchemaValue, parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
@@ -27,6 +29,7 @@ import { createCurrentConversationConnectionFixture } from '../../../../../packa
 import { CHANNEL_STATE_COLLECTION, CHANNEL_DELIVERIES_COLLECTION } from '../../../../../packages/plugins/channels/src/collections';
 import { CHANNELS_PLUGIN, CHANNELS_PROVIDER_POINT_REF } from '../../../../../packages/plugins/channels/src/manifest';
 import { createConversationSessionProjectionFrontierRow } from '../../../../../packages/plugins/channels/src/sessionProjection';
+import { readConversationOutwardDeliveryResolutionPage } from '../../../../../packages/plugins/channels/src/outwardDelivery';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
@@ -73,7 +76,7 @@ function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-async function journey(input: { router?: boolean; socket?: boolean; wrongDelivery?: boolean; wrongSessionCaller?: boolean } = {}) {
+async function journey(input: { router?: boolean; socket?: boolean; wrongDelivery?: boolean; wrongSessionCaller?: boolean; ambiguousStart?: boolean } = {}) {
   const pending: ConversationObservationV1[] = [];
   const delivered: ConversationDeliveryInputV1[] = [];
   const roles = ConversationProvidersContributionProtocolV1.operations;
@@ -101,6 +104,7 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
         if (input.wrongDelivery) roles.connectionTest.declaration.input.schema.parse(request);
         const value = ConversationDeliveryInputV1Schema.parse(request);
         delivered.push(value);
+        if (value.newThread && input.ambiguousStart) return { kind: 'outcomeUnknown' };
         return { kind: 'delivered', providerMessageIds: [`receipt-${delivered.length}`],
           ...(value.newThread ? { endpoint: { kind: 'thread', audience: 'direct', id: 'thread-1', parentId: endpoint.id } } : {}) };
       } },
@@ -294,6 +298,69 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
 }
 
 describe('registered Channels composed journeys through real CLI Session admission', { timeout: 60_000 }, () => {
+  it('reads accepted custody through the registered safe delivery Action before and after provider delivery', async () => {
+    const fixture = await journey({ router: true });
+    try {
+      const admitted = record(await fixture.invoke('conversation/start-v1', {
+        routerBindingId: 'binding-1', audienceGroupId: 'brief', subject: 'Private read subject',
+        content: { text: 'Private read body' }, sessionId: 'session-journey-1',
+      }));
+      const request = { custodyId: String(admitted.custodyId) };
+      const queued = await fixture.invoke('delivery/read-v1', request);
+      expect(queued).toMatchObject({ kind: 'ready', delivery: {
+        custodyId: request.custodyId, revision: expect.any(Number), state: 'ready', lastOutcome: 'pending',
+      } });
+      expect(JSON.stringify(queued)).not.toContain('Private read');
+      await fixture.outward();
+      expect(await fixture.invoke('delivery/read-v1', request)).toMatchObject({ kind: 'ready', delivery: {
+        custodyId: request.custodyId, state: 'delivered', lastOutcome: 'delivered',
+      } });
+    } finally { await fixture.dispose(); }
+  });
+
+  it('projects the missing started-thread endpoint and accepts its current custody without resending', async () => {
+    const fixture = await journey({ router: true, ambiguousStart: true });
+    try {
+      await fixture.invoke('conversation/start-v1', {
+        routerBindingId: 'binding-1', audienceGroupId: 'brief', subject: 'Private brief subject',
+        content: { text: 'Private brief body' }, sessionId: 'session-journey-1',
+      });
+      await fixture.outward();
+      const page = await readConversationOutwardDeliveryResolutionPage({
+        deliveriesCollection: fixture.deliveries as never, connectionId: 'connection-1',
+      });
+      expect(page.rows).toEqual([expect.objectContaining({
+        state: 'outcomeUnknown', createdThreadEndpointRequired: { parentId: 'mailbox' },
+      })]);
+      expect(JSON.stringify(page)).not.toContain('Private brief');
+      const row = page.rows[0]!;
+      const request = { custodyId: row.custodyId, expectedRevision: row.revision, resolution: 'accepted' } as const;
+      await expect(fixture.invoke('delivery/resolve-v1', request))
+        .rejects.toMatchObject({ code: 'channels_delivery_resolve_endpoint_required' });
+      await expect(fixture.invoke('delivery/resolve-v1', { ...request,
+        endpoint: { kind: 'thread', audience: 'direct', id: 'thread-1', parentId: 'another-mailbox' },
+      })).rejects.toMatchObject({ code: 'channels_delivery_resolve_endpoint_required' });
+      const accepted = ConversationDeliveryResolveInputV1Schema.parse({ ...request,
+        endpoint: { kind: 'thread', audience: 'direct', id: 'thread-1', parentId: 'mailbox' },
+      });
+      expect(ConversationDeliveryResolveResultV1Schema.parse(await fixture.invoke('delivery/resolve-v1', accepted)))
+        .toMatchObject({ kind: 'resolved', custodyId: row.custodyId, resolution: 'accepted' });
+      await fixture.outward();
+      await fixture.outward();
+      expect(fixture.delivered).toHaveLength(1);
+      const children = [...fixture.state.rows.values()].filter(child => child.value['record-kind'] === 'binding'
+        && record(child.value.payload).parentBindingId === 'binding-1');
+      expect(children).toHaveLength(1);
+      expect(children[0]?.value.payload).toMatchObject({
+        endpoint: accepted.endpoint, target: { kind: 'session', sessionId: 'session-journey-1' },
+      });
+      fixture.pending.push(observation('confirmed-brief-reply', 'Merci', true));
+      await fixture.poll();
+      expect(fixture.admissions.map(admission => admission.sessionId)).toEqual(['session-journey-1']);
+      fixture.validateWrites();
+    } finally { await fixture.dispose(); }
+  });
+
   it('projects an admitted input through custody and the registered provider with its exact reply relation', async () => {
     const fixture = await journey();
     try {
