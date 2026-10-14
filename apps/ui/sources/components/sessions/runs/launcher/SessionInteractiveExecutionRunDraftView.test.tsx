@@ -15,6 +15,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixtures/pluginProviderDaemonProjection';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { AgentInput } from '@/components/sessions/agentInput';
+import { AgentInputChipPickerPanel } from '@/components/sessions/agentInput/components/AgentInputChipPickerPanel';
 import { SessionParticipantComposer } from '@/components/sessions/participants/composer/SessionParticipantComposer';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
@@ -188,7 +189,15 @@ async function send(text = 'Inspect this', waitForCompletion = true) {
     await settle();
     if (waitForCompletion) await waitFor(() => expect(screen.findByTestId('execution-run-conversation-phase')).toBeNull());
 }
-async function selectEngine(id: string) { await act(async () => composer().engine?.onSelect(id)); }
+// Chooses through the real engine popover panel, as a user does: a row that only takes focus
+// leaves the draft on its previous Agent, which a direct `engine.onSelect` call would hide.
+async function selectEngine(id: string) {
+    const engine = composer().engine!;
+    const picker = await renderScreen(<AgentInputChipPickerPanel title={engine.title} options={engine.options}
+        selectedOptionId={engine.selectedOptionId} onSelect={engine.onSelect} onRequestClose={vi.fn()} />);
+    await picker.pressByTestIdAsync(`agent-input-chip-picker.option:${id}`);
+    await settle();
+}
 async function renderChipContent(key: string) {
     const renderContent = chip(key).collapsedContentPopover?.renderContent;
     return renderScreen(<>{typeof renderContent === 'function' ? renderContent({ requestClose: vi.fn(), maxHeight: Dimensions.get('window').height }) : renderContent}</>);
@@ -477,10 +486,12 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
     it('preserves selected Agent and correlation across a known no-run retry', async () => {
         startResults.push(noRun(), started());
         await mount();
-        await selectEngine(composer().engine!.options.find((option) => option.id.includes('codex'))!.id);
+        const codex = composer().engine!.options.find((option) => option.id.includes('codex'))!;
+        await selectEngine(codex.id);
         await send();
         await send();
-        const selected = canonicalTargetKey(composer().engine!.selectedOptionId!);
+        const selected = canonicalTargetKey(codex.id);
+        expect(composer().engine!.selectedOptionId).toBe(codex.id);
         expect(emittedStarts.map(startedTargetKey)).toEqual([selected, selected]);
         expect(emittedStarts[0]?.launchOrigin).toEqual(emittedStarts[1]?.launchOrigin);
     });
