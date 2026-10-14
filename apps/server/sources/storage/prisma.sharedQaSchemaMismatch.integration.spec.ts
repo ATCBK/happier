@@ -10,7 +10,7 @@ import { startSocket } from '@/app/api/socket';
 import type { Fastify as AppFastify } from '@/app/api/types';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { logger } from '@/utils/logging/log';
-import { db } from './prisma';
+import { db, withSqliteReadSnapshot } from './prisma';
 
 describe('shared QA schema errors at the Prisma and socket boundaries', () => {
     let harness: LightSqliteHarness;
@@ -22,6 +22,17 @@ describe('shared QA schema errors at the Prisma and socket boundaries', () => {
         });
     }, 120_000);
     afterAll(async () => { await harness?.close(); });
+
+    it('preserves root metrics beside diagnostic snapshot queries', async () => {
+        harness.resetEnv({ HAPPIER_STACK_SHARED_DB_SOURCE_STACK: 'dev-test' });
+        expect(await db.$metrics.json()).toMatchObject({
+            counters: expect.any(Array), gauges: expect.any(Array), histograms: expect.any(Array),
+        });
+        const account = await db.account.create({ data: { publicKey: 'diagnostic-snapshot-fixture' } });
+        expect(await withSqliteReadSnapshot(tx => tx.account.findUnique({
+            where: { id: account.id }, select: { id: true },
+        }))).toEqual({ id: account.id });
+    });
 
     it.each([
         { code: 'P2021', change: 'ALTER TABLE "Machine" RENAME TO "MissingMachine"', restore: 'ALTER TABLE "MissingMachine" RENAME TO "Machine"' },
@@ -49,6 +60,7 @@ describe('shared QA schema errors at the Prisma and socket boundaries', () => {
                 query,
                 () => db.$transaction(tx => tx.machine.findFirst({ select: { id: true, installationPublicKey: true } })),
                 () => db.$transaction([query()]),
+                () => withSqliteReadSnapshot(tx => tx.machine.findFirst({ select: { id: true, installationPublicKey: true } })),
             ]) {
                 const error = await execute().then(() => { throw new Error('Query unexpectedly succeeded'); }, error => error);
                 expect(error).toMatchObject({ code });
