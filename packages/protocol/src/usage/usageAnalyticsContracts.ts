@@ -1,3 +1,4 @@
+import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
 import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
@@ -33,6 +34,10 @@ export const UsageObservationCostSchema = lazyZodSchema(() => z.object({
   /** Query projection only; never the authority for vendor-reported or stored estimated costs. */
   apiEquivalentUsd: NonNegativeNumberSchema.optional(),
   pricingSource: z.string().trim().min(1).optional(),
+  /** Query-only overlap witness: this row's fallback money is covered by that reported total. */
+  reportedTotalId: z.string().trim().min(1).optional(),
+  /** Query-only scope of a money-only reported total; subsets cannot apportion this charge. */
+  reportedTotalContributionIds: z.array(z.string().trim().min(1)).optional(),
   invoiceUsd: NonNegativeNumberSchema.optional(),
   billingContext: z.enum([
     'api_usage',
@@ -94,7 +99,7 @@ export const UsageRequestAttributionSchema = lazyZodSchema(() => z.object({
   v: z.literal(1),
   turnId: z.string().trim().min(1),
   source: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('native'), connectedAccount: asProtocolZod(QualifiedConnectedAccountRefSchema).nullable() }).strict(),
+    z.object({ kind: z.literal('native'), connectedAccount: zMini.nullable(asProtocolZod(QualifiedConnectedAccountRefSchema)) }).strict(),
     z.object({ kind: z.literal('provider'), providerId: ProviderContributionKeySchema.nullable(), providerConnectionId: ProviderConnectionIdSchema }).strict(),
   ]),
 }).strict());
@@ -434,7 +439,7 @@ export const UsageAnalyticsContributionSchema = lazyZodSchema(() => z.object({
   /** Response-bound source certainty; absent and current-metadata-only dimensions are unknown. */
   providerAttribution: z.enum(['known', 'unknown']).optional(),
   providerSource: z.enum(['native', 'provider', 'unknown']).optional(),
-  connectedAccount: asProtocolZod(QualifiedConnectedAccountRefSchema).nullable().optional(),
+  connectedAccount: zMini.optional(zMini.nullable(asProtocolZod(QualifiedConnectedAccountRefSchema))),
   machineId: z.string().trim().min(1).nullable(),
   projectKey: z.string().trim().min(1).nullable(),
   workspaceId: z.string().trim().min(1).nullable(),
