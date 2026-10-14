@@ -11,7 +11,7 @@ import { MachineGuardActivityEntryV1Schema, MachineGuardActivityListV1Schema } f
 import { MachineGuardWatchResultV1Schema } from '@happier-dev/protocol/machines/guard/guardRpcV1';
 import { MachinePublishedResourceSummaryV1Schema } from '@happier-dev/protocol/machines/resources/machineResourceSummaryV1';
 
-import { createManagedActivityInventory } from '../lifecycle/managedActivity';
+import { createManagedActivityInventory, createLiveWorkProducerGroup } from '../lifecycle/managedActivity';
 import { createSessionLiveWorkProducer } from '../lifecycle/sessionLiveWorkProducer';
 import { createProcessOwnershipRuntime } from '../processes/ownership/processOwnershipRuntime';
 import { localServiceProcfsFixture } from '../local/services/inventory/platform/censusFixture.testkit';
@@ -153,8 +153,20 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
                 return { session: working ? 'active' : 'settled', input: 'settled', agents: 'settled', attention: 'settled', settledAt: epoch };
             },
         });
+        const sessionActivity = createLiveWorkProducerGroup(() => [sessionProducer]);
+        cleanup.push(() => sessionActivity.dispose());
+        const browserOwner = {};
+        // Native sidecar residency is a process boundary. Its disappearance is
+        // a material item change, not an unchanged Session inventory notification.
+        const browserResidency = !projectService && !idleSession ? [{
+            read: () => ({ coverage: 'complete' as const, items: present ? [{
+                category: 'service' as const, ownerRef: browserOwner, attribution: { kind: 'unknown' as const },
+                state: 'settled' as const, settledAt: epoch - 60000,
+            }] : [] }),
+            subscribe: sessionProducer.subscribe,
+        }] : [];
         const inventory = createManagedActivityInventory({ now: Date.now,
-            producers: [sessionProducer, ...(serviceOwner ? [serviceOwner.activity] : [])] }); cleanup.push(() => inventory.dispose());
+            producers: [sessionActivity, ...browserResidency, ...(serviceOwner ? [serviceOwner.activity] : [])] }); cleanup.push(() => inventory.dispose());
         const procfs = () => localServiceProcfsFixture(present ? [{ pid: 1001 }] : []);
         const serviceTag = parseProcessOwnerTag(nativeEnvironment[PROCESS_OWNER_ENV_KEY]);
         if (serviceOwner && !serviceTag) throw new Error('Native service launch did not retain its process owner');
@@ -234,6 +246,27 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
             gone: () => { present = false; sessionProducer.notifyChanged(); }, pressure: (level: typeof pressure) => { pressure = level; },
             available: (bytes: number) => { available = bytes; }, get stops() { return stops; }, get nativeReads() { return nativeReads; } };
     }
+
+    it('warns after a fresh composed read even when the inventory publishes its settled observation during that read', async () => {
+        const f = await setup(undefined, true, false, undefined, true);
+        f.duringFactsRead(async () => {
+            await new Promise<void>(resolve => setTimeout(resolve, 60000));
+            // startDaemon reads the live inventory again after draft/resume admission.
+            // An owner invalidation must be reconciled by that final observation.
+            f.working(false);
+            await f.inventory.read();
+        });
+        const current = f.policy.read();
+        if (current.status !== 'ready') throw Error('Policy unavailable');
+        await f.policy.set({expectedRevision:current.revision,patch:{guard:{idleSessions:{enabled:true,afterMs:360000,warnBeforeMs:300000}}}});
+        await vi.advanceTimersByTimeAsync(240000); await f.drain();
+        expect(f.guard.runtime.readSessionWarning('workspace-session')).toEqual({stopAt:epoch+360000});
+        f.duringFactsRead(async () => {});
+        f.working(true);
+        await f.drain();
+        expect(f.guard.runtime.readSessionWarning('workspace-session')).toBeUndefined();
+        expect(f.stops).toBe(0);
+    });
 
     it('warns from the real idle policy despite unrelated metadata revisions during fresh fact reads', async () => {
         const f = await setup(undefined, true, false, undefined, true);

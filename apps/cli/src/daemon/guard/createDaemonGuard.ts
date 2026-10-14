@@ -25,7 +25,7 @@ export type DaemonGuardInput = Readonly<{
     keepAwake: Pick<KeepAwake, 'read' | 'subscribe'>;
     summary: Pick<MachineResourceSummary, 'setGuardState' | 'reportAutomaticAction'>;
     ownership: GuardWatchInput['ownership'];
-    inventory: Pick<ManagedActivityInventory, 'subscribe'>;
+    inventory: Pick<ManagedActivityInventory, 'subscribeFacts'>;
     readFacts: GuardWatchInput['readFacts'];
     readLeftBehind: GuardWatchInput['readLeftBehind'];
     readTarget: GuardWatchInput['readTarget'];
@@ -73,7 +73,7 @@ export async function createDaemonGuard(input: DaemonGuardInput): Promise<Daemon
         // Facts follow their canonical inventory owner. Memory policy already
         // subscribes to vitals, and idle policy owns its next deadline; treating
         // every sampler tick as a fact change would repeat the full OS census.
-        return track([input.inventory.subscribe(listener)]);
+        return track([input.inventory.subscribeFacts(listener)]);
     };
     const defaults = MachineGuardPolicyV1Schema.parse({});
     const readPolicy = () => {

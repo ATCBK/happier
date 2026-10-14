@@ -37,6 +37,8 @@ export type ManagedActivityInventory = Readonly<{
     read(): Promise<LiveWorkInventoryV1>;
     readDecision(): Promise<ActivityDecisionV1>;
     subscribe(listener: (decision: ActivityDecisionV1) => void): () => void;
+    /** Per-item facts, excluding the aggregate Machine retention anchor. */
+    subscribeFacts(listener: () => void): () => void;
     dispose(): void;
 }>;
 
@@ -143,6 +145,8 @@ export function createManagedActivityInventory(params: Readonly<{
 }>): ManagedActivityInventory {
     const now = params.now ?? Date.now;
     const listeners = new Set<(decision: ActivityDecisionV1) => void>();
+    const factListeners = new Set<() => void>();
+    let publishedFacts: Omit<LiveWorkInventoryV1, 'idleSince'> | undefined;
     let idleSince: number | undefined;
     let priorDecision: ActivityDecisionV1 | undefined;
     let publishedOwnerEdge = -1;
@@ -191,6 +195,22 @@ export function createManagedActivityInventory(params: Readonly<{
             idleSince = settled ? idleSince ?? now() : undefined;
             const inventory: LiveWorkInventoryV1 = { items, coverage, ...(idleSince === undefined ? {} : { idleSince }) };
             const decision = projectManagedActivityDecision(inventory);
+            const factsChanged = factListeners.size > 0 && (!publishedFacts || publishedFacts.coverage !== coverage
+                || publishedFacts.items.length !== items.length
+                || items.some((item, index) => {
+                    const previous = publishedFacts!.items[index];
+                    return previous.ownerRef !== item.ownerRef || previous.category !== item.category
+                        || previous.state !== item.state || previous.settledAt !== item.settledAt
+                        || previous.activeCount !== item.activeCount || previous.associatedTerminal !== item.associatedTerminal
+                        || previous.workspacePath !== item.workspacePath || previous.workspaceId !== item.workspaceId
+                        || JSON.stringify(previous.attribution) !== JSON.stringify(item.attribution);
+                }));
+            if (factsChanged) {
+                publishedFacts = { items, coverage };
+                if (!disposed) for (const listener of factListeners) {
+                    try { listener(); } catch { /* Observation cannot change work custody. */ }
+                }
+            }
             if (observedEdge !== publishedOwnerEdge || JSON.stringify(decision) !== JSON.stringify(priorDecision)) {
                 publishedOwnerEdge = observedEdge;
                 priorDecision = decision;
@@ -209,6 +229,10 @@ export function createManagedActivityInventory(params: Readonly<{
         read,
         readDecision: async () => projectManagedActivityDecision(await read()),
         subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-        dispose() { disposed = true; for (const cleanup of unsubscribe ?? []) cleanup(); listeners.clear(); },
+        subscribeFacts(listener) {
+            factListeners.add(listener);
+            return () => { factListeners.delete(listener); if (!factListeners.size) publishedFacts = undefined; };
+        },
+        dispose() { disposed = true; for (const cleanup of unsubscribe ?? []) cleanup(); listeners.clear(); factListeners.clear(); publishedFacts = undefined; },
     };
 }
