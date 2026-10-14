@@ -20,6 +20,7 @@ import {
     type SessionReminderPresetV1,
 } from '@/sync/domains/session/organization/sessionReminderPreset';
 import { t } from '@/text';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 export type SessionReminderDateTimeResult = Readonly<{
     remindAt: number;
@@ -117,7 +118,7 @@ export function SessionReminderDateTimeModal(props: Readonly<{
         kind: 'card' as const,
         title: t('sessionsList.reminders.customTitle'),
         testID: 'session-reminder-date-time-modal',
-        dimensions: { width: 480, maxHeightRatio: 0.86, size: 'md' as const },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.86, size: 'md' as const },
         footer,
     }), [footer]));
 

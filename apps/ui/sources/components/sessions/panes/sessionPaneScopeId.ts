@@ -1,6 +1,7 @@
 import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
 import { qualifyPaneScopeId, readResourcePaneScopeId } from '@/components/appShell/panes/paneScopeIdentity';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 const QUALIFIED_SESSION_SCOPE_PREFIX = 'session:address:';
 const LEGACY_SESSION_SCOPE_PREFIX = 'session:';
@@ -11,7 +12,7 @@ export function createSessionPaneScopeId(
     instanceKey?: string | null,
 ): string {
     const sessionId = normalizeSessionId(sessionIdRaw);
-    const address = normalizeSessionAddress(serverIdRaw, sessionId);
+    const address = normalizeSessionAddress(resolveServerProfileScopeIdForIdentifier(serverIdRaw), sessionId);
     const scopeId = address
         ? `${QUALIFIED_SESSION_SCOPE_PREFIX}${encodeURIComponent(address.serverId)}:${encodeURIComponent(address.sessionId)}`
         : `${LEGACY_SESSION_SCOPE_PREFIX}${sessionId}`;

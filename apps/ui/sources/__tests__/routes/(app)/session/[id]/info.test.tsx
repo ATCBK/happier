@@ -15,6 +15,7 @@ import type {
     UiSessionOrganizationFolder,
     UiSessionOrganizationTag,
 } from '@/sync/domains/session/organization';
+import { buildSessionOrganizationProjection, buildSessionOrganizationServerKey, buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization';
 import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
 import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { buildQualifiedPluginContributionKey, deriveSessionCreationTagV1, PluginProjectionV2Schema, SessionCreationCorrespondenceV1Schema, SessionOrganizationContentEnvelopeSchema } from '@happier-dev/protocol';
@@ -25,7 +26,7 @@ import { buildServerFeaturesResponse } from '@/hooks/server/serverFeaturesTestUt
 import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
-import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -269,23 +270,23 @@ function buildSessionOrganizationProjectionFromFixtures(serverIdRaw: unknown): S
             archivedAt: null,
         }]);
     }
-    const foldersById = Object.fromEntries(folderEntries);
-    return {
-        schemaVersion: 1,
-        version: 1,
-        pinnedSessionIds,
-        pinsBySessionId: Object.fromEntries(pinnedSessionIds.map((sessionId, index) => [
-            sessionId,
-            { sessionId, sortKey: String(index + 1).padStart(4, '0'), pinnedAt: index + 1 },
+    return buildSessionOrganizationProjection({
+        schemaVersionByServerId: { [serverId]: 1 },
+        snapshotVersionByServerId: { [serverId]: 1 },
+        pinsBySessionKey: Object.fromEntries(pinnedSessionIds.map((sessionId, index) => [
+            buildSessionOrganizationSessionKey(serverId, sessionId),
+            { sessionId, sortKey: String(index + 1).padStart(4, '0'), pinnedAt: index + 1, listPinned: true, railPinned: false },
         ])),
-        foldersById,
-        attentionStandingsBySessionId: {},
-        folderAssignmentsBySessionId: {},
-        tagsById,
-        tagAssignmentsBySessionId,
+        foldersByFolderKey: Object.fromEntries(folderEntries.map(([id, folder]) => [buildSessionOrganizationServerKey(serverId, id), folder])),
+        attentionStandingsBySessionKey: {},
+        folderAssignmentsBySessionKey: {},
+        tagsByTagKey: Object.fromEntries(Object.entries(tagsById).map(([id, tag]) => [buildSessionOrganizationServerKey(serverId, id), tag])),
+        tagAssignmentsBySessionKey: Object.fromEntries(Object.entries(tagAssignmentsBySessionId).map(([sessionId, tagIds]) => [
+            buildSessionOrganizationSessionKey(serverId, sessionId), { sessionId, tagIds },
+        ])),
         orderEntriesByScopeKey: {},
         labelsByLabelKey: {},
-    };
+    }, serverId);
 }
 
 const routerMock = createExpoRouterMock({
@@ -396,40 +397,17 @@ vi.mock('@/utils/navigation/safeRouterBack', () => ({
 }));
 
 vi.mock('@/components/ui/text/Text', () => ({ Text: (props: any) => React.createElement('Text', props, props.children) }));
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: any) => {
-        const trigger = typeof props.trigger === 'function'
-            ? props.trigger({
-                open: props.open,
-                toggle: () => props.onOpenChange(!props.open),
-                openMenu: () => props.onOpenChange(true),
-                closeMenu: () => props.onOpenChange(false),
-                selectedItem: null,
-            })
-            : props.trigger ?? null;
-        const items = props.open
-            ? props.items.map((item: any) => React.createElement(
-                'DropdownMenuItem',
-                {
-                    key: item.id,
-                    testID: item.testID,
-                    accessibilityRole: 'button',
-                    accessibilityLabel: item.title,
-                    disabled: item.disabled,
-                    onPress: () => {
-                        if (!item.disabled) props.onSelect(item.id);
-                    },
-                },
-                item.title,
-            ))
-            : null;
-        return React.createElement('DropdownMenu', { open: props.open }, trigger, items);
-    },
-}));
+vi.mock('@/components/ui/popover', async (importOriginal) => {
+    const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
+    return createInlinePopoverModuleMock(importOriginal);
+});
 vi.mock('@/components/ui/lists/Item', () => ({
     Item: (props: any) => React.createElement('Item', { ...props, testID: props.testID ?? props.title }, props.children),
 }));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({ ItemGroup: 'ItemGroup' }));
+vi.mock('@/components/ui/lists/ItemGroup', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/components/ui/lists/ItemGroup')>(),
+    ItemGroup: 'ItemGroup',
+}));
 vi.mock('@/components/ui/lists/ItemList', () => ({ ItemList: 'ItemList' }));
 vi.mock('@/components/ui/avatar/Avatar', () => ({
     Avatar: (props: any) => React.createElement('Avatar', { ...props, testID: props.testID ?? 'session-info-avatar' }),
@@ -2573,26 +2551,72 @@ describe('/session/[id]/info', () => {
     });
 
     it('offers rename from the page header menu to a session owner', async () => {
-        mockSession = {
-            id: 'session-1',
-            active: false,
-            accessLevel: null,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            seq: 1,
-            metadata: {},
-            archivedAt: null,
-        };
+        modalPromptSpy.mockResolvedValueOnce('');
+        mockSession = createSessionFixture();
 
         const screen = await renderInfoScreen();
         await screen.pressByTestIdAsync('session-info-menu.trigger');
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('session-info-rename')).not.toBeNull()); });
         await screen.pressByTestIdAsync('session-info-rename');
 
-        expect(modalPromptSpy).toHaveBeenCalledWith(
+        await act(async () => { await vi.waitFor(() => expect(modalPromptSpy).toHaveBeenCalledWith(
             'sessionInfo.renameSession',
             'sessionInfo.renameSessionSubtitle',
             expect.objectContaining({ confirmText: 'common.save' }),
-        );
+        )); });
+    });
+
+    it.each([true, false])('offers Delete from the page header menu for a retired eligible session with rename rights %s and the existing confirmation', async (canRename) => {
+        sessionIsConnected = false;
+        modalConfirmSpy.mockResolvedValueOnce(false);
+        mockSession = createSessionFixture({
+            access: createSessionAccessFixture('owner', { renameSession: canRename }),
+            metadataLayoutVersion: 1,
+            ownerMetadataView: {
+                path: '/repo',
+                host: 'tester.local',
+                terminal: { controlServiceabilityV1: { v: 1, state: 'unknown', observedAt: 1, retired: true } },
+            },
+        });
+
+        const screen = await renderInfoScreen();
+        await screen.pressByTestIdAsync('session-info-menu.trigger');
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('session-info-delete')).not.toBeNull()); });
+        expect(screen.findByTestId('session-info-rename') !== null).toBe(canRename);
+        await screen.pressByTestIdAsync('session-info-delete');
+
+        await act(async () => { await vi.waitFor(() => expect(modalConfirmSpy).toHaveBeenCalledWith(
+            'sessionInfo.deleteSession',
+            'sessionInfo.deleteSessionWarning',
+            expect.objectContaining({ destructive: true, confirmText: 'sessionInfo.deleteSession' }),
+        )); });
+        expect(sessionDeleteSpy).not.toHaveBeenCalled();
+        expect(safeRouterBackSpy).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        { reason: 'active', active: true, connected: false, retired: true, canDelete: true },
+        { reason: 'connected', active: false, connected: true, retired: true, canDelete: true },
+        { reason: 'recoverable', active: false, connected: false, retired: false, canDelete: true },
+        { reason: 'without deletion rights', active: false, connected: false, retired: true, canDelete: false },
+    ])('suppresses Delete in the page header menu for a session that is $reason', async ({ active, connected, retired, canDelete }) => {
+        sessionIsConnected = connected;
+        mockSession = createSessionFixture({
+            active,
+            access: createSessionAccessFixture('owner', { deleteSession: canDelete }),
+            metadataLayoutVersion: 1,
+            ownerMetadataView: {
+                path: '/repo',
+                host: 'tester.local',
+                terminal: { mode: 'plain', controlServiceabilityV1: { v: 1, state: retired ? 'unknown' : 'recoverable_unservable', observedAt: 1, retired } },
+            },
+        });
+
+        const screen = await renderInfoScreen();
+        await screen.pressByTestIdAsync('session-info-menu.trigger');
+        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('session-info-rename')).not.toBeNull()); });
+        expect(screen.findByTestId('session-info-delete')).toBeNull();
+        expect(screen.findByTestId('sessionInfo.deleteSession')).toBeNull();
     });
 
     it.each(['view', 'edit'] as const)('hides rename quick action for %s shared sessions', async (accessLevel) => {

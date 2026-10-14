@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import * as React from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
@@ -63,7 +64,7 @@ export function SessionReminderPresetManagerModal(props: Readonly<{
         title: t('sessionsList.reminders.managePresets'),
         subtitle: t('sessionsList.reminders.managePresetsMessage'),
         testID: 'session-reminder-preset-manager-modal',
-        dimensions: { width: 560, maxHeightRatio: 0.86, size: 'md' as const },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.86, size: 'md' as const },
         footer,
     }), [footer]));
 

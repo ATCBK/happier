@@ -73,7 +73,6 @@ export function useSessionAuthoringControlFacts(params: Readonly<{
         [serverId],
     );
     const directTranscriptsEnabled = useFeatureEnabled('sessions.direct', spawnFeatureScope);
-    const mcpServersEnabled = useFeatureEnabled('mcp.servers', spawnFeatureScope);
 
     const daemonProjection = useDaemonMergedProjectionInputs({
         machineId,
@@ -243,8 +242,8 @@ export function useSessionAuthoringControlFacts(params: Readonly<{
     const mcp = React.useMemo<SessionAuthoringMcpContext | undefined>(() => (
         machineId === null || directory.length === 0
             ? undefined
-            : { machineId, machineName, directory, serverId, enabled: mcpServersEnabled }
-    ), [directory, machineId, machineName, mcpServersEnabled, serverId]);
+            : { machineId, machineName, directory, serverId }
+    ), [directory, machineId, machineName, serverId]);
 
     /**
      * The Home a Connected Service binding is authored against. Only the Home

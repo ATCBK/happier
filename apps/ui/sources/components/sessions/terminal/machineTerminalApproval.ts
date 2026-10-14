@@ -1,4 +1,5 @@
 import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { isRecord } from '@happier-dev/plugin-sdk';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
@@ -26,8 +27,8 @@ export function inspectMachineTerminalMemberApproval(input: Readonly<{
         || origin.accountId !== pending.scope.accountId
         || !areServerProfileIdentifiersEquivalent(originHomeId, pending.scope.serverId)) return null;
     const parsed = getActionSpec(pending.actionId).inputSchema.safeParse(request.actionArgs);
-    if (!parsed.success || typeof parsed.data !== 'object' || parsed.data === null) return null;
-    const args: Readonly<Record<string, unknown>> = parsed.data;
+    if (!parsed.success || !isRecord(parsed.data)) return null;
+    const args = parsed.data;
     if (args.machineId !== input.machineId || typeof args.serverId !== 'string'
         || (args.serverId !== origin.serverId
             && !areServerProfileIdentifiersEquivalent(args.serverId, pending.scope.serverId))) return null;

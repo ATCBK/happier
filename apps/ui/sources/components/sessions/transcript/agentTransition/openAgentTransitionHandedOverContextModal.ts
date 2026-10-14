@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 
@@ -53,7 +54,7 @@ export function openAgentTransitionHandedOverContextModal(
             testID: `${AGENT_TRANSITION_HANDED_OVER_MODAL_TEST_ID}-card`,
             bodyScroll: 'auto',
             scrollHost: 'body',
-            dimensions: { size: 'md', width: 560, maxHeightRatio: 0.86 },
+            dimensions: { size: 'md', width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.86 },
         },
     });
 }

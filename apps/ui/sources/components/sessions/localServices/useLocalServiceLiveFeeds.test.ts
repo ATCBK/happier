@@ -12,6 +12,7 @@ import { createLocalServiceInventoryState } from '@/sync/domains/local/services/
 import { resetLocalServiceLauncherStoreForTests } from '@/sync/domains/local/services/launch/sharedStore';
 import { publishLocalServiceInventorySnapshot, resetLocalServiceInventoryStoreForTests } from '@/sync/domains/local/services/inventory/sharedStore';
 import { useLocalServiceLiveFeeds } from './useLocalServiceLiveFeeds';
+import { buildLocalServiceRows } from '@/sync/domains/local/services/serviceRow';
 
 const remote = vi.hoisted(() => vi.fn());
 const alert = vi.hoisted(() => vi.fn());
@@ -46,8 +47,11 @@ describe('Project Services source feed plus actual native binding', () => {
       refuseRefresh = true;
       await act(async () => { await hook.getCurrent().refresh!(); });
       expect(alert).toHaveBeenCalledTimes(1);
-      expect(alert.mock.calls[0]?.[1]).toContain(RPC_ERROR_CODES.METHOD_NOT_AVAILABLE);
+      expect(alert.mock.calls[0]?.[1]).not.toContain(RPC_ERROR_CODES.METHOD_NOT_AVAILABLE);
       expect(alert.mock.calls[0]?.[1]).not.toContain('private transport detail');
+      const buttons = alert.mock.calls[0]?.[2] as import('@/modal/types').AlertButton[];
+      buttons.find(button => button.onPress)?.onPress?.();
+      expect(alert.mock.calls[1]?.[1]).toContain(RPC_ERROR_CODES.METHOD_NOT_AVAILABLE);
     } finally {
       await hook.unmount();
     }
@@ -75,7 +79,7 @@ describe('Project Services source feed plus actual native binding', () => {
     let childProjection: unknown;
     let managedRow: unknown;
     home = await createPlainArtifactHomeFixture('https://project-services-feed.test', { handleRequest: async path => {
-      if (path === '/v1/machines') return new Response(JSON.stringify([{ id: 'source', installationId: 'child-installation',
+      if (path === '/v1/machines?includeRevoked=true') return new Response(JSON.stringify([{ id: 'source', installationId: 'child-installation',
         devcontainerChild: childProjection, revokedAt: null, replacedByMachineId: null },
         { id: 'worker', installationId: 'worker-installation', revokedAt: null, replacedByMachineId: null },
         { id: 'parent', installationId: 'parent-installation', revokedAt: null, replacedByMachineId: null }]));
@@ -129,6 +133,10 @@ describe('Project Services source feed plus actual native binding', () => {
     await act(async () => { publishLocalServiceInventorySnapshot({ serverId, machineId: 'worker' }, {
       v: 1, machineId: 'worker', generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] }); });
     await vi.waitFor(() => expect([...hook.getCurrent().launcherState!.targetsById.values()]).toEqual([declaration]));
+    const [row] = buildLocalServiceRows({ inventoryRows: [], launchTargets: [...hook.getCurrent().launcherState!.targetsById.values()],
+      sessionId: null, scope: 'workspace' });
+    expect(row).toMatchObject({ status: 'stopped', primaryAction: { kind: 'start', target: declaration } });
+    expect(row!.target.actions).toEqual([]);
     await hook.unmount();
   });
 });

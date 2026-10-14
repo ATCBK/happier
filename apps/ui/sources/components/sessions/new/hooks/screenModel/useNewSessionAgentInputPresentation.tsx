@@ -79,7 +79,7 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
     showServerPickerChip: boolean;
     targetServerId: string | null;
     targetServerName: string;
-    mcpChip?: AgentInputExtraActionChip | null;
+    capabilitiesChip?: AgentInputExtraActionChip | null;
     externalSessionsFeatureEnabled: boolean;
     supportsDirectTranscriptStorage: boolean;
     transcriptStorage: NewSessionTranscriptStorage;
@@ -251,7 +251,7 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
         showServerPickerChip: params.showServerPickerChip,
         targetServerId: params.targetServerId,
         targetServerName: params.targetServerName,
-        mcpChip: params.mcpChip,
+        capabilitiesChip: params.capabilitiesChip,
         externalSessionsFeatureEnabled: params.externalSessionsFeatureEnabled,
         supportsDirectTranscriptStorage: params.supportsDirectTranscriptStorage,
         transcriptStorage: params.transcriptStorage,

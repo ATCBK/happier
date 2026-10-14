@@ -13,6 +13,7 @@ import {
 } from '@/sync/domains/sessionRollback/checkpointCodeRollback';
 import { t, type TranslationKeyNoParams } from '@/text';
 import type { CheckpointCodeRollbackBackupMode, SessionRollbackCodeMode } from '@happier-dev/protocol';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 export type CheckpointCodeRollbackDialogConfirmValue = Readonly<{
     mode: SessionRollbackCodeMode;
@@ -125,7 +126,7 @@ export function CheckpointCodeRollbackDialog(props: CheckpointCodeRollbackDialog
         kind: 'card' as const,
         title: t('session.rollback.checkpointCode.title'),
         testID: 'checkpoint-code-rollback-modal',
-        dimensions: { width: 480, size: 'dialog' as const },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, size: 'dialog' as const },
     }), []);
     useModalCardChrome(props.setChrome, chrome);
 

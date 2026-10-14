@@ -30,6 +30,7 @@ import { useDeviceType } from '@/utils/platform/responsive';
 import { useReviewExecutionRunLaunchOptions } from '@/components/sessions/runs/launcher/useReviewExecutionRunLaunchOptions';
 import { getSessionInputFailureLabelKey } from '@/components/sessions/pending/pendingMessageVisualState';
 import { randomUUID } from '@/platform/randomUUID';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 /**
  * Start review over the comparison on screen (Walkthrough lab WT5-R4, R4p, R7): the existing review
@@ -347,7 +348,11 @@ export function startReviewDialogChrome(): CustomModalChromeConfig {
         kind: 'card',
         header: 'none',
         title: t('scmComparison.startReview'),
-        dimensions: { width: 520 },
+        // The dialog scrolls its own body above a pinned footer, so the card is held to the viewport
+        // instead of growing with the host's engine list.
+        scrollHost: 'body',
+        bodyScroll: 'none',
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.86 },
         phonePresentation: 'sheet',
         testID: 'start-review-modal',
     };
@@ -366,7 +371,7 @@ const styles = StyleSheet.create((theme) => ({
     dialog: { maxHeight: '100%', flexShrink: 1, minHeight: 0 },
     dialogPhone: {},
     head: { flexDirection: 'row', alignItems: 'center', paddingLeft: theme.space.s20, paddingRight: 14, paddingTop: theme.space.s16, paddingBottom: theme.space.s12 },
-    title: { flex: 1, fontSize: 19, letterSpacing: -0.2, color: theme.colors.text.primary, ...Typography.default('semiBold') },
+    title: { flex: 1, ...Typography.variant('heading'), color: theme.colors.text.primary },
     scroll: { flexGrow: 0, flexShrink: 1, minHeight: 0 },
     body: { paddingHorizontal: theme.space.s20, paddingBottom: theme.space.s16, gap: 18 },
     field: { gap: theme.space.s8 },
@@ -406,8 +411,10 @@ const styles = StyleSheet.create((theme) => ({
     narrator: {
         flexDirection: 'column',
         alignItems: 'stretch',
-        marginLeft: 46,
-        marginRight: 14,
+        // The narrator is a list row with its own horizontal padding: the offsets leave its title on the
+        // walkthrough title's edge and its field on the card's inner edge.
+        marginLeft: 46 - HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx,
+        marginRight: 14 - HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx,
         gap: theme.space.s12,
         paddingVertical: 14,
         borderTopWidth: StyleSheet.hairlineWidth,

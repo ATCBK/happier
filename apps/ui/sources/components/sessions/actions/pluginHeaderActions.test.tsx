@@ -40,10 +40,7 @@ function createScopedLaunchFacts(
 function createProjectedHeaderAction(params?: Readonly<{
     command?: PluginUiResolvedSemanticCommandV1;
     execution?: PluginProjectedActionV2['execution'];
-    origin?: Readonly<{
-        serverIdentityId: NonNullable<PluginProjectedActionV2['serverIdentityId']>;
-        materializationRef: NonNullable<PluginProjectedActionV2['materializationRef']>;
-    }>;
+    origin?: NonNullable<PluginProjectedActionV2['executionOrigin']>;
     extraActions?: Readonly<Record<string, PluginProjectedActionV2>>;
     icon?: 'refresh';
     legacyAction?: string;
@@ -68,7 +65,7 @@ function createProjectedHeaderAction(params?: Readonly<{
                 scopes: ['session'],
                 surfaces: ['ui'],
                 execution: params?.execution ?? { target: 'daemon' },
-                ...(params?.origin ?? {}),
+                ...(params?.origin ? { executionOrigin: params.origin } : {}),
                 placementBindings: ['detailsPanel'],
                 dangerLevel: 'safe',
                 available: params?.available ?? true,
@@ -225,6 +222,7 @@ describe('pluginHeaderActions — contribution-reference resolution', () => {
             qualifiedActionId: 'acme.plugin/roundtrip',
             sessionId: 'sess-1',
             executionSurface: 'ui',
+            isCurrent: expect.any(Function),
         });
     });
 
@@ -527,6 +525,7 @@ describe('pluginHeaderActions — scoped projection authority', () => {
             qualifiedActionId: 'acme.plugin/roundtrip',
             sessionId: 'sess-1',
             executionSurface: 'ui',
+            isCurrent: expect.any(Function),
         });
     });
 

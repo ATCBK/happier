@@ -74,6 +74,7 @@ export function useNewSessionScreenWizardProps(params: Readonly<{
         | 'onAgentPickerSelect'
         | 'selectedBackendEntry'
         | 'modelOptions'
+        | 'modelPickerPresentation'
         | 'favoriteModelSelections'
         | 'setFavoriteModelSelections'
         | 'acpSessionModeOptions'

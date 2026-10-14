@@ -23,6 +23,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ActionOperationDetailControls } from '@/components/inbox/actionOperations/ActionOperationDetailControls';
 import { resolveWorkspaceSyncErrorTranslationKey } from '@/sync/domains/sessionHandoff/workspaceSyncPresentation';
 import type { ExecuteSessionHandoffActionResult } from '@/sync/domains/sessionHandoff/executeSessionHandoffAction';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 type Props = CustomModalInjectedProps & Readonly<{
     title?: string;
@@ -612,7 +613,7 @@ export function SessionHandoffProgressModal({ onClose, setChrome, title, message
         title: resolvedTitle,
         testID: 'session-handoff-progress-modal',
         bodyScroll: 'auto' as const,
-        dimensions: { width: 420, maxHeightRatio: 0.92 },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.92 },
         footer: (
             <ActionOperationDetailControls
                 operation={operationStopTarget}

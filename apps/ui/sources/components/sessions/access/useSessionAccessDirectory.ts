@@ -132,7 +132,7 @@ export type SessionAccessDirectory = Readonly<{
  *
  * Each kind keeps its own owner, ranking, cursor and failure. Every lookup for a
  * person is the Home's: Accounts through the collaboration-eligible projection of
- * the incumbent username directory, and Team members through the roster's own
+ * the Account name/username directory, and Team members through the roster's own
  * bounded `teams.members.list` query, so one matcher decides who matches and a
  * member on an unread page is found exactly like one on the first. The Team and
  * Group directory intents still declare no query contract

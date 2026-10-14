@@ -19,6 +19,7 @@ import {
 } from '../presentation/describeSessionTerminal';
 import { renderSessionTerminalMark, SESSION_TERMINAL_STATUS_TONE } from './sessionTerminalMenus';
 import { SessionTerminalLivePill } from './SessionTerminalLivePill';
+import { SessionTerminalTrustNotice, type SessionTerminalTrustNoticeContent } from './SessionTerminalTrustNotice';
 
 /** Terminal lab B1: one 38 px strip is the pane's only chrome; its tabs are the workspace tab at 26 px. */
 export const SESSION_TERMINAL_STRIP_METRICS = Object.freeze({
@@ -57,6 +58,8 @@ export type SessionTerminalStripProps = Readonly<{
     onPaneMenuSelect: (itemId: string) => void;
     onHide: () => void;
     onOpenUrl: (url: string) => void;
+    /** The pane's one quiet trust line (a shared Machine's terminal runs as its operating-system user). */
+    notice?: SessionTerminalTrustNoticeContent;
     testIdPrefix?: string;
 }>;
 
@@ -121,6 +124,7 @@ export const SessionTerminalStrip = React.memo(function SessionTerminalStrip(pro
                 </View>
             )}
             <View style={styles.grow} />
+            {props.notice ? <SessionTerminalTrustNotice notice={props.notice} testID={testId('notice')} /> : null}
             {url ? <SessionTerminalLivePill url={url} onOpen={props.onOpenUrl} testID={testId('live-pill')} /> : null}
             {meta ? <Text style={styles.meta} numberOfLines={1}>{meta}</Text> : null}
             <View style={[styles.splitButton, props.newMenuOpen ? styles.splitButtonOpen : null]}>

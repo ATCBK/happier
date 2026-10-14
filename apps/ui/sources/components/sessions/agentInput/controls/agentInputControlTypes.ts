@@ -14,7 +14,7 @@ export type AgentInputHostControlId =
     | 'env'
     | 'server'
     | 'connectedServices'
-    | 'mcp'
+    | 'capabilities'
     | 'checkout'
     | 'organization'
     | 'tags'

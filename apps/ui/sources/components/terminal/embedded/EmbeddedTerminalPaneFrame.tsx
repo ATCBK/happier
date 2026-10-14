@@ -62,7 +62,8 @@ function resolveTerminalFrameState(props: EmbeddedTerminalPaneFrameProps): Termi
         case 'exited': return {
             kind: 'line',
             reason: t('terminalWorkspace.states.exited', { title: props.title }),
-            action: { label: t('terminalWorkspace.states.restart'), onPress: () => controller.requestRestart() },
+            // A borrowed view cannot restart a process it does not own.
+            ...(controller.readOnly ? {} : { action: { label: t('terminalWorkspace.states.restart'), onPress: () => controller.requestRestart() } }),
         };
         case 'error': {
             if (controller.error === MACHINE_UNREACHABLE_ERROR) {
@@ -123,20 +124,24 @@ export const EmbeddedTerminalPaneFrame = React.memo(function EmbeddedTerminalPan
 
     const frameState = resolveTerminalFrameState(props);
     const showsOwnChrome = props.chrome !== 'none';
+    const readOnly = props.controller.readOnly === true;
 
     return (
         <View testID={testId('root')} style={styles.container}>
-            {showsOwnChrome ? (
-                <View style={styles.toolbar}>
-                    <View style={styles.toolbarLeft}>
-                        <Icon name="terminal" size={16} color={theme.colors.text.secondary} />
-                        <Text style={styles.toolbarTitle} numberOfLines={1}>
-                            {props.title}
-                        </Text>
-                    </View>
+            {showsOwnChrome && (!readOnly || props.toolbarActionsStart || props.onRequestClose) ? (
+                <View style={readOnly ? styles.toolbarReadOnly : styles.toolbar}>
+                    {readOnly ? null : (
+                        <View style={styles.toolbarLeft}>
+                            <Icon name="terminal" size={16} color={theme.colors.text.secondary} />
+                            <Text style={styles.toolbarTitle} numberOfLines={1}>
+                                {props.title}
+                            </Text>
+                        </View>
+                    )}
                     <View style={styles.toolbarRight}>
                         {props.toolbarActionsStart}
-                        {props.onCopySelection ? (
+                        {/* A borrowed output has one copy (its owner's whole-output copy) and nothing that types, resets or restarts. */}
+                        {!readOnly && props.onCopySelection ? (
                             <IconButton
                                 testID={testId('copy-selection')}
                                 iconName="copy"
@@ -147,53 +152,57 @@ export const EmbeddedTerminalPaneFrame = React.memo(function EmbeddedTerminalPan
                                 iconSize={18}
                                 onPress={props.onCopySelection}
                             />
-                    ) : null}
-                    {props.onPaste ? (
-                        <IconButton
-                            testID={testId('paste')}
-                            iconName="clipboard"
-                            accessibilityLabel={t('common.paste')}
-                            tooltip={t('common.paste')}
-                            variant="plain"
-                            size={28}
-                            iconSize={18}
-                            onPress={props.onPaste}
-                        />
-                    ) : null}
-                    <IconButton
-                        testID={testId('clear')}
-                        iconName="trash"
-                        accessibilityLabel={t('common.reset')}
-                        tooltip={t('common.reset')}
-                        variant="plain"
-                        size={28}
-                        iconSize={18}
-                        onPress={props.controller.clearTerminal}
-                    />
-                    <IconButton
-                        testID={testId('restart')}
-                        iconName="arrow-clockwise"
-                        accessibilityLabel={t('common.refresh')}
-                        tooltip={t('common.refresh')}
-                        variant="plain"
-                        size={28}
-                        iconSize={18}
-                        onPress={() => props.controller.requestRestart()}
-                    />
-                    {props.onRequestClose ? (
-                        <IconButton
-                            testID={testId('close')}
-                            iconName="x"
-                            accessibilityLabel={t('common.close')}
-                            tooltip={t('common.close')}
-                            variant="plain"
-                            size={28}
-                            iconSize={18}
-                            onPress={props.onRequestClose}
-                        />
-                    ) : null}
+                        ) : null}
+                        {!readOnly && props.onPaste ? (
+                            <IconButton
+                                testID={testId('paste')}
+                                iconName="clipboard"
+                                accessibilityLabel={t('common.paste')}
+                                tooltip={t('common.paste')}
+                                variant="plain"
+                                size={28}
+                                iconSize={18}
+                                onPress={props.onPaste}
+                            />
+                        ) : null}
+                        {readOnly ? null : (
+                            <>
+                                <IconButton
+                                    testID={testId('clear')}
+                                    iconName="trash"
+                                    accessibilityLabel={t('common.reset')}
+                                    tooltip={t('common.reset')}
+                                    variant="plain"
+                                    size={28}
+                                    iconSize={18}
+                                    onPress={props.controller.clearTerminal}
+                                />
+                                <IconButton
+                                    testID={testId('restart')}
+                                    iconName="arrow-clockwise"
+                                    accessibilityLabel={t('common.refresh')}
+                                    tooltip={t('common.refresh')}
+                                    variant="plain"
+                                    size={28}
+                                    iconSize={18}
+                                    onPress={() => props.controller.requestRestart()}
+                                />
+                            </>
+                        )}
+                        {props.onRequestClose ? (
+                            <IconButton
+                                testID={testId('close')}
+                                iconName="x"
+                                accessibilityLabel={t('common.close')}
+                                tooltip={t('common.close')}
+                                variant="plain"
+                                size={28}
+                                iconSize={18}
+                                onPress={props.onRequestClose}
+                            />
+                        ) : null}
+                    </View>
                 </View>
-            </View>
             ) : null}
 
             {showsOwnChrome && props.controller.detectedUrl?.url ? (

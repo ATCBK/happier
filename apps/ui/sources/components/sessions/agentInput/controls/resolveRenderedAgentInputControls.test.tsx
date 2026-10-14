@@ -55,7 +55,7 @@ describe('resolveRenderedAgentInputControls', () => {
         const collapsed = resolveRenderedAgentInputControls({
             layout: 'collapsed',
             coreControlNodesById: nodes,
-            extraControlNodesById: { mcp: [node('mcp')], automation: [node('automation')] },
+            extraControlNodesById: { capabilities: [node('capabilities')], automation: [node('automation')] },
             extraChips: [],
             barControlIds: ['machine', 'path', 'engine', 'permission', 'actionMenu'],
         });
@@ -65,10 +65,10 @@ describe('resolveRenderedAgentInputControls', () => {
         const wrap = resolveRenderedAgentInputControls({
             layout: 'wrap',
             coreControlNodesById: nodes,
-            extraControlNodesById: { mcp: [node('mcp')] },
+            extraControlNodesById: { capabilities: [node('capabilities')] },
             extraChips: [],
             barControlIds: ['machine'],
         });
-        expect(wrap.chips.map((chip) => (chip as React.ReactElement).key)).toContain('mcp');
+        expect(wrap.chips.map((chip) => (chip as React.ReactElement).key)).toContain('capabilities');
     });
 });

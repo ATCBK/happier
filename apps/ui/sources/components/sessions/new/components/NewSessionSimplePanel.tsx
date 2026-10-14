@@ -136,6 +136,7 @@ export type NewSessionSimplePanelProps = Readonly<{
     modelOptionsProbe?: React.ComponentProps<typeof AgentInput>['modelOptionsOverrideProbe'];
     /** Full-ref inputs for the canonical model picker in a host-bound creation surface. */
     modelPickerProps?: React.ComponentProps<typeof SessionModelPicker>;
+    modelPickerPresentation?: React.ComponentProps<typeof AgentInput>['modelPickerPresentation'];
     modelContentOverride?: React.ComponentProps<typeof AgentInput>['modelContentOverride'];
     acpSessionModeOptions?: ReadonlyArray<Readonly<{ id: string; name: string; description?: string }>>;
     acpSessionModeProbe?: React.ComponentProps<typeof AgentInput>['acpSessionModeOptionsOverrideProbe'];

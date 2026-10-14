@@ -50,6 +50,7 @@ import {
     type TranscriptListShellRef,
 } from '@/components/sessions/transcript/viewport/shell/TranscriptListShell';
 import { resolveSidechainTranscriptListShellFrame } from '@/components/sessions/transcript/viewport/shell/transcriptListShellCapabilities';
+import { resolveTranscriptListShellEdgeSlots } from '@/components/sessions/transcript/viewport/shell/transcriptListShellEdgeSlots';
 import {
     applySidechainJumpToMessageRequest,
 } from '@/components/sessions/transcript/viewport/shell/sidechainJumpToMessage';
@@ -713,6 +714,24 @@ function ChainTranscriptListContent(props: ChainTranscriptListProps) {
         transcriptSessionCommon.toolRoute,
     ]);
 
+    const edgeSlots = resolveTranscriptListShellEdgeSlots<React.ReactNode>({
+        frame: shellFrame,
+        visualTopNode: props.header ? <View>{props.header}</View> : null,
+        visualBottomNode: (
+            <>
+                {!toolVisibility.showToolCalls && source.kind === 'app' && source.serverId ? (
+                    <TranscriptSessionActivityLine sessionId={source.sessionId} serverId={source.serverId} />
+                ) : null}
+                {items.length === 0 && props.isInitialLoadInFlight !== false ? (
+                    <View testID="chain-transcript-loading-footer" style={{ paddingVertical: 12 }}>
+                        <ActivitySpinner size="small" />
+                    </View>
+                ) : null}
+                {props.footer ? <View>{props.footer}</View> : null}
+            </>
+        ),
+    });
+
     return (
         <TranscriptMotionProvider sessionKey={datasetKey} config={motionConfig}>
             <TranscriptRowLayoutMutationProvider value={prepareRowLayoutMutation}>
@@ -729,24 +748,8 @@ function ChainTranscriptListContent(props: ChainTranscriptListProps) {
                     frame={shellFrame}
                     webDomObservation={webDomObservation}
                     {...olderPagination.shellProps}
-                    header={
-                        props.header ? (
-                            <View>{props.header}</View>
-                        ) : null
-                    }
-                    footer={
-                        <>
-                            {!toolVisibility.showToolCalls && source.kind === 'app' && source.serverId ? (
-                                <TranscriptSessionActivityLine sessionId={source.sessionId} serverId={source.serverId} />
-                            ) : null}
-                            {items.length === 0 && props.isInitialLoadInFlight !== false ? (
-                                <View testID="chain-transcript-loading-footer" style={{ paddingVertical: 12 }}>
-                                    <ActivitySpinner size="small" />
-                                </View>
-                            ) : null}
-                            {props.footer ? <View>{props.footer}</View> : null}
-                        </>
-                    }
+                    header={edgeSlots.listHeaderNode}
+                    footer={edgeSlots.listFooterNode}
                     olderLoadOverlay={
                         olderPagination.isLoadingOlder
                             ? <OlderLoadProgressOverlay />

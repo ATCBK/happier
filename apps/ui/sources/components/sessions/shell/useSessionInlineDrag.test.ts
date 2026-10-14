@@ -130,6 +130,15 @@ vi.mock('react-native-gesture-handler', () => ({
 }));
 
 describe('useSessionInlineDrag', () => {
+    it('lets the native recognizer cancel the row touch when the carry activates', async () => {
+        const { useSessionInlineDrag } = await import('./useSessionInlineDrag');
+        const hook = await renderHook(() => useSessionInlineDrag(dragParams()));
+        // RNGH's native touch cancellation defaults true. A false override lets the same
+        // activated Pan's touch-up activate the row's UIButton/Pressable on iOS.
+        const gesture = hook.getCurrent().gesture as unknown as MockGesture;
+        expect(gesture.config.cancelsTouchesInView).not.toBe(false);
+        await hook.unmount();
+    });
     it.each(['session', 'session-folder', 'session-workspace'] as const)('restores %s source opacity on realm cancellation without gesture callbacks', async (kind) => {
         const { useSessionInlineDrag } = await import('./useSessionInlineDrag');
         const runtime = useEntityDragDropRuntime();

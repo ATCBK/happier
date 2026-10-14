@@ -1,3 +1,4 @@
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import type { SessionListQueryV1 } from '@happier-dev/protocol';
 import * as React from 'react';
@@ -76,7 +77,7 @@ export const SessionFollowDestinationPickerModal = React.memo(function SessionFo
     useModalCardChrome(props.setChrome, React.useMemo(() => ({
         kind: 'card' as const,
         title,
-        dimensions: { width: 560, maxHeightRatio: 0.9, size: 'lg' as const },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.9, size: 'lg' as const },
     }), [title]));
 
     const queryHomes = React.useMemo(() => [{

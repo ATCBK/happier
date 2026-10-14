@@ -9,7 +9,9 @@ import { inspectMachineTerminalMemberApproval } from './machineTerminalApproval'
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { DaemonTerminalEnsureResponseSchema, type DaemonTerminalEnsureRequest } from '@happier-dev/protocol/daemon/terminal';
+import { DaemonTerminalEnsureResponseSchema, DaemonTerminalListResponseV1Schema, DaemonTerminalCloseResponseSchema, type DaemonTerminalEnsureRequest } from '@happier-dev/protocol/daemon/terminal';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { randomUUID } from '@/platform/randomUUID';
 import { readSessionTerminalWorkspaceForScope } from './sessionTerminalWorkspaceRuntime';
 
 /** Pane ownership never implies ownership of an agent or a borrowed terminal. */
@@ -29,6 +31,11 @@ export async function closeOwnedSessionTerminals(input: Readonly<{
     const isCurrent = () => !project || project.lifetime.isCurrent();
     const owned = input.terminals.filter((terminal) => terminal.target.kind === 'workspace_shell' || terminal.target.kind === 'machine_shell');
     if (owned.length === 0) return { ok: true };
+    const execute = createFrontDoorActionExecute();
+    const actionContext = () => ({ ...(input.context ?? { surface: 'ui' as const, source: 'ui_button' as const,
+        authority: 'present_user' as const, actionCaller: { kind: 'host' as const } }), serverId,
+        ...(accountId ? { expectedAccountId: accountId } : {}), bypassApprovals: false, actionRequestId: randomUUID(),
+        ...(input.signal ? { signal: input.signal } : {}) });
     try {
         const identities: { machineId: string; terminalKey: string; member: SessionTerminalMemberV1; request: DaemonTerminalEnsureRequest }[] = [];
         for (const terminal of owned) {
@@ -92,9 +99,20 @@ export async function closeOwnedSessionTerminals(input: Readonly<{
             if (!isCurrent()) return failed('terminal_scope_unavailable');
             const queryWorkspace = project ? identity.request.workspace : undefined;
             const censusKey = JSON.stringify([identity.machineId, queryWorkspace ?? null]);
-            if (!lists.has(censusKey)) lists.set(censusKey, await machineTerminalList(identity.machineId, {
-                serverId, accountId, signal: input.signal, ...(queryWorkspace ? { workspace: queryWorkspace } : {}),
-            }));
+            if (!lists.has(censusKey)) {
+                if (project) {
+                    // Private Project discovery needs the same requester Account
+                    // carrier as open/return; raw Machine Use cannot read its rows.
+                    const result = await execute('machines.terminal.list', { serverId, machineId: identity.machineId,
+                        ...(queryWorkspace ? { workspace: queryWorkspace } : {}) }, actionContext());
+                    if (!result.ok) return failed(result.errorCode ?? result.error);
+                    const parsed = DaemonTerminalListResponseV1Schema.nullable().safeParse(result.result);
+                    if (!parsed.success) return failed('terminal_invalid_response');
+                    lists.set(censusKey, parsed.data);
+                } else lists.set(censusKey, await machineTerminalList(identity.machineId, {
+                    serverId, accountId, signal: input.signal,
+                }));
+            }
             if (!isCurrent()) return failed('terminal_scope_unavailable');
             const list = lists.get(censusKey);
             if (list && !list.ok) return failed(list.errorCode);
@@ -109,7 +127,19 @@ export async function closeOwnedSessionTerminals(input: Readonly<{
         for (const terminal of closable) {
             if (input.signal?.aborted) return failed('action_cancelled');
             if (!isCurrent()) return failed('terminal_scope_unavailable');
-            const outcome = await machineTerminalClose(terminal.machineId, { terminalId: terminal.terminalId }, { serverId, accountId, signal: input.signal });
+            let outcome;
+            if (project) {
+                const result = await execute('machines.terminal.close', { serverId, machineId: terminal.machineId,
+                    terminalId: terminal.terminalId }, actionContext());
+                if (!result.ok) return failed(result.errorCode ?? result.error);
+                const pending = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
+                // A pending close has not stopped the process; retain its member
+                // until approval settles and the next census proves absence.
+                if (pending.success) return failed(pending.data.kind);
+                const parsed = DaemonTerminalCloseResponseSchema.safeParse(result.result);
+                if (!parsed.success) return failed('terminal_invalid_response');
+                outcome = parsed.data;
+            } else outcome = await machineTerminalClose(terminal.machineId, { terminalId: terminal.terminalId }, { serverId, accountId, signal: input.signal });
             if (!outcome.ok) return failed(outcome.errorCode);
         }
         if (!isCurrent()) return failed('terminal_scope_unavailable');

@@ -10,6 +10,7 @@ import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyF
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { Item, type ItemProps } from '@/components/ui/lists/Item';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { StatusPill } from '@/components/ui/status/StatusPill';
@@ -284,7 +285,9 @@ function ServiceRowFacts(props: Readonly<{
                         testID={facts.tailReason ? `${props.testID}-reason` : undefined}
                         accessibilityHint={facts.tailReason?.diagnosticCode ?? undefined}
                         style={[styles.factsLine, styles.factsTail]}
-                        numberOfLines={2}
+                        // Facts stay one line (a narrow pane truncates them rather than breaking a
+                        // machine name across lines); a reason keeps room for its sentence.
+                        numberOfLines={facts.tailReason ? 2 : 1}
                     >
                         {tail}
                     </Text>
@@ -627,7 +630,7 @@ export function ServiceRowView(props: Readonly<{
 
     if (props.presentation === 'detail') {
         return (
-            <View testID={props.testID} style={styles.tile}>
+            <View testID={props.testID}>
                 <Item
                     testID={`${props.testID}-item`}
                     title={title}
@@ -640,7 +643,9 @@ export function ServiceRowView(props: Readonly<{
                     loading={pending}
                     rightElement={rowControl}
                 />
-                {body}
+                {/* The pushed page is a page: its detail sits on the shared sheet (lab PAGEp), not on the
+                    selection tint that marks an open row inside a list. */}
+                <ItemGroup header="none">{body}</ItemGroup>
             </View>
         );
     }

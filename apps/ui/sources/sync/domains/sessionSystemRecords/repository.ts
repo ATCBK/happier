@@ -56,12 +56,13 @@ function retainValue(previous: RecordValue | null, next: RecordValue): RecordVal
     return { ...next, records };
 }
 
-/** Runtime projection owned by one captured Server/Account lifetime. */
+/** Runtime projection retained for one captured Server/Account lifetime. */
 export function createSessionSystemRecordRepository(options: SessionSystemRecordTransportOptions) {
     const transport = createSessionSystemRecordTransport(options);
     const sessions = new Map<string, Map<string, Entry>>();
     // Opening follows retained record identity, never a separate content store.
-    // Weak keys release decoded bytes with the last observed repository entry.
+    // Weak keys release decoded bytes with their retained record. Unmounting
+    // stops observation work, not the data needed for a scroll/panel remount.
     const surfaceItemOpenings = new WeakMap<SessionSystemRecordStored, Readonly<{
         context: SessionStoredContentContext | null;
         result: ReturnType<typeof openSessionSurfaceItemRecord>;
@@ -87,15 +88,6 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
             queries.set(key, entry);
         }
         return entry ?? null;
-    }
-    function retireIfUnobserved(entry: Entry) {
-        if (entry.listeners.size > 0 || entry.pending) return;
-        const queries = sessions.get(entry.session.sessionId);
-        if (!queries) return;
-        const key = queryKey(entry.query);
-        if (queries.get(key) !== entry) return;
-        queries.delete(key);
-        if (queries.size === 0) sessions.delete(entry.session.sessionId);
     }
     function publish(entry: Entry, snapshot: Entry['snapshot']) {
         entry.snapshot = snapshot;
@@ -145,7 +137,6 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
             const refreshAgain = entry.invalidatedWhileLoading;
             entry.invalidatedWhileLoading = false;
             if (!retired && refreshAgain && entry.listeners.size > 0) void refresh(session, query);
-            retireIfUnobserved(entry);
         });
         return entry.pending;
     }
@@ -179,7 +170,6 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
             if (entry.snapshot.freshness === 'stale') void refresh(session, query);
             return () => {
                 entry.listeners.delete(listener);
-                retireIfUnobserved(entry);
             };
         },
         invalidate(session: SessionAddress) {

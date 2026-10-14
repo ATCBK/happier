@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
     flushHookEffects,
@@ -8,6 +9,8 @@ import {
 } from '@/dev/testkit';
 import { installSessionRouteCommonModuleMocks } from '../sessionRouteTestHelpers';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { measureScreenContentBottom, PublishBottomChromeHeight } from '../testUtils/bottomChromeViewport';
+import { SessionCockpitChromeRegistryProvider } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -247,9 +250,6 @@ vi.mock('@/components/ui/layout/layout', () => ({
     useLayoutMaxWidthStyle: () => ({ maxWidth: 999 }),
     useLayoutMaxWidth: () => 999,
 }));
-vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({
-    ActivitySpinner: (props: Record<string, unknown>) => React.createElement('ActivitySpinner', props),
-}));
 vi.mock('@/components/sessions/transcript/details/SessionMessageDetailsView', () => ({
     SessionMessageDetailsView: () => React.createElement('SessionMessageDetailsView'),
 }));
@@ -257,11 +257,9 @@ vi.mock('@/components/sessions/runs/details/SessionExecutionRunInfoCard', () => 
     SessionExecutionRunInfoCard: (props: any) => React.createElement('SessionExecutionRunInfoCard', props),
 }));
 
-describe('Session Run Details Screen', () => {
-    beforeAll(async () => {
-        ({ default: SessionRunDetailsScreen } = await import('@/app/(app)/session/[id]/runs/[runId]'));
-    }, 60_000);
+({ default: SessionRunDetailsScreen } = await import('@/app/(app)/session/[id]/runs/[runId]'));
 
+describe('Session Run Details Screen', () => {
     beforeEach(() => {
         getRunSpy.mockClear();
         sendRunSpy.mockClear();
@@ -287,6 +285,23 @@ describe('Session Run Details Screen', () => {
         await flushHookEffects();
         return screen;
     }
+
+    it('keeps the run details viewport above changing bottom chrome', async () => {
+        hydrateReady = false;
+        const render = (height: number) => (
+            <SessionCockpitChromeRegistryProvider>
+                <PublishBottomChromeHeight height={height} />
+                <SessionRunDetailsScreen />
+            </SessionCockpitChromeRegistryProvider>
+        );
+        const screen = await renderScreen(render(94));
+        for (const height of [94, 121, 0]) {
+            await screen.update(render(height));
+            const frame = screen.findAllByType('View')[0];
+            expect(frame).toBeTruthy();
+            expect(measureScreenContentBottom(frame.props.style, 700)).toBe(700 - height);
+        }
+    });
 
     it('configures the run details header and constrains the content width', async () => {
         const screen = await renderRunDetailsScreen();
@@ -352,14 +367,14 @@ describe('Session Run Details Screen', () => {
     it('renders invalid-link fallback when the run id param is missing', async () => {
         localSearchParamsMock = { id: 'session-1' };
         const screen = await renderRunDetailsScreen();
-        expect(screen.findAllByType('ActivitySpinner')).toHaveLength(0);
+        expect(screen.findAllByType(ActivitySpinner)).toHaveLength(0);
         expect(screen.findByTestId('session-invalid-link')).toBeTruthy();
     });
 
     it('does not load run details until route hydration is ready', async () => {
         hydrateReady = false;
         const screen = await renderRunDetailsScreen();
-        expect(screen.findAllByType('ActivitySpinner')).toHaveLength(1);
+        expect(screen.findAllByType(ActivitySpinner)).toHaveLength(1);
         expect(getRunSpy).not.toHaveBeenCalled();
     });
 
@@ -367,7 +382,7 @@ describe('Session Run Details Screen', () => {
         hydrateReady = false;
         localSearchParamsMock = {};
         const screen = await renderRunDetailsScreen();
-        expect(screen.findAllByType('ActivitySpinner')).toHaveLength(1);
+        expect(screen.findAllByType(ActivitySpinner)).toHaveLength(1);
         expect(screen.findAllByTestId('session-invalid-link')).toHaveLength(0);
     });
 

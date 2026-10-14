@@ -98,7 +98,7 @@ vi.mock('@expo/vector-icons', () => ({
     Octicons: 'Octicons',
 }));
 // Real `@/constants/Typography` is used: it depends only on the mocked
-// `react-native` Platform, and the row corridor evaluates `Typography.rowMeta()`
+// `react-native` Platform, and the row corridor evaluates the meta type role
 // while module mocks initialize (browser/frame/styles.ts), so a partial
 // `default`-only mock fails mock-factory initialization.
 vi.mock('@/components/ui/text/Text', () => ({

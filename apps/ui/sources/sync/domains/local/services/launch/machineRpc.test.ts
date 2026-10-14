@@ -227,6 +227,7 @@ describe('local service launcher machine RPC client', () => {
             machineId: 'machine_1',
             serverId: 'server_1',
             method: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START,
+            operationTimeoutMs: null,
             payload: {
                 machineId: 'machine_1',
                 targetId: 'target_1',

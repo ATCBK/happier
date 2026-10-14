@@ -114,7 +114,7 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
                 params.metadata,
                 params.agentId,
                 params.agentTargetKey,
-                sessionModels?.activeSelectionV1?.runner ?? null,
+                params.metadata?.sessionModelsV1?.activeSelectionV1?.runner ?? null,
             )
             : null
     );

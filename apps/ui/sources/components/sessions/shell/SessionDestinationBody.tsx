@@ -98,7 +98,6 @@ export function SessionDestinationBody() {
     const routeScope = React.useMemo(() => createSessionRouteServerScope(params as Record<string, unknown>), [params]);
     const {
         id: sessionIdParam,
-        serverId: serverIdParam,
         mobileSurface: mobileSurfaceParam,
         jumpSeq: jumpSeqParam,
         recoveryDataId: recoveryDataIdParam,
@@ -117,11 +116,7 @@ export function SessionDestinationBody() {
     const jumpSeqTrimmed = typeof jumpSeqRaw === 'string' ? jumpSeqRaw.trim() : '';
     const jumpSeqNum = jumpSeqTrimmed.length > 0 ? Number(jumpSeqTrimmed) : NaN;
     const jumpToSeq = Number.isFinite(jumpSeqNum) && jumpSeqNum >= 0 ? Math.trunc(jumpSeqNum) : null;
-    const routeServerId = typeof serverIdParam === 'string'
-        ? serverIdParam
-        : Array.isArray(serverIdParam)
-            ? (serverIdParam[0] ?? '')
-            : '';
+    const routeServerId = routeScope.serverId ?? '';
     const recoveryDataId = typeof recoveryDataIdParam === 'string'
         ? recoveryDataIdParam
         : Array.isArray(recoveryDataIdParam)

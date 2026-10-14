@@ -20,6 +20,7 @@ import { buildPutUnderChooserSections, PUT_UNDER_TOP_LEVEL_OPTION_ID } from './p
 import { resolvePutUnderEligibility } from './putUnderCandidates';
 import { describeSessionListDropReason } from '@/components/sessions/shell/dropPreview/sessionListDropPresentation';
 import { selectSessionRelationRecords } from './reportSubtree';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 /**
  * "Put under…" (ORC §3.8, R-03; DnD lab K1c): the keyboard, phone and screen-reader equivalent of
@@ -199,7 +200,7 @@ export function PutUnderSessionModal(props: PutUnderSessionModalProps) {
         kind: 'card' as const,
         title,
         testID: 'session-put-under-modal',
-        dimensions: { width: 420, maxHeightRatio: 0.8, size: 'dialog' as const },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.8, size: 'dialog' as const },
     }), [title]);
     useModalCardChrome(props.setChrome, chrome);
 

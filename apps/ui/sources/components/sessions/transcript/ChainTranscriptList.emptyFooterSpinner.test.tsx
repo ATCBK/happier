@@ -21,6 +21,8 @@ vi.mock('@legendapp/list/react-native', async () => {
 });
 
 
+const { ChainTranscriptList: ChainContent } = await import('./ChainTranscriptList');
+
 function createChainTestRoot(Content: typeof import('./ChainTranscriptList')['ChainTranscriptList']) {
     return function ChainTestRoot(props: React.ComponentProps<typeof Content>) {
         const [source] = React.useState(() => createTestSessionTranscriptSource({
@@ -39,7 +41,6 @@ describe('ChainTranscriptList empty-state footer spinner', () => {
         & { datasetKey?: string };
 
     async function renderChainTranscriptList(props: ChainTranscriptListTestProps) {
-        const { ChainTranscriptList: ChainContent } = await import('./ChainTranscriptList');
         const ChainTranscriptList = createChainTestRoot(ChainContent);
         return renderScreen(React.createElement(ChainTranscriptList, {
             ...props,

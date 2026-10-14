@@ -50,7 +50,6 @@ import {
     registerLocalServiceLauncherPreviewViaMachineRpc,
 } from '../launch/machineRpc';
 import {
-    fetchLocalServicePreviewSnapshot,
     normalizeLocalServicePreviewSnapshotPayload,
     type LocalServicePreviewLifecycleFailureReason,
     type LocalServicePreviewOpenOrCreateClientInput,
@@ -58,12 +57,12 @@ import {
     type LocalServicePreviewRevokeClientInput,
     type LocalServicePreviewRevokeClientResult,
     type LocalServicePreviewSnapshotClientInput,
-    type LocalServicePreviewSnapshotClientResult,
-    type LocalServicePreviewSnapshotRequest,
 } from '../preview/api';
 import {
+    fetchLocalServicePreviewSnapshotViaMachineRpc,
     openOrCreateLocalServicePreviewViaMachineRpc,
     revokeLocalServicePreviewViaMachineRpc,
+    type LocalServicePreviewSnapshotRpcResult,
 } from '../preview/machineRpc';
 import { publishLocalServicePreviewSnapshot } from '../preview/sharedStore';
 import type { LocalServicePreviewSnapshot } from '../preview/store';
@@ -84,7 +83,6 @@ export type CreateLocalServicesRuntimeActionExecutorInput = Readonly<{
     readWorkspaceRefs?: () => Readonly<{ serverId: string; accountId: string; refs: readonly WorkspaceRefV1[] }> | null;
     request?: LocalServiceInventorySnapshotRequest
         | LocalServiceLauncherSnapshotRequest
-        | LocalServicePreviewSnapshotRequest
         | LocalServiceActionExecuteRequest;
     fetchInventorySnapshot?: (
         input: LocalServiceInventorySnapshotClientInput,
@@ -121,7 +119,7 @@ export type CreateLocalServicesRuntimeActionExecutorInput = Readonly<{
     ) => Promise<LocalServiceLauncherHistoryClearClientResult>;
     fetchPreviewSnapshot?: (
         input: LocalServicePreviewSnapshotClientInput,
-    ) => Promise<LocalServicePreviewSnapshotClientResult>;
+    ) => Promise<LocalServicePreviewSnapshotRpcResult>;
     openOrCreatePreview?: (
         input: LocalServicePreviewOpenOrCreateClientInput,
     ) => Promise<LocalServicePreviewOpenOrCreateClientResult>;
@@ -344,7 +342,7 @@ export function createLocalServicesRuntimeActionExecutor(
     const openLauncherPreview = input.openLauncherPreview ?? openLocalServiceLauncherPreviewViaMachineRpc;
     const registerLauncherPreview = input.registerLauncherPreview ?? registerLocalServiceLauncherPreviewViaMachineRpc;
     const clearLauncherHistory = input.clearLauncherHistory ?? clearLocalServiceLauncherHistoryViaMachineRpc;
-    const fetchPreviewSnapshot = input.fetchPreviewSnapshot ?? fetchLocalServicePreviewSnapshot;
+    const fetchPreviewSnapshot = input.fetchPreviewSnapshot ?? fetchLocalServicePreviewSnapshotViaMachineRpc;
     const openOrCreatePreview = input.openOrCreatePreview ?? openOrCreateLocalServicePreviewViaMachineRpc;
     const revokePreview = input.revokePreview ?? revokeLocalServicePreviewViaMachineRpc;
     const onPreviewSnapshot = input.onPreviewSnapshot
@@ -454,6 +452,7 @@ export function createLocalServicesRuntimeActionExecutor(
                 ...(request.workspace ? { workspace: request.workspace } : {}),
                 ...(request.declaration ? { declaration: request.declaration } : {}),
                 ...(request.expectedEffectDigest ? { expectedEffectDigest: request.expectedEffectDigest } : {}),
+                ...(args.context.signal ? { signal: args.context.signal } : {}),
             });
             if (!result.ok) return routeFailureResult('launcher', result.reason);
             onLauncherSnapshot({ machineId, serverId, sessionId,
@@ -503,13 +502,12 @@ export function createLocalServicesRuntimeActionExecutor(
             const result = await fetchPreviewSnapshot({
                 machineId,
                 serverId,
-                request: input.request,
             });
             if (!result.ok) return routeFailureResult('preview', result.reason);
             // Converge the action read into the shared store so the status truth and the open pane
             // do not diverge (DUP-6).
             onPreviewSnapshot({ machineId, serverId, snapshot: result.snapshot });
-            return result.snapshot;
+            return result.protocolSnapshot;
         }
 
         if (args.actionId === 'localServices.preview.openOrCreate') {

@@ -17,6 +17,7 @@ import { isSessionRouteHydrationAvailable, isSessionRouteHydrationMissing } from
 import { t } from '@/text';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { useSessionCockpitBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { Icon } from '@/components/ui/icons/Icon';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 
@@ -28,6 +29,7 @@ function normalizeParam(value: unknown): string | null {
 
 export function SessionRunDetailsScreen() {
     const { theme } = useUnistyles();
+    const bottomChromeHeight = useSessionCockpitBottomChromeHeight();
     const router = useRouter();
     const navigation = useNavigation();
     const params = useLocalSearchParams<{ id?: string | string[]; serverId?: string | string[]; runId?: string | string[]; retryInputLocalId?: string | string[] }>();
@@ -91,7 +93,7 @@ export function SessionRunDetailsScreen() {
     }), [headerLeft, headerRight]);
 
     return (
-        <View style={{ flex: 1, backgroundColor: theme.colors.background?.canvas ?? theme.colors.surface.base }}>
+        <View style={{ flex: 1, paddingBottom: bottomChromeHeight, backgroundColor: theme.colors.background?.canvas ?? theme.colors.surface.base }}>
             <Stack.Screen options={screenOptions} />
             {!hydrateReady && !hydrateMissing ? (
                 <ActivitySpinner size="small" color={theme.colors.text.secondary} />

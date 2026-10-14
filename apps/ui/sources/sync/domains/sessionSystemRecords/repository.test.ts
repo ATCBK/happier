@@ -41,7 +41,7 @@ describe('Account-scoped Session System Record repository', () => {
         expect(await repository.openSurfaceItem(surfaceRecord, { mode: 'e2ee', encryption: null })).toEqual({ status: 'locked' });
         expect(decryptions).toBe(1);
     });
-    it('does not retain an unobserved snapshot and truthfully refetches after the final observer leaves', async () => {
+    it('retains an unobserved snapshot for its Account lifetime without refetching on remount', async () => {
         let requests = 0;
         const repository = createSessionSystemRecordRepository({ scope, request: async () => {
             requests += 1;
@@ -53,15 +53,19 @@ describe('Account-scoped Session System Record repository', () => {
         const stop = repository.subscribe(session, query, () => {});
         await repository.refresh(session, query);
         expect(requests).toBe(1);
+        const loaded = repository.getSnapshot(session, query);
         stop();
 
+        expect(repository.getSnapshot(session, query)).toBe(loaded);
         const remounted = repository.subscribe(session, query, () => {});
-        await repository.refresh(session, query);
-        expect(requests).toBe(2);
+        expect(repository.getSnapshot(session, query)).toBe(loaded);
+        expect(requests).toBe(1);
         remounted();
+        repository.retire();
+        expect(repository.getSnapshot(session, query)).toMatchObject({ data: null, lastError: { status: 'forbidden' } });
     });
 
-    it('retires a zero-observer entry as soon as its in-flight request settles', async () => {
+    it('retains a read that finishes after its last observer leaves', async () => {
         let requests = 0;
         let settle: ((response: Response) => void) | undefined;
         const repository = createSessionSystemRecordRepository({ scope, request: async () => {
@@ -75,7 +79,34 @@ describe('Account-scoped Session System Record repository', () => {
         await pending;
 
         const remounted = repository.subscribe(session, query, () => {});
-        expect(requests).toBe(2);
+        expect(repository.getSnapshot(session, query)).toMatchObject({ data: { records: [record] }, loading: 'idle' });
+        expect(requests).toBe(1);
+        remounted();
+    });
+
+    it('marks hidden data stale without ambient work and refreshes it in place on remount', async () => {
+        let requests = 0;
+        let settle: ((response: Response) => void) | undefined;
+        const repository = createSessionSystemRecordRepository({ scope, request: async () => {
+            requests++;
+            if (requests === 1) return page();
+            return new Promise<Response>(resolve => { settle = resolve; });
+        } });
+        const stop = repository.subscribe(session, query, () => {});
+        await repository.refresh(session, query);
+        const data = repository.getSnapshot(session, query).data;
+        stop();
+        repository.invalidate(session);
+        repository.refreshObserved({ force: true });
+        expect(requests).toBe(1);
+        expect(repository.getSnapshot(session, query)).toMatchObject({ data, freshness: 'stale', loading: 'idle' });
+        const remounted = repository.subscribe(session, query, () => {});
+        expect(repository.getSnapshot(session, query)).toMatchObject({ data, loading: 'refreshing' });
+        const pending = repository.refresh(session, query);
+        const updated = { ...record, revision: 'ssr1.AAAACHN5c3JlY18xAAAAAg' };
+        settle!(Response.json({ records: [updated], nextCursor: null, hasNext: false }));
+        await pending;
+        expect(repository.getSnapshot(session, query)).toMatchObject({ data: { records: [updated] }, freshness: 'fresh', loading: 'idle' });
         remounted();
     });
 
@@ -233,12 +264,14 @@ describe('Account-scoped Session System Record repository', () => {
         await repository.refresh(session, query);
         repository.invalidate({ ...session, serverId: 'home-b' });
         expect(repository.getSnapshot(session, query).freshness).toBe('fresh');
+        stop();
         denied = true;
         repository.invalidate(session);
         expect(repository.getSnapshot(session, query).freshness).toBe('stale');
+        const remounted = repository.subscribe(session, query, () => {});
         await repository.refresh(session, query);
         expect(repository.getSnapshot(session, query)).toMatchObject({ data: null, lastError: { status: 'forbidden' } });
-        stop();
+        remounted();
     });
 
     it.each(['strict', 'legacy'] as const)('serves a %s Session query addressed by the device-local id of a Home its scope names by published identity', async (protocol) => {
@@ -292,6 +325,11 @@ describe('Account-scoped Session System Record repository', () => {
             // A different Home is still refused without a request.
             expect(repository.getSnapshot({ serverId: 'home-b', sessionId: 'session-one' }, sessionQuery).lastError).toEqual({ status: 'forbidden' });
             stop();
+            const loaded = repository.getSnapshot(localAddress, sessionQuery);
+            const remounted = repository.subscribe(localAddress, sessionQuery, () => {});
+            expect(repository.getSnapshot(localAddress, sessionQuery)).toBe(loaded);
+            expect(requests).toBe(2);
+            remounted();
         } finally {
             await removeServerProfile(home.id);
         }

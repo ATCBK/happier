@@ -41,6 +41,7 @@ import {
 } from '@/sync/domains/models/extendedContextModelControl';
 import type { CurrentSessionRunnerProcessIdentity } from '@/sync/domains/models/resolveSessionModelSelectionDisposition';
 import { ReportedModelStatusIcon } from '@/components/sessions/modelPicker/reportedModelPresentation';
+import { buildSessionModelSelectedTriggerPresentation } from '@/components/sessions/modelPicker/buildSessionModelPickerSections';
 import { Modal } from '@/modal';
 import {
     hapticsLight,
@@ -525,6 +526,8 @@ interface AgentInputProps {
     agentLabel?: string | null;
     /** A controlled authoring engine/Role label; live Sessions retain their own projection. */
     engineLabel?: string;
+    /** Already-demanded picker facts; the closed chip shares the picker's label owner without discovery. */
+    modelPickerPresentation?: Parameters<typeof buildSessionModelSelectedTriggerPresentation>[0];
     /** Current machine-qualified catalog identity for the running/preflight Agent. */
     agentCatalogIdentity?: Readonly<{
         entry: ResolvedAgentCatalogEntry;
@@ -2722,6 +2725,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      */
     const engineChipLabel = React.useMemo(() => {
         if (props.engineLabel !== undefined) return props.engineLabel;
+        const picker = props.modelPickerPresentation;
+        if (picker?.selected?.providerConnectionId && (
+            !armedComposerTarget || armedComposerTarget.backendTargetKey === picker.agentTargetKey
+        )) {
+            return buildSessionModelSelectedTriggerPresentation(picker).subtitle;
+        }
         // Selection IS the selection. An armed target with a model chosen names
         // that model; an armed target still on the Agent's own defaults names the
         // Agent, because no model has been chosen to name.
@@ -2729,7 +2738,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             return armedComposerTarget.modelLabel ?? armedComposerTarget.label;
         }
         return hasAgentPickerOptions ? selectedModelLabel : resolvedAgentLabel;
-    }, [props.engineLabel, armedComposerTarget, hasAgentPickerOptions, resolvedAgentLabel, selectedModelLabel]);
+    }, [props.engineLabel, props.modelPickerPresentation, armedComposerTarget, hasAgentPickerOptions, resolvedAgentLabel, selectedModelLabel]);
     /**
      * The mark on the engine chip: the armed Agent while one is armed, otherwise
      * the Agent running this Session.

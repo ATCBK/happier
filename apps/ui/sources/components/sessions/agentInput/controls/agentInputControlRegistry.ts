@@ -24,7 +24,7 @@ export const AGENT_INPUT_CONTROL_REGISTRY = [
     { id: 'workflowRoles', line: 'primary' },
     { id: 'workflowTargets', line: 'primary' },
     { id: 'server', line: 'primary' },
-    { id: 'mcp', line: 'primary' },
+    { id: 'capabilities', line: 'primary' },
     { id: 'sessionAccess', line: 'primary' },
     { id: 'tags', line: 'primary' },
     { id: 'recipient', line: 'primary' },

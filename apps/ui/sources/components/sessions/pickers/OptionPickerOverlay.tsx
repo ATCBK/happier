@@ -2,7 +2,6 @@ import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Switch } from '@/components/ui/forms/Switch';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
@@ -631,10 +630,14 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
     const probe = props.probe;
     const shouldRenderProbeControl = probe ? typeof probe.onRefresh === 'function' || probe.phase !== 'idle' : false;
     const refreshAccessibilityLabel = probe?.refreshAccessibilityLabel ?? t('modelPickerOverlay.refreshModelsA11y');
-    const probeHintText = probe && probe.phase !== 'idle' && totalOptionCount <= 1 && !props.canEnterCustomValue
-        ? (probe.phase === 'loading'
-            ? (probe.loadingAccessibilityLabel ?? t('modelPickerOverlay.loadingModelsA11y'))
-            : (probe.refreshingAccessibilityLabel ?? t('modelPickerOverlay.refreshingModelsA11y')))
+    const probeInFlightLabel = probe?.phase === 'loading'
+        ? (probe.loadingAccessibilityLabel ?? t('modelPickerOverlay.loadingModelsA11y'))
+        : probe?.phase === 'refreshing'
+            ? (probe.refreshingAccessibilityLabel ?? t('modelPickerOverlay.refreshingModelsA11y'))
+            : null;
+    const refreshControlLabel = probeInFlightLabel ?? refreshAccessibilityLabel;
+    const probeHintText = probeInFlightLabel && totalOptionCount <= 1 && !props.canEnterCustomValue
+        ? probeInFlightLabel
         : null;
 
     const commitCustomValue = React.useCallback((raw: string) => {
@@ -703,36 +706,25 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
                     <View style={styles.titleRowActions}>
                         {props.headerAccessory ? <View style={styles.headerAccessory}>{props.headerAccessory}</View> : null}
                         {shouldRenderProbeControl && probe ? (
-                            probe.phase === 'idle' && typeof probe.onRefresh === 'function' ? (
-                                <IconButton
-                                    testID={refreshTestID}
-                                    iconName="arrow-clockwise"
-                                    accessibilityLabel={refreshAccessibilityLabel}
-                                    tooltip={refreshAccessibilityLabel}
-                                    // Icon only: no border, no fill. The header already
-                                    // carries the surface this control sits on, so a
-                                    // second bordered circle only added weight.
-                                    variant="plain"
-                                    size={HEADER_GLYPH_BOX_PX}
-                                    iconSize={HEADER_GLYPH_SIZE_PX}
-                                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
-                                    interactiveTargetGapPx={TITLE_ROW_ACTION_GAP_PX}
-                                    onPress={probe.onRefresh}
-                                />
-                            ) : probe.phase !== 'idle' ? (
-                                <View testID={`${refreshTestID}-progress`} style={styles.refreshProgressSlot}>
-                                    <ActivitySpinner
-                                        // Without a border to sit in, the spinner reads as
-                                        // legible only if it matches the glyph it replaces:
-                                        // same box, same ink, same optical weight.
-                                        size={iconMatchedSpinnerSize(HEADER_GLYPH_SIZE_PX)}
-                                        color={theme.colors.text.secondary}
-                                        accessibilityLabel={probe.phase === 'loading'
-                                            ? (probe.loadingAccessibilityLabel ?? t('modelPickerOverlay.loadingModelsA11y'))
-                                            : (probe.refreshingAccessibilityLabel ?? t('modelPickerOverlay.refreshingModelsA11y'))}
-                                    />
-                                </View>
-                            ) : null
+                            <IconButton
+                                testID={refreshTestID}
+                                iconName="arrow-clockwise"
+                                accessibilityLabel={refreshControlLabel}
+                                tooltip={refreshControlLabel}
+                                // Icon only: no border, no fill. The header already
+                                // carries the surface this control sits on, so a
+                                // second bordered circle only added weight.
+                                variant="plain"
+                                size={HEADER_GLYPH_BOX_PX}
+                                iconSize={HEADER_GLYPH_SIZE_PX}
+                                minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
+                                interactiveTargetGapPx={TITLE_ROW_ACTION_GAP_PX}
+                                // While the catalog loads the same glyph stays put, held still:
+                                // the user's loading-style spinner (a dot grid) read as a
+                                // different control on the phone sheet.
+                                disabled={probe.phase !== 'idle'}
+                                onPress={() => probe.onRefresh?.()}
+                            />
                         ) : null}
                     </View>
                 ) : null}
@@ -796,10 +788,17 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
     );
     // A grid reserves its status line below the scroll area. Notices can wrap without moving the cards'
     // starting position or clipping the message.
+    const hasFooterStatus = (props.multiColumn && notes.length > 0) || Boolean(props.footerContent);
     const notesNode = props.multiColumn || props.footerContent ? (
-        <View testID="model-picker-overlay-notes" style={styles.notesFooter} accessibilityLiveRegion="polite">
-            {props.multiColumn ? notes.map((note, index) => <Text key={`${index}:${note}`} style={styles.noteText}>{note}</Text>) : null}
-            {props.footerContent}
+        <View
+            testID="model-picker-overlay-notes"
+            style={[styles.notesFooter, hasFooterStatus ? styles.notesFooterFilled : null]}
+            accessibilityLiveRegion="polite"
+        >
+            <View style={styles.notesFooterBody}>
+                {props.multiColumn ? notes.map((note, index) => <Text key={`${index}:${note}`} style={styles.noteText}>{note}</Text>) : null}
+                {props.footerContent}
+            </View>
         </View>
     ) : null;
 
@@ -904,14 +903,22 @@ const styles = StyleSheet.create((theme) => ({
      */
     title: { flex: 1, ...Typography.variant('body', 'semiBold'),   color: theme.colors.text.primary },
     effectiveBlock: { gap: 0 },
-    notesFooter: { flexShrink: 0, minHeight: Typography.rowMeta().lineHeight },
-    noteText: { fontSize: 11, color: theme.colors.text.tertiary },
     /**
-     * The loading twin of the refresh control's drawn box. Same square, so the
-     * header never reflows between idle and in-flight; no chrome, because the
-     * control it replaces has none either.
+     * The status footer closes the pane the way the search header opens it: a divider, then the line
+     * on the header's own text edge. The divider is only drawn once there is something to say; its
+     * space is reserved either way so a notice arriving never moves the list.
      */
-    refreshProgressSlot: { width: HEADER_GLYPH_BOX_PX, height: HEADER_GLYPH_BOX_PX, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+    notesFooter: {
+        flexShrink: 0,
+        paddingTop: theme.space.s6,
+        paddingBottom: theme.space.s8,
+        paddingLeft: theme.space.s6,
+        borderTopWidth: 1,
+        borderTopColor: 'transparent',
+    },
+    notesFooterFilled: { borderTopColor: theme.colors.border.default },
+    notesFooterBody: { minHeight: Typography.variant('meta').lineHeight },
+    noteText: { fontSize: 11, color: theme.colors.text.tertiary },
     optionCardIconSlot: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
     optionSelectionStatus: { alignItems: 'center', justifyContent: 'flex-start', gap: theme.space.s2 },
     optionSelectionMark: { width: 20, height: 14, alignItems: 'center', justifyContent: 'center' },

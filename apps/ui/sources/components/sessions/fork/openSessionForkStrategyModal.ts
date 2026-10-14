@@ -8,6 +8,7 @@ import {
     SESSION_FORK_STRATEGY_MODAL_TEST_ID,
     SessionForkStrategyModal,
 } from './SessionForkStrategyModal';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 export type OpenSessionForkStrategyModalParams = Readonly<{
     request: SessionForkStrategyRequest;
@@ -55,7 +56,7 @@ export function openSessionForkStrategyModal(params: OpenSessionForkStrategyModa
                 : t('session.forking.strategy.subtitleLatest'),
             testID: SESSION_FORK_STRATEGY_MODAL_TEST_ID,
             bodyScroll: 'auto',
-            dimensions: { size: 'md', width: 460, maxHeightRatio: 0.86 },
+            dimensions: { size: 'md', width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.86 },
         },
         closeOnBackdrop: false,
     });

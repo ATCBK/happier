@@ -12,6 +12,7 @@ import { Modal } from '@/modal';
 import type { CustomModalInjectedProps } from '@/modal/types';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { t } from '@/text';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 /** A day ahead is a useful place to start editing from; it is never a default answer. */
 const INITIAL_EXPIRY_OFFSET_MS = 24 * 60 * 60 * 1000;
@@ -58,7 +59,7 @@ export function TemporaryComputerExpiryModal(props: Readonly<{
         kind: 'card' as const,
         title: t('newSession.temporaryComputer.expiry.title'),
         testID: 'temporary-computer-expiry-modal',
-        dimensions: { width: 480, maxHeightRatio: 0.86, size: 'md' as const },
+        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.86, size: 'md' as const },
         footer,
     }), [footer]));
 
@@ -97,7 +98,7 @@ export async function showTemporaryComputerExpiryModal(input: Readonly<{
                 kind: 'card',
                 title: t('newSession.temporaryComputer.expiry.title'),
                 testID: 'temporary-computer-expiry-modal',
-                dimensions: { width: 480, maxHeightRatio: 0.86, size: 'md' },
+                dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.86, size: 'md' },
             },
             closeOnBackdrop: true,
         });

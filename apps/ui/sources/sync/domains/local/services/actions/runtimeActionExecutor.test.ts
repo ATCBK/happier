@@ -189,6 +189,9 @@ describe('UI local-services runtime action executor', () => {
                 workspace: { serverId: scope.serverId, refId: 'source-ref' }, serviceName: 'web', requestId: 'move-1',
                 currentTarget: { kind: 'managed_service', managedServiceId: 'native-old', machineId: 'old-worker' },
                 destination: { kind: 'primary' },
+                selectedTarget: { machineId: 'source-controller' },
+                desiredPlacement: { workspace: { serverId: scope.serverId, refId: 'source-ref' }, serviceName: 'web',
+                    expectedRevision: 'absent', expected: { kind: 'absent' }, value: { runsOn: { kind: 'primary' }, unavailable: 'fail' } },
             }, context: { serverId: scope.serverId, runtimeAccountId: scope.accountId } });
             await expect(execute(args)).resolves.toEqual({ status: 'unsupported', reasonCode: 'service_relocation_unavailable' });
             storage.getState().setProjectAccountRowsStatusForScope(scope, 'locked');
@@ -219,7 +222,11 @@ describe('UI local-services runtime action executor', () => {
         const execute = createLocalServicesRuntimeActionExecutor({ readWorkspaceRefs, resolveMachineId: fallbackMachine });
         const request = { workspace: { serverId: scope.serverId, refId: 'source-ref' }, serviceName: 'web', requestId: 'move-1',
             currentTarget: { kind: 'managed_service' as const, managedServiceId: 'native-old', machineId: 'old-worker' },
-            destination: { kind: 'workers' as const, destination: { kind: 'machine' as const, machineId: 'new-worker' } } };
+            destination: { kind: 'workers' as const, destination: { kind: 'machine' as const, machineId: 'new-worker' } },
+            selectedTarget: { machineId: 'new-worker' },
+            desiredPlacement: { workspace: { serverId: scope.serverId, refId: 'source-ref' }, serviceName: 'web',
+                expectedRevision: 'absent', expected: { kind: 'absent' }, value: { runsOn: { kind: 'workers',
+                    destination: { kind: 'machine', machineId: 'new-worker' } }, unavailable: 'fail' } } };
         await expect(execute(runtimeArgs({ actionId: 'projects.service.relocate', input: request,
             context: { serverId: scope.serverId, runtimeAccountId: scope.accountId, defaultSessionId: 'session-1' } }))).resolves.toEqual({
                 status: 'unsupported', reasonCode: 'service_relocation_unavailable',

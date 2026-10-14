@@ -25,14 +25,9 @@ import {
     SessionMessageDetailsView,
 } from '@/components/sessions/transcript/details/SessionMessageDetailsView';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { useSessionCockpitBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 
-type SessionMessageRouteTheme = Readonly<{
-    colors: Readonly<{
-        text: Readonly<{
-            primary: string;
-        }>;
-    }>;
-}>;
+type SessionMessageRouteTheme = Parameters<typeof createSessionMessageDetailsStyles>[0];
 
 type SessionMessageRouteStyles = Readonly<{
     loadingContainer: ViewStyle;
@@ -83,6 +78,7 @@ export const WorkspaceRouteBody = React.memo(function SessionMessageRoute() {
 
 function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string; jumpChildId: string | null; routeScope: ReturnType<typeof createSessionRouteServerScope> }) {
     const router = useRouter();
+    const bottomChromeHeight = useSessionCockpitBottomChromeHeight();
     const session = useSession(props.sessionId);
     const { isLoaded: messagesLoaded } = useSessionTranscriptIds(props.sessionId);
     const resolvedMessageId = useResolvedSessionMessageRouteId(props.sessionId, props.messageId);
@@ -237,7 +233,7 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
                     options={toolScreenOptions}
                 />
             )}
-            <View style={styles.routeContent}>
+            <View style={{ ...styles.routeContent, paddingBottom: bottomChromeHeight }}>
                 <Deferred>
                     <SessionMessageDetailsView
                         message={message}

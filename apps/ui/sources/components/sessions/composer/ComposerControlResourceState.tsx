@@ -6,6 +6,10 @@ import {
     MAX_COMPOSER_CONTROL_STATE_RESOURCE_BYTES_V1,
     type ComposerControlStateV1,
 } from '@happier-dev/protocol/plugins/ui/composer';
+import {
+    pluginUiResourceReferenceKey,
+    pluginUiResourceReferenceLabel,
+} from '@happier-dev/plugin-ui/advanced';
 import type {
     PluginUiResourceReference,
     PluginUiResourceSnapshot,
@@ -59,12 +63,6 @@ export type ComposerControlResourceStateProjection = Readonly<{
     resource: PluginUiResourceSnapshot | null;
 }>;
 
-function resourceReferenceKey(resource: PluginUiResourceReference): string {
-    return typeof resource === 'string'
-        ? `local:${resource}`
-        : `qualified:${resource.pluginId}\u0000${resource.localId}`;
-}
-
 function resourceContextKey(binding: PluginContextualResourceBinding): string {
     const context = binding.context;
     switch (context.kind) {
@@ -90,7 +88,7 @@ function createComposerControlResourceStateScope(input: Readonly<{
             input.binding.expectedCallerOccurrenceId,
             resourceContextKey(input.binding),
         ]),
-        resourceKey: resourceReferenceKey(input.resource),
+        resourceKey: pluginUiResourceReferenceKey(input.resource, input.binding.pluginId),
     });
 }
 
@@ -183,9 +181,7 @@ export function useComposerControlResourceState(input: Readonly<{
                 reportedLosingDigestRef.current = Object.freeze({ scope, digest: resourceDigest });
                 logPluginSurfaceDiagnostic({
                     pluginId: input.binding.pluginId,
-                    contributionId: typeof input.resource === 'string'
-                        ? input.resource
-                        : input.resource.localId,
+                    contributionId: pluginUiResourceReferenceLabel(input.resource),
                     surfaceId: 'composer-control-resource',
                 }, {
                     code: 'composer_control_resource_invalid',

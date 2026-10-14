@@ -168,13 +168,6 @@ export function installSourceControlBranchMenuCommonModuleMocks(
         TextInput: (props: Record<string, unknown>) => React.createElement('TextInput', props),
     }));
 
-    vi.mock('@/constants/Typography', () => ({
-        Typography: {
-            default: () => ({}),
-            mono: () => ({}),
-        },
-    }));
-
     vi.mock('@/text', async () => {
         const activeOptions = sourceControlBranchMenuModuleState.options;
         if (activeOptions.text) {

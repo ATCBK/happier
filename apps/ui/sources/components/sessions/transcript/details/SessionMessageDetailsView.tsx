@@ -41,6 +41,7 @@ import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transc
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 
 type SessionMessageDetailsTheme = Readonly<{
+    space: Readonly<{ s16: number }>;
     colors: Readonly<{
         text: Readonly<{
             primary: string;

@@ -53,6 +53,9 @@ vi.mock('@/hooks/session/useEnsureSidechainsLoaded', () => ({
 
 const interaction = { canSendMessages: true, canApprovePermissions: true } as const;
 
+// The real host graph belongs to collection, not the first React/test lifetime.
+const { ToolCallsGroupUnitToolRowWithSessionCommon } = await import('./ToolCallsGroupUnitToolRow');
+
 function makeSubAgentMessage(): ToolCallMessage {
     return createToolCallMessageFixture({
         id: 'tool-msg-1',
@@ -71,7 +74,6 @@ function makeSubAgentMessage(): ToolCallMessage {
 }
 
 async function renderToolRow(props: Record<string, unknown>) {
-    const { ToolCallsGroupUnitToolRowWithSessionCommon } = await import('./ToolCallsGroupUnitToolRow');
     const rowProps = {
         sessionId: 's1',
         groupId: 'toolCalls:t1:m1',

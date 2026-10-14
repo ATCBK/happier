@@ -242,12 +242,6 @@ export async function restartSessionRunnerOnCurrentRuntime(
     return await requestSessionRunnerRestart(input, 'if_stale');
 }
 
-export async function restartSessionRunnerForConfigurationChange(
-    input: RestartSessionRunnerInput,
-): Promise<RestartSessionRunnerResultV1> {
-    return await requestSessionRunnerRestart(input, 'force_current_cli');
-}
-
 export async function restartSessionRunnerForProviderBindingChange(
     input: RestartSessionRunnerForProviderBindingChangeInput,
 ): Promise<RestartSessionRunnerResultV1> {

@@ -51,6 +51,8 @@ import { RetainedPanelSurface } from '@/components/ui/panels/RetainedPanelSurfac
 import { SessionPaneErrorBoundary, SessionPaneLazyLoader } from './SessionPaneLazyLoader';
 import { SessionWorkViewWithTriggers } from '@/components/workflows/triggers/SessionWorkViewWithTriggers';
 import { useSessionWorkSources } from '@/components/sessions/work/sessionWorkSources';
+import { readWorkWorkingCount } from '@/components/sessions/work/workProjection';
+import { readSessionReportsPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 import { SessionBoardPane } from '@/components/sessions/board/SessionBoardPane';
 import { SessionTranscriptNavigationPane } from '@/components/sessions/panes/SessionTranscriptNavigationPane';
 import { getPreferredLanguage, t } from '@/text';
@@ -710,7 +712,17 @@ export const SessionActionRail = React.memo(() => {
     // The Work tab's badge is the Work projection's outstanding count (D-S4): the same number the
     // header strip shows, read from the one owner the Session host mounted — never a second count.
     const workProjection = useSessionWorkSources()?.projection;
-    const runningCount = workProjection?.summary.outstanding ?? 0;
+    const outstandingCount = workProjection?.summary.outstanding ?? 0;
+    const workStatus = workProjection ? readSessionReportsPresentationV1({
+        working: readWorkWorkingCount(workProjection.summary),
+        needsYou: workProjection.summary.needsYou,
+        stalled: workProjection.summary.stalled,
+    }) : null;
+    const workLabel = workStatus && workStatus.count > 0 ? t('sessionWork.strip.a11y', { summary:
+        workStatus.bucket === 'needs_you' ? t('sessionWork.strip.needsYou', { count: workStatus.count })
+            : workStatus.bucket === 'working' ? t('sessionWork.strip.stillWorking', { count: workStatus.count })
+                : `${workStatus.count} · ${t('status.offline')}`,
+    }) : t('sessionWork.title');
     // Scripts counts this Session's own finite runs that are still working (the same Work operations).
     const runningScripts = workProjection?.projectCommands.filter((item) => item.status.bucket === 'working').length ?? 0;
     const rightPaneHiddenByDetails = usePaneActionRailRightPaneHiddenByDetails();
@@ -720,13 +732,11 @@ export const SessionActionRail = React.memo(() => {
     for (const tab of model.rightPanelTabs) {
         // One terminal action owns all dock locations; the catalog retains its sidebar admission.
         if (tab.id === 'terminal') continue;
-        const badgeCount = tab.id === 'agents' ? runningCount : tab.id === 'scripts' ? runningScripts : undefined;
+        const badgeCount = tab.id === 'agents' ? outstandingCount : tab.id === 'scripts' ? runningScripts : undefined;
         actions.push({
             id: tab.id,
-            label: badgeCount && badgeCount > 0
-                ? tab.id === 'scripts'
-                    ? t('projects.scripts.tabRunning', { count: String(badgeCount) })
-                    : t('session.subagents.panel.tabWithRunningCount', { count: badgeCount })
+            label: tab.id === 'agents' ? workLabel : badgeCount && badgeCount > 0
+                ? t('projects.scripts.tabRunning', { count: String(badgeCount) })
                 : tab.id === 'collaboration' && collaborationMentioned
                     ? `${getRightSidebarTabLabel(tab)}. ${t('session.collaboration.discussion.mentioned')}`
                     : getRightSidebarTabLabel(tab),

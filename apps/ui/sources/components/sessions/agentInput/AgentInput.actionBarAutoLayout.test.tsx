@@ -242,7 +242,7 @@ describe('AgentInput (action bar auto layout)', () => {
             onPathClick={() => {}} currentPath="/repo"
             extraActionChips={[{
                 key: 'collapsed-options',
-                controlId: 'mcp',
+                controlId: 'capabilities',
                 render: () => <React.Fragment />,
                 collapsedAction: () => ({ id: 'collapsed-options', label: 'Options', icon: null, onPress: () => {} }),
             }]}

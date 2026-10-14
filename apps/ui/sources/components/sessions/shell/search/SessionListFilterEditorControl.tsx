@@ -19,6 +19,7 @@ import {
     SessionListFilterEditor,
     type SessionListFilterEditorProps,
 } from './SessionListFilterEditor';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 type EditorProps = Omit<SessionListFilterEditorProps, 'onDone' | 'maxHeight'>;
 
@@ -144,7 +145,7 @@ export const SessionListFilterEditorControl = React.memo(function SessionListFil
                 bodyScroll: 'none',
                 scrollHost: 'body',
                 testID: 'session-list-filter-modal',
-                dimensions: { size: 'md', width: 440, maxHeightRatio: 0.9 },
+                dimensions: { size: 'md', width: HAPPIER_PAGE_METRICS.dialogWidthPx.default, maxHeightRatio: 0.9 },
             },
             onRequestClose: () => {
                 if (modalIdRef.current === modalId) modalIdRef.current = null;

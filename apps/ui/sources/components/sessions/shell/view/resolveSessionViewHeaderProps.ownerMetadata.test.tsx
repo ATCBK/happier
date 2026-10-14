@@ -730,6 +730,39 @@ describe('resolveSessionViewHeaderProps owner metadata', () => {
         expect(claude).not.toBe(codex);
     });
 
+    it('names storage only for an external Session: a Happier Session carries no storage badge', () => {
+        // Healthy state is quiet. Every Session in Happier is a Happier Session, so a "Happier"
+        // badge says nothing and costs the title its width; only an external Session needs naming.
+        const session = createSessionFixture({
+            id: 'native-session',
+            metadata: { path: '/tmp/project', host: 'test-host' },
+        });
+        const header = resolveSessionViewHeaderProps({
+            isDataReady: true,
+            session,
+            sessionId: session.id,
+            sessionInfoHref: '/session/native-session/info',
+            sessionRunsHref: '/session/native-session/runs',
+            sessionAutomationsHref: '/session/native-session/automations',
+            paneScopeId: 'pane-1',
+            windowWidth: 800,
+            sessionAutomationsEnabledCount: 0,
+            sessionExecutionRunsSupported: false,
+            showAutomations: false,
+            shouldShowSubagentsButton: false,
+            subagentActiveCount: 0,
+            navigateWithBlurOnWeb: (action: () => void) => action(),
+            handleHeaderExtraItemSelect: () => false,
+            router: { push: () => {}, navigate: () => {} },
+            actionIconColor: '#000',
+            headerTintColor: '#000',
+            statusErrorColor: '#f00',
+            externalSessionRuntime: null,
+        } as const);
+
+        expect(header.badges ?? []).toEqual([]);
+    });
+
     it('uses the layout-v1 owner compatibility view for the private workspace subtitle', () => {
         const session = createSessionFixture({
             id: 'layout-v1-session',

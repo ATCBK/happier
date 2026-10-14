@@ -656,7 +656,7 @@ describe('AgentInput (action menu popover props)', () => {
                     onAgentClick={() => {}}
                     extraActionChips={[{
                         key: 'new-session-mcp',
-                        controlId: 'mcp',
+                        controlId: 'capabilities',
                         collapsedContentPopover: {
                             title: 'newSession.mcpChipLabel',
                             boundaryRef: null,
@@ -719,7 +719,7 @@ describe('AgentInput (action menu popover props)', () => {
                     onAgentClick={() => {}}
                     extraActionChips={[{
                         key: 'new-session-mcp',
-                        controlId: 'mcp',
+                        controlId: 'capabilities',
                         collapsedContentPopover: {
                             title: 'newSession.mcpChipLabel',
                             maxHeightCap: 520,

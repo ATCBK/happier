@@ -92,6 +92,7 @@ export function useNewSessionWizardProps(params: Readonly<{
     selectedBackendEntry?: NewSessionWizardAgentProps['selectedBackendEntry'];
     modelOptions: ReadonlyArray<{ value: ModelMode; label: string; description: string }>;
     modelOptionsProbe?: NewSessionWizardAgentProps['modelOptionsProbe'];
+    modelPickerPresentation?: NewSessionWizardAgentProps['modelPickerPresentation'];
     favoriteModelSelections?: NewSessionWizardAgentProps['favoriteModelSelections'];
     setFavoriteModelSelections?: NewSessionWizardAgentProps['setFavoriteModelSelections'];
     acpSessionModeOptions?: NewSessionWizardAgentProps['acpSessionModeOptions'];
@@ -380,6 +381,7 @@ export function useNewSessionWizardProps(params: Readonly<{
             selectedBackendEntry: params.selectedBackendEntry,
             modelOptions: params.modelOptions,
             modelOptionsProbe: params.modelOptionsProbe,
+            modelPickerPresentation: params.modelPickerPresentation,
             favoriteModelSelections: params.favoriteModelSelections,
             setFavoriteModelSelections: params.setFavoriteModelSelections,
             acpSessionModeOptions: params.acpSessionModeOptions,
@@ -437,6 +439,7 @@ export function useNewSessionWizardProps(params: Readonly<{
         params.experimentalModelConfirmation,
         params.modelOptions,
         params.modelOptionsProbe,
+        params.modelPickerPresentation,
         params.favoriteModelSelections,
         params.setFavoriteModelSelections,
         params.acpSessionModeId,

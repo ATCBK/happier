@@ -8,6 +8,7 @@ import { StatusDot } from '@/components/ui/status/StatusDot';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { readSessionReportsPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 import { t } from '@/text';
 
 /**
@@ -55,7 +56,7 @@ const stylesheet = StyleSheet.create((theme) => ({
 
 export function hasSessionRowReportsChip(reports: Session['reports'] | undefined): boolean {
     if (!reports) return false;
-    return reports.needsYou > 0 || reports.working + reports.stalled > 0;
+    return readSessionReportsPresentationV1(reports).count > 0;
 }
 
 export const SessionRowReportsChip = React.memo((props: Readonly<{
@@ -66,7 +67,8 @@ export const SessionRowReportsChip = React.memo((props: Readonly<{
 }>) => {
     const styles = stylesheet;
     const { theme } = useUnistyles();
-    const { needsYou, working, stalled } = props.reports;
+    const status = readSessionReportsPresentationV1(props.reports);
+    const needsYou = status.bucket === 'needs_you' ? status.count : 0;
     if (props.collapsed && props.reports.total > 0) {
         return (
             <View
@@ -95,11 +97,12 @@ export const SessionRowReportsChip = React.memo((props: Readonly<{
             </View>
         );
     }
-    const active = working + stalled;
-    if (active <= 0) return null;
+    if (status.count <= 0) return null;
     return (
         <View testID={`session-row-reports-chip:${props.sessionId}`} style={styles.chip}>
-            <Text numberOfLines={1} style={styles.working}>{t('sessionWork.list.reportsWorking', { count: active })}</Text>
+            <Text numberOfLines={1} style={styles.working}>{status.bucket === 'working'
+                ? t('sessionWork.list.reportsWorking', { count: status.count })
+                : `${status.count} · ${t('status.offline')}`}</Text>
         </View>
     );
 });

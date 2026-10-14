@@ -109,7 +109,10 @@ export const XtermTerminalView = React.forwardRef<XtermTerminalHandle, XtermTerm
     ref,
 ) {
     const { theme } = useUnistyles();
-    const backgroundColor = useGlassSurfaceColor(theme.colors.surface.base, 'content');
+    const glassBackground = useGlassSurfaceColor(theme.colors.surface.base, 'content');
+    // xterm resolves the CSS keyword `transparent` to opaque black (its viewport and WebGL clear), which
+    // hides the foreground ink on a light page; an explicit zero-alpha colour stays transparent.
+    const backgroundColor = glassBackground === 'transparent' ? '#00000000' : glassBackground;
     const selectionBackgroundColor = useGlassSurfaceColor(theme.colors.surface.selected, 'content', false);
     const backgroundColorRef = React.useRef(backgroundColor);
     backgroundColorRef.current = backgroundColor;

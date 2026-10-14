@@ -590,13 +590,13 @@ describe('OptionPickerOverlay', () => {
             )).toHaveLength(0);
         });
 
-        it('never columnizes — or even measures — unless the caller opts in', async () => {
+        it('keeps the list in one column unless the caller opts in', async () => {
             mockEnv.windowWidth = 1280;
             const screen = await renderPicker(false);
 
             const list = screen.findByTestId('model-picker-overlay-selection-list') as any;
             expect(list).toBeTruthy();
-            expect(list.props.onLayout).toBeUndefined();
+            expect(list.props.columns).toBeUndefined();
             expect(countColumnRows(screen)).toBe(0);
         });
     });
@@ -1226,11 +1226,12 @@ describe('OptionPickerOverlay', () => {
         // The drawn box shrank, but the press box did not: the frame reaches the
         // platform floor on the free (vertical) axis.
         const frame = resolveInteractiveStyle(screen.findByTestId('model-picker-overlay-refresh')?.props.style);
-        expect(frame.height).toBe(44);
+        expect(frame.height).toBe(24);
         expect(frame.width as number).toBeGreaterThanOrEqual(24);
     });
 
-    it('keeps the refresh slot at the same drawn size while the catalog is loading', async () => {
+    it('keeps the refresh glyph itself, held still, while the catalog is refreshing', async () => {
+        const onRefresh = vi.fn();
         const { OptionPickerOverlay } = await import('./OptionPickerOverlay');
 
         const screen = await renderScreen(<OptionPickerOverlay
@@ -1242,13 +1243,18 @@ describe('OptionPickerOverlay', () => {
                     emptyText="empty"
                     canEnterCustomValue={false}
                     onSelect={() => {}}
-                    probe={{ phase: 'refreshing', onRefresh: () => {} }}
+                    probe={{ phase: 'refreshing', onRefresh }}
                 />);
 
-        const slot = flattenStyle(screen.findByTestId('model-picker-overlay-refresh-progress')?.props.style);
-        expect(slot.width).toBe(24);
-        expect(slot.height).toBe(24);
-        expect(slot.borderWidth).toBeUndefined();
+        // The same control as idle (the user's loading-style spinner read as another glyph on the
+        // phone sheet): drawn at the same size, announced as in flight, and not pressable.
+        const control = screen.findByTestId('model-picker-overlay-refresh');
+        expect(control?.props.accessibilityLabel).toBe('modelPickerOverlay.refreshingModelsA11y');
+        expect(control?.props.accessibilityState).toMatchObject({ disabled: true });
+        const surface = flattenStyle(screen.findByTestId('model-picker-overlay-refresh-surface')?.props.style);
+        expect(surface.width).toBe(24);
+        expect(surface.height).toBe(24);
+        expect(screen.findByTestId('model-picker-overlay-refresh-progress')).toBeNull();
     });
 
     it('draws the favourite star at its compact glyph size in list presentation', async () => {
@@ -1277,7 +1283,7 @@ describe('OptionPickerOverlay', () => {
         expect(star?.props.size).toBe(14);
 
         const frame = resolveInteractiveStyle(screen.findByTestId('model-picker-overlay-option-favorite:default')?.props.style);
-        expect(frame.height).toBe(44);
+        expect(frame.height).toBe(24);
     });
 
     it('draws the favourite star and the selection check at one glyph size in a card corner', async () => {
@@ -1791,11 +1797,9 @@ describe('OptionPickerOverlay', () => {
 
         for (const action of [favoriteAction, screen.findByTestId('model-picker-overlay-refresh')]) {
             const targetStyle = resolveInteractiveStyle(action?.props.style);
-            // The press frame, not the drawn box, is the target. Vertical is the free
-            // axis in these clusters so it reaches the platform floor; horizontal is
-            // capped at half the neighbour gap so two targets never overlap, and the
-            // governing requirement there is WCAG 2.2 AA SC 2.5.8 (24×24 CSS px).
-            expect(targetStyle.height ?? targetStyle.minHeight).toBeGreaterThanOrEqual(44);
+            // This fixture uses a precise web pointer. The canonical pointer floor is
+            // WCAG 2.2 AA SC 2.5.8 (24×24 CSS px); native/coarse pointers use the touch floor.
+            expect(targetStyle.height ?? targetStyle.minHeight).toBeGreaterThanOrEqual(24);
             expect(targetStyle.width ?? targetStyle.minWidth).toBeGreaterThanOrEqual(24);
             expect(typeof action?.props.onFocus).toBe('function');
             await act(async () => {

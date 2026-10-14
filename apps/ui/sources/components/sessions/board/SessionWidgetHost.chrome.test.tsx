@@ -180,6 +180,13 @@ describe('SessionWidgetHost chrome', () => {
         expect(runtime.getSnapshot().phase).toBe('idle');
     });
 
+    it('does not name a record it has not read yet: no "Untitled widget" while loading', async () => {
+        const screen = await renderCard({ item: { itemId: 'note-1', revision: null, state: { kind: 'loading' } }, canEdit: false });
+        const title = screen.findHostByTestId('widget-title');
+        expect(title?.props.children).toBe('');
+        expect(title?.props.accessibilityLabel).toBe('Loading this widget');
+    });
+
     it('names the reorder handle after the item it reorders', async () => {
         const screen = await renderCard({
             entityDrag: entityDrag(),
@@ -419,7 +426,7 @@ describe('SessionWidgetHost chrome', () => {
     });
 
     it('bleeds full-bleed content to the frame edge at every density, and keeps the inset otherwise', async () => {
-        const insetOf = async (density: 'full' | 'compact', frame: 'card' | 'full_bleed') => {
+        const insetOf = async (density: 'full' | 'compact', frame: 'card' | 'full_bleed' | 'frameless') => {
             const screen = await renderCard({ density, item: noteItem({ frame }) });
             const body = screen.findHostByTestId('widget.body');
             const style = ([] as unknown[])
@@ -440,6 +447,10 @@ describe('SessionWidgetHost chrome', () => {
             expect(bleed.paddingBottom).toBe(0);
             const inset = await insetOf(density, 'card');
             expect(inset.paddingLeft).toBe(HAPPIER_WIDGET_FRAME_METRICS.cardInsetPx);
+            // Frameless drops the item's own chrome, not the host card's inset: a table's text
+            // must never touch the card edge.
+            const frameless = await insetOf(density, 'frameless');
+            expect(frameless.paddingLeft).toBe(HAPPIER_WIDGET_FRAME_METRICS.cardInsetPx);
         }
     });
 });

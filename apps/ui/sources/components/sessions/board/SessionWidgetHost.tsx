@@ -584,6 +584,18 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
         </View>
     ) : null;
     const configuredReference = presentation.kind === 'preview' && widgetInstance !== null;
+    // This copy is not the one that runs. Saying so keeps the frame truthful; an empty body read as a
+    // visual that failed to render. A configured widget that can be opened here offers that instead.
+    const runningElsewhere = (
+        <SurfaceStateCard
+            testID={`${testID}-elsewhere`}
+            size="line"
+            kind="empty"
+            title={t('sessionBoard.item.runningElsewhere.title')}
+            detail={t('sessionBoard.item.runningElsewhere.reason')}
+            accessibilitySemantics="status"
+        />
+    );
 
     const body = executablePaused
         ? (
@@ -655,7 +667,7 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                         // host composition, not persisted outer card chrome.
                         presentation={embeddedPresentation}
                         appRuntime={appRuntime}
-                        {...(configuredReference ? { reference: openReference } : {})}
+                        {...(configuredReference ? { reference: openReference ?? runningElsewhere } : {})}
                         onIntrinsicHeightChange={setHostedFrameReportedHeight}
                         {...(props.onManagePlugin ? { onManagePlugin: props.onManagePlugin } : {})}
                         {...(inputs.onRepairInputs ? { onRepairInputs: inputs.onRepairInputs } : {})}
@@ -687,18 +699,7 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                         />
                     )
                 : presentation.kind === 'preview'
-                    ? (
-                        // This copy is not the one that runs. Saying so keeps the frame truthful; an
-                        // empty body read as a visual that failed to render.
-                        <SurfaceStateCard
-                            testID={`${testID}-elsewhere`}
-                            size="line"
-                            kind="empty"
-                            title={t('sessionBoard.item.runningElsewhere.title')}
-                            detail={t('sessionBoard.item.runningElsewhere.reason')}
-                            accessibilitySemantics="status"
-                        />
-                    )
+                        ? runningElsewhere
                     : (
                         // Executable sources reach this branch only when their renderer is
                         // available; the presentation resolver has already refused otherwise.
@@ -714,9 +715,9 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                         />
                     );
 
-    // Frameless and full-bleed items reach the frame's real edge; the card clips them to its corner.
-    const bodyReachesEdge = state.kind === 'ready'
-        && (state.item.frame === 'frameless' || state.item.frame === 'full_bleed');
+    // Only full-bleed items reach the frame's real edge; the card clips them to its corner.
+    // Frameless drops the item's own chrome, never the host's inset, so its text never meets an edge.
+    const bodyReachesEdge = state.kind === 'ready' && state.item.frame === 'full_bleed';
     const placement = section ? 'companion' as const : 'board' as const;
     const frameStyle = props.frameStyle ?? (section || reply ? 'plain' : 'card');
 
@@ -724,6 +725,9 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
         <SessionSurfaceEntityDragHandle drag={entityDrag} title={title} testID={`${testID}-move-handle`} />
     ) : null;
 
+    // A record not read yet has no name to show. "Untitled widget" would be a claim about it;
+    // the body's loading state already says what is happening.
+    const recordLoading = state.kind === 'loading';
     const heading = (
             <TitleFrame style={styles.titleWrap} {...titleFrameProps}>
                 {rename.field ?? (
@@ -734,7 +738,9 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                         tabIndex={-1}
                         numberOfLines={1}
                         accessibilityRole="header"
-                        accessibilityLabel={props.width
+                        accessibilityLabel={recordLoading
+                            ? t('sessionBoard.item.loading.title')
+                            : props.width
                             ? t('sessionBoard.item.a11yLabelWithWidth', {
                                 title,
                                 width: t(`sessionBoard.width.${props.width}`),
@@ -742,7 +748,7 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                             : title}
                         {...(beginRename ? { onPress: beginRename } : {})}
                     >
-                        {title}
+                        {recordLoading ? '' : title}
                     </Text>
                 )}
             </TitleFrame>
@@ -870,7 +876,7 @@ function sessionWidgetMark(state: SessionBoardItemProjection['state']): IconName
     if (state.kind !== 'ready') return 'squares-four';
     switch (state.item.source.kind) {
         case 'walkthrough': return 'path';
-        case 'declarative': return 'note';
+        case 'declarative': return (state.item.source.document as { root?: { kind?: unknown } }).root?.kind === 'chart' ? 'chart-bar' : 'note';
         case 'hostedHtml': return 'squares-four';
         case 'widget': return 'puzzle-piece';
     }
