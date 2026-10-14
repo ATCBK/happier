@@ -116,7 +116,7 @@ import {
   HAPPIER_AGENT_RUNTIME_RUNNER_BOOTSTRAP_FILE_ENV_KEY,
 } from '@/agent/runtime/session/process/agentRuntimeRunnerProtocol';
 import { HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
-import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { beginActivePromptLibraryCatalogRefresh, commitActiveProfileCatalog, getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { createResolvedContributionRegistry, getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveBuiltInContributions } from '@/plugins/projection/registry/resolveBuiltInContributions';
@@ -1046,7 +1046,7 @@ describe('runHostSessionRuntime', () => {
     },
   );
 
-  it('prepares daemon-spawned managed Session context through the real server beside unknown catalog keys', async () => {
+  it.each([false, true])('prepares two daemon-spawned Bot turns through the real server beside unknown catalog keys (required context: %s)', async requiredContext => {
     const { createLightSqliteHarness } = await import('../../../../../../server/sources/testkit/lightSqliteHarness');
     const { db } = await import('../../../../../../server/sources/storage/db');
     const { createAuthenticatedTestApp } = await import('../../../../../../server/sources/app/api/testkit/sqliteFastify');
@@ -1066,16 +1066,35 @@ describe('runHostSessionRuntime', () => {
     delete harness.deps.registerKillSessionHandlerFn;
     delete harness.deps.sendReadyWithPushNotificationFn;
     delete harness.deps.cleanupBackendRunResourcesFn;
+    let settledTurns = 0;
+    const sentPrompts: string[] = [];
+    const preparationFailures: unknown[] = [];
+    harness.runtime.sendTurnPrompt = async (prompt: string) => { sentPrompts.push(prompt); };
     harness.deps.runPermissionModePromptLoopFn = async (params: Parameters<typeof runPermissionModePromptLoop>[0]) => {
-      // The fixture Agent exits after startup; keep the actual loop and cleanup.
-      await runPermissionModePromptLoop({ ...params, shouldExit: () => true });
+      params.messageQueue.push({ text: 'BOT_FIRST_TURN', localId: null }, { permissionMode: 'default' });
+      await runPermissionModePromptLoop({ ...params, shouldExit: () => settledTurns === 2,
+        formatPromptErrorMessage: error => {
+          preparationFailures.push(error);
+          return params.formatPromptErrorMessage(error);
+        },
+        sendReady: () => {
+          settledTurns += 1;
+          params.sendReady();
+          if (settledTurns === 1) {
+            const current = getActiveAccountSettingsSnapshot();
+            if (!current?.scopeKey) throw new Error('Missing Bot Account');
+            beginActivePromptLibraryCatalogRefresh({ scopeKey: current.scopeKey,
+              lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() });
+            params.messageQueue.push({ text: 'BOT_SECOND_TURN', localId: null }, { permissionMode: 'default' });
+          }
+        } });
     };
     let opened = false;
     try {
       const account = await db.account.create({ data: { encryptionMode: 'plain', settingsVersion: 1 } });
-      const coding = PromptLibraryRecordV1Schema.parse({ key: 'coding', value: { v: 1, scope: { kind: 'coding' }, entries: [{
+      const coding = PromptLibraryRecordV1Schema.parse({ key: 'coding', value: { v: 1, scope: { kind: 'coding' }, entries: requiredContext ? [{
         id: 'context-source', ref: { kind: 'doc', artifactId: 'context-source' }, enabled: true, required: true, placement: 'system_append',
-      }] } });
+      }] : [] } });
       const document = { id: 'context-source', ownerAccountId: account.id, access: 'owner', encryptionMode: 'plain',
         header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_doc.v2', title: 'Context source' }),
         body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, markdown: 'CTX_SOURCE_ACCOUNT_CONTEXT', createdAtMs: 1, updatedAtMs: 1 }) }),
@@ -1093,7 +1112,8 @@ describe('runHostSessionRuntime', () => {
       harness.opts.startedBy = 'daemon';
       harness.opts.directory = '/tmp/managed-ctx-source';
       harness.session.getMetadataSnapshot = () => createTestMetadata({ path: harness.opts.directory,
-        permissionMode: 'read-only', startedBy: 'daemon', profileId: null, sessionDirectoryV1: { v: 1, kind: 'managed' },
+        permissionMode: 'read-only', startedBy: 'daemon', profileId: null, bot: { kind: 'bot' }, createdAsBot: true,
+        sessionDirectoryV1: { v: 1, kind: 'managed' },
         connectedServices: { v: 2, bindingsByServiceId: { 'happier.agent.claude/claude-subscription': {
           source: 'connected', selection: 'profile', profileId: 'connected-claude-profile',
         } } } });
@@ -1113,6 +1133,15 @@ describe('runHostSessionRuntime', () => {
         if (path === '/v1/artifacts') return { status: 200, data: [document] };
         if (path === '/v1/artifacts/context-source') return { status: 200, data: document };
         const response = await app.inject({ method: 'GET', url: path, headers: { 'x-test-user-id': account.id } });
+        if (settledTurns === 1 && path === '/v1/account/entity-rows/prompt-library') {
+          // An Account wake can finish unrelated Profile hydration while the
+          // second coding plan reads its real rows. No coding Profile is selected.
+          const current = getActiveAccountSettingsSnapshot();
+          if (!current?.scopeKey) throw new Error('Missing Bot Account');
+          commitActiveProfileCatalog({ scopeKey: current.scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
+            catalog: { status: 'ready', authority: 'active', source: 'destination', records: [], diagnostics: [],
+              referenceGuardRevision: 1, control: null, controlRevision: 'absent' } });
+        }
         return { status: response.statusCode, data: response.json() };
       });
       vi.spyOn(daemonControl, 'readDaemonPluginCatalog').mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
@@ -1121,12 +1150,15 @@ describe('runHostSessionRuntime', () => {
         if (!params.resolveFreshSessionSystemPrompt) throw new Error('Missing production prompt binding');
         const prompt = await params.resolveFreshSessionSystemPrompt({ baseOverride: 'CTX_SOURCE_STARTUP' });
         expect(prompt).toContain('CTX_SOURCE_STARTUP');
-        expect(prompt).toContain('CTX_SOURCE_ACCOUNT_CONTEXT');
+        if (requiredContext) expect(prompt).toContain('CTX_SOURCE_ACCOUNT_CONTEXT');
         opened = true;
         return createRuntime(params);
       });
       await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
       expect(opened).toBe(true);
+      expect(preparationFailures).toEqual([]);
+      expect(sentPrompts).toEqual([expect.stringContaining('BOT_FIRST_TURN'), expect.stringContaining('BOT_SECOND_TURN')]);
+      expect(settledTurns).toBe(2);
     } finally {
       vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests();
       await app.close(); await sqlite.close();
