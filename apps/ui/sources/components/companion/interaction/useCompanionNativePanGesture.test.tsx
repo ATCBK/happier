@@ -66,6 +66,35 @@ function flick(gesture: TestGesture, event: Readonly<{
 }
 
 describe('useCompanionNativePanGesture', () => {
+    it('uses the admitted drag geometry for updates and release, and cancels without a throw', async () => {
+        const onDragRelease = vi.fn();
+        const hook = await renderHook(() => useCompanionNativePanGesture({
+            bounds, initialPoint: { x: 200, y: 71 }, noDragRegions: [],
+            releaseMotion: VOICE_ORB_RELEASE_MOTION, motionPolicy: 'snap', positionPublication: 'release',
+            resolveDragPoint: ({ start, translation }) => ({ x: start.x - translation.x, y: start.y }),
+            onDragRelease,
+        }));
+        await act(async () => {
+            const gesture = hook.getCurrent().gesture as unknown as TestGesture;
+            gesture.__handlers.onBegin({ absoluteX: 200, absoluteY: 71 });
+            gesture.__handlers.onUpdate({ translationX: -40, translationY: 90 });
+        });
+        expect([hook.getCurrent().translateX.value, hook.getCurrent().translateY.value]).toEqual([240, 71]);
+        await act(async () => {
+            const gesture = hook.getCurrent().gesture as unknown as TestGesture;
+            gesture.__handlers.onEnd({ translationX: -60, translationY: 90 }, true);
+            gesture.__handlers.onFinalize({}, true);
+        });
+        expect(onDragRelease).toHaveBeenLastCalledWith({ velocityX: 0, velocityY: 0, target: { x: 260, y: 71 } });
+        await act(async () => {
+            const gesture = hook.getCurrent().gesture as unknown as TestGesture;
+            gesture.__handlers.onBegin({ absoluteX: 260, absoluteY: 71 });
+            gesture.__handlers.onUpdate({ translationX: 30, translationY: 0 });
+            gesture.__handlers.onFinalize({ velocityX: 1000 }, false);
+        });
+        expect(onDragRelease).toHaveBeenLastCalledWith({ velocityX: 0, velocityY: 0, target: { x: 230, y: 71 } });
+        await hook.unmount();
+    });
     it('resumes the destination spring after a touch that never becomes a drag', async () => {
         const onDragRelease = vi.fn();
         const hook = await renderHook(() => useCompanionNativePanGesture({
