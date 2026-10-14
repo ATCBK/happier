@@ -23,7 +23,9 @@ import {
   usageCompositionShareLabel,
 } from '../usageCompositionPresentation';
 import {
+  isUsageReadOutstanding,
   UsageBodyInsufficient,
+  UsageBodyReading,
   UsageCoverageLine,
   usagePeriodPhrase,
   useUsageAnalyticsView,
@@ -52,8 +54,11 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
     presentation?.footprint.width === 'compact' ||
     (presentation?.geometry?.width ?? Number.POSITIVE_INFINITY) <
       WAFFLE_BELOW_PX;
-  if (!view)
+  if (!view) {
+    // Its ratios beside the mix they come from: the skeleton holds that shape while the read answers.
+    if (isUsageReadOutstanding(props.slice, ['accounting'])) return <UsageBodyReading testID={`${props.testID}.loading`} shape={{ kind: 'mix' }} />;
     return <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
+  }
   const { composition } = view;
   const totalTokens = props.slice.accounting?.totals.tokens.total ?? 0;
   const efficiency = { ...view.efficiency,

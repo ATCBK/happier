@@ -81,6 +81,16 @@ export function readPlanAccountsStatement(
   };
 }
 
+export type UsageReadingShape = React.ComponentProps<typeof UsageBodyReading>['shape'];
+
+/**
+ * The accounts a quota read already knows to expect: each has its own pending source before it
+ * answers, so a list body can hold its rows' room from the first frame.
+ */
+export function readUsageKnownQuotaAccountCount(slice: Pick<UsageQueryResultSlice, 'sources'>): number {
+  return slice.sources.filter(source => source.source.startsWith('quota:')).length;
+}
+
 /**
  * The Usage page names partial and pending reads once in its header and Sources, so a body keeps only
  * failures. A pending read of a body with nothing else to draw holds the body's room with the first-load
@@ -108,6 +118,8 @@ export function UsagePlanAccountStates(props: Readonly<{
   onRetry(): void | Promise<unknown>;
   /** True when nothing else is drawn in the body: a pending read then holds the body's room. */
   replacesContent?: boolean;
+  /** The shape the body's skeleton holds while it reads (a list of meters), when it is known. */
+  readingShape?: UsageReadingShape;
 }>) {
   const pageHasDetail = useUsageWidgetPageHasCoverageDetail();
   const statement = readPlanAccountsStatement(props.accounts, props.nameOf);
@@ -115,7 +127,7 @@ export function UsagePlanAccountStates(props: Readonly<{
     return <UsageCoverageLine slice={props.slice} sources={['quota']} onRetry={props.onRetry} testID={`${props.testID}.coverage`} />;
   }
   const mode = planAccountStatesMode(statement.kind, pageHasDetail, props.replacesContent === true);
-  if (mode === 'reading') return <UsageBodyReading testID={`${props.testID}.loading`} />;
+  if (mode === 'reading') return <UsageBodyReading testID={`${props.testID}.loading`} {...(props.readingShape ? { shape: props.readingShape } : {})} />;
   if (mode === 'hidden') return null;
   const pending = statement.kind === 'pending';
   return <SurfaceFreshnessLine testID={props.testID} asOf={statement.asOf} reason={statement.reason} busy={pending}
@@ -283,6 +295,8 @@ export function UsagePlansNothingRead(
     slice?: UsageQueryResultSlice;
     /** False when other witnessed facts remain beside this allowance notice. */
     replacesContent?: boolean;
+    /** The shape the body's skeleton holds while it reads, when it is known. */
+    readingShape?: UsageReadingShape;
     /** Unsupported secondary insights share one quiet statement, without another empty card. */
     missing?: readonly string[];
     onRetry?: () => void | Promise<unknown>;
@@ -312,8 +326,9 @@ export function UsagePlansNothingRead(
   // The body holds its room with the first-load skeleton (lab kitstates "Loading · first time"), never a
   // blank card under a header. Once the Usage page's own detail has arrived its header says what is still
   // being read; before that (and on Home, a Board) the quiet line under the skeleton says it.
-  if (outstanding && pageHasDetail) return <UsageBodyReading testID={`${props.testID}.loading`} />;
-  if (outstanding) return <><UsageBodyReading testID={`${props.testID}.loading`} />{coverage}</>;
+  const reading = <UsageBodyReading testID={`${props.testID}.loading`} {...(props.readingShape ? { shape: props.readingShape } : {})} />;
+  if (outstanding && pageHasDetail) return reading;
+  if (outstanding) return <>{reading}{coverage}</>;
   return (
     <View style={styles.nothingRead}>
       <UsageBodyInsufficient

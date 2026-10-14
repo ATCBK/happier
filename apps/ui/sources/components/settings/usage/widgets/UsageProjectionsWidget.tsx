@@ -52,6 +52,7 @@ import {
   UsagePlanLegend,
   UsagePlanAccountStates,
   UsagePlansNothingRead,
+  readUsageKnownQuotaAccountCount,
   usePlanText,
 } from './plans/UsagePlanParts';
 import { readUsagePersonalPaceTarget, selectUsageWindowsAboveTarget } from './plans/usagePacingTarget';
@@ -200,12 +201,18 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
       })),
     [paced, nameOf, nowMs],
   );
+  // Beside other widgets the body is a list of meters: while it reads, it holds the rows' room (one per
+  // account already expected, as many as the list leads with) so the page does not grow under the reader.
+  const readingShape = list
+    ? { kind: 'meters' as const, rows: leadingUsageRows(Array.from({ length: readUsageKnownQuotaAccountCount(props.slice) }), false).rows.length }
+    : undefined;
   if (projection.accounts.length === 0) {
     return (
       <View style={styles.body}>
         <UsagePlansNothingRead
           testID={`${props.testID}.none`}
           slice={props.slice}
+          {...(readingShape ? { readingShape } : {})}
           onRetry={props.model.refresh}
         />
       </View>
@@ -293,6 +300,7 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
         {rows.some(row => row.window.pace) ? <UsagePlanLegend testID={`${props.testID}.legend`} parts={[t('usage.board.plans.legendEvenPace'), t('usage.board.plans.legendHatched')]} /> : null}
         <UsagePlanAccountStates accounts={projection.accounts} nameOf={nameOf} slice={props.slice} onRetry={props.model.refresh}
           replacesContent={!rows.length && !unreported.length && !depletingNote}
+          {...(readingShape ? { readingShape } : {})}
           testID={`${props.testID}.state`} />
       </View>
     );

@@ -100,10 +100,48 @@ export function useUsageAnalyticsView(
  * what lands (a figure, its meter, a caption line); it never reads as "none" (lab kitstates "Loading ·
  * first time"). The page header already says what is still being read.
  */
-export function UsageBodyReading(props: Readonly<{ testID: string }>) {
+export function UsageBodyReading(props: Readonly<{
+  testID: string;
+  /**
+   * The body's known shape, so the room it will fill is held from the first frame: `meters` rows of a
+   * name, a bar and a caption (a list of allowance windows), or the `mix` of two figures over a strip.
+   */
+  shape?: Readonly<{ kind: 'meters'; rows: number }> | Readonly<{ kind: 'mix' }>;
+}>) {
   const { theme } = useUnistyles();
   const reducedMotion = useReducedMotionPreference();
   const color = theme.colors.surface.pressedOverlay;
+  const shape = props.shape;
+  if (shape?.kind === 'meters') {
+    return (
+      <View testID={props.testID} style={readingStyles.meters}>
+        {Array.from({ length: Math.max(1, shape.rows) }, (_, index) => (
+          <View key={index} style={readingStyles.meter}>
+            <HappierSkeletonBlock color={color} width="46%" height={12} radius={4} reducedMotion={reducedMotion} />
+            <HappierSkeletonBlock color={color} width="100%" height={6} radius={3} reducedMotion={reducedMotion} />
+            <HappierSkeletonBlock color={color} width="22%" height={10} radius={4} reducedMotion={reducedMotion} />
+          </View>
+        ))}
+      </View>
+    );
+  }
+  if (shape?.kind === 'mix') {
+    return (
+      <View testID={props.testID} style={readingStyles.mix}>
+        <View style={readingStyles.mixFigures}>
+          {[0, 1].map((index) => (
+            <View key={index} style={readingStyles.mixFigure}>
+              <HappierSkeletonBlock color={color} width="50%" height={10} radius={4} reducedMotion={reducedMotion} />
+              <HappierSkeletonBlock color={color} width="38%" height={22} radius={6} reducedMotion={reducedMotion} />
+              <HappierSkeletonBlock color={color} width="70%" height={10} radius={4} reducedMotion={reducedMotion} />
+            </View>
+          ))}
+        </View>
+        <HappierSkeletonBlock color={color} width="100%" height={14} radius={5} reducedMotion={reducedMotion} />
+        <HappierSkeletonBlock color={color} width="60%" height={10} radius={4} reducedMotion={reducedMotion} />
+      </View>
+    );
+  }
   return (
     <View testID={props.testID} style={readingStyles.body}>
       <HappierSkeletonBlock color={color} width="28%" height={28} radius={6} reducedMotion={reducedMotion} />
@@ -113,7 +151,14 @@ export function UsageBodyReading(props: Readonly<{ testID: string }>) {
   );
 }
 
-const readingStyles = StyleSheet.create(() => ({ body: { gap: 12, paddingVertical: 4 } }));
+const readingStyles = StyleSheet.create(() => ({
+  body: { gap: 12, paddingVertical: 4 },
+  meters: { gap: 18, paddingVertical: 4 },
+  meter: { gap: 8 },
+  mix: { gap: 18, paddingVertical: 4 },
+  mixFigures: { flexDirection: 'row', columnGap: 24 },
+  mixFigure: { flex: 1, gap: 8 },
+}));
 
 /** True while every read a body depends on is still outstanding (pending or not yet loaded). */
 export function isUsageReadOutstanding(slice: UsageQueryResultSlice, sources: readonly string[]): boolean {
