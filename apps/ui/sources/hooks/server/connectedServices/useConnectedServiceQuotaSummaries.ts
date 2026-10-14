@@ -92,6 +92,9 @@ export type ConnectedServiceAccountWithoutUsage = Readonly<{
     state: 'loading' | 'unavailable';
 } & ConnectedServiceQuotaAccountIdentity>;
 
+export type ConnectedServiceQuotaAccountPresentation = ConnectedServiceQuotaAccountIdentity & Pick<ConnectedServiceQuotaSummary,
+    'key' | 'service' | 'legacyServiceId' | 'serviceLabel' | 'profileId' | 'profileLabel'>;
+
 /** A connected account that needs a new sign-in: no usage is read for it until it signs in again. */
 export type ConnectedServiceAccountNeedingSignIn = Readonly<{
     key: string;
@@ -181,6 +184,8 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
     fetchPolicy?: ConnectedServiceQuotaSnapshotsFetchPolicy;
 }>): Readonly<{
     summaries: ReadonlyArray<ConnectedServiceQuotaSummary>;
+    /** Profile and last-known catalog identity, independent of whether any quota meters have arrived. */
+    accountIdentities: ReadonlyArray<ConnectedServiceQuotaAccountPresentation>;
     /**
      * Connected accounts with no usage to show, each with why. A `cache_only` read claims nothing
      * about an account it has not read.
@@ -276,16 +281,18 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
     } = useConnectedServiceQuotaSnapshots(quotaProfileInputs, { fetchPolicy: options?.fetchPolicy });
     const readsAccounts = (options?.fetchPolicy ?? 'poll') !== 'cache_only';
 
-    const { summaries, accountsWithoutUsage, keysWithoutLimits } = React.useMemo(() => {
+    const { summaries, accountIdentities, accountsWithoutUsage, keysWithoutLimits } = React.useMemo(() => {
         if (!quotasEnabled) {
             return {
                 summaries: [] as ConnectedServiceQuotaSummary[],
+                accountIdentities: [] as ConnectedServiceQuotaAccountPresentation[],
                 accountsWithoutUsage: [] as ConnectedServiceAccountWithoutUsage[],
                 keysWithoutLimits: 0,
             };
         }
 
         const next: ConnectedServiceQuotaSummary[] = [];
+        const accountIdentities: ConnectedServiceQuotaAccountPresentation[] = [];
         const withoutUsage: ConnectedServiceAccountWithoutUsage[] = [];
         let keysWithoutLimits = 0;
         for (const entry of connectedProfiles) {
@@ -322,6 +329,7 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
                 email: presentation?.providerIdentity?.email ?? legacyProfile?.providerEmail ?? null,
                 accountId: summaryService.profileId,
             });
+            accountIdentities.push({ key: entry.key, ...summaryService, ...identity });
             const snapshot = snapshotsByKey[entry.key];
             if (!snapshot || snapshot.meters.length === 0) {
                 // In flight (or not started yet) reads as loading; a finished read without usage is
@@ -380,6 +388,7 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
                     : left.key.localeCompare(right.key);
             }),
             accountsWithoutUsage: withoutUsage,
+            accountIdentities,
             keysWithoutLimits,
         };
     }, [
@@ -449,6 +458,7 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
 
     return {
         summaries,
+        accountIdentities,
         accountsWithoutUsage,
         accountsNeedingSignIn,
         keysWithoutLimits,

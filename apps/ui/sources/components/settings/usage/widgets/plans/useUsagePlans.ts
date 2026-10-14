@@ -67,12 +67,12 @@ export function useUsagePlans(slice: UsageQueryResultSlice, resource: Readonly<{
   const summaryByKey = React.useMemo(
     () =>
       new Map(
-        summaries.summaries.map((summary) => [
+        summaries.accountIdentities.map((summary) => [
           accountKeyOf(summary.service, summary.profileId),
           summary,
         ]),
       ),
-    [summaries.summaries],
+    [summaries.accountIdentities],
   );
   const serviceLabelOf = React.useCallback((account: UsagePlanAccount) => {
     const summary = summaryByKey.get(account.key);
