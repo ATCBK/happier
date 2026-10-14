@@ -359,8 +359,28 @@ describe('shared flat reorder UI binding', () => {
         if (!option) throw new Error('Missing current b destination');
         await act(async () => { menu.props.onSelect(option.id); });
         expect(f.model.writes).toHaveLength(1);
-        expect(f.model.writes[0]).toMatchObject({ scope, sourceId: 'a', position: { anchorId: 'b', placement: 'after' } });
+        expect(f.model.writes[0]).toMatchObject({ scope, sourceId: 'a', position: { anchorId: 'c', placement: 'before' } });
         expect(AnchoredListPositionV1Schema.safeParse(f.model.writes[0]!.position).success).toBe(true);
+    });
+
+    it('lists each place a row can go once: between two rows is "before" the lower one, and only the end is "after"', async () => {
+        vi.useFakeTimers();
+        const f = fixture();
+        const screen = await mount(f);
+        await screen.pressByTestIdAsync('grip:a');
+        await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+        const menu = screen.findAllByType(DropdownMenu).find(node => node.findAll(child => child.props.testID === 'grip:a').length > 0);
+        if (!menu) throw new Error('Missing source chooser');
+        const available = (menu.props.items as Array<{ id: string; disabled?: boolean }>).filter(item => !item.disabled);
+        // a, b, c: "a" can go between b and c, or to the end. The gap b|c is not offered as "after b" too.
+        expect(available).toHaveLength(2);
+        const orders = new Set<string>();
+        for (const option of available) {
+            await act(async () => { menu.props.onSelect(option.id); });
+            const write = f.model.writes.at(-1)!;
+            orders.add(JSON.stringify(resolveAnchoredListMoveV1(['a', 'b', 'c'], 'a', write.position)));
+        }
+        expect(orders.size).toBe(2);
     });
 
     it('revalidates added membership and removed sources at release', async () => {

@@ -244,7 +244,8 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
     };
     // The foreground list owns its row kind even where a smaller page target lies behind it.
     useEntityDropTarget(runtime, { id: targetId, scope, acceptedKinds: [context.binding.kind], captureKinds: [context.binding.kind], isCurrent: current, getBounds,
-        listDestinations: () => (['before', 'after'] as const).map(placement => {
+        // Each place is listed once: a gap between two rows is "before" the lower one; only the end is "after" a row.
+        listDestinations: () => (latest.current.binding.items.at(-1)?.id === id ? ['before', 'after'] as const : ['before'] as const).map(placement => {
             const position = { anchorId: id, placement };
             return { destination: position, label: entityReorderPreview(position, latest.current.binding.items).verb };
         }),
