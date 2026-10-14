@@ -177,14 +177,14 @@ export const CommitProposalView = React.memo(function CommitProposalView(props: 
     const header = proposal.applying || pausedForHook ? (
         <View style={styles.head}>
             <View style={styles.headText}>
-                <Text style={[styles.title, phone ? styles.titlePhone : null]} accessibilityRole="header">{t('commitProposal.applying.title', { count: total })}</Text>
+                <Text style={styles.title} accessibilityRole="header">{t('commitProposal.applying.title', { count: total })}</Text>
                 <Text style={styles.subtitle}>{phone ? t('commitProposal.applying.bodyPhone') : t('commitProposal.applying.body')}</Text>
             </View>
         </View>
     ) : (
         <View style={styles.head}>
             <View style={styles.headText}>
-                <Text style={[styles.title, phone ? styles.titlePhone : null]} accessibilityRole="header">
+                <Text style={styles.title} accessibilityRole="header">
                     {phone ? t('commitProposal.titlePhone', { count: total }) : t('commitProposal.title', { count: total })}
                 </Text>
                 <Text style={styles.subtitle}>
@@ -474,8 +474,7 @@ const styles = StyleSheet.create((theme) => ({
     head: { flexDirection: 'row', alignItems: 'flex-end', gap: theme.space.s16, marginBottom: 18 },
     headText: { flex: 1, minWidth: 0 },
     title: { ...Typography.variant('title'),   color: theme.colors.text.primary,  },
-    titlePhone: { fontSize: 25, lineHeight: 31 },
-    subtitle: { marginTop: theme.space.s4, fontSize: 15, lineHeight: 22, color: theme.colors.text.secondary, ...Typography.default() },
+    subtitle: { marginTop: theme.space.s4, ...Typography.variant('reading'), color: theme.colors.text.secondary },
     subtitleSmall: { marginTop: theme.space.s2, ...Typography.variant('reading'),  color: theme.colors.text.secondary,  },
     failureNotice: { marginBottom: theme.space.s12 },
     error: { marginBottom: theme.space.s12, ...Typography.variant('body'),  color: theme.colors.state.danger.foreground,  },

@@ -3,6 +3,7 @@ import { ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID } from '@happier-dev/protocol/s
 import {
     ChangeKindSchema,
     HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1,
+    PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1,
     SessionOrganizationChangeHintSchema,
     TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1,
     readSessionUpdatedMessageChangeHintV1,
@@ -402,6 +403,7 @@ const ROW_LEVEL_SESSION_CHANGE_HINT_KEYS = new Set([
     'pendingVersion',
     'pendingCount',
     'pendingBlockedCount',
+    'pendingExecutionRunIds',
     'meaningfulActivityAt',
     'pendingActivationRequestId',
     'latestReadyEventSeq',
@@ -573,10 +575,11 @@ export function planSyncActionsFromChanges(
             if (
                 change.entityId === TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1
                 || change.entityId === HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1
+                || change.entityId === PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1
             ) {
                 // Scoped snapshot materialization consumes these stable entity
-                // IDs before the cursor advances. They are not Account profile
-                // or encrypted-settings mutations.
+                // IDs before the cursor advances. Usage observations likewise
+                // wake Usage, not Account profile or encrypted Settings readers.
                 // Team and Group membership are also authorization inputs for
                 // shared Saved Secrets, so retire material at this same wake
                 // and let the catalog owner re-observe current grants.
@@ -761,9 +764,16 @@ export function plannedChangesAffectProfileCatalog(planned: PlannedChangeActions
         || planned.changes.some(change => change.kind === 'account' && isProfileCatalogAccountChangeEntityIdV1(change.entityId));
 }
 
-/** Usage observes opened Machine inputs directly; their durable wakes are not accounting writes. */
+/** Usage observes opened Machine inputs directly and consumes neither draft nor workflow Run rows. */
 export function plannedChangesAffectUsageQuery(planned: PlannedChangeActions): boolean {
-    return planned.changes.some(change => change.kind !== 'machine');
+    const workflowEntityIds = new Set(planned.workflowRunIdsToRefresh.map(runId => `workflow-run:${runId}`));
+    return planned.changes.some(change => {
+        if (change.kind === 'machine') return false;
+        if (change.kind === 'account' && (workflowEntityIds.has(change.entityId) || getChangeSessionDraftHint(change))) return false;
+        // Session evidence, allowances, settings and unknown changes retain
+        // their incumbent freshness/admission path, including on mixed pages.
+        return true;
+    });
 }
 
 function plannedChangesAffectEverySessionListQuery(planned: PlannedChangeActions): boolean {

@@ -11,7 +11,8 @@ import { settingsParse } from '@/sync/domains/settings/settings';
 describe('SCM diff-summary settings', () => {
     it('resolves the persisted canonical selector through the protocol target reader', () => {
         const storedValue = encodeScmDiffSummaryModelOverride({ backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-model' });
-        expect(resolveScmDiffSummaryModelSelection({ storedValue })).toMatchObject({
+        expect(resolveScmDiffSummaryModelSelection({ storedValue, catalogProfiles: [{ catalogId: storedValue, title: 'Offered model',
+            modelSelector: { backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-model' }, structuredOutput: 'supported' }] })).toMatchObject({
             success: true, backendTarget: { kind: 'backend', backendId: 'codex' },
             modelSelector: { backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-model' },
         });
@@ -33,10 +34,13 @@ describe('SCM diff-summary settings', () => {
 
         expect(parsed[SCM_DIFF_SUMMARY_SETTING_KEYS.enabled]).toBe(true);
         expect(parsed[SCM_DIFF_SUMMARY_SETTING_KEYS.prefetch]).toBe(false);
+        expect(parsed[SCM_DIFF_SUMMARY_SETTING_KEYS.investigateSurroundingFiles]).toBe(false);
         expect(parsed[SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]).toBe('');
         expect(resolveScmDiffSummarySettings({ storedSettings: parsed, catalogProfiles: [] })).toEqual({
             enabled: true,
             prefetch: false,
+            investigateSurroundingFiles: false,
+            outputLanguage: null,
             modelOverride: null,
         });
     });

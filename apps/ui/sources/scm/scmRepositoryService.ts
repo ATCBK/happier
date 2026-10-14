@@ -749,7 +749,7 @@ export class ScmRepositoryService {
                             RPC_METHODS.SCM_WORKTREES_ENRICHMENT,
                             enrichmentRequest,
                         );
-                    if (!response || response.success !== true || !response.worktrees) {
+                    if (!response || !('success' in response) || response.success !== true || !response.worktrees) {
                         return null;
                     }
                     entries.push(...response.worktrees.map((entry) => ({ ...entry })));

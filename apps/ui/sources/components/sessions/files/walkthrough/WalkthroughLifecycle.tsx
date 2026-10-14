@@ -134,8 +134,10 @@ export const WalkthroughOtherChanges = React.memo(function WalkthroughOtherChang
 const styles = StyleSheet.create((theme) => ({
     notice: {
         flexDirection: 'row',
+        flexWrap: 'wrap',
         alignItems: 'center',
-        gap: HAPPIER_FRESHNESS_LINE_METRICS.gapPx,
+        columnGap: HAPPIER_FRESHNESS_LINE_METRICS.gapPx,
+        rowGap: theme.space.s6,
         minHeight: HAPPIER_FRESHNESS_LINE_METRICS.minHeightPx,
         paddingLeft: HAPPIER_FRESHNESS_LINE_METRICS.paddingStartPx,
         paddingRight: HAPPIER_FRESHNESS_LINE_METRICS.paddingEndPx,
@@ -146,10 +148,12 @@ const styles = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
     },
     noticePhone: { flexDirection: 'column', alignItems: 'stretch', gap: theme.space.s6, paddingVertical: theme.space.s8 },
-    noticeBody: { flexDirection: 'row', alignItems: 'center', gap: HAPPIER_FRESHNESS_LINE_METRICS.gapPx, flexGrow: 1, flexShrink: 1, minWidth: 0 },
-    noticeMessage: { flex: 1, minWidth: 0 },
+    // The message keeps its natural width as the line's basis, so when it and the actions don't fit one
+    // line the actions wrap under it instead of squeezing the sentence into a one-word column.
+    noticeBody: { flexDirection: 'row', alignItems: 'center', gap: HAPPIER_FRESHNESS_LINE_METRICS.gapPx, flexGrow: 1, flexShrink: 1, flexBasis: 'auto', minWidth: 0 },
+    noticeMessage: { flexGrow: 1, flexShrink: 1, flexBasis: 'auto', minWidth: 0 },
     noticeText: { ...Typography.default(), ...HAPPIER_FRESHNESS_LINE_METRICS.text, color: theme.colors.text.secondary },
-    noticeActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s10 },
+    noticeActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s10, flexShrink: 0, marginLeft: 'auto' },
     noticeActionsPhone: { alignSelf: 'flex-end' },
     inventory: { paddingTop: 18 },
     inventoryPhone: { paddingHorizontal: theme.space.s16 },

@@ -94,7 +94,7 @@ export const WalkthroughEditorialHeader = React.memo(function WalkthroughEditori
                 />
             </View>
             {reading.title ? (
-                <Text accessibilityRole="header" style={[styles.title, phone ? styles.titlePhone : null]}>{reading.title}</Text>
+                <Text accessibilityRole="header" style={styles.title}>{reading.title}</Text>
             ) : writing ? (
                 <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.skeleton}>
                     <View style={[styles.skeletonBar, styles.skeletonTitle]} />
@@ -243,7 +243,6 @@ const styles = StyleSheet.create((theme) => ({
         maxWidth: 660,
         color: theme.colors.text.primary,
     },
-    titlePhone: { fontSize: 25, lineHeight: 31 },
     skeleton: { gap: theme.space.s10, paddingTop: theme.space.s4 },
     skeletonBar: { height: 12, borderRadius: 6, backgroundColor: theme.colors.surface.inset },
     skeletonTitle: { height: 20, width: '72%' },
