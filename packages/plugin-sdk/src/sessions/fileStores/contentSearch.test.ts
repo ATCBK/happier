@@ -81,4 +81,27 @@ describe('decoded external conversation content search', () => {
       decode: async () => { nowMs = 1000; return { records: [], partial: false }; },
     })).rejects.toBeInstanceOf(ExternalSessionContentSearchYield);
   });
+
+  it('finishes source-verified EOF under cancellation after the last indivisible scan unit crosses the scan deadline', async () => {
+    let nowMs = 100;
+    let complete = false;
+    let cancelAtEof = false;
+    vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    const abort = new AbortController();
+    const reason = new Error('cancelled at EOF');
+    const run = () => searchExternalSessionContent({
+      query: 'needle',
+      control: createExternalSessionContentSearchControl({ signal: abort.signal, deadlineAtMs: nowMs + 900 }),
+      isScanComplete: () => complete,
+      decode: async (matchText) => {
+        nowMs += 1000;
+        complete = true;
+        if (cancelAtEof) abort.abort(reason);
+        return { records: [{ id: 'native-body', messageIndex: 12, snippet: matchText('native needle') ?? undefined }], partial: true };
+      },
+    });
+    expect(await run()).toEqual({ match: { sourceItemId: 'native-body', messageIndex: 12, snippet: 'native needle' }, partial: true });
+    cancelAtEof = true;
+    await expect(run()).rejects.toBe(reason);
+  });
 });

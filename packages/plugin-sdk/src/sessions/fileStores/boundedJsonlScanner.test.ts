@@ -104,6 +104,23 @@ afterEach(async () => {
 });
 
 describe('bounded JSONL session scanner', () => {
+  it('retains forward source diagnostics before a consumed native line yields', async () => {
+    const scanner = await import('./index.js');
+    const root = await mkdtemp(join(tmpdir(), 'happier-forward-progress-'));
+    tempDirs.add(root);
+    const filePath = join(root, 'transcript.jsonl');
+    const body = Buffer.concat([Buffer.from([0xff, 0x0a]), Buffer.from(jsonlLine({ text: 'native row' }))]);
+    await writeFile(filePath, body);
+    const diagnostics: unknown[] = [];
+    const yielded = new Error('host work yielded');
+    await expect(scanner.readJsonlFileForwardLines({
+      filePath, offsetBytes: 0, maxBytes: body.length, maxItems: body.length,
+      onDiagnostic(diagnostic) { diagnostics.push(diagnostic); },
+      onLine() { throw yielded; },
+    })).rejects.toBe(yielded);
+    expect(diagnostics).toEqual([{ code: 'malformed_source_utf8', count: 1, positions: [0] }]);
+  });
+
   it('retains newest-first consumed lines and diagnostics before a backward read yields', async () => {
     const scanner = await import('./index.js');
     const root = await mkdtemp(join(tmpdir(), 'happier-backward-progress-'));

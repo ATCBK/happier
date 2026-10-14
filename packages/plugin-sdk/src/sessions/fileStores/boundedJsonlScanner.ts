@@ -571,6 +571,7 @@ export async function readJsonlFileForwardLines(params: Readonly<{
   fileSystem?: JsonlScannerFileSystemV1;
   /** Consume each parsed line immediately without retaining source bodies. */
   onLine?: (line: JsonlForwardLineV1) => void;
+  onDiagnostic?: (diagnostic: JsonlSourceDiagnosticV1) => void;
 }>): Promise<Readonly<{
   items: readonly JsonlForwardLineV1[];
   diagnostics?: readonly JsonlSourceDiagnosticV1[];
@@ -645,6 +646,8 @@ export async function readJsonlFileForwardLines(params: Readonly<{
         if (malformedPositions.length < MAX_SOURCE_DIAGNOSTIC_POSITIONS) {
           malformedPositions.push(combinedStartOffset + lineStartIndex + decoded.malformedOffsetBytes);
         }
+        params.onDiagnostic?.({ code: 'malformed_source_utf8', count: 1,
+          positions: [combinedStartOffset + lineStartIndex + decoded.malformedOffsetBytes] });
         lineStartIndex = index + 1;
         continue;
       }
@@ -671,6 +674,8 @@ export async function readJsonlFileForwardLines(params: Readonly<{
       if (malformedPositions.length < MAX_SOURCE_DIAGNOSTIC_POSITIONS) {
         malformedPositions.push(carryStartOffset + decoded.malformedOffsetBytes);
       }
+      params.onDiagnostic?.({ code: 'malformed_source_utf8', count: 1,
+        positions: [carryStartOffset + decoded.malformedOffsetBytes] });
       carry = Buffer.alloc(0);
       carryStartOffset = fileSize;
     } else {

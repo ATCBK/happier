@@ -68,6 +68,8 @@ export async function searchExternalSessionContent(params: Readonly<{
   paths?: readonly string[];
   ripgrep?: AgentExternalSessionsInvocation['ripgrep'];
   control: ExternalSessionContentSearchControl;
+  /** Native EOF closes cooperative scanning; source verification still observes cancellation. */
+  isScanComplete?: () => boolean;
   decode: (matchText: (text: string) => string | null) => Promise<Readonly<{
     /** Streaming decoders may supply the ordinal without retaining preceding rows. */
     records: readonly Readonly<{ id: string; snippet?: string; messageIndex?: number }>[];
@@ -94,10 +96,14 @@ export async function searchExternalSessionContent(params: Readonly<{
     }
   }
   const projection = await params.decode((text) => createExternalSessionContentMatchSnippet(text, params.query));
-  params.control.checkWork();
+  const checkFinalization = () => {
+    if (params.isScanComplete?.()) params.control.assertNotYielded();
+    else params.control.checkWork();
+  };
+  checkFinalization();
   params.control.assertNotYielded();
   for (let messageIndex = 0; messageIndex < projection.records.length; messageIndex += 1) {
-    params.control.checkWork();
+    checkFinalization();
     const item = projection.records[messageIndex]!;
     if (item.snippet !== undefined) return { match: { snippet: item.snippet, sourceItemId: item.id, messageIndex: item.messageIndex ?? messageIndex }, partial: projection.partial };
   }
