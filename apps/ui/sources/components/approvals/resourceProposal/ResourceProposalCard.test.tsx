@@ -26,6 +26,8 @@ import type {
   PileReviewV1,
 } from '@happier-dev/protocol/storage/storageV1';
 import { MachineStorageCategoryListResultV1Schema, PileApplyResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
+import { MachineStorageDeleteNowInputV1Schema } from '@happier-dev/protocol/storage/storageV1';
+import { resolveApprovalRequestExecutionInput } from '@happier-dev/protocol/approvals/approvalRequestTransition';
 import { MachineGuardActivityListV1Schema } from '@happier-dev/protocol/machines/guard/activityV1';
 import tweetnacl from 'tweetnacl';
 import { createMachineGuardViewFixture } from '@/sync/domains/machines/guard/guardViewFixtures';
@@ -403,6 +405,63 @@ describe('resource proposal card', () => {
     storage.setState(initialState, true);
     webLocks?.restore();
     webLocks = undefined;
+  });
+
+  it('checks an agent Delete-now Artifact and executes only the selected subset through the canonical decision and storage front doors', async () => {
+    const items = proposalArgs.items.slice(0, 2).map(({ ref, expect }) => ({ ref, expect }));
+    const base = proposal();
+    const request = signed(ApprovalRequestV2Schema.parse({ ...base, actionId: 'machines.storage.deleteNow',
+      requestedSurface: 'agent', actionArgs: MachineStorageDeleteNowInputV1Schema.parse({ machineId: MACHINE, items }),
+      executionOriginV1: { ...base.executionOriginV1, actionId: 'machines.storage.deleteNow', surface: 'api',
+        caller: { kind: 'session', sessionId: 'session-1' } } }));
+    const remaining = new Set(items.map(item => item.ref.itemId));
+    let executed: PileApplyResultV1 | null = null;
+    // The exact daemon is a network boundary. It consumes the recorded choice with the same
+    // replay admission owner, then the real Storage Action adapter reaches the machine effect.
+    home.answer(homeId, 'POST /v1/actions/approval.request.decide', { select: async raw => {
+      const envelope = ExternalActionRequestEnvelopeV1Schema.parse(raw);
+      const approved = readApproval();
+      const replay = resolveApprovalRequestExecutionInput(approved);
+      if (!replay.ok) throw new Error(replay.errorCode);
+      const input = MachineStorageDeleteNowInputV1Schema.parse(replay.input);
+      const { deleteMachineStorageNowViaAction } = await import('@/sync/domains/machines/storage/machineRpc');
+      const result = await deleteMachineStorageNowViaAction({ ...input, serverId: homeId,
+        expectedAccountId: 'account-1', confirmedByPerson: true });
+      if (!result.ok) throw new Error(result.reason);
+      executed = result.value;
+      return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'approval.request.decide',
+        requestId: envelope.requestId, execution: { ok: true, result: { status: 'executed', execution: {
+          executedAtMs: Date.now(), ok: true, result: executed,
+        } } } }) };
+    } });
+    const previousRpc = daemonRpc.getMockImplementation()!;
+    daemonRpc.mockImplementation(async call => {
+      if (call.method !== RPC_METHODS.DAEMON_STORAGE_DELETE_NOW) return previousRpc(call);
+      const input = MachineStorageDeleteNowInputV1Schema.parse(call.payload);
+      input.items.forEach(item => remaining.delete(item.ref.itemId));
+      return PileApplyResultV1Schema.parse({ batchId: 'permanent-batch', mode: 'delete', inTrashBytes: 0,
+        freedBytes: input.items.length * GB, outcomes: input.items.map(item => ({ itemId: item.ref.itemId, status: 'deleted' })) });
+    });
+    const screen = await render(request);
+    await vi.waitFor(() => expect(screen.findByTestId('approval-prompt-approve')?.props.disabled).toBe(false));
+    expect(calls(RPC_METHODS.DAEMON_STORAGE_ITEMS_CHECK)).toHaveLength(1);
+    await screen.pressByTestIdAsync('resource-proposal-item-wt-merged');
+    await screen.pressByTestIdAsync('approval-prompt-approve');
+    await vi.waitFor(() => expect([...remaining]).toEqual(['wt-merged']));
+    expect(readApproval()).toMatchObject({ actionArgs: { items }, decision: { authority: 'present_user',
+      narrowedInput: { items: [items[1]] } } });
+    expect(calls(RPC_METHODS.DAEMON_STORAGE_TRASH_MOVE)).toHaveLength(0);
+    expect(calls(RPC_METHODS.DAEMON_STORAGE_DELETE_NOW)[0]?.payload).toMatchObject({ items: [items[1]] });
+    await screen.unmount();
+    const settled = ApprovalRequestV2Schema.parse({ ...readApproval(), status: 'executed', updatedAtMs: Date.now(),
+      execution: { executedAtMs: Date.now(), ok: true, result: executed } });
+    const receipt = await render(settled, false);
+    await vi.waitFor(() => expect(receipt.findByTestId('resource-proposal-pile')).toBeTruthy());
+    expect(receipt.getTextContent()).toContain('1 GB');
+    expect(receipt.findByTestId('machine-storage-pile-undo')).toBeNull();
+    expect(receipt.findByTestId('machine-storage-pile-empty')).toBeNull();
+    expect(calls(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST)).toHaveLength(0);
+    await receipt.unmount();
   });
 
   it('approves 5 of 6 with refreshed expectations, then remembers the sixth as declined', async () => {

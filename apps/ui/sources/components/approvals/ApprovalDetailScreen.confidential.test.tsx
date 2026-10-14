@@ -3,9 +3,15 @@ import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-    AccountSettingsV2GetResponseSchema, AccountSettingsV2UpdateRequestSchema, AccountSettingsV2UpdateResponseSchema, ApprovalRequestV2Schema, CurrentCursorResponseSchema,
+    AccountSettingsV2GetResponseSchema, ApprovalRequestV2Schema, CurrentCursorResponseSchema,
     FeaturesResponseSchema, SavedSecretResourceMaterialsResponseV1Schema, buildApprovalRequestArtifactHeaderV1,
 } from '@happier-dev/protocol';
+import {
+    SHARED_SAVED_SECRET_ACTION_PATHS_V1,
+    SharedSavedSecretCreateInputV1Schema,
+    type SharedSavedSecretCreateInputV1,
+} from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
+import { openSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
 import { PrivateSecretContinuationV1Schema } from '@happier-dev/protocol/approvals/privateSecretContinuationV1';
 import { BrowserAutomationSecretFillRequestV1Schema } from '@happier-dev/protocol/browser/automation/v1';
 import { ComputerSecretFillRequestV1Schema } from '@happier-dev/protocol/computer/v1';
@@ -27,7 +33,6 @@ import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeatu
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import { resolveSettingsSecretsKeySet } from '@/sync/encryption/resolveSettingsSecretsKeySet';
 import { normalizeAccountSettingsForLocalStorage } from '@/sync/domains/settings/accountSettingsNormalization';
-import { applyAccountSettingsSavedSecretMutation } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
@@ -60,7 +65,7 @@ let refusal: string | null = null;
 let rememberSucceeds = false;
 let rememberOutcomeUnknown = false;
 let holdPrivateReply: Promise<void> | null = null;
-let rememberedSettings: Readonly<Record<string, unknown>> | null = null;
+let rememberedResource: SharedSavedSecretCreateInputV1 | null = null;
 let savedResourceForChoice = false;
 const savedResourceRef = formatSharedSavedSecretRefV1('secret-1');
 
@@ -103,23 +108,18 @@ describe('confidential approval human continuation', () => {
     beforeAll(loadSyncSingletonForTests);
     beforeEach(async () => {
         savedResourceForChoice = false;
-        deliveries = []; writes = []; uncertain = false; submitUnknown = false; refusal = null; rememberSucceeds = false; rememberOutcomeUnknown = false; rememberedSettings = null; holdPrivateReply = null;
+        deliveries = []; writes = []; uncertain = false; submitUnknown = false; refusal = null; rememberSucceeds = false; rememberOutcomeUnknown = false; rememberedResource = null; holdPrivateReply = null;
         connection = await restoreServerAccountForTest({ serverUrl: 'https://confidential-approval.example.test',
             serverIdentityId: 'srv_confidential-home', accountId: 'account-a', request: async (url, init) => {
                 const path = new URL(String(url)).pathname;
                 if (path === '/v1/plugins/availability/materializations/read' || path === '/v1/plugins/availability/intents/list' || path === '/v1/account/project-rows/list') return new Response('{}', { status: 503 });
                 if (init?.method && init.method !== 'GET') {
                     writes.push(path);
-                    if (rememberSucceeds && path === '/v2/account/settings') {
-                        const update = AccountSettingsV2UpdateRequestSchema.parse(JSON.parse(String(init.body)));
-                        if (update.content?.t !== 'plain') throw new Error('expected_plain_settings');
-                        rememberedSettings = update.content.v;
-                        if (rememberOutcomeUnknown) throw new TypeError('Settings receipt was lost');
-                        return Response.json({ success: true, version: 2 });
+                    if (rememberSucceeds && path === SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.create']) {
+                        rememberedResource = SharedSavedSecretCreateInputV1Schema.parse(JSON.parse(String(init.body)));
+                        if (rememberOutcomeUnknown) throw new TypeError('Saved Secret receipt was lost');
+                        return Response.json({ resourceId: rememberedResource.resourceId, revision: 1 });
                     }
-                    if (path === '/v2/account/settings') return Response.json(AccountSettingsV2UpdateResponseSchema.parse({
-                        success: false, error: 'invalid', reason: 'tooLarge',
-                    }), { status: 413 });
                     return new Response('{}', { status: 503 });
                 }
                 if (path === '/health') return Response.json({ status: 'ok' });
@@ -136,11 +136,18 @@ describe('confidential approval human continuation', () => {
                     return Response.json({ ...artifact, encryptionMode: 'plain', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
                         header: encodePlainArtifactStoredContent(artifact.header), body: encodePlainArtifactStoredContent({ body: artifact.body }) });
                 }
-                if (path === '/v2/account/settings' && rememberOutcomeUnknown && rememberedSettings) return new Response('{}', { status: 503 });
                 if (path === '/v2/account/settings') return Response.json(AccountSettingsV2GetResponseSchema.parse({
-                    content: { t: 'plain', v: rememberedSettings ?? { secrets: savedResourceForChoice ? [] : personal } }, version: rememberedSettings ? 2 : 1,
+                    content: { t: 'plain', v: { secrets: savedResourceForChoice ? [] : personal,
+                        actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'secrets.shared.create': ['ui'] } } } }, version: 1,
                 }));
-                if (path === '/v1/account/saved-secrets/resources/materials') return Response.json(SavedSecretResourceMaterialsResponseV1Schema.parse({ resources: savedResourceForChoice ? [{
+                if (path === '/v1/account/saved-secrets/resources/materials' && rememberOutcomeUnknown && rememberedResource) return new Response('{}', { status: 503 });
+                if (path === '/v1/account/saved-secrets/resources/materials') return Response.json(SavedSecretResourceMaterialsResponseV1Schema.parse({ resources: rememberedResource ? [{
+                    resourceId: rememberedResource.resourceId, encryptionMode: 'plain', recipientEnvelope: null,
+                    entry: { ref: formatSharedSavedSecretRefV1(rememberedResource.resourceId), source: 'shared_resource', relationship: 'owner',
+                        name: rememberedResource.displayName, kind: rememberedResource.kind, encryptionMode: 'plain', revision: 1,
+                        materialStatus: 'ready', capabilities: { use: true, rename: true, rotate: true, manageAccess: true, delete: true } },
+                    storedContent: rememberedResource.storedContent,
+                }] : savedResourceForChoice ? [{
                     resourceId: 'secret-1', encryptionMode: 'plain', recipientEnvelope: null,
                     entry: { ref: savedResourceRef, source: 'shared_resource', relationship: 'owner',
                         name: personal[0].name, kind: personal[0].kind, encryptionMode: 'plain', revision: 1,
@@ -457,20 +464,10 @@ describe('confidential approval human continuation', () => {
         expect(deliveries).toEqual([expect.objectContaining({ submit: true, request: request.actionArgs })]);
     });
 
-    it('writes the Remember Saved Secret through the real captured Account settings CAS owner', async () => {
+    it('saves only an explicitly requested Remember through the strict Saved Secret Resource Action and reloads it', async () => {
         rememberSucceeds = true;
-        const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
-        const account = await captureLazyActionAccountContext(connection!.home.id);
-        try {
-            const result = await account.mutateRawSettings(raw => ({ ...applyAccountSettingsSavedSecretMutation(raw,
-                { kind: 'add', secret: { ...personal[0], id: 'writer-positive', name: 'Writer positive' } }).settings }));
-            expect(result.status).toBe('applied');
-            expect(writes.filter(path => path === '/v2/account/settings')).toHaveLength(1);
-        } finally { account.dispose(); }
-    });
-
-    it('saves only an explicitly requested Remember through the mode-aware settings writer and reloads it', async () => {
-        rememberSucceeds = true;
+        const logged: unknown[][] = [];
+        const logSpies = (['log', 'warn', 'error'] as const).map(method => vi.spyOn(console, method).mockImplementation((...args) => { logged.push(args); }));
         const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
         const screen = await renderScreen(<ApprovalDetailScreen artifactId="approval-1" />);
         await vi.waitFor(() => expect(screen.findByTestId('approvals.secret-value')).toBeTruthy());
@@ -480,15 +477,27 @@ describe('confidential approval human continuation', () => {
         await continueChoice(screen);
         expect(deliveries).toHaveLength(1);
         expect(screen.getTextContent()).toContain('approvals.confidential.rememberSaved');
-        const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
-        const account = await captureLazyActionAccountContext(connection!.home.id);
-        try {
-            const reloaded = await account.readRawSettings();
-            expect(reloaded.secrets).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'Remembered password',
-                encryptedValue: expect.objectContaining({ value: 'one-time-value' }) })]));
-        } finally { account.dispose(); }
+        expect(writes.filter(path => path === SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.create'])).toHaveLength(1);
+        expect(writes.filter(path => path === '/v2/account/settings')).toEqual([]);
+        const produced = SharedSavedSecretCreateInputV1Schema.parse(rememberedResource);
+        expect(openSavedSecretResourceStoredContentV1({ resourceId: produced.resourceId, mode: 'plain', storedContent: produced.storedContent }))
+            .toMatchObject({ name: 'Remembered password', kind: 'apiKey', value: 'one-time-value' });
+        expect(JSON.stringify(logged)).not.toContain('one-time-value');
+        for (const spy of logSpies) spy.mockRestore();
         expect(storage.getState().artifacts['approval-1']?.body).not.toContain('one-time-value');
         expect(screen.findByTestId('approvals.secret-value')?.props.value ?? '').toBe('');
+    });
+
+    it('does not claim Remember succeeded when the Saved Secret Resource Action is unavailable', async () => {
+        const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+        const screen = await renderScreen(<ApprovalDetailScreen artifactId="approval-1" />);
+        await enterOnceValue(screen);
+        await act(async () => { screen.findByTestId('approvals.secret-remember')?.props.onValueChange(true); });
+        await act(async () => { screen.changeTextByTestId('approvals.secret-name', 'Remembered password'); });
+        await continueChoice(screen);
+        expect(writes).toContain(SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.create']);
+        expect(screen.getTextContent()).toContain('approvals.confidential.rememberFailed');
+        expect(screen.getTextContent()).not.toContain('approvals.confidential.rememberSaved');
     });
 
     it.each(['browser.automation.secret.fill', 'computer.secret.fill'] as const)('explains unsupported entry through the reviewed %s route without replay', async actionId => {
@@ -564,7 +573,8 @@ describe('confidential approval human continuation', () => {
         await act(async () => { screen.changeTextByTestId('approvals.secret-name', 'Remembered password'); });
         await continueChoice(screen);
         expect(deliveries).toHaveLength(1);
-        expect(writes.filter(path => path === '/v2/account/settings')).toHaveLength(1);
+        expect(writes.filter(path => path === SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.create'])).toHaveLength(1);
+        expect(writes.filter(path => path === '/v2/account/settings')).toEqual([]);
         expect(screen.getTextContent()).toContain('approvals.confidential.filled');
         expect(screen.getTextContent()).toContain('approvals.confidential.rememberUnknown');
         expect(screen.getTextContent()).not.toContain('approvals.confidential.rememberFailed');
@@ -602,7 +612,8 @@ describe('confidential approval human continuation', () => {
             await act(async () => { releaseReply(); });
             await vi.waitFor(() => expect(screen.getTextContent()).toContain('approvals.confidential.rememberSaved'));
             expect(deliveries).toHaveLength(1);
-            expect(writes.filter(path => path === '/v2/account/settings')).toHaveLength(1);
+            expect(writes.filter(path => path === SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.create'])).toHaveLength(1);
+            expect(writes.filter(path => path === '/v2/account/settings')).toEqual([]);
             expect(storage.getState().artifacts['approval-1']?.body).not.toContain('one-time-value');
         } finally { releaseReply(); }
     });

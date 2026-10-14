@@ -1,7 +1,10 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { HappierApprovalPendingNotice, HappierPressable, type HappierApprovalPendingNoticeTextRender } from '@happier-dev/plugin-ui/presentation';
+import { NoticeLine } from '@/components/ui/lists/NoticeLine';
+import { attentionBannerTextStyles } from '@/components/ui/lists/AttentionBanner';
+import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
@@ -15,19 +18,39 @@ import { useIsInsideItemSection } from '@/components/ui/lists/sectionLeadingColu
 import { t } from '@/text';
 
 /**
- * A row for an Action that is waiting on an approval, with one button to open it. Inside a section it
- * takes the sheet's own padding and edge; placed directly on a page it brings its own sheet. The
- * originating Action continuation owns settlement.
+ * Core's binding of the shared pending-approval notice (`HappierApprovalPendingNotice`, plugin-ui):
+ * an Action that is waiting on an approval, with one way to open it. The originating Action
+ * continuation owns settlement.
  */
 export const ActionApprovalPendingNotice = React.memo(function ActionApprovalPendingNotice(props: Readonly<{
+    /** The waiting state; the row's title when no `summary` names what waits. */
     message: string;
     onOpenApproval: () => void;
     /** What is waiting, in the approval's own words ("Write docs/getting-started.md in d-dc-hello-world."). */
     summary?: string | null;
+    /** `banner` only: what finishes once it is approved. */
+    description?: string | null;
+    /** The open control's name; `Review` by default. */
+    openLabel?: string;
     /**
      * `row` (default): a sheet row. `inline`: one quiet line for a host's own bar (the Code bar), so the
-     * page doesn't move when an approval starts or settles.
+     * page doesn't move when an approval starts or settles. `banner`: the page notice above what waits.
+     * `line`: the compact form among a picker's other status lines, naming what waits.
      */
+    presentation?: 'row' | 'inline' | 'banner' | 'line';
+    testID?: string;
+}>) {
+    if (props.presentation === 'banner' || props.presentation === 'line') {
+        return <SharedApprovalPendingNotice {...props} presentation={props.presentation} />;
+    }
+    return <ApprovalPendingRowOrInline {...props} presentation={props.presentation} />;
+});
+
+const ApprovalPendingRowOrInline = React.memo(function ApprovalPendingRowOrInline(props: Readonly<{
+    message: string;
+    onOpenApproval: () => void;
+    summary?: string | null;
+    openLabel?: string;
     presentation?: 'row' | 'inline';
     testID?: string;
 }>) {
@@ -50,7 +73,7 @@ export const ActionApprovalPendingNotice = React.memo(function ActionApprovalPen
             <HappierPressable
                 testID={props.testID}
                 accessibilityRole="button"
-                accessibilityLabel={`${label}. ${t('approvals.review')}`}
+                accessibilityLabel={`${label}. ${props.openLabel ?? t('approvals.review')}`}
                 onPress={props.onOpenApproval}
                 hitSlop={6}
                 style={(state) => [
@@ -68,7 +91,7 @@ export const ActionApprovalPendingNotice = React.memo(function ActionApprovalPen
                         {t('approvals.waitingForYou')}
                     </Text>
                 )}
-                <Text style={styles.inlineAction}>{t('approvals.review')}</Text>
+                <Text style={styles.inlineAction}>{props.openLabel ?? t('approvals.review')}</Text>
             </HappierPressable>
             </View>
         );
@@ -81,12 +104,62 @@ export const ActionApprovalPendingNotice = React.memo(function ActionApprovalPen
             subtitle={summary ? t('approvals.waitingForYou') : undefined}
             subtitleLines={0}
             showChevron={false}
-            rightElement={<RoundButton size="small" display="secondary" title={t('approvals.review')} onPress={props.onOpenApproval} />}
+            rightElement={<RoundButton size="small" display="secondary" title={props.openLabel ?? t('approvals.review')} onPress={props.onOpenApproval} />}
         />
     );
     // Placed straight on a configuration page, the row brings its own sheet so it keeps the column.
     return page && !inSection ? <ItemGroup>{row}</ItemGroup> : row;
 });
+
+/** The banner and the compact line, drawn by the shared owner with core's text, glyph and button. */
+const SharedApprovalPendingNotice = React.memo(function SharedApprovalPendingNotice(props: Readonly<{
+    message: string;
+    onOpenApproval: () => void;
+    summary?: string | null;
+    description?: string | null;
+    openLabel?: string;
+    presentation: 'banner' | 'line';
+    testID?: string;
+}>) {
+    const { theme } = useUnistyles();
+    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const openLabel = props.openLabel ?? t('approvals.review');
+    const openTestID = props.testID ? `${props.testID}.open` : undefined;
+    if (props.presentation === 'line') {
+        return (
+            <NoticeLine
+                testID={props.testID ?? 'approval-pending-line'}
+                iconName="info"
+                iconColor={theme.colors.text.secondary}
+                subject={props.summary}
+                title={props.message}
+                action={{ testID: openTestID, label: openLabel, iconName: 'caret-right', onPress: props.onOpenApproval }}
+            />
+        );
+    }
+    const palette = theme.colors.state.neutral;
+    return (
+        // On a page the notice takes a section's place in the flow, like every page banner.
+        <ItemGroup surface="none">
+            <HappierApprovalPendingNotice
+                presentation="banner"
+                testID={props.testID}
+                theme={presentationTheme}
+                title={props.message}
+                description={props.description}
+                renderText={renderBannerText}
+                tint={{ background: palette.background, border: palette.border }}
+                icon={<Icon name="info" size={ICON_SIZE.md} color={palette.foreground} />}
+                open={<RoundButton testID={openTestID} size="mini" display="secondary" title={openLabel} onPress={props.onOpenApproval} />}
+            />
+        </ItemGroup>
+    );
+});
+
+/** App `Text` on the shared banner's text steps (the same as every page banner), so font scaling applies. */
+const renderBannerText: HappierApprovalPendingNoticeTextRender = (input) => (
+    <Text style={input.role === 'title' ? attentionBannerTextStyles.title : attentionBannerTextStyles.description}>{input.text}</Text>
+);
 
 /** Room for a file name and the waiting line; below it the line drops the name, then the words. */
 const INLINE_FULL_MIN_PX = 360;

@@ -46,7 +46,7 @@ export function useActionApprovalContinuation(input: Readonly<{
         const registered = observer.getSnapshot().approval;
         if (input.openOnRequest && registered && registered.artifactId !== previous) {
             const serverId = registered.continuation?.scope?.serverId ?? input.serverId;
-            router.pushRetainingCurrent(buildApprovalHref(registered.artifactId, serverId) as Parameters<typeof router.pushRetainingCurrent>[0]);
+            router.pushRetainingCurrent(buildApprovalHref(registered.artifactId, serverId));
         }
     }, [observer, input.openOnRequest, input.serverId, router]);
     const { approval, settlement } = React.useSyncExternalStore(observer.subscribe, observer.getSnapshot, observer.getSnapshot);

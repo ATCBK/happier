@@ -9,11 +9,65 @@ import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfil
 import { ActionApprovalFieldsCard } from './ActionApprovalFieldsCard';
 import type { ApprovalActionFieldsPresentation } from './approvalFieldValues';
 import { describeUnnamedApprovalSession } from './approvalRequesterLabels';
-import { describeApprovalActionFields } from './approvalFieldValues';
+import { describeApprovalActionFields, describeApprovalRequestFields } from './approvalFieldValues';
 import { builtInSettingUiDeclaration } from '@/components/settings/catalog/settingDeclarations';
 import { t } from '@/text';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { getActionSpec } from '@happier-dev/protocol/actions';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { settleApprovalRequestActionArgs } from '@happier-dev/protocol/approvals/approvalRequestTransition';
+import { McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { applyMcpServerCatalogSnapshot, resetMcpServerCatalogSnapshotsForTests } from '@/sync/store/settings/mcpServerCatalogSnapshot';
+import { resetMcpServerCatalogEngineForTests } from '@/sync/engine/settings/mcpServerCatalogEngine';
+
+it.each(['open', 'executed'] as const)('names the MCP catalog title in %s approvals and keeps the id in Technical details', async (status) => {
+    const home = await upsertServerProfile({ name: 'Personal', serverUrl: 'https://mcp-approval-title.test' });
+    profiles.push(home.id);
+    const accountId = 'mcp-approval-account';
+    const serverId = 'fd1b6b4c-a056-48c8-b2dd-1787091b9dd7';
+    const scope = { serverId: home.id, accountId };
+    await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, {
+        token: `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`,
+    });
+    // Use the real destination-row shape and scoped catalog hook, not a mocked reference reader.
+    const catalog = McpServerCatalogV1Schema.parse({ v: 1, servers: [{
+        id: serverId, name: 'filesystem', title: 'Filesystem', transport: 'stdio',
+        stdio: { command: 'filesystem-mcp', args: [] }, env: {}, createdAt: 1, updatedAt: 1,
+    }], bindings: [] });
+    await act(async () => {
+        storage.setState({ settingsScope: scope });
+        applyMcpServerCatalogSnapshot(scope, { status: 'ready', catalog, revision: 1, authority: 'active', diagnostics: [] }, true);
+    });
+    const spec = getActionSpec('mcp.rules.set');
+    const open = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+        createdBy: { surface: 'cli' }, requestedSurface: 'cli', summary: 'Turn on Filesystem', actionId: spec.id,
+        actionArgs: spec.inputSchema.parse({ items: [{ serverId }], change: {
+            kind: 'write', write: { place: { t: 'allMachines' }, state: 'on' },
+        } }), executionOriginV1: { v: 1, authority: 'account_automation', surface: 'cli', caller: { kind: 'host' },
+            serverId: home.id, actionId: spec.id, requestId: 'mcp-title-approval' },
+    });
+    const request = status === 'open' ? open : ApprovalRequestV2Schema.parse({ ...open, status, updatedAtMs: 3,
+        actionArgs: settleApprovalRequestActionArgs(open), decision: { kind: 'approve', decidedAtMs: 2 },
+        execution: { executedAtMs: 3, ok: true },
+    });
+    try {
+        for (const anatomy of ['page', 'card'] as const) {
+            const screen = await renderScreen(<ActionApprovalFieldsCard anatomy={anatomy} serverId={home.id}
+                presentation={describeApprovalRequestFields(request)} />);
+            const text = screen.getTextContent();
+            for (const value of ['MCP server', 'Filesystem', 'Everywhere', 'Turn on']) expect(text).toContain(value);
+            expect(text).not.toContain('filesystem');
+            expect(text).not.toContain(serverId);
+            const details = screen.findAllByTestId('approvals.technical-details').find(node => typeof node.props.onExpandedChange === 'function');
+            expect(details).toBeTruthy();
+            await act(async () => { details?.props.onExpandedChange(true); });
+            expect(screen.getTextContent()).toContain(serverId);
+        }
+    } finally {
+        await act(async () => { await TokenStorage.removeCredentialsForServerUrl(home.serverUrl, { serverId: home.id }); });
+    }
+});
 
 it('names reviewed skills and the exact Home machine, keeping their ids in Technical details', async () => {
     const home = await upsertServerProfile({ name: 'Personal', serverUrl: 'https://capability-approval.test' });
@@ -49,6 +103,8 @@ const profiles: string[] = [];
 
 afterEach(async () => {
     await standardCleanup();
+    resetMcpServerCatalogEngineForTests();
+    resetMcpServerCatalogSnapshotsForTests();
     storage.setState(initialState);
     for (const id of profiles.splice(0)) await removeServerProfile(id);
 });

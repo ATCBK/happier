@@ -23,6 +23,7 @@ import { presentProviderConnectionIdentity } from '@/providers/connection/presen
 import { areProviderContributionKeysEqualV1 } from '@happier-dev/protocol/providers/contribution-identity';
 import { builtInSettingUiDeclaration } from '@/components/settings/catalog/settingDeclarations';
 import { useMcpServerCatalogForServer } from '@/components/settings/mcpServers/useMcpServersSettings';
+import { mcpServerDisplayName } from '@/components/settings/mcpServers/collection/mcpServerCollectionModel';
 import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
 import { useAgentCatalogIdentities } from '@/agents/registry/useSessionAgentCatalogIdentity';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
@@ -172,7 +173,7 @@ function useApprovalReferenceReading(reference: ApprovalReference | undefined, l
     }
     if (reference?.kind === 'mcpServer') {
         const server = mcp.value?.servers.find(row => row.id === reference.id);
-        return { text: server?.name ?? reference.id, named: Boolean(server) };
+        return { text: server ? mcpServerDisplayName(server) : reference.id, named: Boolean(server) };
     }
     if (reference?.kind === 'registrySource') {
         const source = registries.value?.sources.find(row => row.id === reference.id)

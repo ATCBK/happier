@@ -25,6 +25,44 @@ describe('correlated Trash receipts', () => {
     });
 });
 
+describe('permanent storage proposals', () => {
+    it('reviews a strict Delete-now request, narrows only refreshed expectations and settles measured permanent results', () => {
+        const actionArgs = getActionSpec('machines.storage.deleteNow').inputSchema.parse({ machineId: 'machine-1',
+            items: ['cache-a', 'cache-b'].map(itemId => ({ ref: { itemId, path: `/cache/${itemId}`,
+                identity: { dev: '1', ino: itemId, kind: 'directory' }, collectedAt: 1,
+                collectedBy: { accountId: 'account', kind: 'agent' } }, expect: 'claimed' })) });
+        const model = readResourceProposalApproval({ actionId: 'machines.storage.deleteNow', actionArgs });
+        expect(model).not.toBeNull();
+        if (!model) throw new Error('Missing permanent proposal');
+        expect([...initialResourceProposalSelection(model)]).toEqual([]);
+        const check = { kind: 'ready' as const, acknowledged: true, checkedAt: 1, facts: new Map(model.items.map(item => [item.key, {
+            key: item.key, status: 'present' as const, verdict: 'safe' as const, reason: null,
+            expect: 'fresh', bytes: 10, onDiskBytes: null, loses: [], changed: true,
+        }])) };
+        const rows = describeResourceProposalRows(model, check, new Set(['cache-b']), new Set());
+        const narrowed = buildResourceProposalNarrowedInput(model, rows);
+        expect(getActionSpec('machines.storage.deleteNow').approvalNarrowing?.narrow(actionArgs, narrowed))
+            .toMatchObject({ items: [{ ref: { itemId: 'cache-b' }, expect: 'fresh' }] });
+        expect(getActionSpec('machines.storage.deleteNow').approvalNarrowing?.narrow(actionArgs,
+            { ...narrowed, items: [{ ...model.items[1]!.operand, ref: { ...model.items[1]!.operand.ref as object, path: '/another' } }] })).toBeNull();
+        const result = PileApplyResultV1Schema.parse({ batchId: 'delete-batch', mode: 'delete', inTrashBytes: 0, freedBytes: 10,
+            outcomes: [{ itemId: 'cache-b', status: 'deleted' }] });
+        const approval = { v: 2, actionId: model.actionId, actionArgs, status: 'executed',
+            decision: { kind: 'approve', authority: 'present_user', narrowedInput: narrowed },
+            execution: { result } } as ApprovalRequest;
+        const display = deriveResourceProposalDisplay(approval, model, check);
+        expect(display).toMatchObject({ kind: 'emptied', count: 1, freedBytes: 10 });
+        expect([...resourceProposalApprovedKeys(approval, model)]).toEqual(['cache-b']);
+        expect(resolveResourceProposalOutcomes(display, new Set(['cache-b']))?.get('cache-b')).toMatchObject({ status: 'done' });
+        const partial = deriveResourceProposalDisplay({ ...approval, execution: { executedAtMs: 3, ok: true, result: PileApplyResultV1Schema.parse({
+            ...result, outcomes: [{ itemId: 'cache-b', status: 'deleted' },
+                { itemId: 'cache-a', status: 'skipped', reason: { code: 'changed_since_review' } }],
+        }) } }, model, check);
+        expect(resolveResourceProposalOutcomes(partial, new Set(['cache-a', 'cache-b']))?.get('cache-a'))
+            .toEqual({ status: 'skipped', reasonCode: 'changed_since_review' });
+    });
+});
+
 describe('selectGuardKeptForProposal', () => {
     it('joins the planner’s kept rows to the proposal by census process identity, so nothing is both proposed and kept', () => {
         // The planner's own row ref differs from the census ref; only the process identity joins them.
