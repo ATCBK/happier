@@ -13054,6 +13054,7 @@ const widgetAddTranslations = { 'zh-Hans': {
         invalidReason: '你已无权访问，或已被删除。',
         viewerOnly: '这里每个人都通过自己的连接查看。',
         justAdded: ({ widget }) => `已添加 ${widget}`,
+        addAnother: '再添加一个',
         saved: ({ widget }) => `已保存 ${widget}`,
         addFailed: '无法添加。请重试。',
         saveFailed: '无法保存。请重试。',

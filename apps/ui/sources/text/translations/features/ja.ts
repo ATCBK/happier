@@ -13058,6 +13058,7 @@ const widgetAddTranslations = { ja: {
         invalidReason: 'アクセスできなくなったか、削除されました。',
         viewerOnly: 'ここでは各自が自分の接続で表示します。',
         justAdded: ({ widget }) => `${widget} を追加しました`,
+        addAnother: 'もう1つ追加',
         saved: ({ widget }) => `${widget} を保存しました`,
         addFailed: '追加できませんでした。もう一度お試しください。',
         saveFailed: '保存できませんでした。もう一度お試しください。',

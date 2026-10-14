@@ -13054,6 +13054,7 @@ const widgetAddTranslations = { 'zh-Hant': {
         invalidReason: '你已無權存取，或已被刪除。',
         viewerOnly: '這裡每個人都透過自己的連線查看。',
         justAdded: ({ widget }) => `已新增 ${widget}`,
+        addAnother: '再新增一個',
         saved: ({ widget }) => `已儲存 ${widget}`,
         addFailed: '無法新增。請重試。',
         saveFailed: '無法儲存。請重試。',

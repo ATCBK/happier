@@ -13070,6 +13070,7 @@ const widgetAddTranslations = { it: {
         invalidReason: 'Non hai più accesso, oppure è stato rimosso.',
         viewerOnly: 'Qui ognuno lo vede con la propria connessione.',
         justAdded: ({ widget }) => `${widget} aggiunto`,
+        addAnother: 'Aggiungine un altro',
         saved: ({ widget }) => `${widget} salvato`,
         addFailed: 'Impossibile aggiungerlo. Riprova.',
         saveFailed: 'Impossibile salvare. Riprova.',

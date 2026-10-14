@@ -108,6 +108,8 @@ export function WidgetSetupStep(props: Readonly<{
     const [pickedOptions, setPickedOptions] = React.useState<Readonly<Record<string, readonly WidgetSetupValue[]>>>({});
     const [busy, setBusy] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
+    // The Add pane stays open after an Add (another can follow): its button then offers another copy.
+    const [added, setAdded] = React.useState(false);
     const pendingHomeIds = React.useMemo(() => busy && props.serverId ? [props.serverId] : [], [busy, props.serverId]);
     const homeUnreachable = useFailureExplainedByUnreachableHome(pendingHomeIds);
     const resolution = React.useMemo(() => setup.resolve(draft), [draft, setup]);
@@ -155,6 +157,7 @@ export function WidgetSetupStep(props: Readonly<{
             const result = await setup.submit(draft);
             if (result.ok) {
                 AccessibilityInfo.announceForAccessibility?.(result.approvalPending ? t('widgetAdd.areaApprovalPending') : t('widgetAdd.saved', { widget: setup.title }));
+                setAdded(true);
                 props.onDone(result);
                 return;
             }
@@ -346,7 +349,7 @@ export function WidgetSetupStep(props: Readonly<{
         ...(props.backLabel ? { backLabel: props.backLabel } : {}),
         primary: {
             testID: `${props.testID}.submit`,
-            label: setup.submitLabel,
+            label: pane && added ? t('widgetAdd.addAnother') : setup.submitLabel,
             ...(pane ? { icon: 'plus' as const } : {}),
             onPress: () => { void submit(); },
             disabled: busy || !finishable,

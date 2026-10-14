@@ -13096,6 +13096,7 @@ const widgetAddTranslations = { ru: {
         invalidReason: 'У вас больше нет доступа, или это удалено.',
         viewerOnly: 'Здесь каждый видит это через своё подключение.',
         justAdded: ({ widget }) => `Добавлено: ${widget}`,
+        addAnother: 'Добавить ещё',
         saved: ({ widget }) => `Сохранено: ${widget}`,
         addFailed: 'Не удалось добавить. Попробуйте ещё раз.',
         saveFailed: 'Не удалось сохранить. Попробуйте ещё раз.',

@@ -240,6 +240,22 @@ describe('WidgetSetupStep discovery', () => {
         await screen.unmount();
     });
 
+    it('offers another copy rather than the same Add again once the Add pane has added', async () => {
+        const submit = vi.fn(async () => ({ ok: true as const }));
+        const setup = buildWidgetCandidateSetup({ candidate: { ...candidate, target: 'app', sessionInputPath: undefined, inputs: { fields: [] } },
+            scope: { ...scope, owner: { kind: 'home' } }, audience: 'personal', context: {},
+            mode: { kind: 'add', submitLabel: 'Add to Home' }, submit });
+        const label = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.findAllByType(RoundButton).find(node => node.props.testID === 'added-pane.submit')!.props.title;
+        const screen = await renderScreen(<WidgetSetupStep setup={setup} phone={false} presentation="pane" onDone={() => {}} testID="added-pane" />);
+        expect(label(screen)).toBe('Add to Home');
+        await screen.pressByTestIdAsync('added-pane.submit');
+        expect(submit).toHaveBeenCalledOnce();
+        expect(label(screen)).toBe('widgetAdd.addAnother');
+        await screen.pressByTestIdAsync('added-pane.submit');
+        expect(submit).toHaveBeenCalledTimes(2);
+        await screen.unmount();
+    });
+
     it('previews the chosen declared size and submits it together with the input bindings', async () => {
         const sized: WidgetCandidate = { ...candidate, target: 'app', sessionInputPath: undefined,
             inputs: { fields: [{ path: 'filter', title: 'Filter', widget: 'text' as const, required: true }] },

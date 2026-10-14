@@ -13093,6 +13093,7 @@ const widgetAddTranslations = { ca: {
         invalidReason: 'Ja no hi tens accés, o s’ha eliminat.',
         viewerOnly: 'Cadascú aquí ho veu amb la seva pròpia connexió.',
         justAdded: ({ widget }) => `${widget} afegit`,
+        addAnother: 'Afegeix-ne un altre',
         saved: ({ widget }) => `${widget} desat`,
         addFailed: 'No s’ha pogut afegir. Torna-ho a provar.',
         saveFailed: 'No s’ha pogut desar. Torna-ho a provar.',

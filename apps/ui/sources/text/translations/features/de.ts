@@ -12564,6 +12564,7 @@ const widgetAddTranslations = { de: {
         invalidReason: 'Du hast keinen Zugriff mehr, oder es wurde entfernt.',
         viewerOnly: 'Alle hier sehen es mit ihrer eigenen Verbindung.',
         justAdded: ({ widget }) => `${widget} hinzugefügt`,
+        addAnother: 'Weitere hinzufügen',
         saved: ({ widget }) => `${widget} gespeichert`,
         addFailed: 'Konnte nicht hinzugefügt werden. Versuche es erneut.',
         saveFailed: 'Konnte nicht gespeichert werden. Versuche es erneut.',
