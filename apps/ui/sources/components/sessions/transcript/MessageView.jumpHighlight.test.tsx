@@ -1,16 +1,15 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import type { ReactTestInstance } from 'react-test-renderer';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createTestSessionTranscriptSource, renderWithSessionTranscriptSource, standardCleanup } from '@/dev/testkit';
 import { installMessageViewCommonModuleMocks } from './messageViewTestHelpers';
 import type { AgentTextMessage, UserTextMessage } from "@happier-dev/session-core/messages";
 import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
+import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-const reducedMotionState = vi.hoisted(() => ({ value: false }));
 
 installMessageViewCommonModuleMocks({
     text: async () => {
@@ -39,10 +38,6 @@ installMessageViewCommonModuleMocks({
         });
     },
 });
-
-vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({
-    useReducedMotionPreference: () => reducedMotionState.value,
-}));
 
 vi.mock('@/components/markdown/MarkdownView', () => ({
     MarkdownView: (props: React.PropsWithChildren<Record<string, unknown>>) =>
@@ -91,6 +86,9 @@ vi.mock('@expo/vector-icons', async () => {
     const { createExpoVectorIconsMock } = await import('@/dev/testkit/mocks/icons');
     return createExpoVectorIconsMock();
 });
+
+// Prepare the real row graph before starting per-test fake clocks.
+await import('./MessageView');
 
 const userMessage: UserTextMessage = {
     kind: 'user-text',
@@ -160,18 +158,16 @@ async function renderTwoRows(serverId: string | null = 'home-a') {
 }
 
 describe('MessageView jump landing highlight', () => {
-    // Load the real row graph before taking control of the highlight clock.
-    beforeAll(async () => { await import('./MessageView'); });
-
     beforeEach(() => {
         vi.useFakeTimers();
-        reducedMotionState.value = false;
+        setReducedMotionPreferenceOverride(false);
     });
 
     afterEach(async () => {
         const { clearTranscriptJumpHighlight } = await import('./navigation/transcriptJumpHighlightStore');
         await act(async () => {
             clearTranscriptJumpHighlight();
+            setReducedMotionPreferenceOverride(null);
         });
         vi.useRealTimers();
         standardCleanup();
@@ -217,13 +213,11 @@ describe('MessageView jump landing highlight', () => {
 
         const ring = findOverlaysWithin(screen.findByTestId('row-u1'), TRANSCRIPT_JUMP_HIGHLIGHT_TEST_ID)[0];
         expect(ring).toBeTruthy();
-        expect(flattenStyle(ring.props.style).borderRadius).toBe(12);
-
-        // The user bubble owns the highlight; the full-width wrapper that centres it
-        // (no padding, no radius) must not be the painted surface.
-        const bubbleStyle = flattenStyle(hostParentOf(ring)?.props.style);
-        expect(bubbleStyle.borderRadius).toBe(12);
-        expect(bubbleStyle.paddingHorizontal).toBe(14);
+        const { UserMessageBubble } = await import('./UserMessageBubble');
+        const bubble = screen.findByType(UserMessageBubble);
+        const bubbleHost = bubble.findAll(node => typeof node.type === 'string')[0];
+        // Assert the owning surface instead of freezing its theme geometry.
+        expect(hostParentOf(ring)).toBe(bubbleHost);
     });
 
     it('keeps a landed highlight out of a foreign or unbound Home transcript', async () => {
@@ -308,7 +302,7 @@ describe('MessageView jump landing highlight', () => {
     });
 
     it('renders a static highlight without a fade animation when reduced motion is preferred', async () => {
-        reducedMotionState.value = true;
+        setReducedMotionPreferenceOverride(true);
         const { Animated } = await import('react-native');
         const timingSpy = vi.spyOn(Animated, 'timing');
         const { applyTranscriptJumpHighlightForJumpResult, TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS } =
