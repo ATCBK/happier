@@ -213,6 +213,48 @@ describe('API token grant admission', () => {
 });
 
 describe('monotonic child attenuation', () => {
+  it('treats restricted models and organization tags as sets without dropping the creation binding', () => {
+    const parent = grant({
+      models: [modelA, modelB],
+      create: { ...create, placement: { folderId: 'leads', tagIds: ['hot', 'inbound'] } },
+    });
+    const reorderedModels = grant({
+      models: [modelB, modelA],
+      create: parent.create,
+    });
+    const reordered = grant({
+      models: [modelB, modelA],
+      create: { ...create, placement: { folderId: 'leads', tagIds: ['inbound', 'hot'] } },
+    });
+    const invalidSessionChild = grant({
+      models: [modelB, modelA],
+      targets: { sessions: ['s1'], machines: [] },
+      approve: false,
+      create: null,
+    });
+    const validSessionChild = grant({
+      actions: { families: [], ids: ['session.message.send'] },
+      models: [modelB, modelA],
+      targets: { sessions: ['s1'], machines: [] },
+      approve: false,
+      create: null,
+    });
+
+    expect(within(reorderedModels, parent)).toBe(true);
+    expect(within(reordered, parent)).toBe(true);
+    expect(within(invalidSessionChild, parent)).toBe(false);
+    expect(within(validSessionChild, parent)).toBe(true);
+    expect(evaluate({
+      grant: parent,
+      actionId: 'session.spawn_new',
+      target: machine,
+      spawnInput: {
+        ...spawn,
+        organizationPlacement: { folderId: 'leads', tagIds: ['inbound', 'hot'] },
+      },
+    })).toEqual({ ok: true });
+  });
+
   it('uses the same conversational admission when attenuating explicit action ids', () => {
     const send = grant({ actions: { families: [], ids: ['session.message.send'] } });
     const sendAndAnswer = grant({ actions: { families: [], ids: ['session.message.send', 'session.user_action.answer'] } });

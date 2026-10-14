@@ -110,7 +110,10 @@ export function isApiTokenGrantTargetMemberV1(grant: ApiTokenGrantV1, target?: E
 }
 
 function placementsEqual(a: SessionOrganizationPlacementV1, b: SessionOrganizationPlacementV1): boolean {
-  return a.folderId === b.folderId && a.tagIds.length === b.tagIds.length && a.tagIds.every((tag, index) => tag === b.tagIds[index]);
+  if (a.folderId !== b.folderId) return false;
+  const aTags = new Set(a.tagIds);
+  const bTags = new Set(b.tagIds);
+  return aTags.size === bTags.size && [...aTags].every((tag) => bTags.has(tag));
 }
 
 /** All transports call this owner; encrypted spawn fields are decisively rechecked by the daemon. */
