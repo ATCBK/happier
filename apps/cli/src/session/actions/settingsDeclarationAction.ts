@@ -93,7 +93,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
       if (!params.credentials) return refuse('not_authenticated');
       if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return refuse('credential_scope_retired');
       if (actionId === 'settings.get') {
-        const current = await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking', refresh: 'force' });
+        const current = await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking', refresh: 'force', signal: context.signal });
         if (current.source === 'none' || !current.rawSettings) return refuse('account_settings_content_unavailable');
         return { anchor: parsed.anchor, value: readMachineTerminalHostSetting(accountSettingsParse(current.rawSettings), key.data) };
       }
@@ -198,7 +198,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
         credentials, serverId: params.serverId, signal: context.signal, isCredentialCurrent: params.isCredentialCurrent });
       const value = catalogBinding ? catalogBinding.parse(requested.value) : parseBuiltInAccountSettingValueV1(declaration, requested.value);
       if (!value.success) return refuse('invalid_setting_value');
-      const initial = catalogBinding?.prepare || preparedBinding ? await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force' }) : undefined;
+      const initial = catalogBinding?.prepare || preparedBinding ? await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force', signal: context.signal }) : undefined;
       if (initial && (initial.source === 'none' || !initial.rawSettings)) return refuse('account_settings_content_unavailable');
       const catalogServices = createCliSettingsCatalogServices({ credentials, signal: context.signal, serverId: params.serverId,
         expectedAccountId: readAccountIdFromToken(credentials.token) ?? undefined, voiceOwner: voiceContext?.owner,
@@ -258,7 +258,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
     }
     const versioned = 'includeVersion' in parsed && parsed.includeVersion;
     const current = versioned ? await readAccountSettingsV2Raw({ credentials, signal: context.signal })
-      : await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force' });
+      : await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force', signal: context.signal });
     context.signal?.throwIfAborted();
     if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return refuse('credential_scope_retired');
     if (!isCatalogCurrent()) return refuse('setting_value_unavailable');

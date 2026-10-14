@@ -148,6 +148,7 @@ async function requestAccountSettingsV2(
     method: 'GET';
     path: string;
   }>) => Readonly<Record<string, string>> | null,
+  signal?: AbortSignal,
 ): Promise<AccountSettingsV2GetResponse> {
   const path = '/v2/account/settings';
   const authorizationHeaders = resolveAuthorizationHeaders?.({ method: 'GET', path })
@@ -159,6 +160,7 @@ async function requestAccountSettingsV2(
       ...authorizationHeaders,
       'Content-Type': 'application/json',
     },
+    signal,
     timeout: ACCOUNT_SETTINGS_REQUEST_TIMEOUT_MS,
     validateStatus: () => true,
   });
@@ -355,7 +357,7 @@ type BootstrapDeps = Readonly<{
     cache: AccountSettingsCache,
     options?: AccountSettingsCacheWriteOptions,
   ) => Promise<void>;
-  fetchFromServer: (args: { credentials: StoredCredentials }) => Promise<
+  fetchFromServer: (args: { credentials: StoredCredentials; signal?: AbortSignal }) => Promise<
     | { settingsCiphertext: string | null; settingsVersion: number }
     | { settingsContent: AccountSettingsContentEnvelope | null; settingsVersion: number }
   >;
@@ -429,6 +431,7 @@ export function resetInMemoryAccountSettingsContextForTests(): void {
 
 export async function bootstrapAccountSettingsContext(params: Readonly<{
   credentials: StoredCredentials;
+  signal?: AbortSignal;
   resolveAuthorizationHeaders?: (request: Readonly<{
     method: 'GET';
     path: string;
@@ -467,9 +470,9 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
     resolveCachePath: params.deps?.resolveCachePath ?? resolveAccountSettingsCachePath,
     readCache: params.deps?.readCache ?? readAccountSettingsCache,
     writeCache: params.deps?.writeCache ?? writeAccountSettingsCacheAtomic,
-    fetchFromServer: params.deps?.fetchFromServer ?? (async ({ credentials }) => {
+    fetchFromServer: params.deps?.fetchFromServer ?? (async ({ credentials, signal }) => {
       try {
-        const update = await requestAccountSettingsV2(credentials, params.resolveAuthorizationHeaders);
+        const update = await requestAccountSettingsV2(credentials, params.resolveAuthorizationHeaders, signal);
         return { settingsContent: update.content, settingsVersion: update.version };
       } catch (err) {
         if (!(err instanceof AccountSettingsV2RequestError) || err.status !== 404) throw err;
@@ -487,6 +490,7 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
             ...fallbackAuthorizationHeaders,
             'Content-Type': 'application/json',
           },
+          signal,
           timeout: 15_000,
         });
         const body = response.data as { settings: string | null; settingsVersion: number };
@@ -733,7 +737,9 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
   };
 
   const fetchAndPersist = async (): Promise<AccountSettingsContext> => {
-    const fetched = await deps.fetchFromServer({ credentials: params.credentials }) as any;
+    params.signal?.throwIfAborted();
+    const fetched = await deps.fetchFromServer({ credentials: params.credentials, signal: params.signal }) as any;
+    params.signal?.throwIfAborted();
     const settingsVersion = typeof fetched.settingsVersion === 'number' ? fetched.settingsVersion : 0;
     const settingsContent: AccountSettingsContentEnvelope | null =
       'settingsContent' in fetched
@@ -796,6 +802,7 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
 
     // Fire refresh immediately; expose promise for long-running processes.
     const whenRefreshed = fetchAndPersist().catch(async (err) => {
+      params.signal?.throwIfAborted();
       if (isClientE2eeRequiredError(err)) throw err;
       if (minSettingsVersion !== null || isAccountSettingsContentUnavailableError(err)) {
         throw err;
@@ -814,6 +821,7 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
   try {
     return await fetchAndPersist();
   } catch (err) {
+    params.signal?.throwIfAborted();
     if (isClientE2eeRequiredError(err)) throw err;
     if (minSettingsVersion !== null || isAccountSettingsContentUnavailableError(err)) {
       throw err;

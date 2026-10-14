@@ -883,8 +883,8 @@ export function createClaudeUnifiedTerminalTurnOperations(
       if (observation) await nativeRuntime.observeTerminalLifecycle(observation);
     },
     onObserveRow: async (row, observation) => {
-      if (observation.projectedTaskResult) {
-        for (const result of extractToolResultBlocksFromSdkMessage(observation.projectedTaskResult)) {
+      if (!observation.historicalReplay) {
+        for (const result of extractToolResultBlocksFromSdkMessage(observation.projectedTaskResult ?? row)) {
           publishClaudeUnifiedRuntimeEvent({
             handlers, logger: params.ctx.logger,
             event: { kind: 'tool-result', sessionId: params.happierSessionId, emittedAtMs: Date.now(),

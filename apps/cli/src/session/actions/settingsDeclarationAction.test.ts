@@ -39,14 +39,16 @@ describe('headless settings conditional writes', () => {
             machineId: 'machine', actionId: 'settings.get', requestId: 'request',
             requestEnvelopeDigest: 'A'.repeat(43), target: { kind: 'machine', machineId: 'machine' },
         } });
-        vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: {
+        const get = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: {
             content: { t: 'plain', v: {} }, version: 1,
         } });
         const action = createCliSettingsDeclarationAction({ credentials: { token, encryption: null } });
+        const controller = new AbortController();
 
         expect(await action({ actionId: 'settings.get', input: { anchor: 'appearance.atmospherePlanetDigits' },
-            context: { surface: 'agent', externalActionExecutionAuthorization: authorization } }))
+            context: { surface: 'agent', signal: controller.signal, externalActionExecutionAuthorization: authorization } }))
             .toEqual({ anchor: 'appearance.atmospherePlanetDigits', value: true });
+        expect(get).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ signal: controller.signal }));
 
         const foreignToken = `${encode({ alg: 'none' })}.${encode({ sub: 'custodian', tokenEpoch: 1,
             provenance: { v: 1, kind: 'account', authority: 'present_user' } })}.signature`;

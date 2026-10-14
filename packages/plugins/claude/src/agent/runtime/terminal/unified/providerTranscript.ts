@@ -543,12 +543,12 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
     const row = parseRawJsonLinesObject(input.row);
     if (!row) return;
     const fact = readClaudeTaskLifecycleEnvelope(row);
+    const projectedTaskResult = fact ? activeBinding.taskNotificationProjector.project(row) : null;
+    await params.onObserveRow?.(row, {
+      providerSessionId: activeBinding.providerSessionId, historicalReplay: false,
+      ...(projectedTaskResult ? { projectedTaskResult } : {}),
+    });
     if (fact) {
-      const projectedTaskResult = activeBinding.taskNotificationProjector.project(row);
-      await params.onObserveRow?.(row, {
-        providerSessionId: activeBinding.providerSessionId, historicalReplay: false,
-        ...(projectedTaskResult ? { projectedTaskResult } : {}),
-      });
       if (fact.subtype === 'task_notification' || projectedTaskResult) {
         activeBinding.observedSourceIds.add(input.sourceId);
         return;

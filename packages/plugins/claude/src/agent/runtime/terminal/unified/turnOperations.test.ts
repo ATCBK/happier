@@ -166,6 +166,25 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
       expect(events.filter(event => event.kind === 'tool-result')).toEqual([expected]);
       await session.observeSourceTranscript({ providerSessionId, sourceId: 'live:native', row: native });
       expect(events.filter(event => event.kind === 'tool-result')).toEqual([expected]);
+      if (status === 'completed') {
+        await session.observeSourceTranscript({
+          providerSessionId,
+          sourceId: 'live:ordinary-tool-result',
+          row: {
+            type: 'user',
+            uuid: 'ordinary-tool-result',
+            session_id: providerSessionId,
+            message: { role: 'user', content: [{
+              type: 'tool_result', tool_use_id: 'ordinary-action-tool',
+              content: JSON.stringify({ ok: true, result: { items: ['visible'] } }),
+            }] },
+          },
+        });
+        expect(events.filter(event => event.kind === 'tool-result')).toContainEqual(expect.objectContaining({
+          toolCallId: 'ordinary-action-tool',
+          output: JSON.stringify({ ok: true, result: { items: ['visible'] } }),
+        }));
+      }
     } finally {
       subscription.dispose();
       await session.dispose();
