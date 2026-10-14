@@ -1,10 +1,48 @@
 import { describe, it, expect, vi } from 'vitest';
 import { once } from 'node:events';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import psList from 'ps-list';
+import { withTempDir } from '@/testkit/fs/tempDir';
+
+// Process enumeration is an OS boundary; preserve the real listing outside the controlled discovery race.
+vi.mock('ps-list', async importOriginal => {
+  const actual = await importOriginal<typeof import('ps-list')>();
+  return { ...actual, default: vi.fn(actual.default) };
+});
 
 import { isPidAlive, spawnInlineNodeParentWithChild, spawnInlineNodeTestProcess, waitForProcessExit } from '@/testkit/process/spawn';
 import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
 
 describe('killProcessTree', () => {
+  it.runIf(process.platform !== 'win32')('does not claim a stopped tree when its root exits during descendant discovery', async () => {
+    await withTempDir('process-tree-discovery-exit-', async directory => {
+      const ackPath = join(directory, 'provider-alive');
+      const { parent, childPid } = await spawnInlineNodeParentWithChild(`
+        process.on('SIGUSR2', () => require('node:fs').writeFileSync(${JSON.stringify(ackPath)}, 'alive'));
+        setInterval(() => {}, 1000);
+      `);
+      const enumerate = vi.mocked(psList).getMockImplementation();
+      if (!enumerate) throw new Error('Expected the real process enumeration boundary');
+      vi.mocked(psList).mockImplementationOnce(async () => {
+        const exited = once(parent, 'exit');
+        parent.kill('SIGKILL');
+        await exited;
+        return await enumerate();
+      });
+      try {
+        const result = await killProcessTree(parent, { graceMs: 25 });
+        process.kill(childPid, 'SIGUSR2');
+        await vi.waitFor(async () => expect(await readFile(ackPath, 'utf8')).toBe('alive'));
+        expect(result).toEqual({ rootObservedAlive: false });
+      } finally {
+        vi.mocked(psList).mockImplementation(enumerate);
+        parent.kill('SIGKILL');
+        await killProcessTree({ pid: childPid }, { graceMs: 25 });
+      }
+    });
+  });
+
   it('does not mistake a closed owned child for an executing process when its PID remains signalable', async () => {
     const child = spawnInlineNodeTestProcess('process.exit(0)');
     await once(child, 'close');

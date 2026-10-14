@@ -85,7 +85,7 @@ async function killProcessTree(proc, opts, enumerate = psList) {
   // freshly spawned descendant can be reported to its parent before it is visible in the
   // process listing; killing the parent then reparents that descendant and loses the only
   // relationship that lets this owner find it.
-  const rootObservedAlive = proc.exitCode == null && proc.signalCode == null && isAlive(pid);
+  let rootObservedAlive = proc.exitCode == null && proc.signalCode == null && isAlive(pid);
   const rootStopped = process.platform !== 'win32' && rootObservedAlive;
   if (rootStopped) kill(pid, 'SIGSTOP');
 
@@ -101,6 +101,9 @@ async function killProcessTree(proc, opts, enumerate = psList) {
     discoveryFailed = true;
     descendants = [];
   }
+  // Discovery yields to the OS: an externally killed root may have lost its descendants.
+  // Preserve the original stop/resume decision, but do not expose that stale capture as stop proof.
+  if (proc.exitCode != null || proc.signalCode != null) rootObservedAlive = false;
   const all = [...descendants, pid];
 
   // Try graceful first (children-first).

@@ -14,23 +14,27 @@ export function formatErrorForUi(error: unknown, opts?: { maxChars?: number }): 
     }
 
     if (typeof error === 'object' && error !== null) {
-      const seen = new WeakSet<object>();
+      const ancestors: { value: object; serialized: object }[] = [];
       try {
         return JSON.stringify(
           error,
-          (_key, value) => {
-            if (typeof value === 'object' && value !== null) {
-              if (seen.has(value)) return '[Circular]';
-              seen.add(value);
+          function (this: unknown, _key: string, value: unknown) {
+            // JSON visits children through the projected Error object, while cycles
+            // refer to the original Error. Keep both identities on the current path.
+            while (ancestors.length && ancestors[ancestors.length - 1].serialized !== this) {
+              ancestors.pop();
             }
-            if (value instanceof Error) {
-              return {
+            if (typeof value === 'object' && value !== null) {
+              if (ancestors.some((ancestor) => ancestor.value === value)) return '[Circular]';
+              const serialized = value instanceof Error ? {
                 name: value.name,
                 message: value.message,
                 stack: value.stack,
                 ...(value instanceof AggregateError ? { errors: value.errors } : {}),
                 cause: value.cause,
-              };
+              } : value;
+              ancestors.push({ value, serialized });
+              return serialized;
             }
             if (typeof value === 'bigint') return value.toString();
             return value;
