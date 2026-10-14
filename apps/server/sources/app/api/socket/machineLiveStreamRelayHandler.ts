@@ -1,18 +1,7 @@
-import {
-    MACHINE_LIVE_STREAM_SOCKET_EVENT,
-    MachineLiveStreamRelayEnvelopeV1Schema,
-    MachineLiveStreamReceiptV1Schema,
-    PEER_MEDIATION_RECEIPTS,
-    createMachineLiveStreamRelayAuthorizationSigningInputV1,
-    getMachineLiveStreamPayloadDecodedByteLength,
-    isMachineLiveStreamTerminalReceiptV1,
-    type MachineLiveStreamControlV1,
-    type MachineLiveStreamReceiptV1,
-    type MachineLiveStreamWireFrameV1 as MachineLiveStreamFrameV1,
-    type MachineLiveStreamRelayCaps,
-    type MachineLiveStreamWireEnvelopeV1 as MachineLiveStreamRelayEnvelopeV1,
-    type MachineLiveStreamStartRequestV1,
-} from '@happier-dev/protocol';
+import { MACHINE_LIVE_STREAM_SOCKET_EVENT, MachineLiveStreamRelayEnvelopeV1Schema, createMachineLiveStreamRelayAuthorizationSigningInputV1, type MachineLiveStreamControlV1, type MachineLiveStreamWireFrameV1 as MachineLiveStreamFrameV1, type MachineLiveStreamRelayCaps, type MachineLiveStreamWireEnvelopeV1 as MachineLiveStreamRelayEnvelopeV1, type MachineLiveStreamStartRequestV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
+import { MachineLiveStreamReceiptV1Schema, isMachineLiveStreamTerminalReceiptV1, type MachineLiveStreamReceiptV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/receipts';
+import { PEER_MEDIATION_RECEIPTS } from '@happier-dev/protocol/machines/peer/mediation/receipts';
+import { getMachineLiveStreamPayloadDecodedByteLength } from '@happier-dev/protocol/machines/peer/mediation/stream/codecsV1';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import type { Server, Socket } from 'socket.io';
 import tweetnacl from 'tweetnacl';
@@ -93,6 +82,8 @@ function readMachineId(socket: Socket): string {
 function readEnvelopeStreamId(envelope: MachineLiveStreamRelayEnvelopeV1): string | null {
     const message = envelope.message;
     if (message.kind === 'start' || message.kind === 'renew') return message.startRequest.streamId;
+    if (message.kind === 'start_response') return message.startResponse.streamId;
+    if (message.kind === 'metering') return message.metering.streamId;
     if (message.kind === 'frame') return message.frame.streamId;
     if (message.kind === 'receipt') {
         const receipt = MachineLiveStreamReceiptV1Schema.safeParse(message.receipt);

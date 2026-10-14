@@ -170,7 +170,10 @@ describe('machineLiveStreamRelayHandler observability', () => {
     expect(emit).not.toHaveBeenCalled();
   });
 
-  it('does not route start responses through consumer control admission', async () => {
+  it.each([
+    { kind: 'start_response', startResponse: { v: 1, streamId: 'stream_1', accepted: false, disabledReason: 'unavailable' } },
+    { kind: 'metering', metering: { v: 1, streamId: 'stream_1', movingBitrateBps: 0, framesPerSecond: 0 } },
+  ])('does not route $kind through consumer control admission', async (message) => {
     const { machineLiveStreamRelayHandler } = await import('./machineLiveStreamRelayHandler');
     const socket = createFakeSocket({ emit: vi.fn(), id: 'start-response-source' });
     socket.data = { clientType: 'machine-scoped', verifiedMachineInstallationId: TEST_MACHINE_INSTALLATION_ID,
@@ -183,7 +186,7 @@ describe('machineLiveStreamRelayHandler observability', () => {
     });
     await expect(getSocketHandler(socket, MACHINE_LIVE_STREAM_SOCKET_EVENT)({
       v: 1, sourceMachineId: 'machine-source', targetMachineId: 'machine-target',
-      message: { kind: 'start_response', startResponse: { v: 1, streamId: 'stream_1', accepted: false, disabledReason: 'unavailable' } },
+      message,
     })).resolves.toBeUndefined();
     expect(emit).not.toHaveBeenCalled();
     expect(socket.emit).not.toHaveBeenCalled();
