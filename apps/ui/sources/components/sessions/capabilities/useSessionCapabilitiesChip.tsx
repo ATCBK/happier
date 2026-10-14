@@ -1,5 +1,13 @@
 import * as React from 'react';
 import { useWindowDimensions } from 'react-native';
+import { getAgentCore, isBundledAgentId, resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
+import { MetadataSchema } from '@happier-dev/session-core/state';
+import { SessionSkillCatalogListResponseV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
+import { readSessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
+import { resolveSessionWorkspaceRootForMachine } from '@happier-dev/protocol/sessions/metadata/sessionWorkspaceLocationV1';
+import { projectWorkspaceRefV1, resolveWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
+import { resolveMcpToolDecisionV1 } from '@happier-dev/protocol/mcp/servers/tools/resolveMcpToolDecisionV1';
+import type { Message } from '@happier-dev/session-core/messages';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
@@ -11,12 +19,24 @@ import { publishPresentationNotice } from '@/components/sessions/presentation/pr
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { mcpServerRoute } from '@/components/settings/mcpServers/collection/mcpServerCollectionModel';
 import { McpServerMark } from '@/components/settings/mcpServers/identity/McpServerMark';
+import {
+  findMcpSignInGrant,
+  mcpSignInFact,
+  mcpSignInGrantView,
+} from '@/components/settings/mcpServers/signIn/mcpSignInGrantView';
+import { useMcpSignInGrantDiagnostics } from '@/components/settings/mcpServers/signIn/useMcpSignInGrantDiagnostics';
+import { useMcpServerSignIn } from '@/components/settings/mcpServers/signIn/useMcpServerSignIn';
+import { useReachMachines } from '@/sync/domains/capabilities/reach/useReachProjection';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { mcpServerStatus } from '@/components/settings/mcpServers/status/mcpServerStatus';
 import { skillStatus } from '@/components/settings/skills/status/skillStatus';
 import { useSkillPlaces } from '@/components/settings/skills/useSkillPlaces';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { useSkillsLibrary } from '@/sync/domains/skills/useSkillsLibrary';
+import { useFoundSkillsCache } from '@/sync/domains/skills/useFoundSkills';
+import { skillHref } from '@/components/settings/skills/skillsCollectionModel';
 import { useReachRulesLookup } from '@/sync/store/useReachRulesCatalog';
 import { t } from '@/text';
 
@@ -33,6 +53,7 @@ import {
   type SessionCapabilitiesModel,
   type SessionCapabilitiesModelInput,
 } from './sessionCapabilitiesModel';
+import { useSessionCapabilitiesOpenRequest } from './sessionCapabilitiesRoute';
 import { useSessionCapabilityRestart } from './sessionCapabilityRestart';
 import {
   useExistingSessionCapabilitiesPopover,
@@ -43,8 +64,11 @@ import {
 
 type Detail = Pick<
   SessionCapabilitiesModelInput,
-  'rules' | 'mcpStatus' | 'skillStatus' | 'names'
+  'rules' | 'mcpStatus' | 'skillStatus' | 'names' | 'context' | 'nativeSkills' | 'cost'
 >;
+type SheetTarget = Readonly<{ sessionId?: string; metadata?: unknown;
+  draft?: Pick<NewSessionCapabilitiesDraft, 'machineId' | 'directory' | 'agentId' | 'projectKey'> }>;
+const EMPTY_MESSAGES: Readonly<Record<string, Message>> = Object.freeze({});
 type ModelInput = Pick<
   SessionCapabilitiesModelInput,
   'view' | 'selection' | 'state' | 'readOnly' | 'change' | 'applyState'
@@ -56,7 +80,6 @@ type Base = Omit<
 
 const NO_RULES: ReturnType<Detail['rules']> = [];
 const NO_STATUSES: ReturnType<Detail['mcpStatus']> = [];
-const NO_BASE: Base = {};
 /**
  * The always-mounted chip needs no rules, statuses or names: its counts come from the preview alone.
  * The detail owners mount only in the open sheet, which reports back the one summary fact the closed
@@ -78,17 +101,92 @@ const CLOSED_DETAIL: Detail = {
  * The sheet's detail inputs, from their canonical owners: rules from the Account rows (P2), skill and MCP
  * statuses from P6/P7's status owners, names from the places owner.
  */
-function useSessionCapabilitiesDetail(serverId: string | null) {
+function useSessionCapabilitiesDetail(
+  serverId: string | null,
+  machineOnline: boolean,
+  onFactsChanged: () => void,
+  target: SheetTarget,
+  modelInput: ModelInput,
+  machineName: string,
+) {
   const router = useRouter();
   const active = useActiveServerSnapshot(!serverId);
   const { binding } = useServerCredentialAccountScopeBinding(
     serverId ?? active.serverId,
   );
   const scope = binding?.scope ?? null;
-  const { rules, mcpCatalog } = useReachRulesLookup(scope);
+  const { rules, skillRules, mcpCatalog } = useReachRulesLookup(scope);
   const savedSecretCatalog = useSavedSecretCatalog({ scope });
-  const library = useSkillsLibrary();
-  const { names } = useSkillPlaces();
+  // The Account's sign-in grants (P7's one reading of a grant): a row says "Sign-in expired" or
+  // "Sign in" with its fix, as the server page does when no attempt is running.
+  const grants = getStorage()((state) => areServerAccountScopesEqual(scope, state.profileScope) ? state.profile.connectedAccountsV4 : null);
+  const reach = useReachMachines();
+  const parsedMetadata = React.useMemo(() => MetadataSchema.safeParse(target.metadata), [target.metadata]);
+  const metadata = parsedMetadata.success ? parsedMetadata.data : null;
+  const nativeCatalogInput = metadata ? Reflect.get(metadata, 'sessionSkillCatalogV1') : undefined;
+  const machineId = target.draft?.machineId ?? metadata?.machineId ?? null;
+  const machine = areServerAccountScopesEqual(scope, reach.scope) ? reach.machines.find(row => row.machineId === machineId) : null;
+  const agentId = target.draft?.agentId ?? (metadata ? resolveAgentIdFromSessionMetadata(metadata) : null);
+  const diagnosticMachine = machineId;
+  const diagnostics = useMcpSignInGrantDiagnostics(grants, scope, diagnosticMachine);
+  const library = useSkillsLibrary(scope);
+  // The open detail leaf observes the actual Account inputs; callback identity is not a fact.
+  const factsKey = JSON.stringify([scope?.serverId, scope?.accountId, skillRules, mcpCatalog, machineId, agentId,
+    metadata?.path, metadata?.workspaceId, metadata?.projectId, modelInput.selection,
+    library.items.map(item => [item.skillId, item.revision])]);
+  const observedFacts = React.useRef(factsKey);
+  const factsChanged = React.useRef(onFactsChanged);
+  factsChanged.current = onFactsChanged;
+  React.useEffect(() => {
+    if (observedFacts.current === factsKey) return;
+    observedFacts.current = factsKey;
+    factsChanged.current();
+  }, [factsKey]);
+  const { names, workspaceRefs } = useSkillPlaces(scope?.serverId ?? serverId);
+  const context = React.useMemo(() => {
+    if (!machineId) return undefined;
+    const candidatePath = target.draft?.directory ?? metadata?.path ?? '';
+    const directory = metadata ? resolveSessionWorkspaceRootForMachine({ metadata, machineId, candidatePath }).machinePath : candidatePath;
+    const workspaceId: unknown = metadata ? Reflect.get(metadata, 'workspaceId') : null;
+    const projectId: unknown = metadata ? Reflect.get(metadata, 'projectId') : null;
+    const ref = scope && directory && typeof workspaceId === 'string'
+      ? resolveWorkspaceRefV1(workspaceRefs, { serverId: scope.serverId, workspaceId, machineId, rootPath: directory }) : null;
+    const resolvedProject = ref?.kind === 'resolved' ? projectWorkspaceRefV1(ref.ref).projectKey : null;
+    // Until the accepted checkout is available, keep the Machine's resolved preview.
+    if (typeof workspaceId === 'string' && (ref?.kind !== 'resolved' || projectId !== undefined && projectId !== resolvedProject)) return undefined;
+    const projectKey = target.draft?.projectKey ?? (projectId === undefined || projectId === resolvedProject ? resolvedProject : null);
+    return { machineId, machinePlatform: modelInput.view && 'machinePlatform' in modelInput.view ? modelInput.view.machinePlatform : machine?.platform ?? null,
+      directory: directory || null, projectKey, agentId };
+  }, [machineId, target.draft?.directory, target.draft?.projectKey, metadata, scope, workspaceRefs, modelInput.view, machine?.platform, agentId]);
+  const ids = React.useMemo(() => machineId ? [machineId] : [], [machineId]);
+  const found = useFoundSkillsCache(ids, scope);
+  const nativeSkills = React.useMemo(() => {
+    if (!machineId || !agentId) return undefined;
+    const catalog = SessionSkillCatalogListResponseV1Schema.safeParse(nativeCatalogInput);
+    const items = new Map<string, Readonly<{ name: string; path: string }>>();
+    // A Session's published catalog takes precedence over last-known Machine Found facts.
+    if (catalog.success) {
+      for (const item of catalog.data.skills) {
+        if (item.origin === 'vendor' && item.path && (!item.backendId || item.backendId === agentId)) items.set(item.name, { name: item.name, path: item.path });
+      }
+    } else {
+      for (const item of found[machineId]?.items ?? []) {
+        if (item.agents.some(agent => agent === agentId) && !item.happierInstalled && item.scope === 'user') items.set(item.name, { name: item.name, path: item.path });
+      }
+    }
+    for (const item of modelInput.view?.skills.plan.nativeDisables ?? []) if (!items.has(item.name)) items.set(item.name, { name: item.name, path: item.path });
+    const declaration = machine?.agentDeclarationsById?.[agentId]?.capabilities.skills;
+    const bundled = !machine?.agentDeclarationsById && isBundledAgentId(agentId) ? getAgentCore(agentId)?.skills : null;
+    return { items: [...items.values()], canDisable: (declaration ?? bundled)?.nativeDisable === 'supported',
+      machineName, agentName: names.agentName(agentId), applyTiming: modelInput.applyState?.applyTiming?.mcp ?? modelInput.view?.applyTiming.mcp ?? { t: 'session_not_running' as const } };
+  }, [machineId, agentId, nativeCatalogInput, found, modelInput.view?.skills.plan, modelInput.view?.applyTiming.mcp,
+    modelInput.applyState?.applyTiming?.mcp, machine?.agentDeclarationsById, machineName, names]);
+  const messages = getStorage()(state => target.sessionId && areServerAccountScopesEqual(scope, state.sessionLocalStateScope)
+    ? state.sessionMessages[target.sessionId]?.messagesById ?? EMPTY_MESSAGES : EMPTY_MESSAGES);
+  const notices = React.useMemo(() => Object.values(messages).flatMap(message => {
+    const notice = message.kind === 'agent-event' ? readSessionCapabilityNoticeV1(message.event) : null;
+    return notice ? [notice] : [];
+  }), [messages]);
   const servers = React.useMemo(
     () =>
       new Map((mcpCatalog?.servers ?? []).map((entry) => [entry.id, entry])),
@@ -98,13 +196,39 @@ function useSessionCapabilitiesDetail(serverId: string | null) {
     () => new Map(library.items.map((item) => [item.skillId, item])),
     [library.items],
   );
+  const [signInRequest, setSignInRequest] = React.useState<Readonly<{ id: string; stepUp: boolean }> | null>(null);
+  const signInMachines = React.useMemo(() => machineId ? [{ machineId, name: machineName, online: machineOnline }] : [], [machineId, machineName, machineOnline]);
+  const signIn = useMcpServerSignIn(signInRequest ? servers.get(signInRequest.id) ?? null : null, signInMachines, {
+    scope, ...(target.sessionId ? { returnTo: `/session/${encodeURIComponent(target.sessionId)}?serverId=${encodeURIComponent(scope?.serverId ?? '')}&capabilities=open` } : {}),
+  });
+  const startSignIn = React.useRef(signIn.start);
+  startSignIn.current = signIn.start;
+  React.useEffect(() => { if (signInRequest) void startSignIn.current({ stepUp: signInRequest.stepUp }); }, [signInRequest]);
   const detail = React.useMemo<Detail>(
     () => ({
       rules,
       names,
+      context,
+      nativeSkills,
+      cost: (kind, id) => {
+        if (kind === 'skill') {
+          const cost = skills.get(id)?.cost;
+          return cost ? { tokensWhenUsed: cost.bodyTokens } : null;
+        }
+        const entry = servers.get(id);
+        const snapshot = entry?.toolsSnapshot;
+        if (!entry || !snapshot) return null;
+        const toolsDeclaration = agentId ? machine?.agentDeclarationsById?.[agentId]?.capabilities.tools
+          ?? (!machine?.agentDeclarationsById && isBundledAgentId(agentId) ? getAgentCore(agentId)?.tools : null) : null;
+        const hidesOff = toolsDeclaration?.mcpToolControl?.off === 'hidden';
+        const tools = snapshot.tools.filter(tool => !hidesOff || resolveMcpToolDecisionV1({ policy: entry.tools, toolName: tool.name,
+          annotations: tool.annotations, permissionMode: 'default' }).exposed);
+        return { toolCount: tools.length, tokensPerTurn: tools.reduce((sum, tool) => sum + tool.tokens, 0) };
+      },
       skillStatus: (skillId) => {
         const item = skills.get(skillId);
-        return item ? skillStatus(item) : NO_STATUSES;
+        return skillStatus(item ?? null, undefined, { skillId, plan: modelInput.view?.skills.plan ?? null, notices, machineName,
+          onFix: () => router.push(skillHref(skillId) as never) });
       },
       mcpStatus: (serverId) => {
         const entry = servers.get(serverId);
@@ -112,14 +236,22 @@ function useSessionCapabilitiesDetail(serverId: string | null) {
         const open = () => router.push(mcpServerRoute(serverId) as never);
         return mcpServerStatus({
           entry,
-          signIn: null,
+          signIn: signInRequest?.id === serverId ? signIn.fact : mcpSignInFact(
+            mcpSignInGrantView(
+              entry,
+              findMcpSignInGrant(grants, serverId),
+              machineOnline,
+              diagnostics[serverId],
+            ),
+          ),
           tests: {},
-          machines: [],
+          machines: signInMachines,
+          sessionNotices: notices,
           savedSecretCatalog,
           fixes: {
-            signIn: open,
-            reconnect: open,
-            grantAccess: open,
+            signIn: () => setSignInRequest({ id: serverId, stepUp: false }),
+            reconnect: () => setSignInRequest({ id: serverId, stepUp: false }),
+            grantAccess: () => setSignInRequest({ id: serverId, stepUp: true }),
             addKey: open,
             howToFix: open,
             tryAgain: open,
@@ -127,7 +259,8 @@ function useSessionCapabilitiesDetail(serverId: string | null) {
         });
       },
     }),
-    [rules, names, skills, servers, savedSecretCatalog, router],
+    [context, nativeSkills, agentId, machine?.agentDeclarationsById, notices, machineName, modelInput.view?.skills.plan, signInRequest, signIn.fact,
+      signInMachines, diagnostics, rules, names, skills, servers, savedSecretCatalog, grants, machineOnline, router],
   );
   const renderMark = React.useCallback(
     (id: string) => (
@@ -152,10 +285,18 @@ function SessionCapabilitiesSheet(
     onRetry: () => void;
     machineName: string;
     maxHeight: number;
+    target: SheetTarget;
   }>,
 ) {
   const router = useRouter();
-  const { detail, renderMark } = useSessionCapabilitiesDetail(props.serverId);
+  const { detail, renderMark } = useSessionCapabilitiesDetail(
+    props.serverId,
+    props.base.machineOnline !== false,
+    props.onRetry,
+    props.target,
+    props.modelInput,
+    props.machineName,
+  );
   const model = React.useMemo(
     () =>
       buildSessionCapabilitiesModel({
@@ -204,6 +345,8 @@ function useCapabilitiesChip(
     onChange: SessionCapabilitiesChange;
     onRetry: () => void;
     demandPreview: () => void;
+    openRequest?: Readonly<{ consume: () => void }> | null;
+    target: SheetTarget;
   }>,
 ): AgentInputExtraActionChip {
   const { height } = useWindowDimensions();
@@ -219,6 +362,8 @@ function useCapabilitiesChip(
     onChange,
     onRetry,
     demandPreview,
+    openRequest,
+    target,
   } = params;
   // Unknown is never zero: until the first preview the chip names what it holds, not "0 skills".
   const label = modelInput.view ? model.chipLabel : `${t('capabilities.skills.title')} · MCP`;
@@ -230,6 +375,7 @@ function useCapabilitiesChip(
         attention,
         stabilityKey,
         onIntent: demandPreview,
+        openRequest,
         maxHeightCap: Math.round(
           height * SESSION_CAPABILITIES_POPOVER_HEIGHT_RATIO,
         ),
@@ -243,6 +389,7 @@ function useCapabilitiesChip(
             onRetry={onRetry}
             machineName={machineName}
             maxHeight={maxHeight}
+            target={target}
           />
         ),
       }),
@@ -257,7 +404,9 @@ function useCapabilitiesChip(
       onChange,
       onRetry,
       demandPreview,
+      openRequest,
       height,
+      target,
     ],
   );
 }
@@ -270,12 +419,19 @@ export function useNewSessionCapabilitiesChip(
   params: Readonly<{
     draft: NewSessionCapabilitiesDraft;
     machineName: string;
+    /** REACH's presence for the draft's machine; omitted where no machine is chosen yet (authoring). */
+    machineOnline?: boolean;
   }>,
 ): Readonly<{
   chip: AgentInputExtraActionChip;
   model: SessionCapabilitiesModel;
 }> {
-  const popover = useNewSessionCapabilitiesPopover(params.draft, CLOSED_DETAIL);
+  const machineOnline = params.machineOnline;
+  const closedInput = React.useMemo(
+    () => ({ ...CLOSED_DETAIL, ...(machineOnline === undefined ? {} : { machineOnline }) }),
+    [machineOnline],
+  );
+  const popover = useNewSessionCapabilitiesPopover(params.draft, closedInput);
   const { setItem, refresh } = popover;
   const onChange = React.useCallback<SessionCapabilitiesChange>(
     async (change) => setItem(change.kind, change.id, change.state),
@@ -285,17 +441,26 @@ export function useNewSessionCapabilitiesChip(
     void refresh();
   }, [refresh]);
   const draft = params.draft;
+  const target = React.useMemo<SheetTarget>(() => ({ draft: { machineId: draft.machineId, directory: draft.directory,
+    agentId: draft.agentId, projectKey: draft.projectKey } }), [draft.machineId, draft.directory, draft.agentId, draft.projectKey]);
   const stabilityKey = `draft:${draft.machineId ?? ''}:${draft.directory}:${draft.agentId}:${draft.targetServerId ?? ''}`;
+  // The open sheet names the draft's machine (offline line, "<machine>'s copy wins").
+  const machineName = params.machineName;
+  const base = React.useMemo<Base>(
+    () => ({ machineName, ...(machineOnline === undefined ? {} : { machineOnline }) }),
+    [machineName, machineOnline],
+  );
   const chip = useCapabilitiesChip({
     model: popover.model,
     modelInput: popover.modelInput,
-    base: NO_BASE,
+    base,
     stabilityKey,
     serverId: draft.targetServerId ?? null,
     machineName: params.machineName,
     onChange,
     onRetry,
     demandPreview: popover.demandPreview,
+    target,
   });
   return { chip, model: popover.model };
 }
@@ -329,6 +494,7 @@ export function useExistingSessionCapabilitiesChip(
   const popover = useExistingSessionCapabilitiesPopover(params.target, input);
   const { setItem, refresh } = popover;
   const sessionId = params.target.sessionId;
+  const target = React.useMemo<SheetTarget>(() => ({ sessionId, metadata: popover.metadata }), [sessionId, popover.metadata]);
   const onChange = React.useCallback<SessionCapabilitiesChange>(
     async (change) => {
       const result = await setItem(change.kind, change.id, change.state);
@@ -347,6 +513,12 @@ export function useExistingSessionCapabilitiesChip(
   const onRetry = React.useCallback(() => {
     void refresh();
   }, [refresh]);
+  const route = useSessionCapabilitiesOpenRequest();
+  const { consume } = route;
+  const openRequest = React.useMemo(
+    () => (route.requested ? { consume } : null),
+    [route.requested, consume],
+  );
   const chip = useCapabilitiesChip({
     model: popover.model,
     modelInput: popover.modelInput,
@@ -357,6 +529,8 @@ export function useExistingSessionCapabilitiesChip(
     onChange,
     onRetry,
     demandPreview: popover.demandPreview,
+    openRequest,
+    target,
   });
   const { badge } = useSessionCapabilityRestart({
     notice: popover.model.applyNotice,

@@ -1,11 +1,11 @@
 import type { CapabilityApplyTimingV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 import type { SessionCapabilitiesGetOutputV1 } from '@happier-dev/protocol/actions/specs/sessionCapabilities';
 import { t } from '@/text';
-import { readAppliedSessionCapabilitySelectionFromMetadataV1, readSessionCapabilitySelectionFromMetadataV1, readPendingCapabilityApplyV1, readPendingSkillRuleApplyV1, readCapabilitySelectionApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { readAppliedSessionCapabilitySelectionFromMetadataV1, readSessionCapabilitySelectionFromMetadataV1, readPendingCapabilityApplyV1, readPendingCapabilityRuleApplyV1, readCapabilitySelectionApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 import { readSessionCapabilityOverrideV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
 export type SessionCapabilityChange = Readonly<{ kind: 'skill' | 'mcp_server' | 'native_skill'; title: string; state: 'on' | 'off' | 'inherit' }>;
-export type SessionCapabilityApplyChange = (SessionCapabilityChange | Readonly<{ kind: 'skill'; source: 'rules' }>)
+export type SessionCapabilityApplyChange = (SessionCapabilityChange | Readonly<{ kind: 'skill' | 'mcp_server'; source: 'rules' }>)
     & Readonly<Pick<PendingApply, 'reason' | 'restartBy'>>;
 export type SessionCapabilityApplyNoticeKey = 'addedNow' | 'removedNow' | 'appliedNow' | 'joinsNextTurn' | 'leavesNextTurn' | 'pendingNextTurn'
     | 'newSessionsOnly' | 'offline' | 'restart' | 'restartTerminal' | 'cannotResume' | 'nextStart' | 'saved';
@@ -16,7 +16,8 @@ type PendingApply = Extract<SessionCapabilitiesGetOutputV1, { ok: true }>['pendi
 export function readSessionCapabilityApplyChange(metadata: unknown,
     titleFor: (kind: SessionCapabilityChange['kind'], id: string) => string | null): SessionCapabilityApplyChange | null {
     const apply = readCapabilitySelectionApplyV1(metadata);
-    if (readPendingSkillRuleApplyV1(metadata)) return { kind: 'skill', source: 'rules', ...apply.skills };
+    if (readPendingCapabilityRuleApplyV1(metadata, 'mcp')) return { kind: 'mcp_server', source: 'rules', ...apply.mcp };
+    if (readPendingCapabilityRuleApplyV1(metadata, 'skills')) return { kind: 'skill', source: 'rules', ...apply.skills };
     const desired = readSessionCapabilitySelectionFromMetadataV1(metadata), applied = readAppliedSessionCapabilitySelectionFromMetadataV1(metadata);
     const pending = readPendingCapabilityApplyV1(metadata);
     const candidates: SessionCapabilityApplyChange[] = [];

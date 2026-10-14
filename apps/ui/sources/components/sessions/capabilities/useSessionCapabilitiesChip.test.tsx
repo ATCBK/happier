@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import {
   createSessionFixture,
   renderHook,
+  renderScreen,
   standardCleanup,
 } from '@/dev/testkit';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -17,6 +18,8 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
 const homes = createHomeGovernanceHarness();
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 installHomeGovernanceBoundaries(homes);
 installDisconnectedServerSocketBoundary();
 const transport = vi.hoisted(() =>
@@ -38,7 +41,12 @@ const { PromptLibraryRecordV1Schema, PromptLibraryRowsListResponseV1Schema } = a
 const { resolveSessionCapabilitiesV1 } = await import('@happier-dev/protocol/reach/resolveSessionCapabilitiesV1');
 const { SessionCapabilitiesGetOutputV1Schema } = await import('@happier-dev/protocol/actions/specs/sessionCapabilities');
 const { buildSessionCapabilitiesModel } = await import('./sessionCapabilitiesModel');
+const { SessionCapabilitiesContent } = await import('./SessionCapabilitiesContent');
+const { applyMcpServerCatalogSnapshot } = await import('@/sync/store/settings/mcpServerCatalogSnapshot');
+const { McpServerCatalogV1Schema } = await import('@happier-dev/protocol/mcp/servers/serverRowsV1');
 const { MetadataSchema } = await import('@happier-dev/session-core/state');
+const { SessionSkillCatalogListResponseV1Schema } = await import('@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc');
+const { normalizeRawMessage } = await import('@happier-dev/session-core/raw');
 const { createSessionAccessFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
 const { SessionCurrentProjectionRecordV1Schema } = await import('@happier-dev/protocol');
 const { createSessionOwnerMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1, projectSessionOwnerCompatibilityViewV1 } =
@@ -164,6 +172,10 @@ it('binds the draft chip to the preview on intent and edits only the draft', asy
 
 it('mounts one Session owner for the chip and the apply line, and adds nothing until intent', async () => {
   const sessionId = 'c123456789012345678901234';
+  const nativeCatalog = SessionSkillCatalogListResponseV1Schema.parse({ skills: [
+      { origin: 'vendor', name: 'native-review', backendId: 'claude', path: '/native/native-review' },
+      { origin: 'happier', name: 'injected-review', backendId: 'claude', path: '/session/skills/review' },
+    ] });
   const owner = createSessionOwnerMetadataV1({ metadata: { path: '/repo', host: 'MacBook', machineId: 'machine', flavor: 'claude',
     startedBy: 'daemon', runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} },
     agentRuntimeCapabilitiesV1: { capabilitySelection: { vendorResume: 'supported', skillsLiveReload: 'supported' } } } });
@@ -183,7 +195,7 @@ it('mounts one Session owner for the chip and the apply line, and adds nothing u
         active: true,
         metadataLayoutVersion: 1,
         metadata: { path: '', host: '' },
-        ownerMetadataView: MetadataSchema.parse(metadata),
+        ownerMetadataView: MetadataSchema.parse({ ...metadata, sessionSkillCatalogV1: nativeCatalog }),
       }),
     },
     sessionLocalStateScope: { serverId, accountId: 'owner' },
@@ -215,7 +227,7 @@ it('mounts one Session owner for the chip and the apply line, and adds nothing u
   expect(hook.getCurrent().model.state).toBe('resolving');
   const publishOwner = async (value: unknown) => act(async () => {
     getStorage().setState(current => ({ sessions: { ...current.sessions, [sessionId]: {
-      ...current.sessions[sessionId]!, ownerMetadataView: MetadataSchema.parse(value),
+      ...current.sessions[sessionId]!, ownerMetadataView: MetadataSchema.parse({ ...MetadataSchema.parse(value), sessionSkillCatalogV1: nativeCatalog }),
     } } }));
   });
   const rulePending = writeCapabilitySelectionApplyV1(metadata, { skills: { source: 'rules', reason: 'next_turn' } });
@@ -233,4 +245,33 @@ it('mounts one Session owner for the chip and the apply line, and adds nothing u
     hook.getCurrent().chip.collapsedContentPopover?.label,
   );
   expect(stop).not.toHaveBeenCalled();
+
+  // Mount the production detail leaf, rather than projecting a model in the test.
+  const content = hook.getCurrent().chip.collapsedContentPopover!.renderContent;
+  if (typeof content !== 'function') throw new Error('Expected the production sheet binding');
+  const sheet = await renderScreen(<>{content({ maxHeight: 500, requestClose: () => {} })}</>);
+  const scope = { serverId, accountId: 'owner' };
+  const before = transport.mock.calls.length;
+  const catalog = McpServerCatalogV1Schema.parse({ v: 1, servers: [{ id: 'linear', name: 'linear', transport: 'stdio',
+    stdio: { command: 'linear', args: [] }, env: {}, createdAt: 1, updatedAt: 1,
+    toolsSnapshot: { checkedAt: 1, machineId: 'machine', tools: [{ name: 'search', tokens: 1400 }] } }],
+    bindings: [{ id: 'linear-on', serverId: 'linear', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 }] });
+  await act(async () => applyMcpServerCatalogSnapshot(scope, { status: 'ready', revision: 1, catalog, authority: 'active', diagnostics: [] }, true));
+  await vi.waitFor(() => expect(transport.mock.calls.length).toBeGreaterThan(before));
+  expect(sheet.findByType(SessionCapabilitiesContent)?.props.model).toMatchObject({ costKnown: true,
+    groups: expect.arrayContaining([expect.objectContaining({ kind: 'mcp', rows: expect.arrayContaining([
+      expect.objectContaining({ id: 'linear', line2: { kind: 'cost', cost: { toolCount: 1, tokensPerTurn: 1400 } } }),
+    ]) })]) });
+  expect(sheet.findByType(SessionCapabilitiesContent)?.props.model.groups[0].nativeRow.rows.map((row: { id: string }) => row.id)).toEqual(['native-review']);
+  const notice = normalizeRawMessage('capability-failure', null, 2, { role: 'agent', content: { type: 'event', data: {
+    type: 'message', message: 'Optional server failed', capabilityNoticeV1: { v: 1,
+      items: [{ kind: 'mcp_server', itemId: 'linear', name: 'linear', code: 'spawn_failed' }] },
+  } } });
+  if (!notice) throw new Error('Expected a normalized capability notice');
+  await act(async () => { getStorage().getState().applyMessages(sessionId, [notice]); });
+  expect(sheet.findByType(SessionCapabilitiesContent)?.props.model.groups[1].rows.find((row: { id: string }) => row.id === 'linear'))
+    .toMatchObject({ line2: { kind: 'status', status: { kind: 'error', detail: 'spawn_failed' } } });
+  const callsAfterFacts = transport.mock.calls.length;
+  await act(async () => { hook.getCurrent().chip.onIntent?.(); });
+  await vi.waitFor(() => expect(transport.mock.calls.length).toBeGreaterThan(callsAfterFacts));
 });

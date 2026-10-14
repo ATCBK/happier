@@ -28,6 +28,14 @@ function fixture() {
         cost: (kind: 'skill' | 'mcp_server') => kind === 'skill' ? { tokensWhenUsed: 42 } : { toolCount: 3, tokensPerTurn: 123 } };
 }
 describe('the session capability sheet data owner', () => {
+    it('says why a skill masked by the machine\'s own copy is read-only', () => {
+        const input = fixture();
+        const view = { ...input.view, skills: { ...input.view.skills, plan: SessionSkillPlanV1Schema.parse({ plan: 'session_dir',
+            items: [{ skillId: 'review', name: 'review', digest: 'd1', state: 'masked_by_native', reason: 'native_same_name', maskedBy: { path: '/skills/review' } }], nativeDisables: [], diagnostics: [] }) } };
+        const row = buildSessionCapabilitiesModel({ ...input, view, machineName: 'MacBook' }).groups[0]?.rows[0];
+        expect(row).toMatchObject({ id: 'review', readOnlyReason: 'masked', action: { kind: 'none' },
+            line2: { kind: 'status', status: { kind: 'masked', machineName: 'MacBook' } } });
+    });
     it('keeps inherited rows and their scope unknown until rules arrive, then resolves the actual scope', () => {
         const input = fixture();
         const inherited = { ...input, selection: setSessionCapabilitySelectionItemV1(input.selection, 'skill', 'review', 'inherit') };

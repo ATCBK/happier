@@ -36,8 +36,11 @@ export function useExistingSessionCapabilitiesPopover(target: Extract<SessionCap
     const modelInput = React.useMemo(() => ({
         view: state.preview ? { ...state.preview, pendingApply: state.pendingApply } : null, selection: state.selection,
         applyState: { pendingApply: state.pendingApply, applyTiming: state.applyTiming },
-        state: state.status === 'ready' ? 'ready' as const : state.status === 'unavailable' ? 'error' as const : 'resolving' as const,
-        readOnly: target.readOnly, change: changeForTarget }), [state.preview, state.pendingApply, state.applyTiming, state.selection, state.status, target.readOnly, changeForTarget]);
+        // A check that failed while the session's machine is offline is the machine being away, not a failure.
+        state: state.status === 'ready' ? 'ready' as const : state.status === 'unavailable'
+            ? presentation.machineOnline === false ? 'machine_unreachable' as const : 'error' as const : 'resolving' as const,
+        readOnly: target.readOnly, change: changeForTarget }), [state.preview, state.pendingApply, state.applyTiming, state.selection, state.status,
+        presentation.machineOnline, target.readOnly, changeForTarget]);
     const model = React.useMemo(() => buildSessionCapabilitiesModel({ ...presentation, ...modelInput }), [presentation, modelInput]);
     const dismissNotice = React.useCallback(() => setChange(null), []);
     const undoLast = React.useCallback(() => target.readOnly
@@ -51,8 +54,11 @@ export function useExistingSessionCapabilitiesPopover(target: Extract<SessionCap
 export function useNewSessionCapabilitiesPopover(draft: NewSessionCapabilitiesDraft, presentation: SessionCapabilitiesPresentation) {
     const state = useNewSessionCapabilities(draft);
     const modelInput = React.useMemo(() => ({ view: state.preview, selection: state.selection,
-        state: state.previewStatus === 'ready' ? 'ready' as const : state.previewStatus === 'unreachable' ? 'machine_unreachable' as const
-            : state.previewStatus === 'error' ? 'error' as const : 'resolving' as const, readOnly: false }), [state.preview, state.selection, state.previewStatus]);
+        // REACH's presence decides "offline" too: a failed check against a machine that is away is not a failure.
+        state: state.previewStatus === 'ready' ? 'ready' as const
+            : state.previewStatus === 'unreachable' || (state.previewStatus === 'error' && presentation.machineOnline === false) ? 'machine_unreachable' as const
+            : state.previewStatus === 'error' ? 'error' as const : 'resolving' as const, readOnly: false }),
+        [state.preview, state.selection, state.previewStatus, presentation.machineOnline]);
     const model = React.useMemo(() => buildSessionCapabilitiesModel({ ...presentation, ...modelInput }), [presentation, modelInput]);
     return { model, modelInput, setItem: state.setItem, demandPreview: state.demandPreview, refresh: state.refresh, error: state.error };
 }

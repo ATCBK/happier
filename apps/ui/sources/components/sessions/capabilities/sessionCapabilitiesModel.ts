@@ -77,7 +77,9 @@ export function buildSessionCapabilitiesModel(input: SessionCapabilitiesModelInp
         }
         if (selected) { if (item.kind === 'skill') skillCount++; else mcpCount++; }
         const statuses = item.kind === 'skill' ? input.skillStatus(item.id) : input.mcpStatus(item.id);
-        const status = pickMostBlockingCapabilityStatus(statuses.filter(status => presentCapabilityStatus(status, 'row').tone !== 'quiet'), 'row');
+        // A skill the machine's own copy masks is read-only; its row says so rather than going silent.
+        const status = pickMostBlockingCapabilityStatus(statuses.filter(status => presentCapabilityStatus(status, 'row').tone !== 'quiet'), 'row')
+            ?? (masked ? { kind: 'masked' as const, ...(input.machineName ? { machineName: input.machineName } : {}) } : null);
         if (status && presentCapabilityStatus(status, 'row').tone === 'needs_you') attention = true;
         const cost = input.cost?.(item.kind, item.id) ?? null;
         // Per-turn cost is what MCP servers add every turn; skills cost only when an Agent loads them.

@@ -133,7 +133,10 @@ export function useSessionCapabilities(sessionId: string, suppliedMetadata?: unk
         return { mcp: resolveCapabilityApplyTimingV1({ ...input, kind: 'mcp_server' }),
             skills: resolveCapabilityApplyTimingV1({ ...input, kind: 'skill' }) };
     }, [sessionMetadata, sessionRunning, preview?.applyTiming]);
-    const demandPreview = React.useCallback(() => setDemanded(true), []);
+    const demandPreview = React.useCallback(() => {
+        if (demanded && execution.ready) void refresh();
+        else setDemanded(true);
+    }, [demanded, execution.ready, refresh]);
     return { sessionId, scopeKey: key, metadata: sessionMetadata, selection: state.selection, items: preview ? { mcp: preview.mcp.items, skills: preview.skills.items } : null,
         pendingApply, applyTiming,
         preview, lastKnownPreview: preview, status, error, setItem, undoLast, demandPreview, refresh };

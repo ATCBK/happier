@@ -41,13 +41,15 @@ export function createCapabilitiesActionChip(
     /** The one demand signal: hover, press-in, focus and overflow all route through it. */
     onIntent?: () => void;
     maxHeightCap?: number;
+    /** The route asked for the sheet (`?capabilities=open`, PD13): the chip opens it once, then hands back. */
+    openRequest?: Readonly<{ consume: () => void }> | null;
   }>,
 ): AgentInputExtraActionChip {
   const title = t('capabilities.session.sheet.title');
   return {
     key: SESSION_CAPABILITIES_CHIP_KEY,
     onIntent: params.onIntent,
-    stabilityKey: `${params.stabilityKey}:${params.label}:${params.attention ? 1 : 0}`,
+    stabilityKey: `${params.stabilityKey}:${params.label}:${params.attention ? 1 : 0}:${params.openRequest ? 'open' : ''}`,
     controlId: 'capabilities',
     collapsedContentPopover: {
       title,
@@ -78,7 +80,13 @@ export function createCapabilitiesActionChip(
       chipAnchorRef,
       toggleCollapsedPopover,
     }) => (
-      <Pressable
+      <CapabilitiesChipPressable
+        openRequest={params.openRequest ?? null}
+        open={() => {
+          // A route open is an entry like a press: it demands the preview through the one intent signal.
+          params.onIntent?.();
+          toggleCollapsedPopover?.(SESSION_CAPABILITIES_CHIP_KEY);
+        }}
         ref={chipAnchorRef}
         testID="session-capabilities-chip"
         accessibilityRole="button"
@@ -110,7 +118,26 @@ export function createCapabilitiesActionChip(
             <AttentionDot />
           </View>
         ) : null}
-      </Pressable>
+      </CapabilitiesChipPressable>
     ),
   };
 }
+
+/** The chip's pressable; on mount with a route request it opens its own popover once and consumes the request. */
+const CapabilitiesChipPressable = React.forwardRef<
+  View,
+  React.ComponentProps<typeof Pressable> &
+    Readonly<{
+      openRequest: Readonly<{ consume: () => void }> | null;
+      open: () => void;
+    }>
+>(function CapabilitiesChipPressable({ openRequest, open, ...pressable }, ref) {
+  const openRef = React.useRef(open);
+  openRef.current = open;
+  React.useEffect(() => {
+    if (!openRequest) return;
+    openRef.current();
+    openRequest.consume();
+  }, [openRequest]);
+  return <Pressable ref={ref} {...pressable} />;
+});

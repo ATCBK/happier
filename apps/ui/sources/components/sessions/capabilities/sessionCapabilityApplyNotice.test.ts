@@ -25,6 +25,23 @@ describe('the single session capability apply notice', () => {
         expect(notice(projected)?.text).toBe(text);
         expect(notice(clearCapabilitySelectionApplyV1(projected, 'skills'))).toBeNull();
     });
+    it('reads MCP rule pending and manual-restart words from the same strict owner producer without a Session override', () => {
+        for (const [reason, restartBy, key] of [
+            ['next_turn', undefined, 'pendingNextTurn'],
+            ['restart_to_apply', 'terminal', 'restartTerminal'],
+        ] as const) {
+            const metadata = writeCapabilitySelectionApplyV1({}, { mcp: { source: 'rules', reason, ...(restartBy ? { restartBy } : {}) } });
+            const created = createSessionOwnerMetadataV1({ metadata });
+            if (!created.ok) throw new Error('MCP rule status rejected by owner metadata');
+            const projected = projectSessionOwnerCompatibilityViewV1({ sharedMetadata: projectSessionSharedMetadataV1({ metadata }),
+                ownerMetadata: SessionOwnerMetadataV1Schema.parse(created.ownerMetadata) });
+            const notice = (value: unknown) => sessionCapabilityApplyNotice({ pendingApply: readPendingCapabilityApplyV1(value),
+                applyTiming: { mcp: { t: 'applied_now' }, skills: { t: 'applied_now' } },
+                change: readSessionCapabilityApplyChange(value, () => null), machineOnline: true, machineName: 'QA', turnSettled: false });
+            expect(notice(projected)?.key).toBe(key);
+            expect(notice(clearCapabilitySelectionApplyV1(projected, 'mcp'))).toBeNull();
+        }
+    });
     it('uses the busy Claude owner record from QA-FIX20R3 instead of its live-reload declaration', () => {
         const owner = SessionOwnerMetadataV1Schema.parse({ v: 1, runtime: {
             agentRuntimeCapabilitiesV1: { capabilitySelection: { vendorResume: 'supported', skillsLiveReload: 'supported' } },

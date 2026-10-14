@@ -57,6 +57,19 @@ it('edits only the authoring draft and does not request a Machine preview before
     await vi.waitFor(() => expect(hook.getCurrent().model.state, hook.getCurrent().error ?? '').toBe('ready'));
 });
 
+it('reads a draft check that failed against a machine REACH says is away as offline, not as a failure', async () => {
+    transport.mockRejectedValue(new Error('rpc timed out'));
+    const hook = await renderHook((machineOnline: boolean) => {
+        const [selection, setSelection] = React.useState<SessionCapabilitySelectionV1>({});
+        return useNewSessionCapabilitiesPopover({ machineId: 'machine', directory: '/repo', agentId: 'codex', enabled: true,
+            selection, setSelection }, { ...presentation, machineOnline });
+    }, { initialProps: false });
+    await act(async () => hook.getCurrent().demandPreview());
+    await vi.waitFor(() => expect(hook.getCurrent().model.state).toBe('machine_unreachable'));
+    await hook.rerender(true);
+    expect(hook.getCurrent().model.state).toBe('error');
+});
+
 it('reuses the Session Action owner for rollback, previous-override Undo and read-only viewers', async () => {
     const sessionId = 'c123456789012345678901234';
     const initial = createSessionOwnerMetadataV1({ metadata: { path: '/repo', host: 'MacBook', machineId: 'machine', flavor: 'codex', startedBy: 'daemon',
@@ -139,4 +152,23 @@ it('reuses the Session Action owner for rollback, previous-override Undo and rea
     await expect(hook.getCurrent().setItem('native_skill', 'native-review', 'on')).resolves.toEqual({ ok: false, message: 'read_only' });
     await expect(hook.getCurrent().undoLast()).resolves.toEqual({ ok: false, message: 'read_only' });
     expect(hook.getCurrent().model.groups[0]?.nativeRow?.rows[0]?.action.kind).toBe('none');
+});
+
+it('says the session\'s machine is away when its check fails while it is offline, and a failure otherwise', async () => {
+    const sessionId = 'c123456789012345678901299';
+    const owner = createSessionOwnerMetadataV1({ metadata: { path: '/repo', host: 'MacBook', machineId: 'machine', flavor: 'claude', startedBy: 'daemon',
+        runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} } } });
+    if (!owner.ok) throw new Error('Invalid owner fixture');
+    const ownerMetadataView = MetadataSchema.parse(projectSessionOwnerCompatibilityViewV1({ sharedMetadata: { v: 1 }, ownerMetadata: owner.ownerMetadata }));
+    getStorage().setState({ sessions: { [sessionId]: createSessionFixture({ id: sessionId, serverId, active: true, metadataLayoutVersion: 1,
+        metadata: { path: '', host: '' }, ownerMetadataView }) }, sessionLocalStateScope: { serverId, accountId: 'owner' } });
+    homes.answer(serverId, 'GET /v1/artifacts', { body: [] });
+    transport.mockRejectedValue(new Error('machine unreachable'));
+    const target = { kind: 'session' as const, sessionId, serverId, readOnly: false };
+    const hook = await renderHook((machineOnline: boolean) => useExistingSessionCapabilitiesPopover(target, { ...presentation, machineOnline }),
+        { initialProps: false });
+    await act(async () => { hook.getCurrent().demandPreview(); });
+    await vi.waitFor(() => expect(hook.getCurrent().model.state).toBe('machine_unreachable'));
+    await hook.rerender(true);
+    expect(hook.getCurrent().model.state).toBe('error');
 });

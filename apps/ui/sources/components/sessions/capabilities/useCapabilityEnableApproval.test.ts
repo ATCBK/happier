@@ -8,6 +8,7 @@ import { installApprovalCommonModuleMocks } from '@/components/approvals/approva
 import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { ApprovalRequestSchema, SessionCurrentProjectionRecordV1Schema, buildApprovalRequestArtifactHeaderV1, encodePlainArtifactStoredContent } from '@happier-dev/protocol';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -90,7 +91,7 @@ it.each(['always', 'reject', 'cannot_resume'] as const)('uses the existing Agent
         expect(request.method).toBe(RPC_METHODS.APPROVAL_REQUEST_REPLAY_APPROVED);
         const account = await captureLazyActionAccountContext(serverId);
         try {
-            const replay = createActionExecutor({ ...createUiSessionCapabilityActionDeps(account),
+            const replay = createActionExecutor(createActionExecutorBoundaryFixture({ ...createUiSessionCapabilityActionDeps(account),
                 // This unsigned host-origin fixture uses the same captured Home/Account
                 // currentness owner as the real UI executor; no signed-origin branch is replaced.
                 isApprovalExecutionOriginCurrent: async ({ origin }) => {
@@ -108,7 +109,7 @@ it.each(['always', 'reject', 'cannot_resume'] as const)('uses the existing Agent
                     }) });
                     return response?.ok ? { ok: true } : { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
                 },
-            });
+            }));
             const payload = request.payload;
             if (!payload || typeof payload !== 'object' || !('artifactId' in payload) || typeof payload.artifactId !== 'string') {
                 throw new Error('Invalid approved replay transport');
