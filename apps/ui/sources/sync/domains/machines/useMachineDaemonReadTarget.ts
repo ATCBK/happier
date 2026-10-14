@@ -1,7 +1,10 @@
 import * as React from 'react';
 
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
-import { useServerCredentialAccountScopeBinding, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { useServerCredentialAccountScopeStates, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { storage } from '@/sync/domains/state/storageStore';
 import { useMachinePresenceSummary, useMachinePresenceSummaries } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
@@ -16,6 +19,37 @@ export type MachineDaemonReadTargetInput = Readonly<{
     online?: boolean;
 }>;
 
+type MachineDaemonReadIdentity = Readonly<{
+    key: MachineDaemonReadKey;
+    accountBinding: ServerCredentialAccountScopeBinding | null;
+    accountMatches: boolean;
+    enabled: boolean;
+}>;
+
+/** Resolve the same credential-owned identities for a fleet spanning several Homes. */
+export function useMachineDaemonReadIdentities(inputs: readonly MachineDaemonReadTargetInput[]): readonly MachineDaemonReadIdentity[] {
+    const inputsKey = JSON.stringify(inputs.map(input => ({ machineId: input.machineId,
+        serverId: resolveServerProfileScopeIdForIdentifier(input.serverId?.trim() || getActiveServerSnapshot().serverId),
+        expectedAccountId: input.expectedAccountId ?? null, enabled: input.enabled !== false })));
+    const targets = React.useMemo(() => JSON.parse(inputsKey) as Array<Readonly<{
+        machineId: string; serverId: string; expectedAccountId: string | null; enabled: boolean;
+    }>>, [inputsKey]);
+    const states = useServerCredentialAccountScopeStates(targets.map(input => input.serverId));
+    const hostViewed = useHostActivelyViewed();
+    const presented = useLayoutPresentationActive();
+    const viewed = hostViewed && presented;
+    return React.useMemo(() => targets.map(input => {
+        const state = states.get(input.serverId);
+        const binding = state?.binding ?? null;
+        const scope = state?.resolution.kind === 'bound' ? state.resolution.scope : null;
+        const expectedAccountId = input.expectedAccountId ?? binding?.accountId ?? scope?.accountId ?? null;
+        return { key: { machineId: input.machineId, serverId: input.serverId || null, expectedAccountId },
+            accountBinding: binding, accountMatches: !!scope && scope.accountId === expectedAccountId,
+            enabled: viewed && input.enabled && !!binding
+                && binding.accountId === expectedAccountId && binding.isCurrent() };
+    }), [states, targets, viewed]);
+}
+
 /**
  * Who a daemon read for one machine is made as, and whether it may run now: the exact Home/Account
  * identity from the existing credential owner (including other Homes), the machine's presence, and
@@ -27,29 +61,20 @@ export function useMachineDaemonReadTarget(input: MachineDaemonReadTargetInput):
     enabled: boolean;
     offline: boolean;
     accountBinding: ServerCredentialAccountScopeBinding | null;
+    /** Settled identity may retain content during a profile recheck, never across credential mutation. */
+    accountMatches: boolean;
     daemonStateVersion: number | null | undefined;
 }> {
-    const { binding, serverId, expectedAccountId, viewed } = useMachineDaemonReadIdentity(input);
-    const key = React.useMemo(() => ({ machineId: input.machineId, serverId, expectedAccountId }), [input.machineId, serverId, expectedAccountId]);
+    const identity = useMachineDaemonReadIdentities([input])[0]!;
+    const { key, accountBinding: binding } = identity;
+    const serverId = key.serverId;
     const presence = useMachinePresenceSummary(serverId, input.machineId);
     const selectVersion = React.useCallback((state: Parameters<typeof resolveServerScopedMachine>[0]) => resolveServerScopedMachine(state, serverId, input.machineId)?.daemonStateVersion, [input.machineId, serverId]);
     const reportedVersion = storage(selectVersion);
     const online = input.online ?? (presence.reachability !== 'unreachable');
-    const enabled = viewed && input.enabled !== false && online && !!binding
-        && binding.accountId === expectedAccountId && binding.isCurrent();
-    return { key, enabled, offline: !online, accountBinding: binding, daemonStateVersion: input.daemonStateVersion ?? reportedVersion };
-}
-
-/** Who asks, once for a Home: the credential owner's identity and whether the app is being looked at. */
-function useMachineDaemonReadIdentity(input: Readonly<{ serverId?: string | null; expectedAccountId?: string | null }>) {
-    const { binding, resolution } = useServerCredentialAccountScopeBinding(input.serverId);
-    const viewed = useHostActivelyViewed();
-    // The credential owner retains a settled identity during metadata rechecks, but
-    // withdraws it on credential mutation. Keep projection continuity, not stale authority.
-    const scope = resolution.kind === 'bound' ? resolution.scope : null;
-    const serverId = binding?.serverId ?? scope?.serverId ?? input.serverId ?? null;
-    const expectedAccountId = input.expectedAccountId ?? binding?.accountId ?? scope?.accountId ?? null;
-    return { binding, serverId, expectedAccountId, viewed };
+    const enabled = identity.enabled && online;
+    return { key, enabled, offline: !online, accountBinding: binding, accountMatches: identity.accountMatches,
+        daemonStateVersion: input.daemonStateVersion ?? reportedVersion };
 }
 
 export type MachineDaemonReadTargetEntry = Readonly<{ key: MachineDaemonReadKey; enabled: boolean; offline: boolean }>;
@@ -59,17 +84,15 @@ export type MachineDaemonReadTargetEntry = Readonly<{ key: MachineDaemonReadKey;
  * each machine's own presence. A daemon read stays per machine; this only names the targets together.
  */
 export function useMachineDaemonReadTargets(input: Readonly<{ serverId?: string | null; machineIds: readonly string[]; enabled?: boolean }>): readonly MachineDaemonReadTargetEntry[] {
-    const { binding, serverId, expectedAccountId, viewed } = useMachineDaemonReadIdentity(input);
-    const idsKey = JSON.stringify(input.machineIds);
-    const presence = useMachinePresenceSummaries(serverId, input.machineIds);
+    const identities = useMachineDaemonReadIdentities(input.machineIds.map(machineId => ({ ...input, machineId })));
+    const presence = useMachinePresenceSummaries(input.serverId, input.machineIds);
     const onlineKey = JSON.stringify(presence.map(machine => machine.reachability !== 'unreachable'));
-    const current = viewed && input.enabled !== false && !!binding && binding.accountId === expectedAccountId && binding.isCurrent();
     return React.useMemo(() => {
         const online = JSON.parse(onlineKey) as boolean[];
-        return (JSON.parse(idsKey) as string[]).map((machineId, index) => ({
-            key: { machineId, serverId, expectedAccountId },
-            enabled: current && online[index] === true,
+        return identities.map((identity, index) => ({
+            key: identity.key,
+            enabled: identity.enabled && online[index] === true,
             offline: online[index] !== true,
         }));
-    }, [current, expectedAccountId, idsKey, onlineKey, serverId]);
+    }, [identities, onlineKey]);
 }

@@ -2,9 +2,9 @@ import * as React from 'react';
 import { MachineResourceAttentionV1Schema, type MachineResourceAttentionV1, type MachineResourceSummaryV1 } from '@happier-dev/protocol/machines/resources/machineResourceSummaryV1';
 import { storage } from '@/sync/domains/state/storageStore';
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
-import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
+import { useMachineDaemonReadIdentities } from '../useMachineDaemonReadTarget';
 import { useMachinePresenceSummary } from '@/components/sessions/model/useMachinePresenceSummary';
-import { isMachineResourceStateStale, machineResourceStore } from './machineResourceStore';
+import { EMPTY_MACHINE_RESOURCE_STATE, isMachineResourceStateStale, machineResourceStore } from './machineResourceStore';
 import type { MachineResourceKey } from './machineRpc';
 
 export type MachineResourceAvailability =
@@ -23,13 +23,14 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 
 /** Row-local read of already demanded/warmed state; this hook is deliberately passive. */
 export function useMachineResourceSummary(input: MachineResourceKey): MachineResourceAvailability | null {
-    const presence = useMachinePresenceSummary(input.serverId, input.machineId);
-    const selectMachine = React.useCallback((state: Parameters<typeof resolveServerScopedMachine>[0]) => resolveServerScopedMachine(state, input.serverId, input.machineId), [input.machineId, input.serverId]);
+    const target = useMachineDaemonReadIdentities([input])[0]!;
+    const presence = useMachinePresenceSummary(target.key.serverId, input.machineId);
+    const selectMachine = React.useCallback((state: Parameters<typeof resolveServerScopedMachine>[0]) => resolveServerScopedMachine(state, target.key.serverId, input.machineId), [input.machineId, target.key.serverId]);
     const machine = storage(selectMachine);
-    const viewed = useHostActivelyViewed();
-    const key = React.useMemo(() => ({ machineId: input.machineId, serverId: input.serverId ?? null, view: 'summary' as const }), [input.machineId, input.serverId]);
+    const viewed = target.enabled;
+    const key = React.useMemo(() => ({ ...target.key, view: 'summary' as const }), [target.key]);
     const subscribe = React.useCallback((listener: () => void) => machineResourceStore.observe(key, listener), [key]);
-    const getSnapshot = React.useCallback(() => machineResourceStore.getState(key), [key]);
+    const getSnapshot = React.useCallback(() => target.accountMatches ? machineResourceStore.getState(key) : EMPTY_MACHINE_RESOURCE_STATE, [key, target.accountMatches]);
     const state = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     const stale = isMachineResourceStateStale(state, Date.now());
     const daemonState: unknown = machine?.daemonState;
@@ -49,10 +50,11 @@ export function useMachineResourceSummary(input: MachineResourceKey): MachineRes
         if (publishedAttention) machineResourceStore.setPublishedAttention(key, publishedAttention);
     }, [key, publishedAttention, state.snapshot?.attention, state.snapshot?.sample?.sampledAt]);
     React.useEffect(() => {
-        if (machine) machineResourceStore.daemonStateChanged(input, machine.daemonStateVersion);
-    }, [input.machineId, input.serverId, machine?.daemonStateVersion]);
+        if (machine && key.expectedAccountId) machineResourceStore.daemonStateChanged(key, machine.daemonStateVersion);
+    }, [key, machine?.daemonStateVersion]);
     const online = machine ? presence.reachability === 'reachable' : true;
     return React.useMemo<MachineResourceAvailability | null>(() => {
+        if (!target.accountMatches) return null;
         if (state.status === 'not_reported') return OLDER_HAPPIER;
         if (publication?.reason === 'helper_missing' || state.snapshot?.reason === 'helper_missing') return UNSUPPORTED;
         if (state.status === 'error' && !state.summary) return state.errorCode ? { kind: 'unavailable', errorCode: state.errorCode } : UNAVAILABLE;
@@ -68,5 +70,5 @@ export function useMachineResourceSummary(input: MachineResourceKey): MachineRes
             : !viewed || !online || state.status === 'error' || state.snapshot?.state === 'unavailable' ? 'held' : 'live';
         return { kind: 'reporting', summary: state.summary, freshness,
             attention: publishedAttention ?? state.snapshot?.attention ?? null };
-    }, [machine, online, publication, publishedAttention, stale, state, viewed]);
+    }, [machine, online, publication, publishedAttention, stale, state, target.accountMatches, viewed]);
 }

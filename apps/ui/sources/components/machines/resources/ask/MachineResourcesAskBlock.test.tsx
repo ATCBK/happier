@@ -86,6 +86,8 @@ await loadSyncSingletonForTests();
 const { HubComposerSuggestionList } = await import('@/components/hub/composer/suggestions/HubComposerSuggestions');
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { machineResourceStore } = await import('@/sync/domains/machines/resources/machineResourceStore');
+const { machineStorageStore } = await import('@/sync/domains/machines/storage/machineStorageStore');
+const { machineProcessesStore } = await import('@/sync/domains/machines/processes/machineProcessesStore');
 const { warmMachineResourceSummaries } = await import('@/sync/domains/machines/resources/warmMachineResourceSummaries');
 const { MachineResourcesAskBlock } = await import('./MachineResourcesAskBlock');
 const { NewSessionEmbeddedHostProvider } = await import('@/components/sessions/new/navigation/newSessionHost');
@@ -168,9 +170,62 @@ it('starts Ask on the page machine and home folder before intent, independently 
 afterEach(() => {
     standardCleanup();
     machineResourceStore.reset();
+    machineStorageStore.reset();
+    machineProcessesStore.reset();
     storage.setState({ machines: {}, machineListByServerId: {}, machineListStatusByServerId: {} });
     rpc.mockReset();
     routePush.mockReset();
+});
+
+it('uses warmed Storage and Processes facts without extra reads and suppresses unavailable Automations', async () => {
+    const { HappierStorageSummaryV1Schema } = await import('@happier-dev/protocol/storage/storageV1');
+    const { MachineProcessesAnswerV1Schema } = await import('@happier-dev/protocol/machines/processes/machineProcessesV1');
+    const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+    const { MachineResourcesPolicyV1Schema } = await import('@happier-dev/protocol/machines/resources/machineResourcesPolicyV1');
+    await prepareSessionDraftPersistenceStorage();
+    const serverId = 'srv_warmed_ask';
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://warmed-ask.example.test', serverIdentityId: serverId });
+    onTestFinished(() => connection.dispose());
+    const machine = createMachineFixture({ id: 'machine-warmed', active: true, activeAt: Date.now(), metadata: {
+        ...createMachineFixture().metadata!, resourcesPolicyV1: MachineResourcesPolicyV1Schema.parse({ v: 1, guard: { memoryGuard: { enabled: true } } }),
+    } });
+    storage.setState({ isDataReady: true, isSessionDraftsReady: true, machines: { [machine.id]: machine },
+        machineListByServerId: { [serverId]: [machine] }, machineListStatusByServerId: { [serverId]: 'idle' },
+        settings: { ...storage.getState().settings, featureToggles: { ...storage.getState().settings.featureToggles, automations: false } } });
+    const accountId = captureActiveServerAccountScopeLifetime()!.scope.accountId;
+    const storageReport = HappierStorageSummaryV1Schema.parse({ revision: 1, sizedAt: 1, volumes: [], categories: [
+        { categoryId: 'caches', size: { allocatedBytes: 4_000_000_000, freesBytes: 4_000_000_000,
+            sharedBytes: 0, sharedExtentsUnmeasured: false, atLeast: false }, count: 1, canGoBytes: 4_000_000_000, detailFacts: {} },
+    ], suggestionsTop: [], pile: { count: 0, freesBytes: 0, droppedSinceLastView: [] }, trash: { count: 0, allocatedBytes: 0 },
+        wholeDisk: { enabled: false, scans: [] } });
+    const processReport = MachineProcessesAnswerV1Schema.parse({ v: 1, machineId: machine.id, capturedAtMs: 1,
+        state: 'live', platform: 'linux', evidenceModel: 'fenced', owners: [], leftBehind: [
+            { rowId: 'left', ref: 'left', name: 'vite', pid: 20, startedAtMs: 1, level: 'left_behind', memoryBytes: 100,
+                memoryKind: 'rss', owner: { kind: 'session', sessionId: 'finished' }, confirmedAtMs: 1 },
+        ], totals: { happier: { processCount: 0, memoryBytes: 0 }, leftBehind: { processCount: 1, memoryBytes: 100 } } });
+    rpc.mockImplementation(async ({ method }: { method: string }) => method === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET
+        ? storageReport : method === RPC_METHODS.MACHINES_PROCESSES_LIST ? processReport : undefined);
+    await machineStorageStore.read({ serverId, machineId: machine.id, expectedAccountId: accountId });
+    await machineProcessesStore.read({ serverId, machineId: machine.id, accountId, scope: 'happier', view: 'tree' });
+    rpc.mockClear();
+    const screen = await renderScreen(<MachineResourcesAskBlock serverId={serverId} machineId={machine.id} machineName="Laptop" />);
+    const list = () => screen.root.findAll(node => node.type === Reflect.get(HubComposerSuggestionList, 'type'))[0]!;
+    await vi.waitFor(() => {
+        const suggestions = list().props.suggestions;
+        expect(suggestions.find((entry: { kind: string }) => entry.kind === 'leftBehind')?.reason)
+            .toBe(t('machineResources.askSuggestions.reasons.leftBehind', { count: 1 }));
+        expect(suggestions.find((entry: { kind: string }) => entry.kind === 'storage')?.reason)
+            .toBe(t('machineResources.askSuggestions.reasons.storage', { amount: '4 GB' }));
+        expect(suggestions.some((entry: { kind: string }) => entry.kind === 'weeklyReview')).toBe(false);
+    });
+    const suggestion = list().props.suggestions.find((entry: { kind: string }) => entry.kind === 'leftBehind');
+    await screen.pressByTestIdAsync(`hub-composer.suggestion.${suggestion.id}`);
+    const host: NewSessionEmbeddedHost = screen.root.findByType(NewSessionEmbeddedHostProvider).props.host;
+    expect(host.params.prompt).toBe(suggestion.fill.text);
+    expect(host.params.machineId).toBe(machine.id);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(storage.getState().sessions).toEqual({});
+    await screen.unmount();
 });
 
 it('mounts Ask with a real warmed summary and reads calm from canonical attention, not the value payload', async () => {

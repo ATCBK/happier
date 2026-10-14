@@ -38,6 +38,25 @@ async function settle() { for (let turn = 0; turn < 8; turn++) await Promise.res
 describe('machine resources subscription owner', () => {
     afterEach(() => { vi.useRealTimers(); });
 
+    it('keeps held samples, history and unavailable-method facts within their exact Home Account', async () => {
+        const h = harness();
+        const accountA = { ...key, expectedAccountId: 'account-a' };
+        const accountB = { ...key, expectedAccountId: 'account-b' };
+        await h.store.read(accountA);
+        expect(h.store.getState(accountB).snapshot).toBeNull();
+        expect(h.store.getState({ ...accountB, view: 'overview' }).snapshot).toBeNull();
+        h.historyClient.mockResolvedValueOnce({ ok: true, value: { range: '1h', bucketMs: 60_000, points: [], today: { rxBytes: 1, txBytes: 2 } } });
+        await h.store.readHistory({ ...accountA, range: '1h' });
+        expect(h.store.getHistory({ ...accountB, range: '1h' }).history).toBeNull();
+        h.snapshotClient.mockResolvedValueOnce({ ok: false, reason: 'older_happier' });
+        await h.store.read(accountA);
+        expect(h.store.getState(accountA).status).toBe('not_reported');
+        expect(h.store.getState(accountB).status).toBe('loading');
+        await h.store.read(accountB);
+        expect(h.store.getState(accountB).status).toBe('ready');
+        h.store.reset();
+    });
+
     it('holds the last measured CPU across unreported samples without filling history gaps or another machine', async () => {
         const h = harness();
         const missing = snapshot(75_000);
