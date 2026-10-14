@@ -21,6 +21,7 @@ import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { SessionPendingPromptCards } from '@/components/tools/shell/permissions/SessionPendingPromptCards';
 import { TranscriptOriginSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
 
 import type { SessionCompanionDensity } from '../state/sessionCompanionPreference';
 import {
@@ -530,7 +531,12 @@ export const SessionSummaryCard = React.memo(function SessionSummaryCard(props: 
         : model.availability === 'locked'
             ? resolveSessionAwarenessContentLabel(model.encryption) ?? t('status.encryptedUnavailable')
             : null;
-    const offline = model.status?.state === 'disconnected' || model.status?.state === 'unknown';
+    // Session runtime freshness and Machine transport reachability are separate facts.
+    // This is the same scoped, reactive presence owner that Vitals consumes.
+    const { machineReachability } = useSessionMachineReachability(
+        props.session?.id ?? '', props.serverId ?? props.session?.serverId,
+    );
+    const offline = machineReachability === 'unreachable';
 
     return (
         <View testID={testID} style={styles.root} accessibilityRole="summary">

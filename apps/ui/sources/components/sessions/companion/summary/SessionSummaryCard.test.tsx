@@ -213,7 +213,7 @@ describe('SessionSummaryCard (the Companion hero)', () => {
         expect(screen.findByTestId('session-companion-summary-allow')?.props.disabled).toBe(false);
     });
 
-    it('shows an ask it cannot answer disabled, with when it can be answered', async () => {
+    it('keeps an unanswerable ask disabled without inventing machine reachability from Session status', async () => {
         const screen = await renderScreen(
             <SessionSummaryCard
                 model={model({
@@ -228,7 +228,7 @@ describe('SessionSummaryCard (the Companion hero)', () => {
 
         expect(screen.findByTestId('session-companion-summary-allow')?.props.disabled).toBe(true);
         expect(screen.findByTestId('session-companion-summary-ask-reason')?.props.children)
-            .toBe('sessionCompanion.ask.answerWhenBack(machine=MacBook Pro)');
+            .toBe('sessionCompanion.ask.notAllowed');
     });
 
     it('opens each fact and the dedicated Recap row at its existing owner in a compact card', async () => {
