@@ -281,6 +281,7 @@ describe('createManagedServiceProcessSupervisorHost', () => {
                     inventoryRegistry: createLocalServiceInventoryRegistry(), projectManagedServices: owner,
                     verifyConfirmationNonce: isLocalServiceActionConfirmationNonceV1 });
                 const terminateTree = processTree.terminateProcessTree;
+                let capturedTree: Extract<Awaited<ReturnType<typeof processTree.captureProcessTree>>, { status: 'ok' }> | undefined;
                 let restoreTerminationBoundary = () => {};
                 try {
                     let childPid = 0;
@@ -289,6 +290,14 @@ describe('createManagedServiceProcessSupervisorHost', () => {
                         expect(rootPid).toBeGreaterThan(0);
                         expect(childPid).toBeGreaterThan(0);
                     });
+                    // Preserve the fixture's exact generations before root death;
+                    // a departed numeric group cannot authorize survivor discovery.
+                    const captured = await processTree.captureProcessTree({ pid: rootPid });
+                    expect(captured).toMatchObject({ status: 'ok', capturedTargets: expect.arrayContaining([
+                        expect.objectContaining({ pid: childPid }),
+                    ]) });
+                    if (captured.status !== 'ok') throw new Error('Expected observed fixture tree before root exit');
+                    capturedTree = captured;
                     // Automatic root-exit cleanup and explicit Stop share the real owner; only OS termination refuses.
                     const terminationBoundary = vi.spyOn(processTree, 'terminateProcessTree').mockRejectedValue(new PluginError({
                         code: 'plugin_exec_termination_incomplete', message: 'Owned process tree remains live',
@@ -307,12 +316,22 @@ describe('createManagedServiceProcessSupervisorHost', () => {
                     expect(() => process.kill(childPid, 0)).not.toThrow();
                     restoreTerminationBoundary();
                     const retry = { ...request, requestId: `retry-${mode}` };
+                    const unconfirmed = await routes.execute({ ...retry, confirmationNonce: createLocalServiceActionConfirmationNonceV1(retry) });
+                    expect(unconfirmed).toMatchObject({ status: 'failed', reasonCode: 'plugin_managed_server_termination_incomplete' });
+                    expect(release).not.toHaveBeenCalled();
+                    expect(owner.resolveProjectService(target)).toMatchObject({ status: 'found', handle });
+                    expect(() => process.kill(childPid, 0)).not.toThrow();
+                    // Restoring the OS adapter is not physical settlement. Only
+                    // explicit test cleanup of those observed identities is.
+                    expect(await terminateTree({ targets: capturedTree.capturedTargets, tree: false }))
+                        .toMatchObject({ status: 'complete' });
                     const retried = await routes.execute({ ...retry, confirmationNonce: createLocalServiceActionConfirmationNonceV1(retry) });
                     expect(retried.reasonCode ?? retried.status).toBe('succeeded');
                     await handle.dispose();
                     expect(release).toHaveBeenCalledOnce();
                 } finally {
                     restoreTerminationBoundary();
+                    if (capturedTree) await terminateTree({ targets: capturedTree.capturedTargets, tree: false });
                     await handle.dispose().catch(() => undefined);
                     if (rootPid > 0) await terminateTree({ pid: rootPid }, { ownedProcessGroup: true });
                 }
