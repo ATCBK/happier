@@ -33,10 +33,14 @@ function ModelPickerChoices(props: ScmDiffSummaryModelPickerProps & Readonly<{ m
     const choices = props.modelChoices;
     const viewportClass = useViewportClass();
     React.useEffect(() => { props.onAvailabilityChange?.(choices.selectionAvailable); }, [props.onAvailabilityChange, choices.selectionAvailable]);
-    return <DropdownMenu open={choices.open} onOpenChange={choices.setOpen} items={choices.items} selectedId={props.value} search searchPlaceholder={t('walkthroughSettings.searchModels')}
-        variant="selectable" matchTriggerWidth connectToTrigger closeOnSelect={false}
+    return <DropdownMenu open={choices.open} onOpenChange={choices.setOpen} items={choices.items} selectedId={choices.selectedItem?.id ?? props.value} search searchPlaceholder={t('walkthroughSettings.searchModels')}
+        variant="selectable" matchTriggerWidth connectToTrigger closeOnSelect={false} showCategoryTitles categoryDecorations={choices.sections}
         itemTrigger={{ title: t('walkthroughSettings.model'), subtitle: t('walkthroughSettings.modelDescription'),
-            detailFormatter: () => choices.selectedItem?.title ?? (props.value ? t('walkthroughSettings.unavailable') : props.defaultBackendTarget && choices.selections.has('') ? t('agentInput.model.useCliSettings') : t('walkthroughSettings.chooseModel')),
+            // A chosen model that cannot be used explains itself in the row once; otherwise the row keeps what the model is for.
+            showSelectedSubtitle: choices.selectedItem?.disabled === true,
+            detailFormatter: () => props.value === '' && choices.defaultProfile && choices.selections.has('')
+                ? `${choices.defaultProfile.title} · ${t('walkthroughSettings.defaultModel')}`
+                : choices.selectedItem?.title ?? (props.value ? t('walkthroughSettings.unavailable') : props.defaultBackendTarget && choices.selections.has('') ? t('agentInput.model.useCliSettings') : t('walkthroughSettings.chooseModel')),
             itemProps: { testID: props.testID ?? 'walkthrough.summaryModel', subtitleLines: 0,
                 accessoryLayout: viewportClass === 'compact' ? 'stacked' : 'adaptive' } }}
         onSelect={(id) => {
@@ -49,6 +53,7 @@ function ModelPickerChoices(props: ScmDiffSummaryModelPickerProps & Readonly<{ m
             }
             const selection = choices.selections.get(id);
             if (!selection) return;
-            props.onChange(id); props.onSelection?.(selection); choices.setDiscoveryTargetKey(null); choices.setOpen(false);
+            // Choosing the default row returns to following the default rather than writing its id.
+            props.onChange(id === choices.defaultProfile?.catalogId ? '' : id); props.onSelection?.(selection); choices.setDiscoveryTargetKey(null); choices.setOpen(false);
         }} />;
 }

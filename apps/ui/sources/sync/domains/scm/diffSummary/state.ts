@@ -184,6 +184,8 @@ export function buildScmDiffSummaryRequestKey(input: ScmDiffSummaryRequestKeyInp
         `selector:${selectorCatalogId}`,
         `model:${JSON.stringify([input.input.modelSelector?.profileId ?? null, input.input.modelSelector?.modelId ?? null, input.input.modelSelector?.backendTargetKey ?? null])}`,
         `outputs:${[...new Set(input.input.outputs ?? ['summary'])].sort().join(',')}`,
+        ...(input.input.outputLanguage ? [`language:${input.input.outputLanguage}`] : []),
+        ...(input.input.investigateSurroundingFiles === true ? ['investigation:surrounding-files'] : []),
     ].join('|');
 }
 

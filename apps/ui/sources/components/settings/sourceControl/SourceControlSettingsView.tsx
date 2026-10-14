@@ -19,7 +19,7 @@ import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machine
 import { useMachineAdministrationTargetSelection } from '@/sync/domains/machines/administration/useTargetSelection';
 import type { ScmCommitStrategy } from '@/scm/settings/commitStrategy';
 import type { ScmDiffArea } from '@happier-dev/protocol';
-import { t, type TranslationKey } from '@/text';
+import { getLanguageEnglishName, getLanguageNativeName, SUPPORTED_LANGUAGE_CODES, t, type TranslationKey } from '@/text';
 import { Switch } from '@/components/ui/forms/Switch';
 import type {
     ScmGitRepoPreferredBackend,
@@ -192,6 +192,21 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
     const settingsScope = useAccountSettingsScope();
     const [explainChanges, setExplainChanges] = useSettingMutable('scm.diffSummary.enabled');
     const [prepareAfterTurn] = useSettingMutable('scm.diffSummary.prefetch');
+    const [investigateSurroundingFiles] = useSettingMutable('scm.diffSummary.investigateSurroundingFiles');
+    const [outputLanguage] = useSettingMutable('scm.diffSummary.outputLanguage');
+    const [outputLanguageMenuOpen, setOutputLanguageMenuOpen] = React.useState(false);
+    const selectedOutputLanguage = typeof outputLanguage === 'string' ? outputLanguage : '';
+    // Empty follows the app language; a stored tag outside the app's languages stays listed as the current choice.
+    const outputLanguageItems = React.useMemo(() => [
+        { id: '', title: t('walkthroughSettings.appLanguage') },
+        ...SUPPORTED_LANGUAGE_CODES.map((code) => {
+            const nativeName = getLanguageNativeName(code);
+            const englishName = getLanguageEnglishName(code);
+            return { id: code, title: nativeName, subtitle: englishName !== nativeName ? englishName : undefined };
+        }),
+        ...(selectedOutputLanguage && !SUPPORTED_LANGUAGE_CODES.some((code) => code === selectedOutputLanguage)
+            ? [{ id: selectedOutputLanguage, title: selectedOutputLanguage }] : []),
+    ], [selectedOutputLanguage]);
     const [summaryModel] = useSettingMutable('scm.diffSummary.modelProfileOverride');
     const [summaryModelAvailable, setSummaryModelAvailable] = React.useState(false);
     const setWalkthroughSetting = async (anchor: string, value: string | boolean) => {
@@ -410,6 +425,32 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                             onAvailabilityChange={setSummaryModelAvailable}
                             machineId={executionTarget?.machine.id} serverId={executionTarget?.serverId} testID="settings.sourceControl.summaryModel" />
                     </SettingAnchor>
+                    <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.outputLanguage}>
+                        <DropdownMenu
+                            open={outputLanguageMenuOpen}
+                            onOpenChange={setOutputLanguageMenuOpen}
+                            items={outputLanguageItems}
+                            selectedId={selectedOutputLanguage}
+                            variant="selectable"
+                            matchTriggerWidth
+                            connectToTrigger
+                            onSelect={(id) => {
+                                void setWalkthroughSetting(SOURCE_CONTROL_SETTINGS.settings.outputLanguage.anchor, id);
+                                setOutputLanguageMenuOpen(false);
+                            }}
+                            itemTrigger={{
+                                title: t(SOURCE_CONTROL_SETTINGS.settings.outputLanguage.titleKey),
+                                subtitle: t('walkthroughSettings.outputLanguageDescription'),
+                                showSelectedSubtitle: false,
+                                detailFormatter: (item) => item?.title ?? t('walkthroughSettings.appLanguage'),
+                                itemProps: { testID: 'settings.sourceControl.outputLanguage', subtitleLines: 0 },
+                            }}
+                        />
+                    </SettingAnchor>
+                    <SettingRow setting={SOURCE_CONTROL_SETTINGS.settings.investigateSurroundingFiles} subtitleLines={0} showChevron={false}
+                        rightElement={<Switch value={investigateSurroundingFiles === true}
+                            onValueChange={value => { void setWalkthroughSetting(SOURCE_CONTROL_SETTINGS.settings.investigateSurroundingFiles.anchor, value); }} />}
+                        onPress={() => { void setWalkthroughSetting(SOURCE_CONTROL_SETTINGS.settings.investigateSurroundingFiles.anchor, investigateSurroundingFiles !== true); }} />
                     <WalkthroughSavedSettings machineId={executionTarget?.machine.id ?? null} serverId={executionTarget?.serverId ?? null}
                         machineAvailability={administrationTargetSelection.state.kind}
                         machineName={administrationTargetSelection.candidates.find(candidate => candidate.target.machineId === executionTarget?.machine.id)?.displayName ?? ''}

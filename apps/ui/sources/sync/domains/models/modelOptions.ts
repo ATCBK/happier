@@ -32,6 +32,7 @@ export type PreflightModelList = Readonly<{
         extendedContextModelId?: string;
         modelOptions?: readonly AcpConfigOption[];
         capabilities?: ProviderModelDescriptorV1['capabilities'];
+        costTier?: ProviderModelDescriptorV1['costTier'];
     }>>;
     supportsFreeform: boolean;
     unavailable?: boolean;

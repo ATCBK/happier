@@ -86,8 +86,9 @@ describe('completed checkpoint transcript prefetch', () => {
         expect(network.generate.mock.calls[0]?.[0]?.payload).toMatchObject({ cwd: '/repo', sessionId: session.id,
             source: { kind: 'turnCheckpoint', sessionId: session.id, turnId: turn.turnId,
                 checkpointReceiptId: 'checkpoint.finalized', evidenceMode: 'checkpoint' },
-            modelSelector: { backendTargetKey: 'agent:happier.agent.codex/codex' }, outputs: ['walkthrough'],
+            modelSelector: { backendTargetKey: expect.any(String), modelId: expect.any(String) }, outputs: ['walkthrough'],
         });
+        expect(network.generate.mock.calls[0]?.[0]?.payload.modelSelector.modelId).not.toBe('default');
         expect(Object.values(getScmDiffSummaryState().entriesByKey)).toEqual([expect.objectContaining({ executionRunId: 'checkpoint-run' })]);
         expect(selectSessionScmWalkthroughKey(getScmDiffSummaryState(), session.id,
             { kind: 'turnCheckpoint', turnId: turn.turnId }, 'walkthrough', serverAccountScopeKeySuffix(scope))).not.toBeNull();

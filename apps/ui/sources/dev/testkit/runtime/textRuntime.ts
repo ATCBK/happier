@@ -1,3 +1,5 @@
+import { SUPPORTED_LANGUAGE_CODES, SUPPORTED_LANGUAGES, getLanguageEnglishName, getLanguageNativeName } from '@/text/_all';
+
 export type TextModuleRuntimeOptions = Readonly<{
     translate?: (key: string, params?: Record<string, unknown>) => unknown;
     translateLoose?: (key: string, params?: Record<string, unknown>) => unknown;
@@ -42,6 +44,11 @@ export function createTextModuleRuntime(options: TextModuleRuntimeOptions = {}) 
         getPreferredLanguage,
         hasTranslation,
         getTranslationValue: options.getTranslationValue ?? ((key: string) => hasTranslation(key) ? translate(key) : undefined),
+        // The language catalog is static data, not a boundary: surfaces that list languages read the real one.
+        SUPPORTED_LANGUAGES,
+        SUPPORTED_LANGUAGE_CODES,
+        getLanguageNativeName,
+        getLanguageEnglishName,
     };
 }
 

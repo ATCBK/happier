@@ -9,10 +9,11 @@ import { useNewSessionPreflightModelsState } from '@/components/sessions/new/hoo
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { useSetting } from '@/sync/domains/state/storage';
 import { useAcpCatalogForServer } from '@/sync/store/useAcpCatalog';
-import { decodeScmDiffSummaryModelOverride } from '@/settings/scmDiffSummary/settings';
+import { decodeScmDiffSummaryModelOverride, resolveScmDiffSummaryDefaultModelProfile, type ScmDiffSummaryCatalogProfile } from '@/settings/scmDiffSummary/settings';
 import { buildScmDiffSummaryModelProfiles } from '@/settings/scmDiffSummary/models';
 import { t } from '@/text';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 export type ScmDiffSummaryModelSelection = Readonly<{ backendTarget: BackendTargetRefV2; modelSelector: ScmDiffSummaryModelSelector }>;
 
@@ -53,7 +54,18 @@ export function useScmDiffSummaryModelChoices(params: Readonly<{
         const target = targetFor(entry);
         return target && buildBackendTargetKeyV2(target) === discoveryTargetKey;
     });
-    const probeEntry = discoveryEntry ?? selectedEntry;
+    const staticProfiles = entries.flatMap(entry => {
+        const target = targetFor(entry);
+        return target ? buildScmDiffSummaryModelProfiles({ backendTarget: target,
+            models: getAgentStaticModels(entry.agentId, { catalogOnly: true }),
+            agentFormats: entry.kind === 'builtInAgent' ? getAgentCore(entry.agentId)?.structuredOutput?.formats : null }) : [];
+    });
+    const initialDefault = resolveScmDiffSummaryDefaultModelProfile(staticProfiles, params.defaultBackendTarget);
+    const defaultEntry = entries.find(entry => {
+        const target = targetFor(entry);
+        return target && buildBackendTargetKeyV2(target) === initialDefault?.modelSelector?.backendTargetKey;
+    });
+    const probeEntry = discoveryEntry ?? selectedEntry ?? (!params.value ? defaultEntry : undefined);
     const probeTarget = probeEntry ? targetFor(probeEntry) : params.defaultBackendTarget;
     const probe = useNewSessionPreflightModelsState({ backendTarget: probeTarget,
         runtimeCarrierAgentId: probeEntry?.agentId, selectedMachineId: params.machineId ?? null,
@@ -62,37 +74,55 @@ export function useScmDiffSummaryModelChoices(params: Readonly<{
     });
     const selections = new Map<string, ScmDiffSummaryModelSelection>();
     const discoveryTargets = new Map<string, string>();
-    const items: DropdownMenuItem[] = [];
-    for (const entry of entries) {
+    const catalogProfiles: ScmDiffSummaryCatalogProfile[] = [];
+    const entryProfiles = entries.flatMap(entry => {
         const target = targetFor(entry);
-        if (!target) continue;
+        if (!target) return [];
         const dynamic = probeTarget && buildBackendTargetKeyV2(target) === buildBackendTargetKeyV2(probeTarget) && probe.preflightModels ? probe.preflightModels.availableModels : null;
         const staticModels = getAgentStaticModels(entry.agentId, { catalogOnly: true });
-        const profiles = buildScmDiffSummaryModelProfiles({ backendTarget: target, models: dynamic ?? staticModels,
+        const profiles = buildScmDiffSummaryModelProfiles({ backendTarget: target, models: dynamic ?? staticModels, catalogModels: staticModels,
             agentFormats: entry.kind === 'builtInAgent' ? getAgentCore(entry.agentId)?.structuredOutput?.formats : null });
+        catalogProfiles.push(...profiles);
+        return [{ entry, target, profiles }];
+    });
+    const defaultProfile = resolveScmDiffSummaryDefaultModelProfile(catalogProfiles, params.defaultBackendTarget);
+    const costTierLabels = { low: t('walkthroughSettings.costLow'), standard: t('walkthroughSettings.costStandard'), premium: t('walkthroughSettings.costPremium') } as const;
+    const items: DropdownMenuItem[] = [];
+    const sections: Record<string, Readonly<{ icon: React.ReactNode; note?: string }>> = {};
+    for (const { entry, target, profiles } of entryProfiles) {
+        // Only models that can write a walkthrough are offered. An agent with none keeps its section only where a
+        // machine can ask it for models that could: one whose format supports it, a configured agent, or the one asked.
+        const usable = profiles.filter(profile => profile.structuredOutput === 'supported' && profile.modelSelector);
+        const discoverable = entry.kind === 'configuredBackend' || entry === probeEntry
+            || (entry.kind === 'builtInAgent' && getAgentCore(entry.agentId)?.structuredOutput?.formats?.includes('json') === true);
+        if (usable.length === 0 && !(params.machineId && discoverable)) continue;
+        const hidden = profiles.length - usable.length;
+        sections[entry.title] = { icon: React.createElement(AgentIcon, { agentId: entry.agentId, size: 18 }),
+            ...(hidden > 0 ? { note: t('walkthroughSettings.hiddenModels', { count: hidden }) } : {}) };
+        for (const profile of usable) {
+            selections.set(profile.catalogId, { backendTarget: target, modelSelector: profile.modelSelector! });
+            // One row per model; the default is that row, marked, and the quiet line carries the catalog's relative cost when it has one.
+            const meta = [profile.catalogId === defaultProfile?.catalogId ? t('walkthroughSettings.defaultModel') : null,
+                profile.costTier ? costTierLabels[profile.costTier] : null].filter(Boolean).join(' · ') || undefined;
+            items.push({ id: profile.catalogId, title: profile.title, category: entry.title, subtitle: meta });
+        }
+        // Finding more models is one operation at the end of its agent's section, offered only where a machine can answer it.
+        if (!params.machineId) continue;
         const targetKey = buildBackendTargetKeyV2(target);
         const id = `backend-discovery:${targetKey}`;
         discoveryTargets.set(id, targetKey);
-        const icon = React.createElement(AgentIcon, { agentId: entry.agentId, size: 22 });
-        items.push({ id, title: t('walkthroughSettings.loadModels'), category: entry.title, icon, disabled: !params.machineId,
-            subtitle: !params.machineId || (probeEntry === entry && probe.probe.failed) ? t('walkthroughSettings.unavailable')
-                : probeEntry === entry && probe.probe.phase !== 'idle' ? t('common.loading') : t('walkthroughSettings.chooseModel') });
-        for (const profile of profiles) {
-            const support = profile.structuredOutput;
-            if (support === 'supported' && profile.modelSelector) selections.set(profile.catalogId, { backendTarget: target, modelSelector: profile.modelSelector });
-            items.push({ id: profile.catalogId, title: profile.title, category: entry.title, icon, disabled: support !== 'supported',
-                subtitle: support === 'supported' ? undefined : support === 'unsupported' ? t('walkthroughSettings.unsupported') : t('walkthroughSettings.unavailable') });
-        }
+        const probing = probeEntry === entry;
+        const failed = probing && probe.probe.failed;
+        // The row keeps its height while discovery runs: only its trailing spinner and, on failure, its wording change.
+        items.push({ id, category: entry.title, title: failed ? t('walkthroughSettings.loadModelsFailed') : t('walkthroughSettings.loadModels'),
+            rightElement: probing && !failed && probe.probe.phase !== 'idle' ? React.createElement(ActivitySpinner, { size: 'small' }) : undefined });
     }
-    const runtimeDefault = params.defaultBackendTarget;
-    if (runtimeDefault) {
-        const runtimeSelection = [...selections.values()].find(selection => selection.modelSelector.modelId === 'default'
-            && buildBackendTargetKeyV2(selection.backendTarget) === buildBackendTargetKeyV2(runtimeDefault));
-        if (runtimeSelection) selections.set('', runtimeSelection);
-        items.unshift({ id: '', title: t('agentInput.model.useCliSettings'), disabled: !runtimeSelection,
-            subtitle: runtimeSelection ? undefined : t('walkthroughSettings.unavailable') });
-    }
-    return { open, setOpen, discoveryTargetKey, setDiscoveryTargetKey, selections, discoveryTargets, items,
-        selectedItem: items.find(item => item.id === params.value), selectionAvailable: selections.has(params.value),
+    const defaultSelection = defaultProfile ? selections.get(defaultProfile.catalogId) : undefined;
+    // An unset choice follows the default: it resolves to that row's selection without writing it.
+    if (defaultSelection) selections.set('', defaultSelection);
+    const effectiveId = params.value || (defaultSelection ? defaultProfile!.catalogId : '');
+    return { open, setOpen, discoveryTargetKey, setDiscoveryTargetKey, selections, discoveryTargets, items, sections,
+        catalogProfiles, defaultProfile,
+        selectedItem: items.find(item => item.id === effectiveId), selectionAvailable: selections.has(params.value),
         onRefresh: probe.probe.onRefresh };
 }

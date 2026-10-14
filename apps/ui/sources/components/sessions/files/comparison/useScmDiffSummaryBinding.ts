@@ -59,7 +59,7 @@ export function useScmDiffSummaryBinding(params: Readonly<{
         serverId, observeSelection: Boolean(scope && machineReachable && comparison) });
     const modelAvailable = modelChoices.selectionAvailable;
     React.useEffect(() => { setModel(typeof storedModel === 'string' ? storedModel : ''); }, [binding, storedModel]);
-    const selected = React.useMemo(() => resolveScmDiffSummaryModelSelection({ storedValue: model }), [model]);
+    const selected = resolveScmDiffSummaryModelSelection({ storedValue: model, catalogProfiles: modelChoices.catalogProfiles });
     const [starting, setStarting] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
     const [inputObservation, setInputObservation] = React.useState<Readonly<{ hostKey: string; runId: string; inputId: string; resultId: string }> | null>(null);

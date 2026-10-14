@@ -14,7 +14,7 @@ import type {
 } from '@happier-dev/protocol';
 import { SCM_DIFF_SUMMARY_CACHE_SCHEMA_VERSION, ScmComparisonCaptureOutputSchema, ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 
 import {
     SCM_DIFF_SUMMARY_GENERATE_ACTION_ID,
@@ -38,6 +38,7 @@ import type { ScmDiffSummaryHost } from './results';
 import { invokeUiScmAction, type UiScmActionExecutor } from '@/sync/ops/scm/scmActionInvocation';
 import { scmReviewComparisonMatchesSource } from '@/sync/domains/scm/diffSummary/selection';
 import { sessionExecutionRunGet } from '@/sync/ops/sessionExecutionRuns';
+import { getPreferredLanguage } from '@/text';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import {
     resolveScmDiffSummarySettings,
@@ -109,16 +110,6 @@ export type ScmDiffSummaryOperationResult =
     | Readonly<{ ok: false; key: string; error: string; errorCode?: string; state: ScmDiffSummaryState; viewModel: ScmDiffSummaryViewModel }>;
 
 type OperationError = Readonly<{ ok: false; error: string; errorCode?: string }>;
-
-async function machineSummaryRpc<R>(machineId: string, method: string, payload: object,
-    options: Readonly<{ serverId?: string | null; scope?: ServerAccountScope; signal?: AbortSignal }> = {}): Promise<R> {
-    const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
-    return machineRpcWithServerScope<R, object>({ machineId, method, payload,
-        ...(method === RPC_METHODS.DAEMON_EXECUTION_RUN_GET && ('waitForOutput' in payload || 'waitForInputId' in payload)
-            ? { operationTimeoutMs: null } : {}),
-        ...(options.scope ? { serverId: options.scope.serverId, accountId: options.scope.accountId }
-            : options.serverId ? { serverId: options.serverId } : {}), ...(options.signal ? { signal: options.signal } : {}) });
-}
 
 function readServerOptions(serverId: string | null | undefined): Readonly<{ serverId: string }> | undefined {
     const normalized = typeof serverId === 'string' ? serverId.trim() : '';
@@ -213,6 +204,8 @@ function buildCacheKeyInput(params: Readonly<{ sessionId?: string | null; machin
         summarySchemaVersion: SCM_DIFF_SUMMARY_CACHE_SCHEMA_VERSION,
         resolvedSelector,
         outputs: params.input.outputs,
+        ...(params.input.outputLanguage ? { outputLanguage: params.input.outputLanguage } : {}),
+        investigateSurroundingFiles: params.input.investigateSurroundingFiles === true,
         scopeKey: JSON.stringify([params.serverId?.trim() ?? null, params.sessionId ?? null, params.machineId ?? null, params.input.cwd]),
     };
 }
@@ -234,10 +227,13 @@ function hasCompletedRequestedOutputs(output: ScmDiffSummaryGenerateSuccess, inp
 }
 
 function buildGenerateRequest(params: GenerateScmDiffSummaryParams): ScmDiffSummaryGenerateInput {
-    const settings = resolveScmDiffSummarySettings({ storedSettings: params.settings ?? {}, catalogProfiles: params.catalogProfiles ?? [] });
+    const settings = resolveScmDiffSummarySettings({ storedSettings: params.settings ?? {}, catalogProfiles: params.catalogProfiles ?? [], uiLocale: getPreferredLanguage() });
     const override = settings.modelOverride?.catalogId;
+    const outputLanguage = params.input.outputLanguage ?? settings.outputLanguage;
     return {
         ...params.input,
+        ...(outputLanguage ? { outputLanguage } : {}),
+        investigateSurroundingFiles: params.input.investigateSurroundingFiles ?? settings.investigateSurroundingFiles,
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),
         modelSelector: {
             backendTargetKey: buildBackendTargetKeyV2(params.backendTarget),
@@ -249,9 +245,10 @@ function buildGenerateRequest(params: GenerateScmDiffSummaryParams): ScmDiffSumm
 }
 
 export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDeps = {}) {
-    const actionContext = (params: CaptureScmComparisonParams | GenerateScmDiffSummaryParams) => ({
+    const actionContext = (params: CaptureScmComparisonParams | GenerateScmDiffSummaryParams | RefreshScmDiffSummaryRunParams) => ({
         ...(params.sessionId ? { defaultSessionId: params.sessionId, externalActionTarget: { kind: 'session' as const, sessionId: params.sessionId } }
-            : { externalActionTarget: { kind: 'machine' as const, machineId: params.machineId! } }),
+            : { externalActionTarget: { kind: 'machine' as const, machineId: params.machineId! },
+                executionRunTargetMachineId: params.machineId }),
         ...(params.scope ? { serverId: params.scope.serverId, expectedAccountId: params.scope.accountId }
             : params.serverId ? { serverId: params.serverId } : {}),
         ...(params.signal ? { signal: params.signal } : {}),
@@ -334,6 +331,8 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
     };
 
     const generateFromUserAction = async (params: GenerateScmDiffSummaryParams): Promise<ScmDiffSummaryOperationResult> => {
+        // Capture the effective language once for admission, publication and later cache reads.
+        params = { ...params, input: buildGenerateRequest(params) };
         const key = params.key ?? buildRequestKey(params);
         const current = () => !params.signal?.aborted && params.shouldContinue?.() !== false;
         const retired = (): ScmDiffSummaryOperationResult => ({
@@ -507,7 +506,9 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
             ...(params.waitForOutput ? { waitForOutput: params.waitForOutput } : {}),
             ...(params.waitForInputId ? { waitForInputId: params.waitForInputId } : {}) };
         const response = params.machineId !== undefined
-            ? await machineSummaryRpc<unknown>(params.machineId, RPC_METHODS.DAEMON_EXECUTION_RUN_GET, request, serverOptions)
+            ? await invokeUiScmAction({ actionId: 'execution.run.get', input: { sessionId: null, ...request },
+                schema: ExecutionRunGetResponseSchema, context: actionContext(params), executor: deps.actionExecutor,
+                shouldContinue: current })
             : serverOptions ? await getExecutionRun(params.sessionId, request, serverOptions)
                 : await getExecutionRun(params.sessionId, request);
         if (!current()) return retired();
