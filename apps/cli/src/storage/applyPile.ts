@@ -43,7 +43,11 @@ export async function applyPile(input: PileApplyInput, deps: PileApplyDeps): Pro
                 return facts;
             };
             await recheck();
-            for (const child of [...reviewedFacts.children].sort((left, right) => right.ref.path.length - left.ref.path.length)) {
+            // SCM renames main/common authorities whole; contained facts are still in expect,
+            // but their bytes and original back-references must remain inside that one payload.
+            const separateChildren = reviewedFacts.item.retirementKind === 'main' || reviewedFacts.item.retirementKind === 'common'
+                ? [] : reviewedFacts.children;
+            for (const child of [...separateChildren].sort((left, right) => right.ref.path.length - left.ref.path.length)) {
                 if (completedChildren.has(child.ref.itemId)) continue;
                 await recheck();
                 const childFacts = await readPileFacts(child.ref, deps);
@@ -135,5 +139,7 @@ export async function applyPile(input: PileApplyInput, deps: PileApplyDeps): Pro
             }
         }
     }
+    if (input.mode === 'trash') result.trashEntryIds = movedEntries
+        .filter(entry => !emptiedEntries.has(entry.entryId)).map(entry => entry.entryId);
     return result;
 }

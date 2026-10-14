@@ -201,6 +201,16 @@ export const ScmWorktreeEnrichmentEntrySchema = lazyZodSchema(() => z.object({
   lockReason: z.string().optional(),
   headOid: z.string().optional(),
   hasSubmodules: z.boolean().optional(),
+  // SCM-owned proof and loss facts consumed by Storage's existing review/Trash lifecycle.
+  retention: z.strictObject({
+    kind: z.enum(['main', 'orphan']), commonDirPath: z.string().min(1), fingerprint: z.string().min(1),
+    losses: z.strictObject({
+      unpushedBranches: z.array(z.strictObject({ name: z.string(), ahead: z.number().int().nonnegative() })),
+      stashes: z.array(z.strictObject({ name: z.string(), oid: z.string() })),
+      changes: z.array(z.strictObject({ path: z.string(), untracked: z.boolean(), worktreePath: z.string() })),
+      dependentWorktrees: z.array(z.string()),
+    }).optional(),
+  }).optional(),
 }));
 export type ScmWorktreeEnrichmentEntry = z.infer<typeof ScmWorktreeEnrichmentEntrySchema>;
 

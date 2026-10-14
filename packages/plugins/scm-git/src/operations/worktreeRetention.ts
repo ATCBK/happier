@@ -9,6 +9,8 @@ import { runScmCommand } from '../runtime.js';
 import { buildScmNonInteractiveEnv } from '../providers/shared/nonInteractiveEnv.js';
 import { withGitWorktreeMutation } from './worktreeMutationQueue.js';
 import { parseGitWorktreeListPorcelain } from '../worktreeListParser.js';
+import { readCurrentBackendRuntimeServices } from '@happier-dev/plugin-sdk/scm/backend';
+import { readGitRetentionKind } from './worktreeRetentionFacts.js';
 
 type Input = Readonly<{ context: ScmBackendContext; request: ScmWorktreeRetireRequest; signal?: AbortSignal }>;
 function failure(error: string, errorCode: ScmOperationErrorCode = SCM_OPERATION_ERROR_CODES.COMMAND_FAILED): ScmWorktreeRemoveResponse {
@@ -22,6 +24,14 @@ async function command(input: Input, args: string[]) {
     return runScmCommand({ bin: 'git', cwd: input.context.cwd, args, timeoutMs: 60_000,
         env: buildScmNonInteractiveEnv(), signal: input.signal });
 }
+async function renameRetained(input: Input, expectedIdentity: Readonly<{ dev: string; ino: string }>) {
+    const rename = readCurrentBackendRuntimeServices()?.renamePathNoReplace;
+    if (!rename) return failure('The host does not support retained SCM rename', SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED);
+    await input.context.beforeFilesystemMutation?.();
+    await rename({ sourcePath: input.request.worktreePath, targetPath: input.request.targetPath,
+        expectedIdentity, signal: input.signal });
+    return { success: true };
+}
 async function completeMoved(input: Input, restoring: boolean): Promise<ScmWorktreeRemoveResponse> {
     const { worktreePath, targetPath, entryId } = input.request;
     if (!input.context.beforeFilesystemMutation)
@@ -30,6 +40,12 @@ async function completeMoved(input: Input, restoring: boolean): Promise<ScmWorkt
     if (!before.isDirectory() || before.isSymbolicLink()) return failure('The completed worktree is not a directory', SCM_OPERATION_ERROR_CODES.INVALID_PATH);
     const identity = await inspectGitCheckoutIdentity({ cwd: targetPath });
     const repository = await inspectGitCheckoutIdentity({ cwd: input.context.cwd });
+    if (await readGitRetentionKind(targetPath, input.context.cwd, restoring ? targetPath : worktreePath)) {
+        await input.context.beforeFilesystemMutation();
+        const after = await lstat(targetPath);
+        return await absent(worktreePath) && before.dev === after.dev && before.ino === after.ino
+            ? { success: true } : failure('The completed checkout identity changed', SCM_OPERATION_ERROR_CODES.INVALID_PATH);
+    }
     if (!identity || !repository || identity.gitDirPath === identity.commonDirPath
         || !canonicalAbsolutePathsEqual(identity.commonDirPath, repository.commonDirPath))
         return failure('The completed worktree is not owned by this repository', SCM_OPERATION_ERROR_CODES.INVALID_PATH);
@@ -67,12 +83,19 @@ async function move(input: Input, restoring: boolean): Promise<ScmWorktreeRemove
     if (await absent(worktreePath) && !await absent(targetPath)) return completeMoved(input, restoring);
     if (!await absent(targetPath)) return failure(`Restore destination is occupied: ${targetPath}`, SCM_OPERATION_ERROR_CODES.INVALID_PATH);
     if (await absent(dirname(targetPath))) return failure('The destination parent is missing', SCM_OPERATION_ERROR_CODES.INVALID_PATH);
-    const sourceInfo = await lstat(worktreePath);
+    const sourceInfo = await lstat(worktreePath, { bigint: true });
     if (!sourceInfo.isDirectory() || sourceInfo.isSymbolicLink()) return failure('A worktree source must be a directory', SCM_OPERATION_ERROR_CODES.INVALID_PATH);
     const physicalSource = await canonicalizePath(worktreePath);
     const identity = await inspectGitCheckoutIdentity({ cwd: worktreePath });
-    if (!identity || identity.gitDirPath === identity.commonDirPath) return failure('Only a registered linked worktree can be retained');
     const repository = await inspectGitCheckoutIdentity({ cwd: input.context.cwd });
+    if (await readGitRetentionKind(physicalSource, input.context.cwd, restoring ? targetPath : worktreePath)) {
+        if (isCanonicalAbsolutePathInsideRoot(physicalSource, targetPath))
+            return failure('A checkout cannot be retained inside itself', SCM_OPERATION_ERROR_CODES.INVALID_PATH);
+        // Moving a main checkout retains its common directory and registrations as-is.
+        // Dependent worktrees are unavailable until exact Undo restores that authority.
+        return renameRetained(input, { dev: String(sourceInfo.dev), ino: String(sourceInfo.ino) });
+    }
+    if (!identity || identity.gitDirPath === identity.commonDirPath) return failure('The source is not a proved SCM checkout');
     if (!repository || !canonicalAbsolutePathsEqual(repository.commonDirPath, identity.commonDirPath))
         return failure('The worktree belongs to another repository', SCM_OPERATION_ERROR_CODES.INVALID_PATH);
     const listed = await command(input, ['worktree', 'list', '--porcelain', '-z']);

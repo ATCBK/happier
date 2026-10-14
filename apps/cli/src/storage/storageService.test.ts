@@ -574,6 +574,11 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             await mkdir(upload, { recursive: true }); await writeFile(attachment, 'retained attachment');
             const mainScan = await service.scanStart({ machineId: 'machine', target: { folderPath: repo } }, { actor });
             await waitForStorageScan(service, mainScan.scanId, actor);
+            const administrativePath = join(repo, '.git', 'refs');
+            const administrative = await service.itemsCheck([{ itemId: administrativePath, path: administrativePath }], { actor });
+            expect(administrative.items).toEqual([]);
+            expect(administrative.staying).toMatchObject([{ reason: { code: 'unsupported',
+                detail: { cause: 'owner_requires_whole_item', categoryId: 'worktrees', path: join(repo, '.git') } } }]);
             const partial = await service.itemsCheck([{ itemId: attachment, path: attachment }], { actor });
             expect(partial.staying).toMatchObject([{ reason: { code: 'unsupported',
                 detail: { cause: 'owner_requires_whole_item', categoryId: 'sessionFolders', path: upload } } }]);
@@ -582,12 +587,12 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             const limited = await service.itemsCheck([mainRef], { actor });
             expect(limited.items).toEqual([]);
             expect(limited.staying).toMatchObject([{ reason: { code: 'unsupported',
-                detail: { cause: 'main_checkout_lifecycle_unsupported', owner: 'scm', path: repo } } }]);
+                detail: { cause: 'checkout_reference_owner_unavailable', owner: 'scm', path: repo } } }]);
             const refusedDelete = await service.deleteNow({ machineId: 'machine', items: [{ ref: { ...mainRef,
                 identity: { dev: String((await lstat(repo)).dev), ino: String((await lstat(repo)).ino), kind: 'directory' },
                 collectedAt: 0, collectedBy: { accountId: 'owner', kind: 'person' } }, expect: 'unreviewed' }] }, { actor });
             expect(refusedDelete.outcomes).toMatchObject([{ status: 'skipped', reason: { code: 'unsupported',
-                detail: { cause: 'main_checkout_lifecycle_unsupported' } } }]);
+                detail: { cause: 'checkout_reference_owner_unavailable' } } }]);
             expect((await execute('git', ['-C', repo, 'worktree', 'list', '--porcelain'])).stdout).toContain(`worktree ${nested}`);
         } finally { service.dispose(); }
         // Observed composed native/SCM replay: 80 s under concurrent remote-host validation.

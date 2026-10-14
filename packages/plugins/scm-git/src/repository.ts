@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { readGitBranchOperationState } from './operations/branchOperationState.js';
 import { parseGitStatusPorcelainV2Z } from './statusParser.js';
 import { parseGitWorktreeListPorcelain } from './worktreeListParser.js';
+import { inspectGitOrphanWorktree, readGitRetentionFacts, resolveGitRetainedWorktreeRepository } from './operations/worktreeRetentionFacts.js';
 
 function resolveMainWorktreePathFromCheckoutIdentity(
     checkoutIdentity: Awaited<ReturnType<typeof inspectGitCheckoutIdentity>>,
@@ -65,7 +66,11 @@ function commandProducedNoAnswer(result: ScmExecResult): boolean {
     return result.timedOut === true || result.outputLimitExceeded === true || result.exitCode < 0;
 }
 
-export async function detectGitRepo(input: { cwd: string }): Promise<ScmRepoDetection> {
+export async function detectGitRepo(input: { cwd: string; includeRetainedWorktrees?: boolean }): Promise<ScmRepoDetection> {
+    if (input.includeRetainedWorktrees) {
+        const rootPath = await resolveGitRetainedWorktreeRepository(input.cwd);
+        if (rootPath) return { isRepo: true, rootPath, mode: '.git' };
+    }
     const gitRepoCheck = await runScmCommand({
         bin: 'git',
         cwd: input.cwd,
@@ -272,21 +277,29 @@ export async function getGitWorktreesEnrichment(input: {
     const requestedCanonicals = await Promise.all(paths.map((path) => canonicalizeWorktreePathForCompare(path)));
     const allowedPaths: string[] = [];
     const seenAllowed = new Set<string>();
-    for (const canonical of requestedCanonicals) {
+    const repositoryIdentity = await inspectGitCheckoutIdentity({ cwd: repoRoot });
+    for (let index = 0; index < requestedCanonicals.length; index++) {
+        const canonical = requestedCanonicals[index]!;
         const registered = canonicalToRegisteredPath.get(canonical);
-        if (registered === undefined || seenAllowed.has(registered)) continue;
-        seenAllowed.add(registered);
-        allowedPaths.push(registered);
+        const orphan = registered === undefined && repositoryIdentity
+            ? await inspectGitOrphanWorktree(paths[index]!, repositoryIdentity.commonDirPath) : null;
+        const allowed = registered ?? (orphan !== null ? paths[index]! : undefined);
+        if (allowed === undefined || seenAllowed.has(allowed)) continue;
+        seenAllowed.add(allowed);
+        allowedPaths.push(allowed);
     }
 
     if (allowedPaths.length === 0) {
         return { success: true, worktrees: [] };
     }
 
+    const entries = await readWorktreeStatusEnrichmentForPaths({ worktreePaths: allowedPaths });
+    await Promise.all(entries.map(async entry => {
+        const retention = await readGitRetentionFacts(entry.path, repoRoot);
+        if (retention) entry.retention = retention;
+    }));
     return {
         success: true,
-        worktrees: await readWorktreeStatusEnrichmentForPaths({
-            worktreePaths: allowedPaths,
-        }),
+        worktrees: entries,
     };
 }

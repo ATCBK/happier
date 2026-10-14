@@ -13,7 +13,7 @@ import { StorageCategoryAdapterError } from './types';
 import { bindFilesystemItem, filesystemAdapterForEntry } from './filesystemAdapters';
 
 const AcpOwnerSchema = z.object({ kind: z.literal('managed_acp'), accountNamespace: z.string().regex(/^[a-f0-9]{64}$/),
-    definitionId: z.string().min(1), version: z.string().min(1), installKind: z.enum(['archive', 'npm']) }).strict();
+    definitionId: z.string().min(1), version: z.string().min(1), installKind: z.enum(['archive', 'npm', 'uv']) }).strict();
 const StoredAcpOwnerSchema = createStoredReadSchema(AcpOwnerSchema);
 const environment = (deps: StorageCategoryCatalogDeps) => ({ ...process.env, HAPPIER_HOME_DIR: deps.happyHomeDir });
 function acpAdapter(ownerData: JsonValue, deps: StorageCategoryCatalogDeps): StorageCategoryAdapter {

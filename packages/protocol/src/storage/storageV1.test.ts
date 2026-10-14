@@ -23,6 +23,17 @@ const summary: HappierStorageSummaryV1 = {
 };
 
 describe('storage V1 contract', () => {
+  it('reads additive stored pile receipts while retaining exact Trash correlation and strict current writes', () => {
+    const receipt = { batchId: 'batch', mode: 'trash', outcomes: [{ itemId: 'cache', status: 'moved' }],
+      inTrashBytes: 4096, freedBytes: 0, trashEntryIds: ['entry'] };
+    expect(PileApplyResultV1Schema.parse(receipt)).toEqual(receipt);
+    expect(storage.PileApplyResultStoredV1Schema.parse({ ...receipt, future: true,
+      outcomes: [{ ...receipt.outcomes[0], future: true }] })).toEqual(receipt);
+    const { trashEntryIds: _ids, ...older } = receipt;
+    expect(storage.PileApplyResultStoredV1Schema.parse(older)).toEqual(older);
+    expect(storage.PileApplyResultStoredV1Schema.safeParse({ ...receipt, trashEntryIds: [''] }).success).toBe(false);
+    expect(PileApplyResultV1Schema.safeParse({ ...receipt, future: true }).success).toBe(false);
+  });
   it('retains sampled optional reclaimable capacity without changing immediately available free space', () => {
     const volume = summary.volumes[0]!;
     for (const availableIncludingPurgeableBytes of [5000, 8000]) {

@@ -87,7 +87,9 @@ function rowError(code: string): Error & { code: string } { return Object.assign
 export type ProjectAccountSessionCustody = Readonly<{ serverId: string; accountId: string; serverHttpBaseUrl: string; isCurrent(): Promise<boolean> }>;
 export type ProjectAccountRowsInput = Readonly<({ credentials: StoredCredentials; sessionCustody?: ProjectAccountSessionCustody; authorization?: never; effectActionId?: never }
   | { credentials?: never; sessionCustody?: never; authorization: ExternalActionExecutionAuthorizationV1; effectActionId: string })
-  & { serverId?: string; signal?: AbortSignal }>;
+  & { serverId?: string; signal?: AbortSignal;
+    /** A host-owned effect also retains its captured Machine/lifecycle authority at each HTTP admission. */
+    assertCurrentAuthority?: () => Promise<void> }>;
 export type ProjectRuntimeAccountAccess = Readonly<{ credentials: StoredCredentials; accountAuthorization?: never }>
   | Readonly<{ credentials?: never; accountAuthorization: ExternalActionExecutionAuthorizationV1 }>;
 
@@ -99,6 +101,7 @@ export function projectRuntimeAccountRowsInput(runtime: ProjectRuntimeAccountAcc
 }
 type ReadInput = ProjectAccountRowsInput;
 async function assertRequesterCurrent(input: ReadInput): Promise<void> {
+  await input.assertCurrentAuthority?.();
   if (input.sessionCustody && (!await input.sessionCustody.isCurrent()
     || input.serverId && !await isServerProfileHomeIdentity(input.sessionCustody.serverId, input.serverId))) {
     throw rowError('project_requester_authority_unavailable');
@@ -214,8 +217,17 @@ async function submitOpenedRows(input: ReadInput & Readonly<{ request: OpenedPro
   } catch { throw rowError('project_account_row_outcome_unknown'); }
 }
 /** Physical batch port shared by semantic owners and the bounded retained-data cutover. */
-export async function mutateProjectAccountRows(input: ReadInput & Readonly<{ request: OpenedProjectAccountRowMutationRequest }>): Promise<OpenedProjectAccountRowMutationResponse> {
-  return await runWithServerHttpBaseUrl(resolveServerHttpBaseUrl(), async () => submitOpenedRows(input, await readMode(input)));
+export async function mutateProjectAccountRows(input: ReadInput & Readonly<{
+  request: OpenedProjectAccountRowMutationRequest;
+  /** A semantic owner can publish its acknowledged transition without reopening the network after commit. */
+  snapshot?: ActiveProjectAccountRowsSnapshot;
+}>): Promise<OpenedProjectAccountRowMutationResponse> {
+  if (input.snapshot && input.snapshot.scopeKey !== scopeKey(input)) throw rowError('project_requester_authority_unavailable');
+  return await runWithServerHttpBaseUrl(resolveServerHttpBaseUrl(), async () => {
+    const result = await submitOpenedRows(input, await readMode(input));
+    if (result.status === 'updated' && input.snapshot) acceptSnapshot(input, applyAcknowledgedRows(input.snapshot, result.openedRows));
+    return result;
+  });
 }
 async function fetchSnapshot(input: ReadInput, mode: 'plain' | 'e2ee'): Promise<ActiveProjectAccountRowsSnapshot> {
   const path = `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`;

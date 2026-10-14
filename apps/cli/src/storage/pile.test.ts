@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
 import type { PileItemRefV1, StorageActorV1, StorageSizeV1 } from '@happier-dev/protocol/storage/storageV1';
+import { PileApplyResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import type { StorageCategoryAdapter, StorageCategoryItem, StorageCleanupItem } from './categories/types';
 import { createPileStore } from './pileStore';
 import { reviewPile, type PileReviewDeps } from './reviewPile';
@@ -84,7 +85,7 @@ describe.skipIf(process.platform === 'win32' && process.arch !== 'x64')('canonic
             retire: async ({ payloadPath, beforeEffect }) => { await beforeEffect?.(); await rename(item.path, payloadPath); },
             reinstate: async ({ payloadPath, restorePath, beforeEffect }) => { await beforeEffect?.(); await rename(payloadPath, restorePath); },
             discard: async ({ beforeEffect }) => { await beforeEffect?.(); await removeStoragePath(item.path, { allowedRoot: candidates, expectedIdentity: await readStoragePathIdentity(item.path) }); } });
-        return { candidates, deps, trash, adapter, fingerprints, verdicts };
+        return { candidates, deps, trash, adapter, fingerprints, verdicts, activityLog };
     }
 
     it('reviews one reduced union and ignores size growth in expect while rejecting identity/fingerprint changes', async () => {
@@ -133,11 +134,17 @@ describe.skipIf(process.platform === 'win32' && process.arch !== 'x64')('canonic
         const result = await applyPile({ items: review.items, mode: 'trash', actor, custodianAccountId: 'owner', assertCurrentAuthority: authority }, deps);
         expect(result.outcomes.map(outcome => outcome.status)).toEqual(['moved', 'moved', 'moved', 'skipped', 'refused']);
         expect(result.inTrashBytes).toBe(actual); expect(result.freedBytes).toBe(0);
+        const receipt = PileApplyResultV1Schema.parse(result);
+        expect(receipt.trashEntryIds?.slice().sort()).toEqual((await f.trash.list({ batchId: result.batchId })).map(entry => entry.entryId).sort());
         expect(await readFile((await f.trash.list({ batchId: result.batchId }))[0]!.originalPath).catch(() => null)).toBeNull();
         const extra = join(f.candidates, 'extra'); await writeFile(extra, Buffer.alloc(4096));
         const extraReview = await reviewPile([await ref(extra)], f.deps);
         const emptied = await applyPile({ items: extraReview.items, mode: 'trash', actor, custodianAccountId: 'owner', emptyAfter: true, assertCurrentAuthority: authority }, deps);
         expect(emptied.inTrashBytes).toBe(0); expect(emptied.freedBytes).toBeGreaterThan(0);
+        const emptiedReceipt = PileApplyResultV1Schema.parse(emptied);
+        expect(emptiedReceipt.trashEntryIds).toEqual([]);
+        const emptyActivity = (await f.activityLog.list({ range: '30d' })).entries.filter(row => row.kind === 'trash_emptied');
+        expect(emptyActivity).toEqual([expect.objectContaining({ kind: 'trash_emptied', freedBytes: emptied.freedBytes })]);
         expect(await f.trash.list()).toHaveLength(4);
     });
 
@@ -160,6 +167,41 @@ describe.skipIf(process.platform === 'win32' && process.arch !== 'x64')('canonic
             { ...f.deps, trashStore: f.trash, resolveAdapter: f.adapter });
         expect(emptied.inTrashBytes).toBe(0); expect(emptied.freedBytes).toBe(nextActual.totalExclusiveBytes);
         expect(await f.trash.list()).toHaveLength(2);
+    });
+
+    it('correlates only the entries remaining after a real partial immediate empty', async () => {
+        const f = await fixtures('partial-immediate-empty');
+        const paths = ['first', 'second'].map(name => join(f.candidates, name));
+        for (const path of paths) await writeFile(path, Buffer.alloc(8192, 3));
+        const checked = await reviewPile(await Promise.all(paths.map(ref)), f.deps);
+        let remainingId: string | undefined;
+        // Replace one payload only after both moves commit, at the real pre-empty authority boundary.
+        // The actual Trash owner must refuse its changed identity while emptying the other entry.
+        const assertCurrentAuthority = async () => {
+            if (remainingId) return;
+            const entries = await f.trash.list();
+            if (entries.length !== 2) return;
+            const entry = entries.find(value => value.originalPath === paths[1])!;
+            remainingId = entry.entryId;
+            const root = (await f.trash.roots()).find(value => value.volumeId === entry.volumeId)!;
+            const payload = join(root.path, entry.entryId, 'payload');
+            await rename(payload, `${payload}-retained`);
+            await writeFile(payload, Buffer.alloc(8192, 4));
+        };
+        const result = PileApplyResultV1Schema.parse(await applyPile({ items: checked.items, mode: 'trash', actor,
+            custodianAccountId: 'owner', emptyAfter: true, assertCurrentAuthority },
+        { ...f.deps, trashStore: f.trash, resolveAdapter: f.adapter }));
+        expect(result.trashEntryIds).toEqual([remainingId]);
+        expect((await f.trash.list()).map(entry => entry.entryId)).toEqual([remainingId]);
+        const activity = (await f.activityLog.list({ range: '30d' })).entries;
+        expect(activity.filter(entry => entry.kind === 'trash_emptied')).toEqual([
+            expect.objectContaining({ freedBytes: result.freedBytes }),
+        ]);
+        expect(result.freedBytes).toBeGreaterThan(0);
+        expect(result.outcomes).toEqual([
+            { itemId: paths[0], status: 'moved' },
+            { itemId: paths[1], status: 'moved', reason: { code: 'changed_since_review' } },
+        ]);
     });
 
     it('checks changed facts and revoked authority after an owner wait immediately before effect', async () => {

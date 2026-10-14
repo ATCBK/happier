@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 // Shared Map/Rings drawing geometry also sets native scan folding resolution.
 export const STORAGE_TREEMAP_MIN_NODE_PX = { width: 56, height: 20 } as const;
@@ -223,8 +224,12 @@ export const PileApplyResultV1Schema = lazyZodSchema(() => z.strictObject({
   batchId: z.string().min(1), mode: z.enum(['trash', 'delete']),
   outcomes: z.array(z.strictObject({ itemId: z.string().min(1), status: z.enum(['moved', 'deleted', 'skipped', 'refused', 'failed']), reason: StorageReasonV1Schema.optional() })),
   inTrashBytes: bytes(), freedBytes: bytes(),
+  /** Exact entries still in Trash at settlement; freedBytes already includes immediate emptyAfter effects. */
+  trashEntryIds: z.array(z.string().min(1)).optional(),
 }));
 export type PileApplyResultV1 = z.infer<typeof PileApplyResultV1Schema>;
+/** Retained presentation receipts drop additive fields; known correlation remains validated. */
+export const PileApplyResultStoredV1Schema = createStoredReadSchema(PileApplyResultV1Schema);
 export const TrashEntryV1Schema = lazyZodSchema(() => z.strictObject({
   entryId: z.string().min(1), batchId: z.string().min(1), volumeId: z.string().min(1), originalPath: z.string().min(1),
   title: z.string(), categoryId: HappierStorageCategoryIdV1Schema.optional(), size: StorageSizeV1Schema,

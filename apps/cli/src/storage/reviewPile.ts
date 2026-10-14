@@ -58,7 +58,8 @@ export async function readPileFacts(ref: PileItemRefV1, deps: PileReviewDeps) {
         const resolved = await current.resolve(ref);
         if (!resolved) throw new PileFactError('facts_unavailable');
         const ownFingerprint = resolved.ownFingerprint ?? resolved.fingerprint;
-        if ((resolved.fingerprintRequired || resolved.item.fingerprintRequired) && !ownFingerprint) throw new PileFactError('facts_unavailable');
+        if ((resolved.fingerprintRequired || resolved.item.fingerprintRequired) && !ownFingerprint)
+            throw new PileFactError('facts_unavailable', resolved.item.reason.code === 'unsupported' ? resolved.item.reason : undefined);
         const canonicalPath = await physicalPathWithoutFollowingLeaf(resolve(resolved.item.path));
         if (!canonicalAbsolutePathsEqual(path, canonicalPath) || resolved.item.itemId !== ref.itemId) throw new PileFactError('changed_since_review');
         const ownClassification = await current.classify(path, resolved.item);

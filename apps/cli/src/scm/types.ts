@@ -254,7 +254,7 @@ export interface ScmBackend {
     declaredCapabilities?: ScmBackendCapabilities;
     selection: ScmBackendSelection;
     workspaceIntegration?: ScmWorkspaceIntegration;
-    detectRepo(input: { cwd: string }): Promise<ScmRepoDetection>;
+    detectRepo(input: { cwd: string; includeRetainedWorktrees?: boolean }): Promise<ScmRepoDetection>;
     getCapabilities(input: {
         mode: ScmRepoMode | null;
         executableAvailable?: boolean;
