@@ -44,7 +44,9 @@ type MachineTerminalSpec<TId extends MachineTerminalActionId> = PreNormalizedAct
 function row<TId extends MachineTerminalActionId>(actionId: TId, title: string, rpcMethod: string, read = false): MachineTerminalSpec<TId> {
   return {
     id: actionId, approval: actionId === 'machines.terminal.open' || actionId === 'machines.terminal.restart' ? { result: 'required', flow: 'deferred' } : { result: 'required' },
-    approvalPolicy: { uiConfirmation: 'policy' }, title,
+    // Interactive present-user input uses the PTY's admitted custody. Keep
+    // automation's danger floor and explicit per-surface Ask settings intact.
+    approvalPolicy: actionId === 'machines.terminal.write' ? {} : { uiConfirmation: 'policy' }, title,
     description: read ? 'Read only the authenticated requester’s current Machine terminals. No Session is required.'
       : 'Operate on a requester-owned Machine terminal through the canonical daemon PTY owner. Project shells retain their accepted checkout. Interactive input and resize remain under admitted terminal custody.',
     safety: read ? 'safe' : 'danger', sideEffectClass: read ? 'read' : 'danger',
