@@ -133,6 +133,29 @@ const WORKFLOW_CONTENT_REASON_KEYS = {
 } as const satisfies Readonly<Record<WorkflowDefinitionContentUnavailableReasonV1, TranslationKeyNoParams>>;
 
 const WORKFLOW_TARGET_REASON_SHAPES = {
+    // Host diagnostics refine the formerly bare target refusal. Retain its
+    // existing presentation while keeping the finite consumer exhaustive.
+    requester_projection_unavailable: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    agent_start_context_unavailable: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    caller_session_unavailable: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    caller_run_unavailable: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    caller_witness_invalid: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    caller_depth_unavailable: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    caller_machine_unavailable: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    caller_workspace_unavailable: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    caller_agent_unavailable: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    caller_permission_unavailable: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    role_source_incomplete: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    role_overrides_unavailable: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    spawn_policy_invalid: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    materialization_owner_unavailable: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    run_admission_unavailable: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    target_binding_mismatch: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    publisher_machine_unavailable: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    requester_runtime_unavailable: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    credentialed_factory_failed: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    profile_unavailable: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+    engine_unavailable: WORKFLOW_PROBLEM_SHAPES.target_unavailable,
     machine_check_failed: { messageKey: 'machineAgents.unknown', repair: 'retry' },
     agent_probe_failed: { messageKey: 'machineAgents.unknown', repair: 'retry' },
     agent_not_installed: { messageKey: 'machineAgents.notInstalled', repair: 'none' },
@@ -209,7 +232,8 @@ export function resolveWorkflowProblemPresentation(
         return { ...present(code, WORKFLOW_PROBLEM_SHAPES.workflow_conversation_unavailable),
             message: formatWorkflowConversationProblem(failure.details) };
     }
-    if (failure?.errorCode === 'target_unavailable' && failure.details && 'reason' in failure.details) {
+    if (failure?.errorCode === 'target_unavailable' && failure.details && 'reason' in failure.details
+        && failure.details.reason !== undefined) {
         return present(code, { ...WORKFLOW_PROBLEM_SHAPES.target_unavailable,
             ...WORKFLOW_TARGET_REASON_SHAPES[failure.details.reason],
             ...(failure.details.reason === 'platform_unsupported' && failure.details.platformReason === 'arch'

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { WORKFLOW_OPERATION_ERROR_CODES_V1 } from '@happier-dev/protocol';
 import { normalizeWorkflowActionThrownError } from '@happier-dev/protocol/actions/executor/workflowAccountActions';
 import { WorkflowActionFailureV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { actionStartTargetUnavailableV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 
 import { WorkflowActionError } from '@/sync/domains/workflows/workflowActionError';
 import { formatWorkflowRunDisplayName, resolveWorkflowRunDisplayName } from './workflowRunDisplayName';
@@ -28,6 +29,12 @@ function actionError(rawCode: string | null, message = 'server-internal reason')
  * never reach a person as prose the server chose or as the identifier itself.
  */
 describe('workflowProblemPresentation', () => {
+    it('keeps the existing target failure and retry for content-free host admission diagnostics', () => {
+        const failure = WorkflowActionFailureV1Schema.parse(actionStartTargetUnavailableV1(undefined,
+            'agent_start_context', 'caller_agent_unavailable'));
+        const typed = new WorkflowActionError({ rawCode: failure.errorCode, message: failure.error, failure });
+        expect(resolveWorkflowProblemPresentation(typed)).toEqual(resolveWorkflowProblemPresentation(actionError('target_unavailable')));
+    });
     it('explains Account-wide role preparation and offers retry from the real strict failure projection', () => {
         const failure = WorkflowActionFailureV1Schema.parse(normalizeWorkflowActionThrownError(
             Object.assign(new Error('private catalog contents'), { code: 'account_role_overrides_unavailable' }),
