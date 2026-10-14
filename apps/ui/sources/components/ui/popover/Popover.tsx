@@ -1432,9 +1432,19 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                         position === 'absolute'
                             ? boundaryRect.y + boundaryRect.height - webPortalOffsetY
                             : boundaryRect.y + boundaryRect.height;
+                    // The box never starts above the boundary: a trigger that has scrolled up while the panel
+                    // still stands at its last measured size would otherwise carry it out of the window.
+                    const panelHeight = contentRectState?.height ?? computed.maxHeight;
+                    const boundaryTopInPortalSpace =
+                        position === 'absolute'
+                            ? boundaryRect.y - webPortalOffsetY
+                            : boundaryRect.y;
                     const pinnedBottomEdge = Math.min(
-                        anchorTopInPortalSpace - gap,
                         boundaryBottomInPortalSpace,
+                        Math.max(
+                            anchorTopInPortalSpace - gap,
+                            boundaryTopInPortalSpace + panelHeight,
+                        ),
                     );
                     return {
                         bottom: Math.floor(portalHeight - pinnedBottomEdge - nativePortalShadowOutset),
