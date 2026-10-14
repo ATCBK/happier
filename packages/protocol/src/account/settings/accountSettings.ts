@@ -52,6 +52,7 @@ import {
 } from '../../marketplace/pluginUpdatePolicyV1.js';
 import {
   HappierReplayRecentMessagesCountSchema,
+  HappierReplayWireMaxSeedCharsSchema,
   HappierReplayWritableMaxSeedCharsSchema,
 } from '../../sessions/replaySeedBudget.js';
 import {
@@ -890,7 +891,12 @@ const ACCOUNT_DISPLAY_CATALOG_DEFINITIONS = {
     // Bounds come from the one Replay-budget owner. A stored value outside them
     // recovers to the default: a budget below the floor produced no seed at all.
     sessionReplayRecentMessagesCount: accountPreference(HappierReplayRecentMessagesCountSchema, 250, 'session replay'),
-    sessionReplayMaxSeedChars: accountPreference(HappierReplayWritableMaxSeedCharsSchema, 120000, 'session replay'),
+    sessionReplayMaxSeedChars: accountCatalogDefinition(HappierReplayWritableMaxSeedCharsSchema.or(
+        HappierReplayWireMaxSeedCharsSchema.transform(() => 120000),
+    ), 120000, {
+        semanticDomain: 'session replay', classification: 'preference', maximumSerializedValueBytes: 4 * 1024,
+        mutationSchema: HappierReplayWritableMaxSeedCharsSchema,
+    }),
     executionRunsGuidanceEnabled: accountPreference(z.boolean(), true, 'execution guidance'),
     executionRunsNotifyParentOnCompletionDefault: accountPreference(z.boolean(), false, 'execution guidance'),
     executionRunsGuidanceMaxChars: accountPreference(z.number().check(z.int(), z.minimum(1), z.maximum(64 * 1024)), 4000, 'execution guidance'),
