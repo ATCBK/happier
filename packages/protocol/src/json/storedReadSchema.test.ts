@@ -8,6 +8,25 @@ import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdent
 import { lazyZodSchema } from '../lazyZodSchema.js';
 
 describe('stored JSON schema derivation', () => {
+    it.each(['canonical', 'stored'] as const)('shares the native lazy definition when %s admission comes first', (first) => {
+        let constructions = 0;
+        const canonical = z.lazy(() => {
+            const fallback = `definition-${++constructions}`;
+            return z.object({ value: z.string().min(1).default(fallback) }).strict();
+        });
+        const stored = createStoredReadSchema(canonical);
+        expect(constructions).toBe(0);
+        const admitted = first === 'canonical' ? canonical : stored;
+        expect(admitted.parse({})).toEqual({ value: 'definition-1' });
+        // A stored reader projects the same canonical definition; it cannot
+        // run the source factory again and select a different default/schema.
+        expect(canonical.parse({})).toEqual({ value: 'definition-1' });
+        expect(stored.parse({ retired: true })).toEqual({ value: 'definition-1' });
+        expect(canonical.safeParse({ retired: true }).success).toBe(false);
+        expect(stored.safeParse({ value: '' }).success).toBe(false);
+        expect(createStoredReadSchema(canonical)).toBe(stored);
+        expect(constructions).toBe(1);
+    });
     it('retains a registered lazy hidden-parser projection under optional array composition without eager construction', () => {
         let constructions = 0;
         const shape = z.object({ value: z.string().min(1) }).strict();

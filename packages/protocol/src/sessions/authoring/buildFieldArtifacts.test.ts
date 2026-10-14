@@ -1,4 +1,8 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
+import { z } from 'zod';
+import { lazyZodSchema } from '../../lazyZodSchema.js';
+import { buildSessionAuthoringFieldArtifacts } from './buildFieldArtifacts.js';
+import { defineSessionAuthoringFields } from './fieldDefinition.js';
 
 import {
   SESSION_AUTHORING_FIELD_IDS,
@@ -12,6 +16,37 @@ import {
 } from './index.js';
 
 describe('sessionAuthoring field artifacts', () => {
+  it('keeps catalog construction cold and admits transformed defaults on first use', () => {
+    let built = 0;
+    const schema = lazyZodSchema(() => {
+      built++;
+      return z.string().trim().min(1);
+    });
+    const definitions = defineSessionAuthoringFields({ title: {
+      schema, default: ' kept ', description: 'Title', storageClass: 'template', draftStorage: 'sync',
+      contexts: ['newSession'], defaultSurface: 'chip', defaultEditabilityByContext: {},
+    } });
+    const artifacts = buildSessionAuthoringFieldArtifacts(definitions);
+    expect(artifacts.definitions).toBe(definitions);
+    expect(artifacts.syncedFieldIds).toEqual(['title']);
+    expect(artifacts.shape.title).toBe(schema);
+    expect(built).toBe(0);
+    expect(artifacts.defaults.title).toBe('kept');
+    expect(artifacts.defaults.title).toBe('kept');
+    expect(built).toBe(1);
+    expect(artifacts.valueSchema.parse({ title: ' next ', extra: true })).toEqual({ title: 'next', extra: true });
+    expect(artifacts.syncedValueSchema.safeParse({ title: 'next', extra: true }).success).toBe(false);
+    expect(artifacts.syncedValueSchema.safeParse({ title: ' ' }).success).toBe(false);
+  });
+
+  it('rejects an invalid default when defaults are first consumed', () => {
+    const artifacts = buildSessionAuthoringFieldArtifacts(defineSessionAuthoringFields({ title: {
+      schema: z.string().min(1), default: '', description: 'Title', storageClass: 'template', draftStorage: 'sync',
+      contexts: ['newSession'], defaultSurface: 'chip', defaultEditabilityByContext: {},
+    } }));
+    expect(() => Object.keys(artifacts.defaults)).toThrow('Invalid default for session authoring field "title"');
+  });
+
   it('round-trips both capability kinds through the current synchronized draft catalog', () => {
     const capabilitySelection = {
       mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['tools'], forceExcludeServerIds: [] },
