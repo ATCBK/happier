@@ -30,6 +30,10 @@ function doMockChildProcessSpawnSync(
   });
 }
 
+function isHappierTaskFolderListing(command: string, args: readonly string[] = []): boolean {
+  return command === 'powershell.exe' && args.some((arg) => arg.includes('.GetFolder("\\Happier")'));
+}
+
 const SCOPED_ENV_KEYS = [
   'HAPPIER_DAEMON_SERVICE_PLATFORM',
   'HAPPIER_DAEMON_SERVICE_USER_HOME_DIR',
@@ -1545,7 +1549,11 @@ describe('runDaemonServiceCliCommand', () => {
         HAPPIER_DAEMON_SERVICE_OWNERSHIP_STABLE_MS: '20',
       });
       vi.resetModules();
-      doMockChildProcessSpawnSync(() => ({ status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') }));
+      doMockChildProcessSpawnSync((command, args = []) => ({
+        status: 0,
+        stdout: Buffer.from(isHappierTaskFolderListing(command, args) ? '[]' : ''),
+        stderr: Buffer.from(''),
+      }));
       vi.doMock('./commandExistsInPath', () => ({
         commandExistsInPath: vi.fn(() => true),
       }));
@@ -1659,6 +1667,12 @@ describe('runDaemonServiceCliCommand', () => {
         return {
           ...actual,
           spawnSync: vi.fn((command: string, args: readonly string[] = []) => {
+            if (isHappierTaskFolderListing(command, args)) {
+              return { status: 0, stdout: Buffer.from('[]'), stderr: Buffer.from('') };
+            }
+            if (command === 'powershell.exe' && args.some((arg) => arg.includes('.RegisterTask('))) {
+              lifecycleEvents.push('registerTask');
+            }
             if (command !== 'schtasks') {
               return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
             }
@@ -1734,7 +1748,7 @@ describe('runDaemonServiceCliCommand', () => {
       }
 
       const stopIndex = lifecycleEvents.indexOf('stopDaemon');
-      const createIndex = lifecycleEvents.indexOf('/Create');
+      const createIndex = lifecycleEvents.indexOf('registerTask');
       const runIndex = lifecycleEvents.indexOf('/Run');
       if (hasDaemonOwner) expect(stopIndex).toBeGreaterThanOrEqual(0);
       else expect(stopIndex).toBe(-1);
@@ -1775,16 +1789,23 @@ describe('runDaemonServiceCliCommand', () => {
         HAPPIER_DAEMON_SERVICE_OWNERSHIP_STABLE_MS: '20',
       });
       vi.resetModules();
+      mockCurrentProcessAsDaemonLifecycleOwner();
       vi.doMock('node:child_process', async (importOriginal) => {
         const actual = await importOriginal<typeof import('node:child_process')>();
         return {
           ...actual,
           spawnSync: vi.fn((command: string, args: readonly string[] = []) => {
+            if (isHappierTaskFolderListing(command, args)) {
+              return { status: 0, stdout: Buffer.from(JSON.stringify(['\\' + paths.label])), stderr: Buffer.from('') };
+            }
+            if (command === 'schtasks' && args.includes('/XML')) {
+              return { status: 0, stdout: Buffer.from(`<Task><Actions><Exec><Arguments>-File &quot;${paths.installedPath}&quot;</Arguments></Exec></Actions></Task>`), stderr: Buffer.from('') };
+            }
             if (command !== 'schtasks') {
               return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
             }
             const action = String(args[0] ?? '');
-            lifecycleEvents.push(action);
+            if (action !== '/Query') lifecycleEvents.push(action);
             if (action === '/Run' && writeDaemonStateImpl) {
               writeDaemonStateImpl({
                 pid: process.pid,
@@ -1870,14 +1891,26 @@ describe('runDaemonServiceCliCommand', () => {
         HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
       });
       vi.resetModules();
+      mockCurrentProcessAsDaemonLifecycleOwner();
       vi.doMock('node:child_process', async (importOriginal) => {
         const actual = await importOriginal<typeof import('node:child_process')>();
         return {
           ...actual,
           spawnSync: vi.fn((command: string, args: readonly string[] = []) => {
-            if (command === 'schtasks') {
-              lifecycleEvents.push(String(args[0] ?? ''));
+            if (isHappierTaskFolderListing(command, args)) {
+              return { status: 0, stdout: Buffer.from(JSON.stringify(['\\' + paths.label])), stderr: Buffer.from('') };
             }
+            if (command === 'powershell.exe' && args.some((arg) => arg.includes('Stop-ScheduledTask'))) {
+              lifecycleEvents.push('stopTask');
+              return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
+            }
+            if (command === 'schtasks' && args.includes('/XML')) {
+              return { status: 0, stdout: Buffer.from(`<Task><Actions><Exec><Arguments>-File &quot;${paths.installedPath}&quot;</Arguments></Exec></Actions></Task>`), stderr: Buffer.from('') };
+            }
+            if (command === 'schtasks' && args[0] === '/Query') {
+              return { status: 0, stdout: Buffer.from('Status: Running\nScheduled Task State: Enabled\n'), stderr: Buffer.from('') };
+            }
+            if (command === 'schtasks') lifecycleEvents.push(String(args[0] ?? ''));
             return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
           }),
         };
@@ -1925,7 +1958,7 @@ describe('runDaemonServiceCliCommand', () => {
       }
 
       expect(stopSpy).toHaveBeenCalledWith();
-      expect(lifecycleEvents.slice(0, 2)).toEqual(['stopDaemon', '/End']);
+      expect(lifecycleEvents.slice(0, 2)).toEqual(['stopDaemon', 'stopTask']);
 
       stopSpy.mockClear();
       lifecycleEvents.length = 0;
@@ -1947,7 +1980,7 @@ describe('runDaemonServiceCliCommand', () => {
       }
 
       expect(stopSpy.mock.calls).toEqual([[]]);
-      expect(lifecycleEvents.slice(0, 2)).toEqual(['stopDaemon', '/End']);
+      expect(lifecycleEvents.slice(0, 2)).toEqual(['stopDaemon', 'stopTask']);
     });
   });
 

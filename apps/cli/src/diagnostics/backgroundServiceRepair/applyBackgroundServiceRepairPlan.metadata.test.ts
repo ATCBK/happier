@@ -26,6 +26,7 @@ vi.mock('node:child_process', async (original) => ({
   ...(await original<typeof import('node:child_process')>()),
   spawnSync: (command: string, args: readonly string[]) => {
     boundary.commands.push({ command, args });
+    if (command === 'powershell.exe' && args.some((arg) => arg.includes('.GetFolder("\\Happier")'))) return { status: 0, stdout: '[]', stderr: '' };
     if (boundary.stateReadFailure) return { status: 1, stdout: '', stderr: 'Service manager unavailable' };
     if (command === 'systemctl' && args.includes('show')) return { status: 0, stdout: `UnitFileState=${boundary.enabled ? 'enabled' : 'disabled'}\nActiveState=${boundary.running ? 'active' : 'inactive'}\n`, stderr: '' };
     if (command === 'launchctl' && args[0] === 'print-disabled') return { status: 0, stdout: `disabled services = {\n "com.happier.cli.daemon.default" => ${!boundary.enabled}\n "com.happier.cli.daemon.preview.default" => ${!boundary.enabled}\n}`, stderr: '' };

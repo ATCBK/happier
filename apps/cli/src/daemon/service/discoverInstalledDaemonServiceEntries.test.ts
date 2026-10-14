@@ -27,10 +27,20 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return { ...actual, readFile: vi.fn(actual.readFile) };
 });
 
+function isHappierTaskFolderListing(command: string, args: readonly string[] = []): boolean {
+  return command === 'powershell.exe' && args.some((arg) => arg.includes('.GetFolder("\\Happier")'));
+}
+
+function happierTaskFolderListing(taskPaths: readonly string[]) {
+  return { status: 0, stdout: JSON.stringify(taskPaths), stderr: '' } as never;
+}
+
 describe('discoverInstalledDaemonServiceEntries', () => {
   beforeEach(() => {
     spawnSyncMock.mockReset();
-    spawnSyncMock.mockReturnValue({ status: 0, stdout: '', stderr: '' } as never);
+    spawnSyncMock.mockImplementation((command, args) => isHappierTaskFolderListing(command, args)
+      ? happierTaskFolderListing([])
+      : { status: 0, stdout: '', stderr: '' } as never);
   });
 
   it('preserves shared definition read failures instead of independently publishing the service', async () => {
@@ -584,17 +594,13 @@ describe('discoverInstalledDaemonServiceEntries', () => {
       mkdirSync(join(happierHomeDir, 'services'), { recursive: true });
 
       spawnSyncMock.mockImplementation((command, args) => {
+        if (isHappierTaskFolderListing(command, args)) {
+          return happierTaskFolderListing(['\\Happier\\happier-daemon.default']);
+        }
         if (command !== 'schtasks') {
           return { status: 1, stdout: '', stderr: '' } as never;
         }
         const normalizedArgs = Array.isArray(args) ? args.map((value) => String(value)) : [];
-        if (normalizedArgs.join(' ') === '/Query /FO CSV /NH') {
-          return {
-            status: 0,
-            stdout: '"\\\\Happier\\\\happier-daemon.default","N/A"\r\n',
-            stderr: '',
-          } as never;
-        }
         if (normalizedArgs.join(' ') === '/Query /TN Happier\\happier-daemon.default /XML') {
           return {
             status: 0,
@@ -653,17 +659,13 @@ describe('discoverInstalledDaemonServiceEntries', () => {
       const happierHomeDir = join(homeDir, '.happier');
 
       spawnSyncMock.mockImplementation((command, args) => {
+        if (isHappierTaskFolderListing(command, args)) {
+          return happierTaskFolderListing(['\\Happier\\happier-daemon.default']);
+        }
         if (command !== 'schtasks') {
           return { status: 1, stdout: '', stderr: '' } as never;
         }
         const normalizedArgs = Array.isArray(args) ? args.map((value) => String(value)) : [];
-        if (normalizedArgs.join(' ') === '/Query /FO CSV /NH') {
-          return {
-            status: 0,
-            stdout: '"\\\\Happier\\\\happier-daemon.default","N/A"\r\n',
-            stderr: '',
-          } as never;
-        }
         if (normalizedArgs.join(' ') === '/Query /TN Happier\\happier-daemon.default /XML') {
           return {
             status: 0,
@@ -709,17 +711,13 @@ describe('discoverInstalledDaemonServiceEntries', () => {
       mkdirSync(join(happierHomeDir, 'services'), { recursive: true });
 
       spawnSyncMock.mockImplementation((command, args) => {
+        if (isHappierTaskFolderListing(command, args)) {
+          return happierTaskFolderListing(['\\Happier\\happier-daemon.default']);
+        }
         if (command !== 'schtasks') {
           return { status: 1, stdout: '', stderr: '' } as never;
         }
         const normalizedArgs = Array.isArray(args) ? args.map((value) => String(value)) : [];
-        if (normalizedArgs.join(' ') === '/Query /FO CSV /NH') {
-          return {
-            status: 0,
-            stdout: '"\\\\Happier\\\\happier-daemon.default","N/A"\r\n',
-            stderr: '',
-          } as never;
-        }
         if (normalizedArgs.join(' ') === '/Query /TN Happier\\happier-daemon.default /XML') {
           return {
             status: 1,
@@ -769,17 +767,13 @@ describe('discoverInstalledDaemonServiceEntries', () => {
       mkdirSync(join(happierHomeDir, 'services'), { recursive: true });
 
       spawnSyncMock.mockImplementation((command, args) => {
+        if (isHappierTaskFolderListing(command, args)) {
+          return happierTaskFolderListing(['\\Happier\\happier-daemon.default']);
+        }
         if (command !== 'schtasks') {
           return { status: 1, stdout: '', stderr: '' } as never;
         }
         const normalizedArgs = Array.isArray(args) ? args.map((value) => String(value)) : [];
-        if (normalizedArgs.join(' ') === '/Query /FO CSV /NH') {
-          return {
-            status: 0,
-            stdout: '"\\\\Happier\\\\happier-daemon.default","N/A"\r\n',
-            stderr: '',
-          } as never;
-        }
         if (normalizedArgs.join(' ') === '/Query /TN Happier\\happier-daemon.default /XML') {
           return {
             status: 1,
@@ -810,7 +804,7 @@ describe('discoverInstalledDaemonServiceEntries', () => {
   it('names the task when its OS inspection throws, and confirms absence only with a successful listing', async () => {
     await withTempDir('happier-discover-task-throw-', async (homeDir) => {
       const params = { platform: 'win32' as const, userHomeDir: homeDir, happierHomeDir: join(homeDir, '.happier'), mode: 'user' as const, serversById: {} };
-      const listing = { status: 0, stdout: '"\\Happier\\happier-daemon.company","N/A"\r\n', stderr: '' };
+      const listing = happierTaskFolderListing(['\\Happier\\happier-daemon.company']);
       spawnSyncMock.mockReturnValueOnce(listing as never)
         .mockImplementationOnce(() => { throw new Error('OS process unavailable'); })
         .mockReturnValueOnce({ status: 1, stdout: '', stderr: 'inspection unavailable' } as never)
@@ -819,7 +813,7 @@ describe('discoverInstalledDaemonServiceEntries', () => {
       spawnSyncMock.mockReturnValueOnce(listing as never)
         .mockReturnValueOnce({ status: 1, stdout: '', stderr: 'not found' } as never)
         .mockReturnValueOnce({ status: 1, stdout: '', stderr: 'not found' } as never)
-        .mockReturnValueOnce({ status: 0, stdout: '', stderr: '' } as never);
+        .mockReturnValueOnce(happierTaskFolderListing([]));
       await expect(discoverInstalledDaemonServiceEntries(params)).resolves.toEqual([]);
     });
   });
@@ -831,18 +825,14 @@ describe('discoverInstalledDaemonServiceEntries', () => {
 
       const observedTimeouts: number[] = [];
       spawnSyncMock.mockImplementation((command, args, options) => {
+        observedTimeouts.push(Number((options as { timeout?: number } | undefined)?.timeout ?? 0));
+        if (isHappierTaskFolderListing(command, args)) {
+          return happierTaskFolderListing(['\\Happier\\happier-daemon.default']);
+        }
         if (command !== 'schtasks') {
           return { status: 1, stdout: '', stderr: '' } as never;
         }
-        observedTimeouts.push(Number((options as { timeout?: number } | undefined)?.timeout ?? 0));
         const normalizedArgs = Array.isArray(args) ? args.map((value) => String(value)) : [];
-        if (normalizedArgs.join(' ') === '/Query /FO CSV /NH') {
-          return {
-            status: 0,
-            stdout: '"\\\\Happier\\\\happier-daemon.default","N/A"\r\n',
-            stderr: '',
-          } as never;
-        }
         if (normalizedArgs.join(' ') === '/Query /TN Happier\\happier-daemon.default /XML') {
           return {
             status: 0,

@@ -20,6 +20,10 @@ const envScope = createEnvKeyScope([
   'HAPPIER_DAEMON_SERVICE_TARGET_MODE', 'HAPPIER_DAEMON_SERVICE_INSTANCE_ID',
 ]);
 
+function isHappierTaskFolderListing(command: string, args: readonly string[] = []): boolean {
+  return command === 'powershell.exe' && args.some((arg) => arg.includes('.GetFolder("\\Happier")'));
+}
+
 afterEach(() => { envScope.restore(); vi.resetModules(); spawnSyncMock.mockReset(); });
 
 describe('service definition home attribution', () => {
@@ -49,7 +53,7 @@ describe('service definition home attribution', () => {
       spawnSyncMock.mockImplementation((command: string, args: readonly string[]) => ({
         status: 0, stderr: '', stdout: args.includes('/XML')
           ? `<Task><Actions><Exec><Arguments>-File &quot;${definition.path}&quot;</Arguments></Exec></Actions></Task>`
-          : args.includes('CSV') ? '"\\Happier\\happier-daemon.default","N/A","Ready"'
+          : isHappierTaskFolderListing(command, args) ? JSON.stringify(['\\Happier\\happier-daemon.default'])
             : command === 'systemctl' ? 'LoadState=loaded\nActiveState=inactive\nUnitFileState=disabled'
               : command === 'launchctl' ? '"com.happier.cli.daemon.default" => false'
                 : command === 'powershell.exe' ? JSON.stringify({ exists: true, enabled: true, active: false, autostart: false }) : '',
@@ -59,7 +63,7 @@ describe('service definition home attribution', () => {
       for (const action of ['stop', 'start', 'restart', 'uninstall'] as const) {
         await expect(cli.runDaemonServiceCliCommand({ argv: [action, '--json'] })).rejects.toMatchObject({ code: 'foreign_home_service' });
       }
-      expect(spawnSyncMock.mock.calls.every(([, args]) => args.includes('/Query'))).toBe(true);
+      expect(spawnSyncMock.mock.calls.every(([command, args]) => args.includes('/Query') || isHappierTaskFolderListing(command, args))).toBe(true);
       const runtime = cli.resolveDaemonServiceCliRuntimeFromEnv();
       mkdirSync(foreignHomeDir, { recursive: true });
       writeFileSync(join(foreignHomeDir, 'settings.json'), JSON.stringify({
