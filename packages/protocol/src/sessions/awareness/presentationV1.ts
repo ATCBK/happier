@@ -1,5 +1,6 @@
 import type { SessionAwarenessProjectionV1 } from './projectionV1.js';
 import { isSessionAwarenessContentReadableV1 } from './availability.js';
+import type { SessionReportsV1 } from '../relations/sessionReportsToV1.js';
 
 export type SessionAwarenessPresentationFactsV1 = Readonly<{
   runtime: SessionAwarenessProjectionV1['runtime'];
@@ -63,4 +64,14 @@ export function readSessionWorkStateGroupV1(
     case 'idle':
     case 'offline': return 'recent';
   }
+}
+
+/** Compact report counts use the same Work vocabulary as the individual Session rows. */
+export function readSessionReportsPresentationV1(
+  reports: Pick<SessionReportsV1, 'working' | 'needsYou' | 'stalled'>,
+): Readonly<{ bucket: 'needs_you' | 'working' | 'offline' | 'idle'; count: number }> {
+  if (reports.needsYou > 0) return { bucket: 'needs_you', count: reports.needsYou };
+  if (reports.working > 0) return { bucket: 'working', count: reports.working };
+  if (reports.stalled > 0) return { bucket: 'offline', count: reports.stalled };
+  return { bucket: 'idle', count: 0 };
 }

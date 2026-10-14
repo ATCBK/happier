@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import { readSessionAwarenessPresentationV1, readSessionAwarenessWorkStatusV1, readSessionWorkStateGroupV1 } from './presentationV1.js';
+import { readSessionAwarenessPresentationV1, readSessionAwarenessWorkStatusV1, readSessionWorkStateGroupV1, readSessionReportsPresentationV1 } from './presentationV1.js';
 
 describe('readSessionAwarenessWorkStatusV1', () => {
+  it('does not turn offline in-flight reports into working reports in a summary', () => {
+    expect(readSessionReportsPresentationV1({ working: 0, needsYou: 0, stalled: 4 }))
+      .toEqual({ bucket: 'offline', count: 4 });
+    expect(readSessionReportsPresentationV1({ working: 1, needsYou: 0, stalled: 3 }))
+      .toEqual({ bucket: 'working', count: 1 });
+    expect(readSessionReportsPresentationV1({ working: 1, needsYou: 2, stalled: 3 }))
+      .toEqual({ bucket: 'needs_you', count: 2 });
+    expect(readSessionReportsPresentationV1({ working: 0, needsYou: 0, stalled: 0 }))
+      .toEqual({ bucket: 'idle', count: 0 });
+  });
   it('preserves public offline status while content hydration is undecided', () => {
     const awareness = { runtime: 'offline', encryption: 'unknown', operational: { primary: 'working' } } as const;
     expect(readSessionAwarenessPresentationV1(awareness)).toBe('disconnected');
