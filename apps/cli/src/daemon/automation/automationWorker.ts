@@ -195,13 +195,7 @@ export function startAutomationWorker(params: {
     });
   let maxActiveRunsPerMachine = DEFAULT_AUTOMATION_V3_MAX_ACTIVE_RUNS_PER_MACHINE;
   const sourceObservers = createAutomationRunLifecycleObservers({
-    wait: async (source, signal) => {
-      const result = await actionExecutor.execute('execution.run.wait', {
-        runId: source.runId, sessionId: source.sessionId ?? null,
-      }, { surface: 'cli', executionRunTargetMachineId: source.machineId, signal });
-      if (!result.ok) throw Object.assign(new Error(result.errorCode), { code: result.errorCode });
-      return result.result;
-    },
+    executor: actionExecutor,
     report: (occurrence, signal) => claimClient.reportRunLifecycle(params.machineId, occurrence, signal),
     onError: (error, source) => logAutomationWarn('Run notification source observation failed; retained source remains armed', error,
       { machineId: source.machineId, runId: source.runId }),

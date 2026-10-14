@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getActionSpec } from './actionSpecs.js';
+import { ExecutionRunGetRequestSchema } from '../execution/runs/responseSchemas.js';
+import { ScmDiffSummaryGenerateOutputSchema } from '../scm/diffSummary.js';
 
 import { planStartCompletion, reviewStartCompletion } from './specs/executionRunCompletion.js';
 import {
@@ -11,6 +13,24 @@ import {
 } from './actionCompletion.js';
 
 describe('Action completion owner', () => {
+  it.each(['complete', 'failed'] as const)('settles an exact retained commit proposal when its output is %s', (state) => {
+    const observation = ExecutionRunGetRequestSchema.parse({ runId: 'generator', waitForOutput: {
+      kind: 'scm_diff_summary', output: 'commitPlan', comparisonId: 'comparison-1', resultId: 'saved-1', afterRevision: 2 } }).waitForOutput;
+    const output = ScmDiffSummaryGenerateOutputSchema.parse({ success: true, sourceKey: 'comparison-1', resultId: 'saved-1', revision: 3,
+      metadata: { source: { kind: 'workingTree' }, sourceKey: 'comparison-1' },
+      comparison: { id: 'comparison-1', source: { kind: 'workingTree' }, repository: { rootPath: '/repo' },
+        endpoints: { before: 'a', after: 'b' }, inventory: { state: 'complete', reasons: [], files: [] } },
+      requestedOutputs: ['walkthrough', 'commitPlan'], outputs: { walkthrough: { state: 'writing' },
+        commitPlan: state === 'complete' ? { state, value: { groups: [], leftOutChangeRefs: [] } }
+          : { state, reason: 'model_refused' } },
+      analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] },
+    });
+    const read = (payload: unknown) => readActionCompletionRunObservationV1({ run: { status: 'running' },
+      structuredMeta: { kind: 'scm_diff_summary.v1', payload } }, observation);
+    expect(read(output)).toMatchObject({ kind: 'completed', result: { outputs: { commitPlan: { state } } } });
+    expect(read({ ...output, revision: 2 })).toMatchObject({ kind: 'outcome_uncertain', code: 'execution_run_output_not_settled' });
+    expect(read({ ...output, resultId: 'other-result' })).toMatchObject({ kind: 'outcome_uncertain', code: 'execution_run_output_not_settled' });
+  });
   it('observes standalone walkthrough completion without waiting for its retained process to exit', () => {
     const declaration = getActionSpec('review.walkthrough').completion;
     expect(declaration).toBeDefined();

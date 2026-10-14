@@ -35,12 +35,16 @@ export type CommitProposalViewProps = Readonly<{
     proposal: CommitProposal | null;
     /** none: nothing requested · writing: the model is grouping · ready: a proposal exists. */
     phase: 'none' | 'writing' | 'ready';
+    /** Output progress is independent of whether usable proposal groups already exist. */
+    isGenerating?: boolean;
     branch: string | null;
     modelLabel: string | null;
     layout: CommitProposalViewLayout;
     actions: CommitProposalActions;
     /** The empty state's way in: propose for these pending changes. */
     start?: Readonly<{ onStart: () => void; busy: boolean; disabled: boolean; reason: string | null; modelPicker?: React.ReactNode }> | null;
+    /** The notification offer for a proposal still being written; shown only while it is. */
+    notify?: React.ReactNode;
     /** A commit the person asked for elsewhere (the Git pane's Open); the view scrolls it into view. */
     focusGroupId?: string | null;
     busy?: boolean;
@@ -68,6 +72,9 @@ export const CommitProposalView = React.memo(function CommitProposalView(props: 
     const insets = useSafeAreaInsets();
     const phone = props.layout === 'phone';
     const { proposal, actions } = props;
+    // One keyed root child retains registration/cancellation state as partial groups become usable.
+    const notify = props.isGenerating && props.notify
+        ? <View key="notify" testID="commit-proposal-notify" style={styles.startPicker}>{props.notify}</View> : null;
     const hookEvidence = useCommitHookEvidence(proposal?.outcome?.kind === 'hookChanged' ? proposal.outcome : null, actions.readHookDiff);
     const hookActions = React.useMemo(() => ({ ...actions, onIncludeHookChanges: actions.onIncludeHookChanges
         ? () => { if (hookEvidence.state === 'ready') actions.onIncludeHookChanges?.(); } : undefined }), [actions, hookEvidence.state]);
@@ -150,6 +157,7 @@ export const CommitProposalView = React.memo(function CommitProposalView(props: 
                     />
                 )}
                 {props.phase === 'none' && props.start?.modelPicker ? <View style={styles.startPicker}>{props.start.modelPicker}</View> : null}
+                {notify}
             </View>
         );
     }
@@ -339,6 +347,7 @@ export const CommitProposalView = React.memo(function CommitProposalView(props: 
                     </View>
                 </View>
             </ScrollView>
+            {notify}
             {footer}
         </View>
     );

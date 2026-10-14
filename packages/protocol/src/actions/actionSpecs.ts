@@ -309,7 +309,7 @@ export {
 };
 import { ActionUiPlacementSchema, type ActionUiPlacement } from './actionUiPlacements.js';
 import { ReviewStartInputSchema } from '../reviews/reviewStart.js';
-import { ReviewWalkthroughInputSchema, ReviewExplainFindingsInputSchema, ReviewWalkthroughObservationSchema } from '../reviews/reviewNarration.js';
+import { ReviewWalkthroughInputSchema, ReviewExplainFindingsInputSchema, ExecutionRunOutputObservationSchema } from '../reviews/reviewNarration.js';
 import {
   REVIEW_COMMENT_ACTION_IDS_V1,
   ReviewCommentActionInputSchemasV1,
@@ -1888,7 +1888,7 @@ const ExecutionRunStartInputSchema = lazyZodSchema(() => z.preprocess<
 const ExecutionRunGetInputSchema = lazyZodSchema(() => ExecutionRunIdInputSchema.extend({
   includeStructured: z.boolean().optional(),
   waitForInputId: z.string().trim().min(1).optional(),
-  waitForOutput: ReviewWalkthroughObservationSchema.optional(),
+  waitForOutput: ExecutionRunOutputObservationSchema.optional(),
 }).passthrough());
 
 export const DetachedExecutionRunSendInputSchema = lazyZodSchema(() => z.object({

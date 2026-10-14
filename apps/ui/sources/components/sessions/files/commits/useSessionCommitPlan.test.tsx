@@ -8,6 +8,7 @@ import type { SessionScmReviewComparison } from '@/components/sessions/panes/det
 import { buildScmDiffSummaryModelProfiles } from '@/settings/scmDiffSummary/models';
 import { SCM_DIFF_SUMMARY_SETTING_KEYS } from '@/settings/scmDiffSummary/settings';
 import { AgentModelsProbeObservationSchema } from '@happier-dev/protocol/capabilities';
+import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 
 const boundary = vi.hoisted(() => ({
     saved: null as ScmDiffSummaryResult | null,
@@ -38,6 +39,12 @@ async function remote(method: string): Promise<unknown> {
     } };
     if (method === RPC_METHODS.CAPABILITIES_INVOKE) return { ok: true, result: MODEL_OBSERVATION };
     if (method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST) return { runs: [] };
+    if (method === SESSION_RPC_METHODS.EXECUTION_RUN_GET) return ExecutionRunGetResponseSchema.parse({
+        run: { runId: boundary.saved?.output.runId, callId: 'generator-call', sidechainId: 'generator-sidechain',
+            intent: 'scm_diff_summary', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, permissionMode: 'read_only',
+            retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming', status: 'running', startedAtMs: 1 },
+        latestToolResult: boundary.saved?.output,
+    });
     if (method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_LIST) {
         const saved = boundary.saved!;
         return ScmDiffSummaryResultListResponseSchema.parse({ success: true, results: [{ cwd: '/repo/exact',
@@ -88,6 +95,11 @@ const { useSessionCommitPlan } = await import('./useSessionCommitPlan');
 const { useScmCommitPlan } = await import('./useScmCommitPlan');
 const { useWorkspaceScmDiffSummaryBinding } = await import('@/components/projects/scm/useWorkspaceScmDiffSummaryBinding');
 const { ScmCommitsView } = await import('./ScmCommitsView');
+const { RunWorkNotifications } = await import('@/components/sessions/work/RunWorkNotifications');
+const { applySavedScmDiffSummaryResult } = await import('@/sync/ops/scmDiffSummary/generate');
+const { WorkflowTriggerSetV1Schema } = await import('@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1');
+const { buildTriggerTarget } = await import('@/components/workflows/triggers/sessionTriggerForm');
+const { SPECIMEN_COMPARISON } = await import('@/components/dev/changes/walkthroughSpecimenFixture');
 const initialStorage = getStorage().getState();
 
 beforeEach(async () => { await homes.reset(); resetDynamicModelProbeCacheForTests(); });
@@ -166,19 +178,22 @@ async function mountProposal(sessionId: string, saved = savedResult(1, 'unknown'
     return { latest, screen, visibility };
 }
 
-async function mountWorkspaceProposal(saved = savedResult(1, 'unknown'), renderProposal = false) {
+async function mountWorkspaceProposal(saved = savedResult(1, 'unknown'), renderProposal = false, renderWhilePending = false) {
     boundary.sessionId = '';
     boundary.saved = saved;
     const home = await addHome('workspace-commit-plan');
     const machine = createMachineFixture({ id: 'machine:workspace-commit-plan', activeAt: Date.now() });
     const backendTarget = { kind: 'backend', backendId: 'codex' } as const;
-    const profile = buildScmDiffSummaryModelProfiles({ backendTarget, models: OFFERED_MODELS })[0]!;
-    getStorage().setState({ sessions: {}, machines: { [machine.id]: machine }, machineListByServerId: { [home.id]: [machine] },
+    const profile = buildScmDiffSummaryModelProfiles({ backendTarget, models: OFFERED_MODELS })[0];
+    const targetKey = profile?.modelSelector?.backendTargetKey;
+    if (!profile || !targetKey) throw new Error('The offered fixture model must name its backend target.');
+    getStorage().setState({ profileScope: { serverId: home.id, accountId: 'commit-plan-account' },
+        sessions: {}, machines: { [machine.id]: machine }, machineListByServerId: { [home.id]: [machine] },
         settings: { ...initialStorage.settings, experiments: true, featureToggles: { 'execution.runs': true },
             [SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]: profile.catalogId } });
     if (renderProposal) {
         // Observe the remote catalog through the real discovery/cache owner before reopening the saved view.
-        const cacheKey = buildDynamicModelProbeCacheKey({ machineId: machine.id, targetKey: profile.modelSelector!.backendTargetKey,
+        const cacheKey = buildDynamicModelProbeCacheKey({ machineId: machine.id, targetKey,
             serverId: home.id, providerConnectionId: null });
         if (!cacheKey) throw new Error('The fixture Machine must have a model discovery key.');
         const observed = await discoverMachineModels({ cacheKey, machineId: machine.id, serverId: home.id,
@@ -201,7 +216,7 @@ async function mountWorkspaceProposal(saved = savedResult(1, 'unknown'), renderP
         const bound = useWorkspaceScmDiffSummaryBinding({ serverId: home.id, machineId: machine.id, rootPath, comparison, output: 'commitPlan' });
         latest.current = useScmCommitPlan({ bound });
         // Reopening an already-restored proposal never visits the empty-state model picker.
-        return renderProposal && latest.current.phase === 'ready'
+        return renderProposal && (renderWhilePending || latest.current.phase === 'ready')
             ? <ScmCommitsView plan={latest.current} branch="main" layout="wide" renderBar={() => null} /> : null;
     }
     const screen = await renderScreen(<Probe />);
@@ -209,6 +224,63 @@ async function mountWorkspaceProposal(saved = savedResult(1, 'unknown'), renderP
 }
 
 describe('exact workspace commit plans', () => {
+    it('keeps the exact Run notification and its cancellation available as partial groups arrive, until output completion', async () => {
+        const initial = savedResult(1, 'complete');
+        const occurrence = SPECIMEN_COMPARISON.inventory.files[0]!.occurrences[0]!;
+        const allRefs = SPECIMEN_COMPARISON.inventory.files.flatMap(file => file.occurrences.map(change => change.id));
+        const plan = { groups: [{ id: 'g1', message: 'One commit', rationale: '', changeRefs: [occurrence.id] }],
+            leftOutChangeRefs: allRefs.filter(id => id !== occurrence.id) };
+        const outputAt = (revision: number, state: 'pending' | 'writing' | 'complete') => ScmDiffSummaryResultSchema.parse({
+            ...initial, application: undefined, revision, output: { ...initial.output, revision, runId: 'commit-plan-generator',
+                comparison: { ...initial.output.comparison, inventory: SPECIMEN_COMPARISON.inventory },
+                analysis: state === 'complete' ? { suppliedChangeRefs: allRefs, analysedChangeRefs: allRefs, remainingChangeRefs: [] }
+                    : { suppliedChangeRefs: state === 'pending' ? [] : [occurrence.id],
+                        analysedChangeRefs: state === 'pending' ? [] : [occurrence.id],
+                        remainingChangeRefs: state === 'pending' ? allRefs : plan.leftOutChangeRefs },
+                outputs: { commitPlan: { state, ...(state === 'pending' ? {} : { value: plan }) } } },
+        });
+        const pending = outputAt(1, 'pending');
+        const { latest, screen, machine } = await mountWorkspaceProposal(pending, true, true);
+        await vi.waitFor(() => expect(screen.findByTestId('commit-proposal-notify'), proposalDiagnostic(latest.current)).toBeTruthy());
+        const notification = screen.root.findByType(RunWorkNotifications);
+        const sourceIdentity = notification.props.source;
+        const outputIdentity = notification.props.selectedOutput;
+        expect(notification.props.source).toEqual({ kind: 'execution_run', machineId: machine.id, runId: 'commit-plan-generator' });
+        expect(notification.props.selectedOutput).toMatchObject({ output: 'commitPlan',
+            comparisonId: pending.output.comparison!.id, resultId: pending.resultId });
+        expect(screen.findByTestId('commit-group:g1')).toBeNull();
+        const requestKey = latest.current!.binding.viewModel!.requestKey;
+        const armed = WorkflowTriggerSetV1Schema.parse({ automationId: 'proposal-notification', revision: 1,
+            enabled: true, health: 'available', project: { machineId: machine.id, directory: '/repo/exact' },
+            target: buildTriggerTarget({ kind: 'notifyMe', message: 'Proposal update', title: '', channels: [] }, 'account'),
+            triggers: [{ id: 'proposal-trigger', revision: 0, createdAt: 1, updatedAt: 1, enabled: true,
+                kind: 'runLifecycle', condition: 'terminal', remainingOccurrences: 1, status: { state: 'waiting', runId: null },
+                triggerDefinitionEnvelope: null,
+                source: { ...sourceIdentity, observation: { kind: 'scm_diff_summary', output: 'commitPlan',
+                    comparisonId: pending.output.comparison!.id, resultId: pending.resultId, afterRevision: 1 } } }],
+        });
+        // External persisted trigger snapshot, parsed by the strict consumer; real store matching and control stay mounted.
+        await act(async () => getStorage().getState().upsertWorkflowTriggerSet({ set: armed, queryKey: 'account_inline' }));
+        expect(screen.findByTestId('notify-run-terminal-cancel:commit-plan-generator')).toBeTruthy();
+        const writing = outputAt(2, 'writing');
+        boundary.saved = writing;
+        await act(async () => applySavedScmDiffSummaryResult(requestKey, writing));
+        expect(latest.current?.phase).toBe('ready');
+        expect(screen.findByTestId('commit-group:g1')).toBeTruthy();
+        expect(latest.current?.proposal?.groups[0]?.changes[0]?.changeRefs).toEqual([occurrence.id]);
+        expect(screen.findByTestId('commit-proposal-writing')).toBeNull();
+        expect(screen.findByTestId('commit-proposal-notify')).toBeTruthy();
+        expect(screen.findByTestId('notify-run-terminal-cancel:commit-plan-generator')).toBeTruthy();
+        expect(screen.root.findByType(RunWorkNotifications)).toBe(notification);
+        expect(screen.root.findByType(RunWorkNotifications).props.source).toEqual(sourceIdentity);
+        expect(screen.root.findByType(RunWorkNotifications).props.selectedOutput).toEqual(outputIdentity);
+        const complete = outputAt(3, 'complete');
+        boundary.saved = complete;
+        await act(async () => applySavedScmDiffSummaryResult(requestKey, complete));
+        expect(screen.findByTestId('commit-group:g1')).toBeTruthy();
+        expect(screen.findByTestId('commit-proposal-notify')).toBeNull();
+    });
+
     it('regenerates a restored proposal with its actually offered model without visiting the empty-state picker', async () => {
         const saved = ScmDiffSummaryResultSchema.parse({ ...savedResult(1, 'complete'), application: undefined });
         const { latest, machine } = await mountWorkspaceProposal(saved, true);

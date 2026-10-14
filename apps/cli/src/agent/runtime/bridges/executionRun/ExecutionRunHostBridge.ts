@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { ExecutionRunOutputObservation } from '@happier-dev/protocol/reviews/reviewNarration';
 import { readExecutionRunOfferedModel } from './structuredOutputAdmission';
 
 import {
@@ -13,7 +14,7 @@ import type { StreamedTranscriptWriterSession } from '../../../../api/session/st
 import type { ExecutionBudgetRegistry } from '../../../../daemon/executionBudget/ExecutionBudgetRegistry';
 import { buildBackendTargetKey } from '@happier-dev/protocol/backends/targets/backendTargetRef';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import type { AcpConfigOptionOverridesV1, BackendTargetRefV1, ConnectedServiceBindingsV2, ExecutionRunConnectedServicesLaunchV1, ExecutionRunUserTranscriptDirective, ExecutionRunBridgeLifecycleHookEventIdV1, ExecutionRunListRequest, ExecutionRunPublicState, ExecutionRunStartRequest, ExecutionRunResultContractV1, ProviderBoundModelRef, TeamCredentialProviderModelSelectionV1, SessionRunPromptReadActionIdV1, SessionRunPromptContextV1, SessionInputCausalPermissionAuthorityV1, SecretReferenceOverlayV1, StructuredQuestionAnswersV1, ReviewWalkthroughObservation } from '@happier-dev/protocol';
+import type { AcpConfigOptionOverridesV1, BackendTargetRefV1, ConnectedServiceBindingsV2, ExecutionRunConnectedServicesLaunchV1, ExecutionRunUserTranscriptDirective, ExecutionRunBridgeLifecycleHookEventIdV1, ExecutionRunListRequest, ExecutionRunPublicState, ExecutionRunStartRequest, ExecutionRunResultContractV1, ProviderBoundModelRef, TeamCredentialProviderModelSelectionV1, SessionRunPromptReadActionIdV1, SessionRunPromptContextV1, SessionInputCausalPermissionAuthorityV1, SecretReferenceOverlayV1, StructuredQuestionAnswersV1 } from '@happier-dev/protocol';
 import { SessionRunPromptContextV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
 import type { SessionInputAdmissionResultV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
@@ -1480,7 +1481,7 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
     return;
   }
 
-  async waitForOutput(runId: string, observation: ReviewWalkthroughObservation, signal?: AbortSignal): Promise<void> {
+  async waitForOutput(runId: string, observation: ExecutionRunOutputObservation, signal?: AbortSignal): Promise<void> {
     await this.recoverRetainedRuns();
     const settled = (): boolean => {
       const run = this.runs.get(runId);

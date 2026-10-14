@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 
 import { ScmDiffSummaryModelPicker } from '@/components/settings/sourceControl/ScmDiffSummaryModelPicker';
+import { RunWorkNotifications } from '@/components/sessions/work/RunWorkNotifications';
 import { t } from '@/text';
 
 import { CommitProposalView, type CommitProposalViewLayout } from './CommitProposalView';
@@ -56,6 +57,15 @@ export const ScmCommitsView = React.memo(function ScmCommitsView(props: ScmCommi
             ),
         };
     }, [addToSaved, bound, canStart, plan.supportedComparison]);
+    // The proposal's own Run and saved result: the offer says only that the proposal has an update, never that a commit landed.
+    const { viewModel, machine, cwd } = bound;
+    const runId = viewModel?.executionRunId ?? null;
+    const notify = machine?.machineId && cwd && runId && viewModel?.comparison && viewModel.resultId
+        ? <RunWorkNotifications serverId={bound.serverId}
+            source={{ kind: 'execution_run', machineId: machine.machineId, runId, ...(bound.host.sessionId ? { sessionId: bound.host.sessionId } : {}) }}
+            project={{ machineId: machine.machineId, directory: cwd }}
+            selectedOutput={{ output: 'commitPlan', comparisonId: viewModel.comparison.id, resultId: viewModel.resultId,
+                message: t('sessionWork.notify.commitPlanUpdate') }} /> : null;
     const onShowInGit = props.onShowInGit;
     const actions = React.useMemo(() => (onShowInGit ? { ...plan.actions, onShowInGit } : plan.actions), [onShowInGit, plan.actions]);
     return (
@@ -64,11 +74,13 @@ export const ScmCommitsView = React.memo(function ScmCommitsView(props: ScmCommi
             <CommitProposalView
                 proposal={plan.proposal}
                 phase={plan.phase}
+                isGenerating={plan.isGenerating}
                 branch={props.branch}
                 modelLabel={plan.modelLabel}
                 layout={props.layout}
                 actions={actions}
                 start={start}
+                notify={notify}
                 focusGroupId={props.focusGroupId ?? null}
                 busy={plan.busy}
                 error={plan.phase === 'ready' ? plan.error : null}

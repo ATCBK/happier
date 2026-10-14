@@ -37,7 +37,7 @@ import {
   type ExecutionRunLifecycleV1,
 } from './executionRunLifecycleV1.js';
 import { OperationUpdateRequiredV1Schema } from '../../compat/operationUpdateRequiredV1.js';
-import { ReviewWalkthroughObservationSchema } from '../../reviews/reviewNarration.js';
+import { ExecutionRunOutputObservationSchema } from '../../reviews/reviewNarration.js';
 import { ProviderAgentTargetKeySchema } from '../../providers/ids.js';
 import { ProviderBoundModelRefSchema } from '../../providers/selection/v1.js';
 
@@ -238,7 +238,7 @@ export const ExecutionRunGetRequestSchema = lazyZodSchema(() => z.object({
   includeStructured: z.boolean().optional(),
   /** Await this exact current/last input turn before returning the Run snapshot. */
   waitForInputId: z.string().trim().min(1).optional(),
-  waitForOutput: ReviewWalkthroughObservationSchema.optional(),
+  waitForOutput: ExecutionRunOutputObservationSchema.optional(),
 }).passthrough());
 export type ExecutionRunGetRequest = z.infer<typeof ExecutionRunGetRequestSchema>;
 

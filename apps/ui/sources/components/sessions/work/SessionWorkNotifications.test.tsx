@@ -14,6 +14,8 @@ import {
 import { renderScreen } from '@/dev/testkit';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import type { SessionTriggersRead } from '@/components/workflows/triggers/useSessionTriggers';
+import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
 
 // Load the real Account/Action graph during collection, not inside the assertion
 // deadline; no service or catalog beneath the component is replaced.
@@ -25,6 +27,7 @@ function ownerFixture(
     disconnected?: boolean;
     configured?: boolean;
     channelDisconnected?: boolean;
+    runOutputState?: 'pending' | 'writing' | 'complete' | 'failed';
   }> = {},
 ) {
   const rows = new Map<string, AutomationDefinitionDetail>();
@@ -157,6 +160,26 @@ function ownerFixture(
       actions.sessionUpdate({ ...request, sessionId: 'session-one' }),
   };
   const executor = createActionExecutor({
+    executionRunCheckProtocolV2: async () => ({ ok: true }),
+    // The exact Run snapshot comes from the Machine RPC boundary; the registration
+    // producer and Action's scope/request/output validation remain real.
+    executionRunGet: async (_sessionId, request) => {
+      if (!options.runOutputState) throw new Error('Unexpected Run read');
+      const output = ScmDiffSummaryGenerateOutputSchema.parse({ success: true, sourceKey: 'comparison-one',
+        resultId: 'saved-one', revision: 4, metadata: { source: { kind: 'workingTree' }, sourceKey: 'comparison-one' },
+        comparison: { id: 'comparison-one', source: { kind: 'workingTree' }, repository: { rootPath: '/workspace' },
+          endpoints: { before: 'a', after: 'b' }, inventory: { state: 'complete', reasons: [], files: [] } },
+        requestedOutputs: ['commitPlan'], outputs: { commitPlan: options.runOutputState === 'complete'
+          ? { state: 'complete', value: { groups: [], leftOutChangeRefs: [] } } : { state: options.runOutputState } },
+        analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] },
+      });
+      return ExecutionRunGetResponseSchema.parse({ run: { runId: request.runId, callId: 'call', sidechainId: 'sidechain',
+        intent: 'scm_diff_summary', backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        permissionMode: 'read-only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
+        startedAtMs: 1, status: 'running' },
+        ...(request.includeStructured ? { structuredMeta: { kind: 'scm_diff_summary.v1', payload: output } } : {}),
+      });
+    },
     // The Account daemon's channel catalog is a genuine remote boundary.
     notificationChannelsList: async () => {
       if (options.channelDisconnected)
@@ -332,6 +355,38 @@ describe('Session Work notification operation', () => {
 });
 
 describe('Run Work notification operation', () => {
+  it('refuses registration when the selected saved result is not the Run owner result', async () => {
+    const owner = ownerFixture({ runOutputState: 'complete' });
+    owner.acceptCreate();
+    const screen = await renderScreen(<RunWorkNotifyOperation
+      source={{ kind: 'execution_run', machineId: 'machine-one', runId: 'generator' }}
+      selectedOutput={{ output: 'commitPlan', comparisonId: 'comparison-one', resultId: 'other-result', message: 'Commit proposal update' }}
+      project={{ machineId: 'machine-one', directory: '/workspace' }} read={owner.runRead} execute={owner.execute} />);
+    await act(async () => { screen.pressByTestId('notify-run-terminal:generator'); });
+    expect(owner.source()).toBeUndefined();
+    expect(screen.findByTestId('notify-run-terminal-error:generator')).not.toBeNull();
+    expect(screen.findByTestId('notify-run-terminal-armed:generator')).toBeNull();
+  });
+  it.each(['pending', 'writing', 'complete', 'failed'] as const)('registers and cancels the exact %s output through its Run owner', async (state) => {
+    const owner = ownerFixture({ runOutputState: state });
+    owner.acceptCreate();
+    const screen = await renderScreen(<RunWorkNotifyOperation
+      source={{ kind: 'execution_run', machineId: 'machine-one', runId: 'generator' }}
+      selectedOutput={{ output: 'commitPlan', comparisonId: 'comparison-one', resultId: 'saved-one', message: 'Commit proposal update' }}
+      project={{ machineId: 'machine-one', directory: '/workspace' }} read={owner.runRead} execute={owner.execute} />);
+    await act(async () => { screen.pressByTestId('notify-run-terminal:generator'); });
+    expect(owner.source()).toEqual({ kind: 'runLifecycle', enabled: true, condition: 'terminal', source: {
+      kind: 'execution_run', machineId: 'machine-one', runId: 'generator', observation: { kind: 'scm_diff_summary',
+        output: 'commitPlan', comparisonId: 'comparison-one', resultId: 'saved-one',
+        ...(['pending', 'writing'].includes(state) ? { afterRevision: 4 } : {}),
+      },
+    } });
+    expect(screen.findByTestId('notify-run-terminal-armed:generator')).not.toBeNull();
+    await act(async () => { screen.pressByTestId('notify-run-terminal-cancel:generator'); });
+    expect(owner.removedId()).toBe([...owner.rows.values()][0]?.triggers[0]?.id);
+    await act(async () => { owner.acceptRemove(); });
+    expect([...owner.rows.values()].flatMap(row => row.triggers)).toEqual([]);
+  });
   it('registers the exact workflow terminal source and only acknowledges committed registration/removal', async () => {
     const owner = ownerFixture();
     const screen = await renderScreen(

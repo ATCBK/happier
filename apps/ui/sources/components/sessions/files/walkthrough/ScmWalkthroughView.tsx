@@ -10,6 +10,7 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
 import { resolveExecutionRunAgentMarkId } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
 import { getPreferredLanguage, t } from '@/text';
+import { RunWorkNotifications } from '@/components/sessions/work/RunWorkNotifications';
 
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { resolveScmDiffSummaryDiscussionTarget } from '@/sync/domains/scm/diffSummary/discussion';
@@ -246,6 +247,12 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
                 onRetry={onStart}
                 onChooseModel={() => setChoosingModel(true)}
                 endedConversation={saved && sessionId && discussion?.kind !== 'continue' ? { onStartNew, onAskSession } : null}
+                notify={machine?.machineId && cwd && runId && capturedComparison && viewModel?.resultId
+                    ? <RunWorkNotifications serverId={props.serverId}
+                        source={{ kind: 'execution_run', machineId: machine.machineId, runId, ...(sessionId ? { sessionId } : {}) }}
+                        project={{ machineId: machine.machineId, directory: cwd }}
+                        selectedOutput={{ output: 'walkthrough', comparisonId: capturedComparison.id, resultId: viewModel.resultId,
+                            message: t('sessionWork.notify.walkthroughUpdate') }} /> : null}
                 savedActions={saved && cwd && key && operations ? <WalkthroughSavedActions result={saved} cwd={cwd} operations={operations}
                     nativeDiscussion={!sessionId}
                     nativeDiscussionReply={nativeDiscussionReply}

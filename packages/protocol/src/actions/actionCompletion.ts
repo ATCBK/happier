@@ -10,13 +10,13 @@ import { zodSchemaToJsonSchemaObject } from './actionInputJsonSchema.js';
 import type { ActionExecuteResult } from './actionExecutionResult.js';
 import type { ExecutionRunGetResponse } from '../execution/runs/responseSchemas.js';
 import { ExecutionRunStartRunCreationSchema, type ExecutionRunStartRunCreation } from '../execution/runs/responseSchemas.js';
-import { ReviewWalkthroughObservationSchema, type ReviewWalkthroughObservation } from '../reviews/reviewNarration.js';
+import { ExecutionRunOutputObservationSchema, type ExecutionRunOutputObservation } from '../reviews/reviewNarration.js';
 import { ScmDiffSummaryGenerateOutputSchema, type ScmDiffSummaryReviewRun } from '../scm/diffSummary.js';
 import { ScmDiffSummaryResultErrorCodeSchema } from '../scm/diffSummaryResult.js';
 import { ReviewPublicationEvidenceSchema, type ReviewPublicationMaterialization } from '../reviews/reviewPublicationEvidence.js';
 import { ActionOperationSnapshotV1Schema, type ActionOperationSnapshotV1 } from './operations/v1.js';
 
-export type ActionCompletionRun = Readonly<{ key: string; runId: string; observation?: ReviewWalkthroughObservation }>;
+export type ActionCompletionRun = Readonly<{ key: string; runId: string; observation?: ExecutionRunOutputObservation }>;
 export type ActionCompletionLaunchFailure = Readonly<{ key: string; errorCode: string; runCreation: ExecutionRunStartRunCreation }>;
 export type ReviewRunMaterialization = ReviewPublicationMaterialization;
 
@@ -37,7 +37,7 @@ export function readActionCompletionRunObservationV1(native: Readonly<{
   run: Pick<ExecutionRunGetResponse['run'], 'status' | 'error'>;
   latestToolResult?: unknown;
   structuredMeta?: ExecutionRunGetResponse['structuredMeta'];
-}>, observation?: ReviewWalkthroughObservation): ExecutionRunTerminalObservation {
+}>, observation?: ExecutionRunOutputObservation): ExecutionRunTerminalObservation {
   if (observation) {
     if (native.run.error?.code === 'execution_run_send_outcome_unknown') {
       return { kind: 'outcome_uncertain', code: native.run.error.code };
@@ -58,7 +58,7 @@ export function readActionCompletionRunObservationV1(native: Readonly<{
     if (publicationFailure.success) return { kind: 'failed', code: publicationFailure.data, ...reviewEvidence };
     if (matches
       && (observation.afterRevision === undefined || output.data.revision !== undefined && output.data.revision > observation.afterRevision)) {
-      const state = output.data.outputs?.walkthrough?.state;
+      const state = output.data.outputs?.[observation.kind === 'scm_diff_summary' ? observation.output : 'walkthrough']?.state;
       if (state && state !== 'pending' && state !== 'writing') {
         return { kind: 'completed', result: projectNativeJsonValueForTransport(output.data) };
       }
@@ -124,7 +124,7 @@ export const ActionCompletionContractV1Schema = lazyZodSchema(() => z.object({
 export type ActionCompletionContractV1 = z.infer<typeof ActionCompletionContractV1Schema>;
 
 const ActionCompletionRunSchema = lazyZodSchema(() => z.object({ key: z.string().min(1), runId: z.string().min(1),
-  observation: ReviewWalkthroughObservationSchema.optional(),
+  observation: ExecutionRunOutputObservationSchema.optional(),
 }).strict());
 const ActionCompletionLaunchesSchema = lazyZodSchema(() => z.object({
   runs: z.array(ActionCompletionRunSchema),

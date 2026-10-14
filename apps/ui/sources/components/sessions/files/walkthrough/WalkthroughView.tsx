@@ -96,6 +96,8 @@ export type WalkthroughViewProps = Readonly<{
     savedActions?: React.ReactNode;
     /** A review's findings beside the stops; absent for a walkthrough no review produced. */
     review?: WalkthroughReviewSlots | null;
+    /** The notification offer for a walkthrough still being written; shown only while it is. */
+    notify?: React.ReactNode;
 }>;
 
 /**
@@ -270,6 +272,8 @@ export const WalkthroughView = React.memo(function WalkthroughView(props: Walkth
                 note={props.review?.headerNote}
             />
             <View style={phone ? styles.padPhone : null}>{props.savedActions}</View>
+            {props.notify && (reading.phase === 'inventory' || reading.phase === 'arriving')
+                ? <View testID="walkthrough-notify" style={phone ? styles.padPhone : styles.notify}>{props.notify}</View> : null}
         </View>
     );
     const marksDisabled = props.offline ? t('walkthrough.notice.offlineA11y') : props.marksDisabledReason ?? null;
@@ -472,6 +476,7 @@ const styles = StyleSheet.create((theme) => ({
     stopDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border.default },
     arriving: { paddingVertical: theme.space.s24, ...Typography.variant('body'), color: theme.colors.text.tertiary,  },
     padPhone: { paddingHorizontal: theme.space.s16 },
+    notify: { paddingVertical: theme.space.s8 },
     rest: {
         flexDirection: 'row',
         alignItems: 'center',

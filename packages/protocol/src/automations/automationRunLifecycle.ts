@@ -1,11 +1,14 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
 import { AutomationOccurredAtV1Schema } from './automationOccurredAtV1.js';
+import { ExecutionRunOutputObservationSchema } from '../reviews/reviewNarration.js';
 
 const Id = z.string().trim().min(1).max(191);
 /** Public routing facts; source lifecycle and access remain with the Run owner. */
 export const AutomationRunLifecycleSourceSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('execution_run'), machineId: Id, runId: Id, sessionId: Id.optional() }).strict(),
+  z.object({ kind: z.literal('execution_run'), machineId: Id, runId: Id, sessionId: Id.optional(),
+    observation: ExecutionRunOutputObservationSchema.optional(),
+  }).strict(),
   z.object({ kind: z.literal('workflow_run'), runId: Id }).strict(),
 ]));
 export type AutomationRunLifecycleSource = z.infer<typeof AutomationRunLifecycleSourceSchema>;
@@ -21,7 +24,7 @@ export type AutomationRunLifecycleTrigger = z.infer<typeof AutomationRunLifecycl
 export const AutomationRunLifecycleTriggerInputSchema = lazyZodSchema(() => AutomationRunLifecycleTriggerSchema.extend({ enabled: z.boolean() }).strict());
 export const AutomationRunLifecycleOccurrenceEvidenceV1Schema = lazyZodSchema(() => AutomationRunLifecycleConfigurationSchema.extend({
   v: z.literal(1), kind: z.literal('runLifecycle'),
-  /** Execution terminal's finished timestamp, or FIN's current revision. */
+  /** Execution terminal's finished timestamp, saved output revision, or FIN's current revision. */
   sourceRevision: z.number().int().nonnegative().safe(),
   occurredAt: AutomationOccurredAtV1Schema,
   /** Exact-machine host provenance for an Execution Run spawned by a Workflow. */

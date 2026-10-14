@@ -72,6 +72,7 @@ import { useServerCredentialAccountScopeBinding, useServerCredentialAccountScope
 import { usePreferredServerIdForSession } from '@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession';
 import { sync } from '@/sync/sync';
 import { t } from '@/text';
+import { SessionRunWorkNotifications } from '@/components/sessions/work/RunWorkNotifications';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { StructuredFindText, useStructuredFindState } from '@/components/sessions/transcript/structured/structuredFindText';
 import { useTranscriptRowLayoutMutation } from '@/components/sessions/transcript/measurement/TranscriptRowLayoutMutationContext';
@@ -694,6 +695,7 @@ function ReviewFindingsCardContent(props: ReviewFindingsMessageCardProps & Reado
                                         <Text style={styles.reviewerName}>{resolveExecutionRunBackendLabel(sibling.backendTarget) ?? agentId}</Text>
                                         {meta ? <Text style={styles.reviewerMeta}>{meta}</Text> : null}
                                     </View>
+                                    {sibling.status === 'running' ? <SessionRunWorkNotifications sessionId={sessionId} runId={sibling.runId} serverId={serverId} /> : null}
                                 </View>
                             );
                         })}

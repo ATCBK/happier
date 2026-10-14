@@ -10198,7 +10198,7 @@ const ca: typeof en = {
 
 const notify = { ca: { turn: 'Avisa’m quan acabi aquest torn', attention: 'Avisa’m quan em necessiti', armed: 'Rebràs un avís', cancel: 'Cancel·la l’avís', failed: 'No s’ha pogut actualitzar l’avís. Torna-ho a provar.', turnFinished: 'El torn d’aquesta sessió ha acabat.', needsYou: 'Aquesta sessió et necessita.', settings: 'Configuració de notificacions' } };
 
-const runNotify = { ca: { run: 'Avisa’m quan acabi', runFinished: 'Aquesta execució ha acabat.', runNeedsYou: 'Aquesta execució et necessita.', setup: 'Configura les notificacions' } };
+const runNotify = { ca: { run: 'Avisa’m quan acabi', runFinished: 'Aquesta execució ha acabat.', runNeedsYou: 'Aquesta execució et necessita.', setup: 'Configura les notificacions', walkthroughUpdate: "Hi ha novetats al teu recorregut.", commitPlanUpdate: "Hi ha novetats a les teves propostes de commit." } };
 
 const sessionWorkTranslations = { ca: { ...ca, notify: { ...notify.ca, ...runNotify.ca } } };
 

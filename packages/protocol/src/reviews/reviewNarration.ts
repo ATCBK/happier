@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { ScmDiffSummaryRefineInputSchema } from '../scm/diffSummaryResult.js';
 import { ReviewLaunchFailureSchema } from './reviewLaunchFailure.js';
 import { ScmComparisonSchema } from '../scm/comparison.js';
-import { ScmReviewFindingIdentitySchema } from '../scm/diffSummary.js';
+import { ScmReviewFindingIdentitySchema, ScmDiffSummaryOutputKindSchema } from '../scm/diffSummary.js';
 export { ReviewLaunchFailureSchema, type ReviewLaunchFailure } from './reviewLaunchFailure.js';
 
 // New routing/selection envelopes are closed; the existing review-start custodian
@@ -21,6 +21,15 @@ export const ReviewWalkthroughObservationSchema = lazyZodSchema(() => z.object({
   afterRevision: z.number().int().nonnegative().optional(),
 }).strict());
 export type ReviewWalkthroughObservation = z.infer<typeof ReviewWalkthroughObservationSchema>;
+
+/** Exact structured-output observation shared by retained review and SCM generators. */
+export const ExecutionRunOutputObservationSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  ReviewWalkthroughObservationSchema,
+  ReviewWalkthroughObservationSchema.extend({ kind: z.literal('scm_diff_summary'),
+    output: ScmDiffSummaryOutputKindSchema,
+  }).strict(),
+]));
+export type ExecutionRunOutputObservation = z.infer<typeof ExecutionRunOutputObservationSchema>;
 
 export const ReviewFindingIdentitySchema = ScmReviewFindingIdentitySchema;
 export type ReviewFindingIdentity = z.infer<typeof ReviewFindingIdentitySchema>;

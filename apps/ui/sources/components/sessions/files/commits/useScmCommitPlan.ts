@@ -51,8 +51,8 @@ export function useScmCommitPlan(params: Readonly<{
     const proposal = React.useMemo<CommitProposal | null>(() => (supportedComparison && comparison && plan && comparison.source.kind === 'workingTree'
         ? buildCommitProposal({ comparison, plan, application })
         : null), [application, comparison, plan, supportedComparison]);
-    const phase: 'none' | 'writing' | 'ready' = proposal ? 'ready'
-        : supportedComparison && planOutput && (planOutput.state === 'pending' || planOutput.state === 'writing') ? 'writing' : 'none';
+    const isGenerating = supportedComparison && (planOutput?.state === 'pending' || planOutput?.state === 'writing');
+    const phase: 'none' | 'writing' | 'ready' = proposal ? 'ready' : isGenerating ? 'writing' : 'none';
     const [busy, setBusy] = React.useState(false);
     const key = viewModel?.requestKey ?? null;
     // Progress timers belong to the foreground reader, not the machine Action's lifetime.
@@ -230,6 +230,7 @@ export function useScmCommitPlan(params: Readonly<{
     return {
         proposal,
         phase,
+        isGenerating,
         actions,
         busy,
         error: bound.error,
