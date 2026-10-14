@@ -8,6 +8,7 @@ import {
 } from "vitest";
 
 import { buildProviderAccountUsageRecordId } from "@happier-dev/protocol";
+import { buildProviderAccountUsagePageProjectionV1, sealProviderAccountUsagePageProjectionV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 
 import { db } from "@/storage/db";
 import {
@@ -55,6 +56,34 @@ describe("provider account usage record storage (integration)", () => {
         harness.resetEnv();
         await db.providerAccountUsageRecord.deleteMany().catch(() => {});
         await db.account.deleteMany().catch(() => {});
+    });
+
+    it('preserves the derived page projection across accepted latest updates without changing exact witnesses', async () => {
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' }, select: { id: true } });
+        const first = createUsageSnapshot({ fetchedAt: Date.now() - 3000 });
+        const write = (snapshot: typeof first) => writeProviderAccountUsageRecordWithPolicy({ accountId: account.id,
+            recordId: first.recordId, recordKey: first.recordKey, payloadMode: 'plain_json_v1', status: 'ok',
+            snapshot, fetchedAt: snapshot.fetchedAtMs, staleAfterMs: snapshot.staleAfterMs });
+        await write(first);
+        const range = { startAtMs: first.fetchedAtMs, endAtMs: first.fetchedAtMs + 10_000 };
+        const history = await readProviderAccountUsageHistory({ accountId: account.id, recordId: first.recordId, history: { range, pageSize: 100 } });
+        const witness = history.entries[0]!;
+        const pageProjection = { recordId: first.recordId, demand: { range, resolution: 'accepted_observations' },
+            frontier: { id: witness.id, observedAtMs: witness.observedAtMs }, observationCount: 1,
+            content: sealProviderAccountUsagePageProjectionV1({ accountMode: 'plain', projection: buildProviderAccountUsagePageProjectionV1({
+                recordId: first.recordId, range, history: { entries: [{ id: witness.id, observedAtMs: witness.observedAtMs, snapshot: first }], nextCursor: null },
+            }) }) };
+        await db.providerAccountUsageRecord.update({ where: { accountId_recordId: { accountId: account.id, recordId: first.recordId } },
+            data: { metadata: { pageProjection } } });
+        await write({ ...first, planLabel: 'new plan', fetchedAtMs: first.fetchedAtMs + 1000, observedAtMs: first.observedAtMs + 1000 });
+        const row = await db.providerAccountUsageRecord.findUniqueOrThrow({ where: { accountId_recordId: { accountId: account.id, recordId: first.recordId } } });
+        expect(row.metadata).toMatchObject({ pageProjection });
+        const accepted = await readProviderAccountUsageHistory({ accountId: account.id, recordId: first.recordId,
+            history: { range, pageSize: 100 } });
+        expect(accepted.entries).toHaveLength(2);
+        expect(accepted.entries[1]!.record.metadata).not.toHaveProperty('pageProjection');
+        expect(await readProviderAccountUsageHistoryWitness({ accountId: account.id, recordId: first.recordId,
+            witness: pageProjection.frontier })).toEqual(witness);
     });
 
     it('keeps an interior Pending reset witness after material changes and unchanged refreshes', async () => {

@@ -21,6 +21,7 @@ import type {
     LegacyQuotaCompatibilityProjection,
     ProviderAccountUsagePayloadMode,
     ProviderAccountUsageStatus,
+    UpsertProviderAccountUsageRecordParams,
 } from "./types";
 import { ProviderAccountUsagePayloadInvariantError } from "./types";
 
@@ -246,7 +247,7 @@ async function writeProviderAccountUsageRecordWithPolicyInClient(
                 existingLegacyQuotaProjections,
                 nextLegacyQuotaProjections,
             );
-        let nextWrite;
+        let nextWrite: UpsertProviderAccountUsageRecordParams;
         let result: "written" | "noop" | "stale";
         if (!incomingFingerprint) {
             if (!isNewer && !subscriptionAdvanced) return "stale";
@@ -318,6 +319,8 @@ async function writeProviderAccountUsageRecordWithPolicyInClient(
             };
         }
 
+        if (existing.metadata?.pageProjection) nextWrite = { ...nextWrite,
+            metadata: { ...nextWrite.metadata, pageProjection: existing.metadata.pageProjection } };
         const updated = await updateProviderAccountUsageRecordIfCurrent(nextWrite, {
             fetchedAt: existing.fetchedAt,
             ...(existing.refreshRequestedAt !== undefined ? { refreshRequestedAt: existing.refreshRequestedAt } : {}),

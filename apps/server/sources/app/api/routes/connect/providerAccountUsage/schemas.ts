@@ -5,6 +5,7 @@ import { ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema, ConnectedServic
 import { ProviderAccountUsageRecordIdSchema, ProviderAccountUsageRecordKeyV1Schema, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { ProviderAccountUsageRecordWriteV1Schema, SealedProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/accountUsage';
 import { ProviderAccountSubscriptionV1Schema } from '@happier-dev/protocol/connect/accountSubscription';
+import { StoredProviderAccountUsagePageProjectionV1Schema } from '@happier-dev/protocol/connect/providerAccountUsagePageProjection';
 import type { ProviderAccountUsagePayloadMode, ProviderAccountUsageStatus } from "./types";
 
 export const ProviderAccountUsagePayloadModeSchema = z.enum([
@@ -21,9 +22,10 @@ export const ProviderAccountUsageStatusSchema = z.enum([
 ]) satisfies z.ZodType<ProviderAccountUsageStatus>;
 
 export const ProviderAccountUsageRecordMetadataSchema = z.object({
+    pageProjection: z.optional(StoredProviderAccountUsagePageProjectionV1Schema),
     materialFingerprint: z.string().trim().min(1).max(256).optional(),
-    subscription: ProviderAccountSubscriptionV1Schema.optional(),
-    recoveryCreditDetails: ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema.optional(),
+    subscription: z.optional(ProviderAccountSubscriptionV1Schema),
+    recoveryCreditDetails: z.optional(ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema),
     legacyQuotaCompatibilityProjections: z.array(z.object({
         source: z.object({
             serviceId: ConnectedServiceIdSchema,
@@ -42,8 +44,8 @@ export const UpsertProviderAccountUsageRecordSchema = z.object({
     recordKey: ProviderAccountUsageRecordKeyV1Schema,
     payloadMode: ProviderAccountUsagePayloadModeSchema,
     status: ProviderAccountUsageStatusSchema,
-    snapshot: ProviderAccountUsageSnapshotV1Schema.optional(),
-    sealedPayload: SealedProviderAccountUsageSnapshotV1Schema.optional(),
+    snapshot: z.optional(ProviderAccountUsageSnapshotV1Schema),
+    sealedPayload: z.optional(SealedProviderAccountUsageSnapshotV1Schema),
     fetchedAt: z.number().int().nonnegative().optional(),
     staleAfterMs: z.number().int().nonnegative().optional(),
     refreshRequestedAt: z.number().int().nonnegative().optional(),
@@ -111,6 +113,6 @@ export function validateProviderAccountUsageRecordWrite(raw: unknown) {
     return {
         accountId,
         ...canonicalRecordWrite,
-        ...(metadata ? { metadata } : {}),
+        metadata,
     };
 }
