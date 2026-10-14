@@ -6,6 +6,7 @@ import { resolveVitestFeatureTestExcludeGlobs } from '../../scripts/testing/feat
 import { resolveVitestWorkers } from '../../scripts/testing/vitestWorkers'
 import {
     createWorkspacePackageSourcesPlugin,
+    createWorkspaceHostSourceAlias,
     readBundledPluginWorkspacePackageSpecs,
     type WorkspacePackageSpec,
 } from '../../scripts/testing/vitestWorkspacePackageResolution'
@@ -349,7 +350,7 @@ export default defineConfig({
                 find: /^@\/components\/ui\/code\/editor\/CodeEditor$/,
                 replacement: resolve('./sources/components/ui/code/editor/CodeEditor.web.tsx'),
             },
-            { find: '@', replacement: resolve('./sources') },
+            createWorkspaceHostSourceAlias(repoRoot, resolve('./sources')),
         ],
     },
     plugins: [expoNodeModuleStubsPlugin],
