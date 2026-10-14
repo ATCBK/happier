@@ -34,6 +34,8 @@ import { resolveTranscriptBodySessionMessageRole as protocolResolveTranscriptBod
 import { SessionIdSchema as protocolSessionIdSchema, SessionIndexedIdentifierMaxLengthV1 as protocolSessionIndexedIdentifierMaxLengthV1 } from '@happier-dev/protocol/sessions/idsV1';
 import { SessionMessageProvenanceV1Schema as protocolSessionMessageProvenanceV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SessionRuntimeIssueV1Schema as protocolSessionRuntimeIssueV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import { SESSION_CAPABILITY_NOTICE_SIDECAR_KEY as protocolSessionCapabilityNoticeSidecarKey,
+    SessionCapabilityNoticeV1Schema as protocolSessionCapabilityNoticeV1Schema } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 import { SessionUsageLimitRecoveryV1Schema as protocolSessionUsageLimitRecoveryV1Schema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import { SPAWN_SESSION_ERROR_CODES as protocolSpawnSessionErrorCodes } from '@happier-dev/protocol/spawnSession';
 import { SessionAuthoringCheckoutCreationDraftV1Schema as protocolSessionAuthoringCheckoutCreationDraftV1Schema } from '@happier-dev/protocol/sessions/authoring/creationFieldsV1';
@@ -277,6 +279,21 @@ export type SessionStateCapabilitiesV1 = Readonly<{
     runtime?: unknown;
     view?: unknown;
 }>;
+/** Structural projection; the Protocol validator owns notice admission. */
+export type SessionCapabilityNoticeV1 = {
+    v: 1;
+    items: {
+        kind: 'mcp_server' | 'skill' | 'prompt_library';
+        name: string;
+        itemId?: string;
+        code: string;
+        detail?: string;
+    }[];
+};
+/** @realm any */
+export const SESSION_CAPABILITY_NOTICE_SIDECAR_KEY = protocolSessionCapabilityNoticeSidecarKey;
+/** @realm any */
+export const SessionCapabilityNoticeV1Schema: SessionSchema<SessionCapabilityNoticeV1> = protocolSessionCapabilityNoticeV1Schema;
 /** @realm any */
 export const SPAWN_SESSION_ERROR_CODES: Readonly<Record<string, string>> = protocolSpawnSessionErrorCodes;
 /** @realm any */

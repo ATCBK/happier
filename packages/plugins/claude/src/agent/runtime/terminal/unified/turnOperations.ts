@@ -2,7 +2,7 @@ import { extractToolResultBlocksFromSdkMessage } from '../../remote/sdk/streamEv
 
 import { sleep } from '@happier-dev/plugin-sdk/async';
 import { buildClaudeMcpConfigArgs, materializeClaudeMcpConfigArgsForSpawn } from '../../../mcp/materializeConfigArgs.js';
-import type { JsonValue } from '@happier-dev/plugin-sdk';
+import type { Disposable, JsonValue } from '@happier-dev/plugin-sdk';
 import type {
   TerminalHostHandle,
   TerminalHostPreference,
@@ -928,6 +928,8 @@ export function createClaudeUnifiedTerminalTurnOperations(
           nativeRecordId: row.uuid,
           inferenceId: readClaudeProviderIdentityValue(row.message.id),
           nativeSessionId: readClaudeProviderIdentityValue(row.session_id) ?? readClaudeProviderIdentityValue(row.sessionId),
+          turnId: !observation.historicalReplay && row.isSidechain !== true && !row.parent_tool_use_id
+            ? state.activeTurnId : null,
           modelId: readClaudeAssistantModelId(row),
           modelSource,
           ...(observedAtMs === undefined ? {} : { observedAtMs }),
@@ -1868,6 +1870,33 @@ export function createClaudeUnifiedTerminalTurnOperations(
     queuedBannerCustodyTimers.clear();
   }
 
+  function reconcileProviderActivityAfterHostLoss(nativeExited: boolean): void {
+    if (nativeExited) providerActivityLedger.noteProviderStopped();
+    else providerActivityLedger.noteObservationLost();
+    publishProviderTaskInventory(nativeExited ? 'native-process-exited' : 'host-observation-lost');
+  }
+
+  let terminalExitSubscription: Disposable | null = null;
+
+  async function subscribeToHostExit(handle: TerminalHostHandle): Promise<void> {
+    const subscribeExit = params.ctx.agentRuntime.terminalHost.subscribeExit;
+    if (!subscribeExit) return;
+    const subscription = await subscribeExit(handle, exit => {
+      if (state.disposed || state.handle !== handle) return;
+      void nativeRuntime.observeTerminalLifecycle({
+        agentId: CLAUDE_UNIFIED_TERMINAL_PROVIDER_ID, type: 'process_exited',
+        exitCode: exit.code, signal: exit.signal,
+        ...(exit.nativeExited === true ? { nativeExited: true as const } : {}),
+      }).catch(() => params.ctx.logger.warn('[ClaudeUnifiedTerminal] terminal exit observation failed'));
+    });
+    if (state.disposed || state.handle !== handle) await subscription?.dispose();
+    else {
+      const previous = terminalExitSubscription;
+      terminalExitSubscription = subscription;
+      await previous?.dispose();
+    }
+  }
+
   let startupInstructionsFile: ReturnType<typeof materializeClaudeStartupInstructions> | undefined;
   let mcpConfigForSpawn: ReturnType<typeof materializeClaudeMcpConfigArgsForSpawn> | undefined;
 
@@ -1890,6 +1919,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
       if (retained) {
         retainedHostAdopted = true;
         state.handle = retained;
+        await subscribeToHostExit(retained);
         return retained;
       }
     }
@@ -1960,6 +1990,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
       throw recordTerminalHostStartupFailure(error) ?? error;
     }
     state.handle = handle;
+    await subscribeToHostExit(handle);
     return handle;
   }
 
@@ -2815,7 +2846,8 @@ export function createClaudeUnifiedTerminalTurnOperations(
     lastObservedPaneAlive = liveness.paneAlive === true;
     if (!liveness.paneAlive) {
       if (liveness.paneDead === true) {
-        // The host confirmed the pane is dead. Terminalize: there is no recovery path.
+        // Pane loss ends unresolved observation, without proving that the native provider stopped.
+        if (providerActivityLedger.hasActiveProviderTasks()) reconcileProviderActivityAfterHostLoss(false);
         lastReadinessKind = 'failed';
         arbiter.observeReadiness({
           status: 'failed_terminal',
@@ -4057,7 +4089,12 @@ export function createClaudeUnifiedTerminalTurnOperations(
       ));
     },
     async disposeProviderSession(reason) {
+      if (providerActivityLedger.hasActiveProviderTasks()) {
+        reconcileProviderActivityAfterHostLoss(false);
+      }
       state.disposed = true;
+      const exitSubscription = terminalExitSubscription;
+      terminalExitSubscription = null;
       pendingNativeStarts.length = 0;
       usageObservationListeners.clear();
       stopReadinessWake();
@@ -4085,6 +4122,8 @@ export function createClaudeUnifiedTerminalTurnOperations(
         if (cleanupError === undefined) cleanupError = error;
         params.ctx.logger.warn(message, { error });
       };
+      try { await exitSubscription?.dispose(); }
+      catch (error) { recordCleanupError(error, '[ClaudeUnifiedTerminal] terminal exit subscription cleanup failed'); }
       try {
         if (handle) {
           await params.ctx.agentRuntime.terminalHost.dispose(handle, resolveClaudeTerminalHostDisposeIntent(reason));
@@ -4372,8 +4411,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
         return;
       }
       if (observation.type === 'process_exited' && !state.disposed) {
-        providerActivityLedger.noteObservationLost();
-        publishProviderTaskInventory('process-exited-observation-lost');
+        reconcileProviderActivityAfterHostLoss(observation.nativeExited === true);
       }
       if (observation.type === 'process_exited' && (state.turnInFlight || state.dispatchAttemptInFlight)) {
         nativeResumeTurnBarrier?.observeTerminal();

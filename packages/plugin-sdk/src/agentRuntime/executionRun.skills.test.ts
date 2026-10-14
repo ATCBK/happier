@@ -11,6 +11,7 @@ it.each(['create', 'resume'] as const)('preserves skills and MCP policy through 
   const request = {
     runId: 'run', cwd: '/repo', profile: { pluginId: 'fixture', localId: 'default' }, skills,
     mcpServers: { docs: { command: 'docs-server', args: [] } },
+    mcpServersStrictMode: true,
     mcpToolPolicy: { docs: { unlisted: 'ask', tools: { read: 'allow', write: 'off' } } },
     ...(kind === 'create' ? { kind, input: { text: 'Use the guide' } } : { kind, checkpointId: 'checkpoint' }),
   } satisfies AgentExecutionRunOpenRequest;
@@ -25,7 +26,8 @@ it.each(['create', 'resume'] as const)('preserves skills and MCP policy through 
     openSession(value) { opened = value; return session; },
   });
   try {
-    expect(opened).toMatchObject({ kind, skills, mcpServers: request.mcpServers, mcpToolPolicy: request.mcpToolPolicy });
+    expect(opened).toMatchObject({ kind, skills, mcpServers: request.mcpServers,
+      mcpServersStrictMode: true, mcpToolPolicy: request.mcpToolPolicy });
   } finally {
     await runtime.dispose();
   }

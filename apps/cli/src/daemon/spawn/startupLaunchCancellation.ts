@@ -1,5 +1,6 @@
 import type { ChildExit } from '../sessions/onChildExited';
 import type { TrackedSession } from '../types';
+import { isPidPresent } from '@happier-dev/cli-common/process';
 import { SessionLaunchRetiredV1Schema } from '@happier-dev/protocol/spawnSession';
 import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionResult } from '@/session/shared/spawnSessionContract';
 
@@ -19,6 +20,8 @@ export type CancelStartupLaunch =
 
 export async function completeStartupCancellationCleanup(params: Readonly<{
   trackedSession: TrackedSession;
+  /** Captured POSIX launch wrapper, even after custody moves to its runner. */
+  wrapperPid?: number;
   pidToTrackedSession: Map<number, TrackedSession>;
   onChildExited: (pid: number, exit: ChildExit) => void | Promise<void>;
 }>): Promise<StartupLaunchCancellationResult> {
@@ -30,6 +33,13 @@ export async function completeStartupCancellationCleanup(params: Readonly<{
   };
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    // Terminal disappearance and synthetic exit bookkeeping cannot prove
+    // process retirement. Windows launch owners instead prove exact native
+    // runner identity/absence before entering cleanup (their pid can be a dispatcher).
+    if (process.platform !== 'win32' && [params.wrapperPid, params.trackedSession.pid, params.trackedSession.sessionRunnerPid]
+      .some(pid => typeof pid === 'number' && pid > 0 && isPidPresent(pid))) {
+      return { status: 'incomplete', reason: 'process_still_running' };
+    }
     const currentPid = params.trackedSession.pid;
     if (
       params.pidToTrackedSession.get(currentPid)

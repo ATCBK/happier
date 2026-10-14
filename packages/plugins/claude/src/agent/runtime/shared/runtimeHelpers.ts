@@ -156,18 +156,20 @@ export function observeClaudeProviderTaskActivity(params: Readonly<{
 
 export function applyClaudeProviderTaskActivity(params: Readonly<{
   activity: ClaudeProviderTaskActivity;
+  ownerScope?: object;
   ledger: ReturnType<typeof createClaudeProviderActivityLedger>;
   runtimeActivityPublisher: ClaudeRuntimeActivityPublisher;
   logger: ClaudeRuntimeLogger;
   logPrefix: string;
-}>): void {
+}>): boolean {
   const activity = params.activity;
-  const didChange = params.ledger.apply(activity);
-  if (!didChange) return;
+  const didChange = params.ledger.apply(activity, params.ownerScope);
+  if (!didChange) return false;
   publishClaudeProviderTaskInventory({
     ...params,
     reason: activity.type === 'terminal' ? 'task-terminal' : `task-${activity.type}`,
   });
+  return true;
 }
 
 export async function respondToClaudePermission(params: Readonly<{

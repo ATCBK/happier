@@ -207,9 +207,24 @@ export function createSessionHooksFixture(): Readonly<{
   };
 }
 
-export function createSdkExecFixture(): Readonly<{
+type ClaudeSdkExecFixtureExit = Readonly<{
+  exitCode: number | null;
+  signal: string | null;
+  stdout?: string;
+  stderr?: string;
+}>;
+
+type ClaudeSdkExecFixtureProcess = Readonly<{
+  written: readonly unknown[];
+  emit(record: unknown): Promise<void>;
+  exitWith(result: ClaudeSdkExecFixtureExit): Promise<void>;
+}>;
+
+// This vendor OS boundary models a direct Claude process; {} models an unqualified wrapper.
+export function createSdkExecFixture(options: Readonly<{ providerExitOwnership?: 'direct' }> = { providerExitOwnership: 'direct' }): Readonly<{
   spawnClient: ReturnType<typeof vi.fn>;
   written: unknown[];
+  processes: readonly ClaudeSdkExecFixtureProcess[];
   service: ClaudeSdkQueryContext;
   emit(record: unknown): Promise<void>;
   exitWith(result: Readonly<{
@@ -220,14 +235,20 @@ export function createSdkExecFixture(): Readonly<{
   }>): Promise<void>;
   resolveExit(): Promise<void>;
 }> {
-  const listeners = new Set<(record: unknown) => void | Promise<void>>();
+  const processes: ClaudeSdkExecFixtureProcess[] = [];
   const written: unknown[] = [];
   type ExitResult = Readonly<{
     exitCode: number | null;
     signal: string | null;
     stdout: string;
     stderr: string;
+    providerStopped?: true;
   }>;
+  const observedExit = (result: ClaudeSdkExecFixtureExit): ExitResult => ({
+    exitCode: result.exitCode, signal: result.signal, stdout: result.stdout ?? '', stderr: result.stderr ?? '',
+    ...(options.providerExitOwnership === 'direct' && (result.exitCode !== null || result.signal !== null)
+      ? { providerStopped: true as const } : {}),
+  });
   const pendingExitResolvers = new Set<(result: ExitResult) => void>();
   const pendingExits = new Set<Promise<ExitResult>>();
   const settlePendingExits = async (result: ExitResult): Promise<void> => {
@@ -236,6 +257,8 @@ export function createSdkExecFixture(): Readonly<{
     await Promise.all(exits);
   };
   const spawnClient = vi.fn(async (): Promise<ClaudeSdkExecClientHandle> => {
+    const processWritten: unknown[] = [];
+    const listeners = new Set<(record: unknown) => void | Promise<void>>();
     let resolveExitPromise!: (result: ExitResult) => void;
     const exit = new Promise<ExitResult>((resolve) => {
       resolveExitPromise = resolve;
@@ -246,6 +269,16 @@ export function createSdkExecFixture(): Readonly<{
       pendingExitResolvers.delete(resolveExitPromise);
       pendingExits.delete(exit);
     });
+    processes.push({
+      written: processWritten,
+      async emit(record) {
+        await Promise.all([...listeners].map((listener) => listener(record)));
+      },
+      async exitWith(result) {
+        resolveExitPromise(observedExit(result));
+        await exit;
+      },
+    });
     const client: ClaudeSdkJsonStreamClient = {
       closed: exit.then(() => undefined),
       subscribe(listener) {
@@ -254,6 +287,7 @@ export function createSdkExecFixture(): Readonly<{
       },
       async writeRecord(record) {
         written.push(record);
+        processWritten.push(record);
         return { kind: 'written' };
       },
     };
@@ -283,28 +317,19 @@ export function createSdkExecFixture(): Readonly<{
   return {
     spawnClient,
     written,
+    processes,
     service: {
       // Boundary fixture: Vitest mock has one implementation while the SDK exposes overloads.
       spawnClient,
     } as unknown as ClaudeSdkQueryContext,
     async emit(record) {
-      await Promise.all([...listeners].map((listener) => listener(record)));
+      await Promise.all(processes.map((process) => process.emit(record)));
     },
     async exitWith(result) {
-      await settlePendingExits({
-        exitCode: result.exitCode,
-        signal: result.signal,
-        stdout: result.stdout ?? '',
-        stderr: result.stderr ?? '',
-      });
+      await settlePendingExits(observedExit(result));
     },
     async resolveExit() {
-      await settlePendingExits({
-        exitCode: 0,
-        signal: null,
-        stdout: '',
-        stderr: '',
-      });
+      await settlePendingExits(observedExit({ exitCode: 0, signal: null }));
     },
   };
 }

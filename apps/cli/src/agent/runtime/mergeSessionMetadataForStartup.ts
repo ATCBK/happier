@@ -382,6 +382,16 @@ export function mergeSessionMetadataForStartup(opts: {
         lifecycleState: 'running',
         lifecycleStateSince: opts.nowMs,
     };
+    // Plain-runner absence belongs to the stopped process. A newly admitted
+    // runner must not inherit it and appear permanently absent after disconnect.
+    if (opts.next.terminal === undefined && typeof opts.next.hostPid === 'number'
+        && (opts.current.hostPid !== opts.next.hostPid
+            || opts.current.hostProcessStartTimeMs !== opts.next.hostProcessStartTimeMs)
+        && opts.current.terminal?.mode === 'plain'
+        && opts.current.terminal.controlServiceabilityV1?.retired === true
+        && opts.current.terminal.controlServiceabilityV1.attachmentId === undefined) {
+        delete merged.terminal;
+    }
 
     if (mode === 'attach') {
         // Tool policy belongs to the retained Session, never runner defaults.

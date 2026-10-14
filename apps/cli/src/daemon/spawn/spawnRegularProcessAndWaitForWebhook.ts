@@ -1,5 +1,6 @@
 import type { PersistedTakeoverAdmissionWaitRegistration } from './persistedTakeoverAdmission';
 import { spawn as spawnChildProcess } from 'node:child_process';
+import { observeProcessLaunch } from '@/processes/launchNotification';
 import { isPidPresent } from '@happier-dev/cli-common/process';
 
 import { appendBoundedStderrTail, sanitizeChildStderrTail } from './childStderrDiagnostic';
@@ -136,6 +137,7 @@ export async function spawnRegularProcessAndWaitForWebhook(params: Readonly<{
   }
 
   let capturedStderrTail = '';
+  observeProcessLaunch(happyProcess);
   const stderrSanitizer = params.createStreamingSanitizer?.() ?? null;
   const stdoutSanitizer = params.createStreamingSanitizer?.() ?? null;
   const sanitizeStreamChunk = (
@@ -292,6 +294,7 @@ export async function spawnRegularProcessAndWaitForWebhook(params: Readonly<{
       }
       return await completeStartupCancellationCleanup({
         trackedSession,
+        wrapperPid: pid,
         pidToTrackedSession: params.pidToTrackedSession,
         onChildExited: params.onChildExited,
       });

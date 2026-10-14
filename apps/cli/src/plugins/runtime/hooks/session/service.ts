@@ -152,24 +152,35 @@ function resolveHookSessionRoot(params: Readonly<{
     );
 }
 
+function resolveHookResourceLifecycle(request: Readonly<{
+    lifecycle?: HostSessionHookLifecycle;
+    lifetime?: 'invocation';
+}>): HostSessionHookLifecycle | undefined {
+    if (request.lifetime !== undefined && request.lifetime !== 'invocation') {
+        throw new PluginError({ code: 'plugin_session_hook_lifetime_invalid', message: 'The hook resource lifetime is unsupported.' });
+    }
+    return request.lifetime === 'invocation' ? { kind: 'runner' } : request.lifecycle;
+}
+
 function resolveHookPluginDirPath(params: Readonly<{
     happyHomeDir: string;
     pluginsRoot: string;
     request: HostSessionHookPluginDirCreateRequest;
 }>): string {
     const providerSegment = sanitizeProviderId(params.request.providerId);
-    if (params.request.lifecycle?.kind === 'session') {
+    const lifecycle = resolveHookResourceLifecycle(params.request);
+    if (lifecycle?.kind === 'session') {
         return join(resolveHookSessionRoot({
             happyHomeDir: params.happyHomeDir,
             providerId: params.request.providerId,
-            sessionId: params.request.lifecycle.sessionId,
+            sessionId: lifecycle.sessionId,
         }), 'plugin');
     }
     return join(params.pluginsRoot, `${providerSegment}-${process.pid}-${pluginDirSequence++}`);
 }
 
 function shouldRetainHookPluginDir(request: HostSessionHookPluginDirCreateRequest): boolean {
-    return request.lifecycle?.kind === 'session';
+    return resolveHookResourceLifecycle(request)?.kind === 'session';
 }
 
 function resolveNodeExecutable(): string {
@@ -420,18 +431,14 @@ export function createSessionHooksService(
         ) {
             throw new Error(`Session hook plugin dir is not owned by this service: ${pluginDir}`);
         }
-        activePluginDirs.delete(resolvedPluginDir);
         if (retainedPluginDirs.has(resolvedPluginDir)) {
+            activePluginDirs.delete(resolvedPluginDir);
             disposedPluginDirs.add(resolvedPluginDir);
             return;
         }
-        try {
-            await disposeHookPluginDir(resolvedPluginDir);
-            disposedPluginDirs.add(resolvedPluginDir);
-        } catch (error) {
-            activePluginDirs.add(resolvedPluginDir);
-            throw error;
-        }
+        await disposeHookPluginDir(resolvedPluginDir);
+        activePluginDirs.delete(resolvedPluginDir);
+        disposedPluginDirs.add(resolvedPluginDir);
     }
 
     return Object.freeze({
@@ -440,18 +447,19 @@ export function createSessionHooksService(
             if (request.lifecycle?.kind === 'session' && request.lifecycle.sessionId !== request.sessionId) {
                 throw new Error('Session hook lifecycle sessionId must match the hook server sessionId');
             }
+            const lifecycle = resolveHookResourceLifecycle(request);
             const secretFiles = await createHookSecretFiles({
                 happyHomeDir: params.happyHomeDir,
                 providerId: request.providerId,
-                lifecycle: request.lifecycle,
+                lifecycle,
                 sessionHookSecret: request.sessionHookSecret,
                 permissionHookSecret: request.permissionHookSecret,
             });
-            const sessionRoot = request.lifecycle?.kind === 'session'
+            const sessionRoot = lifecycle?.kind === 'session'
                 ? resolveHookSessionRoot({
                     happyHomeDir: params.happyHomeDir,
                     providerId: request.providerId,
-                    sessionId: request.lifecycle.sessionId,
+                    sessionId: lifecycle.sessionId,
                 })
                 : null;
             const requestedPort = sessionRoot ? await readSessionHookEndpointPort(sessionRoot) : null;

@@ -15,6 +15,7 @@ import { buildClaudePluginDirArgs } from '../runtime/pluginDirArgs.js';
 import { materializeClaudeStartupInstructions } from '../runtime/startupInstructions.js';
 
 export type ClaudeSdkExecResult = Readonly<{
+    providerStopped?: true;
     exitCode: number | null;
     signal: string | null;
     stdout: string;
@@ -371,6 +372,8 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
             prompt: QueryPrompt;
             options?: QueryOptions;
             onMessageReceived?: (message: SDKMessage) => void;
+            onProcessExited?: (result: ClaudeSdkExecResult) => void;
+            onObservationLost?: (reason: 'query_disposed' | 'dispose_failed') => void;
         }>,
     ) {
         this.promptTransportOutcome = new Promise((resolve) => {
@@ -487,8 +490,11 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
     }
 
     async dispose(): Promise<void> {
-        this.unsubscribe?.();
-        this.unsubscribe = null;
+        if (this.unsubscribe) {
+            this.unsubscribe();
+            this.unsubscribe = null;
+            this.config.onObservationLost?.('query_disposed');
+        }
         for (const controller of this.controlControllers.values()) {
             controller.abort();
         }
@@ -497,6 +503,9 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
         const handle = await this.handlePromise.catch(() => null);
         try {
             await handle?.dispose({ code: 'CLAUDE_SDK_QUERY_DISPOSED' });
+        } catch (error) {
+            this.config.onObservationLost?.('dispose_failed');
+            throw error;
         } finally {
             await this.cleanupSpawnArtifacts?.().catch(() => undefined);
         }
@@ -567,6 +576,7 @@ export class ClaudeSdkQuery implements AsyncIterableIterator<SDKMessage> {
             async (result) => {
                 await cleanup().catch(() => undefined);
                 this.exitResult = result;
+                this.config.onProcessExited?.(result);
                 this.rejectPendingControlResponses(
                     new Error('Claude SDK process exited before control response.'),
                 );
@@ -823,6 +833,8 @@ export function query(
         prompt: QueryPrompt;
         options?: QueryOptions;
         onMessageReceived?: (message: SDKMessage) => void;
+        onProcessExited?: (result: ClaudeSdkExecResult) => void;
+        onObservationLost?: (reason: 'query_disposed' | 'dispose_failed') => void;
     }>,
 ): ClaudeSdkQuery {
     return queryWithContext(ctx.agentRuntime.exec, config);

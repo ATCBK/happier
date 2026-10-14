@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createPluginExecSystemToolGrantStore } from '@/plugins/runtime/exec/system/tools/grants';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { logger } from '@/ui/logger';
 
 import { createTerminalRuntimeProcessService } from './launchProcess';
 
@@ -20,6 +21,143 @@ class FakeChildProcess extends EventEmitter {
 }
 
 describe('createTerminalRuntimeProcessService', () => {
+    it('shares pending stop failure and permits physical retry before retaining success', async () => {
+        // ChildProcess and termination are OS boundaries; supervision and grant verification stay real.
+        const child = new FakeChildProcess() as unknown as ChildProcess;
+        const grants = createPluginExecSystemToolGrantStore();
+        grants.register({ grantId: 'stop-fixture', toolId: 'claude', executablePath: '/fixture/claude', expiresAt: null });
+        const failure = new Error('physical stop rejected');
+        let rejectAttempt!: (error: unknown) => void;
+        const pending = new Promise<void>((_resolve, reject) => { rejectAttempt = reject; });
+        let attempts = 0;
+        let alive = true;
+        const seenOptions: unknown[] = [];
+        const service = createTerminalRuntimeProcessService({
+            spawn: () => child,
+            verifyExecutableGrant: grants.verifyGrant,
+            async terminateProcessTree(_child, options) {
+                seenOptions.push(options);
+                if (!alive) throw new Error('A settled process must not be stopped again');
+                if (++attempts === 1) return await pending;
+                alive = false;
+                child.emit('exit', null, 'SIGTERM');
+            },
+        });
+        const handle = await service.launch({ executable: { path: '/fixture/claude',
+            hostGrant: { kind: 'system-tool', grantId: 'stop-fixture' } }, cwd: '/repo' });
+        const first = handle.stop({ graceMs: 17 }).then(() => undefined, error => error);
+        let secondSettled = false;
+        const second = handle.stop({ graceMs: 23 }).then(
+            () => { secondSettled = true; },
+            error => { secondSettled = true; return error; },
+        );
+        try {
+            await Promise.resolve();
+            await Promise.resolve();
+            expect(secondSettled).toBe(false);
+            rejectAttempt(failure);
+            expect(await Promise.all([first, second])).toEqual([failure, failure]);
+            expect(alive).toBe(true);
+            await handle.stop({ graceMs: 29 });
+            expect(alive).toBe(false);
+            expect(seenOptions).toEqual([{ graceMs: 17 }, { graceMs: 29 }]);
+            await expect(handle.waitForTermination()).resolves.toEqual({ type: 'signaled', signal: 'SIGTERM' });
+            await expect(handle.stop()).resolves.toBeUndefined();
+        } finally {
+            rejectAttempt(failure);
+            await Promise.all([first, second]);
+            child.emit('exit', 0, null);
+        }
+    });
+
+    it.each(['failed_stop', 'post_spawn_error'] as const)('keeps containing cancellation effective after %s', async boundary => {
+        // Only child events and physical termination are substituted; the public service and supervision are real.
+        const child = new FakeChildProcess() as unknown as ChildProcess;
+        const grants = createPluginExecSystemToolGrantStore();
+        grants.register({ grantId: 'cancel-retry-fixture', toolId: 'claude', executablePath: '/fixture/claude', expiresAt: null });
+        const controller = new AbortController();
+        const failure = new Error('manual physical stop rejected');
+        let alive = true;
+        let attempts = 0;
+        const service = createTerminalRuntimeProcessService({
+            spawn: () => child,
+            verifyExecutableGrant: grants.verifyGrant,
+            terminateProcessTree: async () => {
+                attempts += 1;
+                if (boundary === 'failed_stop' && attempts === 1) throw failure;
+                alive = false;
+                child.emit('exit', null, 'SIGTERM');
+            },
+        });
+        const handle = await service.launch({ executable: { path: '/fixture/claude',
+            hostGrant: { kind: 'system-tool', grantId: 'cancel-retry-fixture' } },
+            cwd: '/repo', signal: controller.signal });
+        try {
+            if (boundary === 'failed_stop') {
+                await expect(handle.stop()).rejects.toBe(failure);
+            } else {
+                child.emit('error', new Error('post-spawn observation failed'));
+                await expect(handle.waitForTermination()).resolves.toMatchObject({ type: 'spawn_error' });
+            }
+            expect(alive).toBe(true);
+            controller.abort();
+            await vi.waitFor(() => expect(alive).toBe(false));
+            if (boundary === 'failed_stop') {
+                await expect(handle.waitForTermination()).resolves.toEqual({ type: 'signaled', signal: 'SIGTERM' });
+            }
+        } finally { child.emit('exit', 0, null); }
+    });
+
+    it('preserves cancellation and physical cleanup failures after spawn', async () => {
+        const child = new FakeChildProcess() as unknown as ChildProcess;
+        const grants = createPluginExecSystemToolGrantStore();
+        grants.register({ grantId: 'aborted-stop-fixture', toolId: 'claude', executablePath: '/fixture/claude', expiresAt: null });
+        const controller = new AbortController();
+        const cleanupFailure = new Error('spawned child cleanup rejected');
+        const service = createTerminalRuntimeProcessService({
+            spawn: () => { controller.abort(); return child; },
+            verifyExecutableGrant: grants.verifyGrant,
+            terminateProcessTree: async () => { throw cleanupFailure; },
+        });
+        try {
+            await expect(service.launch({ executable: { path: '/fixture/claude',
+                hostGrant: { kind: 'system-tool', grantId: 'aborted-stop-fixture' } },
+                cwd: '/repo', signal: controller.signal })).rejects.toMatchObject({
+                errors: [expect.objectContaining({ name: 'AbortError' }), cleanupFailure],
+                cause: expect.objectContaining({ name: 'AbortError' }),
+            });
+        } finally { child.emit('exit', 0, null); }
+    });
+
+    it('reports cancellation stop rejection while keeping the handle retryable', async () => {
+        const child = new FakeChildProcess() as unknown as ChildProcess;
+        const grants = createPluginExecSystemToolGrantStore();
+        grants.register({ grantId: 'cancel-stop-fixture', toolId: 'claude', executablePath: '/fixture/claude', expiresAt: null });
+        const controller = new AbortController();
+        const failure = new Error('cancellation stop rejected');
+        let failed = false;
+        const report = vi.spyOn(logger, 'infoFile');
+        const service = createTerminalRuntimeProcessService({
+            spawn: () => child,
+            verifyExecutableGrant: grants.verifyGrant,
+            terminateProcessTree: async () => {
+                if (!failed) { failed = true; throw failure; }
+                child.emit('exit', 0, null);
+            },
+        });
+        const handle = await service.launch({ executable: { path: '/fixture/claude',
+            hostGrant: { kind: 'system-tool', grantId: 'cancel-stop-fixture' } },
+            cwd: '/repo', signal: controller.signal });
+        try {
+            controller.abort();
+            await vi.waitFor(() => expect(report.mock.calls.some(call =>
+                typeof call[1] === 'object' && call[1] !== null
+                    && Reflect.get(call[1], 'code') === 'terminal_process_stop_failed')).toBe(true));
+            await handle.stop();
+            await expect(handle.waitForTermination()).resolves.toEqual({ type: 'exited', code: 0 });
+        } finally { report.mockRestore(); child.emit('exit', 0, null); }
+    });
+
     it('fails closed when asked to launch a non-absolute executable path', async () => {
         const spawn = vi.fn();
         const service = createTerminalRuntimeProcessService({

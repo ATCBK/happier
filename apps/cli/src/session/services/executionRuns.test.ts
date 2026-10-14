@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BackendTargetRefV2Input } from '@happier-dev/protocol';
 import { markRpcRequestDisposition } from '@happier-dev/sync-client';
+import { projectExecutionRunChildChoiceV1, ExecutionRunStartFailureDetailsV1Schema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { createSessionClientExecutionRunService } from '@/api/session/client/executionRuns/createSessionClientExecutionRunService';
 
 it('preserves attention selection through the Session client service used by bound MCP', async () => {
@@ -1138,7 +1140,10 @@ describe('startExecutionRun', () => {
         });
     });
 
-    it('projects only validated start certainty from start failures', async () => {
+    it('preserves strict child choices while dropping unknown start failure details', async () => {
+        const childChoice = projectExecutionRunChildChoiceV1({
+            agentTargetKey: buildBackendTargetKeyV2({ kind: 'backend', backendId: 'codex' }),
+        });
         callSessionRpc.mockResolvedValueOnce({
             ok: false,
             error: 'Feature disabled',
@@ -1148,6 +1153,7 @@ describe('startExecutionRun', () => {
                 blockedBy: 'dependency',
                 blockerCode: 'dependency_disabled',
                 executionRunStart: { v: 1, runCreation: 'noRunCreated' },
+                childChoice,
                 secret: 'must-not-cross-the-service-boundary',
             },
         });
@@ -1164,8 +1170,14 @@ describe('startExecutionRun', () => {
             message: 'Feature disabled',
             details: {
                 executionRunStart: { v: 1, runCreation: 'noRunCreated' },
+                childChoice,
             },
         });
+        const projected = normalizeExecutionRunRpcPayload({
+            ok: false, details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' }, childChoice },
+        }, { executionRunStart: true });
+        expect(projected.ok).toBe(false);
+        if (!projected.ok) expect(ExecutionRunStartFailureDetailsV1Schema.safeParse(projected.details).success).toBe(true);
     });
 
     it.each([

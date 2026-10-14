@@ -23,7 +23,42 @@ const appliedParent: ExecutionRunAppliedParentSelection = {
     },
 };
 
+it('delivers a native model keyed by the admitted installed Agent without requiring a global runner catalog', () => {
+    const target = { kind: 'backend' as const, backendId: 'acme.snapshot/parent' };
+    const selection = ProviderBoundModelRefSchema.parse({
+        agentTargetKey: buildBackendTargetKeyV2(readBackendTargetRefV2(target)),
+        providerConnectionId: null, modelId: 'parent-applied-model',
+    });
+    expect(buildExecutionRunConfiguration({ backendTarget: target, modelSelection: selection,
+        permissionMode: 'read_only', updatedAtMs: 1 })).toMatchObject({
+        modelSelection: selection, configuration: { model: { value: 'parent-applied-model' } },
+    });
+    expect(() => buildExecutionRunConfiguration({ backendTarget: { ...target, backendId: 'acme.snapshot/parent2' },
+        modelSelection: selection, permissionMode: 'read_only', updatedAtMs: 1 })).toThrow();
+});
+
 describe('resolveExecutionRunChildSelection', () => {
+    it('inherits a known parent before the summary default, and uses that default when the parent is unavailable', () => {
+        const summaryDefault = { agentTargetKey: providerSelection.agentTargetKey,
+            providerConnectionId: 'pc_summary_default', modelId: 'summary-model' };
+        expect(resolveExecutionRunChildSelection({ backendTarget: codexTarget, lifecycle: 'attached',
+            parent: appliedParent, fallbackSelection: summaryDefault })).toMatchObject({
+            modelId: 'applied-model', modelSelection: providerSelection, selectionSource: 'inherited',
+        });
+        expect(resolveExecutionRunChildSelection({ backendTarget: codexTarget, lifecycle: 'attached',
+            parent: { status: 'unavailable' }, fallbackSelection: summaryDefault })).toMatchObject({
+            modelId: 'summary-model', modelSelection: summaryDefault, selectionSource: 'independent',
+        });
+        expect(resolveExecutionRunChildSelection({ backendTarget: codexTarget, lifecycle: 'attached',
+            parent: { status: 'applied', backendTarget: codexTarget, modelId: null, connectedServices: null },
+            fallbackSelection: summaryDefault })).toMatchObject({
+            modelId: 'summary-model', modelSelection: summaryDefault, selectionSource: 'independent',
+        });
+        expect(resolveExecutionRunChildSelection({ backendTarget: codexTarget, lifecycle: 'attached',
+            parent: { status: 'unavailable' }, modelId: 'chosen-model', fallbackSelection: summaryDefault })).toMatchObject({
+            modelId: 'chosen-model', modelSelection: { ...summaryDefault, modelId: 'chosen-model' },
+        });
+    });
     it('uses the child Agent Account default only after an explicit choice, without inheriting parent credentials', () => {
         const childDefault = { agentTargetKey: buildBackendTargetKeyV2(readBackendTargetRefV2(claudeTarget)),
             providerConnectionId: 'pc_child_default', modelId: 'default-model' };

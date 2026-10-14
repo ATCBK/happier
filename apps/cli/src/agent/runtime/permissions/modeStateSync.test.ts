@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import type { PermissionMode } from '@/api/types';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 
 import {
   applyPermissionIntentFromMetadataIfNewer,
@@ -19,12 +21,12 @@ describe('readPermissionModeUpdatedAtFromMetadataSnapshot', () => {
 });
 
 describe('applyStartupPermissionModeSeed', () => {
-  const createSession = (seed: { intent: any; updatedAt: number } | null): PermissionModeSeedSession => ({
-    getMetadataSnapshot: () => null,
+  const createSession = (seed: { intent: PermissionMode; updatedAt: number } | null): PermissionModeSeedSession => ({
+    getMetadataSnapshot: () => seed ? createTestMetadata({ permissionMode: seed.intent, permissionModeUpdatedAt: seed.updatedAt }) : null,
     fetchLatestUserPermissionIntentFromTranscript: async () => seed,
   });
 
-  it('skips transcript seeding when explicit permission mode is provided', async () => {
+  it('keeps explicit permission mode instead of seeding from metadata', async () => {
     let applied = false;
 
     const nextUpdatedAt = await applyStartupPermissionModeSeed({
@@ -40,7 +42,7 @@ describe('applyStartupPermissionModeSeed', () => {
     expect(applied).toBe(false);
   });
 
-  it('applies a newer transcript seed at startup', async () => {
+  it('applies a newer owner baseline at startup', async () => {
     let mode: string | null = null;
     let updatedAt = 10;
 
@@ -59,7 +61,7 @@ describe('applyStartupPermissionModeSeed', () => {
     expect(nextUpdatedAt).toBe(25);
   });
 
-  it('does not apply transcript seed when it is missing or stale', async () => {
+  it('does not apply the owner baseline when it is missing or stale', async () => {
     const staleSession = createSession({ intent: 'safe-yolo', updatedAt: 9 });
     const emptySession = createSession(null);
 

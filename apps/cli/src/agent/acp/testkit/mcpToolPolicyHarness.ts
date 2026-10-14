@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFile, mkdir } from 'node:fs/promises';
+import { watch } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
@@ -40,8 +41,6 @@ import { isPrimaryAgentContributionDefinition, readAgentSessionCapabilities } fr
 
 const require = createRequire(import.meta.url);
 const moduleUrl = (id: string) => JSON.stringify(pathToFileURL(require.resolve(id)).href);
-const keys = ['team-docs', 'team-docs__archive'] as const;
-const tool = 'read_file';
 
 /** An installed executable remains the Agent boundary; no ACP replies are synthesized. */
 export type AcpMcpPolicyVendorBoundary = Readonly<{
@@ -79,15 +78,15 @@ function writeVendorObserver(dir: string, executablePath: string) {
 /** The third-party Agent/process is the boundary. It discovers the actual MCP transport,
  * sends standard ACP permission requests, and dispatches only the selected allow_once.
  * This fixture characterizes the real leaf/composer; it is not a vendor admission probe. */
-function writeAgent(dir: string, toolWireFormat: 'canonical' | 'underscore', nativeConfig?: PluginAgentAcpNativeSessionMcpConfigV2, authMethodIds: readonly string[] = []) {
+function writeAgent(dir: string, toolWireFormat: 'canonical' | 'underscore', tool: string, nativeConfig?: PluginAgentAcpNativeSessionMcpConfigV2, authMethodIds: readonly string[] = []) {
   return writeAcpTestAgentScript({ dir, fileName: 'mcp-policy-agent.mjs', source: `
     import { createInterface } from 'node:readline';
     import { spawnSync } from 'node:child_process';
-    import { appendFileSync, writeFileSync, readFileSync } from 'node:fs';
+    import { appendFileSync, writeFileSync, readFileSync, renameSync } from 'node:fs';
     import { join } from 'node:path';
     import { Client } from ${moduleUrl('@modelcontextprotocol/sdk/client/index.js')};
     import { StdioClientTransport } from ${moduleUrl('@modelcontextprotocol/sdk/client/stdio.js')};
-    import { zSessionNotification, zRequestPermissionRequest } from ${JSON.stringify(new URL('./schema/zod.gen.js', pathToFileURL(require.resolve('@agentclientprotocol/sdk'))).href)};
+    import { zSessionNotification, zRequestPermissionRequest, zRequestPermissionResponse } from ${JSON.stringify(new URL('./schema/zod.gen.js', pathToFileURL(require.resolve('@agentclientprotocol/sdk'))).href)};
     const clients = new Map(); const pending = new Map(); const nativeGrants = new Set(); let nextId = 100; let activePrompt = null;
     const nativeConfig = ${JSON.stringify(nativeConfig ?? null)};
     const trace = value => appendFileSync(process.env.CAPTURE + '.acp.jsonl', JSON.stringify(value) + '\\n');
@@ -106,7 +105,10 @@ function writeAgent(dir: string, toolWireFormat: 'canonical' | 'underscore', nat
     createInterface({ input: process.stdin }).on('line', async line => {
       const message = JSON.parse(line);
       trace({ direction: 'in', value: message });
-      if (!message.method) { pending.get(message.id)?.(message.result); pending.delete(message.id); return; }
+      if (!message.method) {
+        if (pending.has(message.id)) pending.get(message.id)(zRequestPermissionResponse.parse(message.result));
+        pending.delete(message.id); return;
+      }
       try {
         if (message.method === 'initialize') ok(message.id, { protocolVersion: 1, agentCapabilities: {},
           authMethods: ${JSON.stringify(authMethodIds.map(id => ({ id, name: 'Fixture authentication' })))} });
@@ -122,13 +124,13 @@ function writeAgent(dir: string, toolWireFormat: 'canonical' | 'underscore', nat
             await client.connect(new StdioClientTransport({ command: server.command, args: server.args,
               env: { PATH: process.env.PATH, ...Object.fromEntries(server.env.map(entry => [entry.name, entry.value])) } }));
             const listed = await client.listTools();
-            if (!listed.tools.some(value => value.name === '${tool}')) throw new Error('Fixture tool was not delivered');
+            if (!listed.tools.some(value => value.name === ${JSON.stringify(tool)})) throw new Error('Fixture tool was not delivered');
             clients.set(server.name, client);
           }
           ok(message.id, { sessionId: 'mcp-policy-provider' });
         } else if (message.method === 'session/cancel') {
           if (activePrompt?.sessionId === message.params.sessionId) {
-            activePrompt.cancelled = true; ok(activePrompt.id, { stopReason: 'cancelled' }); activePrompt = null;
+            activePrompt.cancelled = true;
           }
         } else if (message.method === 'session/prompt') {
           const prompt = { id: message.id, sessionId: message.params.sessionId, cancelled: false }; activePrompt = prompt;
@@ -158,7 +160,15 @@ function writeAgent(dir: string, toolWireFormat: 'canonical' | 'underscore', nat
               options: [{ optionId: 'allow', name: 'Allow once', kind: 'allow_once' },
                 { optionId: 'always', name: 'Allow always', kind: 'allow_always' },
                 { optionId: 'deny', name: 'Deny', kind: 'reject_once' }] });
-            if (prompt.cancelled) return;
+            // Settle a cancelled prompt after consuming its actual permission
+            // response, so the boundary observation precedes the terminal fact.
+            writeFileSync(process.env.CAPTURE + '.permission.tmp', JSON.stringify({ invocation: input.fixtureInvocation, server: input.server, tool: input.tool, response: permission }));
+            renameSync(process.env.CAPTURE + '.permission.tmp', process.env.CAPTURE + '.permission');
+            if (prompt.cancelled) {
+              ok(message.id, { stopReason: 'cancelled' });
+              if (activePrompt === prompt) activePrompt = null;
+              return;
+            }
             if (permission?.outcome?.optionId === 'always') nativeGrants.add(subject);
             const allowed = permission?.outcome?.optionId === 'allow' || permission?.outcome?.optionId === 'always';
             if (allowed) {
@@ -187,7 +197,13 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
   /** Auth methods advertised by the third-party boundary, not an auth-selector mock. */
   authMethods?: readonly string[];
   vendor?: AcpMcpPolicyVendorBoundary;
+  serverKeys?: readonly [string, string];
+  toolNames?: readonly [string, ...string[]];
+  initialToolDefault?: 'ask' | 'allow_read_only' | 'allow_all';
 }>): AgentMcpToolPolicyContractInput {
+  const keys = params.serverKeys ?? ['team-docs', 'team-docs__archive'] as const;
+  const tools = params.toolNames ?? ['read_file'] as const;
+  const tool = tools[0];
   let cwd = ''; let catalog: McpServerCatalogV1; let revision = 1; let order = 0; let invocation = 0;
   let scope: 'once' | 'session' = 'once';
   const handlers = new WeakMap<Parameters<AgentMcpToolPolicyContractInput['invokeTool']>[0], ProviderEnforcedPermissionHandler>();
@@ -197,6 +213,7 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
   let calls: AgentMcpToolPolicyCallObservation[] = [];
   let nativeConfigFiles: string[] = [];
   let vendorEnvironment: Readonly<Record<string, string>> = {};
+  let permissionObservationAbort = new AbortController();
   const receipt = createServer(async (request, response) => {
     if (request.method !== 'POST' || request.url !== '/receipt') { response.statusCode = 404; response.end(); return; }
     let raw = ''; for await (const chunk of request) raw += String(chunk);
@@ -217,7 +234,7 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
       if (['turn-complete', 'turn-failed', 'turn-cancelled', 'runtime-ended'].includes(event.kind)) settle();
     });
     try {
-      const admission = await runtime.send({ inputIds: [`input-${invocation}`], input: { text: JSON.stringify(input) },
+      const admission = await runtime.send({ inputIds: [`input-${invocation}`], input: { text: JSON.stringify({ ...input, fixtureInvocation: invocation }) },
         delivery: { kind: 'newTurn', turnId }, causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' } });
       assert.equal(admission.status, 'admitted', JSON.stringify(admission));
       await completed;
@@ -239,6 +256,7 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
     fixtureServer: {
       async prepare(input) {
         cwd = input.cwd; revision = 1; order = 0; invocation = 0; permissions = []; calls = []; nativeConfigFiles = [];
+        permissionObservationAbort = new AbortController();
         await mkdir(join(cwd, 'native-home'));
         vendorEnvironment = await params.vendor?.prepare({ cwd }) ?? {};
         launchObserver = createAgentLaunchObserver({ home: join(cwd, 'native-home') });
@@ -248,9 +266,9 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
           import { McpServer } from ${moduleUrl('@modelcontextprotocol/sdk/server/mcp.js')};
           import { StdioServerTransport } from ${moduleUrl('@modelcontextprotocol/sdk/server/stdio.js')};
           const server = new McpServer({ name: 'contract-mcp', version: '1' });
-          server.registerTool('${tool}', {}, async () => {
+          for (const tool of ${JSON.stringify(tools)}) server.registerTool(tool, {}, async () => {
             if (process.env.PRIVATE_MARKER !== 'acp-contract-private-marker') throw new Error('Private env did not reach MCP process');
-            await fetch(process.env.RECEIPT, { method: 'POST', body: JSON.stringify({ server: process.env.SERVER_KEY, tool: '${tool}' }) });
+            await fetch(process.env.RECEIPT, { method: 'POST', body: JSON.stringify({ server: process.env.SERVER_KEY, tool }) });
             return { content: [{ type: 'text', text: 'ok' }] };
           });
           await server.connect(new StdioServerTransport());
@@ -261,6 +279,8 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
             RECEIPT: { t: 'literal', v: `http://127.0.0.1:${address.port}/receipt` } }, createdAt: 1, updatedAt: 1 })),
           bindings: keys.map((_, index) => ({ id: `rule-${index}`, serverId: `item-${index}`, enabled: true,
             target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 })) };
+        if (params.initialToolDefault) catalog = { ...catalog, servers: catalog.servers.map(server => ({ ...server,
+          tools: { default: params.initialToolDefault!, overrides: {} } })) };
         const resolved = resolveSessionCapabilitiesV1({ context: { machineId: 'fixture', directory: cwd,
           machinePlatform: null, projectKey: null, agentId: params.agent.id }, mcp: { ...catalog, strictMode: true },
           skills: null, selection: {}, agentAcceptsUserMcp: true });
@@ -286,7 +306,7 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
         if (input.runtime) handlers.get(input.runtime)?.setPermissionMode(input.permissionMode);
         if (input.runtime) await input.runtime.updateConfiguration(input.configuration);
       },
-      async dispose() { materialized?.cleanup(); materialized = undefined;
+      async dispose() { permissionObservationAbort.abort(); materialized?.cleanup(); materialized = undefined;
         try { if (receipt.listening) await new Promise<void>((resolve, reject) => receipt.close(error => error ? reject(error) : resolve())); }
         finally { await params.vendor?.dispose(); } },
     },
@@ -363,7 +383,7 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
         protocols: { acp: { open: async (openRequest, options) => {
           const auth = options.definition?.auth;
           const script = params.vendor ? writeVendorObserver(cwd, params.vendor.executablePath)
-            : writeAgent(cwd, params.toolWireFormat ?? 'canonical', params.nativeConfig,
+            : writeAgent(cwd, params.toolWireFormat ?? 'canonical', tool, params.nativeConfig,
               auth && 'methodId' in auth ? [auth.methodId] : params.authMethods);
           const composed = await createPublicAcpSession(openRequest, options, { pluginId: params.pluginId, agentId: params.agent.id, signal,
             isCurrent: () => true, interactions: ui.interactions, modes: publications.services.modes, models: publications.services.models,
@@ -400,8 +420,38 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
       scope = request.approvalScope; const before = permissions.length; const beforeCalls = calls.length;
       const result = await send(runtime, request);
       const observed = permissions.slice(before);
-      const denied = observed.some(value => value.decision === 'denied');
       assert.notEqual(result.terminal.kind, 'runtime-ended', JSON.stringify(result.terminal));
+      let identityRefused = false;
+      if (!params.vendor && observed.length === 0 && result.terminal.kind !== 'turn-complete') {
+        // The host can publish its failed turn before the child receives the
+        // cancelled reply. Observe that actual reply with the fixture lifecycle,
+        // without classifying an arbitrary failed turn as permission denial.
+        let changed!: () => void;
+        let failed!: (error: Error) => void;
+        const changes = watch(cwd, () => changed?.());
+        const abort = () => { changes.close(); failed?.(new Error('Permission observation disposed')); };
+        permissionObservationAbort.signal.addEventListener('abort', abort, { once: true });
+        changes.on('error', error => failed?.(error));
+        let permission: unknown;
+        try {
+          while (true) {
+            const change = new Promise<void>((resolve, reject) => { changed = resolve; failed = reject; });
+            void change.catch(() => undefined);
+            try { permission = JSON.parse(await readFile(join(cwd, 'capture.json.permission'), 'utf8')); }
+            catch (error) { if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error; }
+            if (permission && typeof permission === 'object' && 'invocation' in permission && permission.invocation === invocation) break;
+            await change;
+          }
+        } finally { changes.close(); permissionObservationAbort.signal.removeEventListener('abort', abort); }
+        if (permission && typeof permission === 'object' && 'server' in permission && 'tool' in permission
+          && permission.server === request.server && permission.tool === request.tool && 'response' in permission
+          && permission.response && typeof permission.response === 'object' && 'outcome' in permission.response
+          && permission.response.outcome && typeof permission.response.outcome === 'object'
+          && 'outcome' in permission.response.outcome) {
+          identityRefused = permission.response.outcome.outcome === 'cancelled';
+        }
+      }
+      const denied = observed.some(value => value.decision === 'denied') || identityRefused;
       if (!denied) assert.equal(result.terminal.kind, 'turn-complete', JSON.stringify(result.terminal));
       // ACP text is presentation, not call evidence. The actual MCP receipt and
       // terminal outcome decide completion even if the host emits no message delta.

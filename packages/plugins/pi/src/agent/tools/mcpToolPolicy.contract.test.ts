@@ -5,8 +5,54 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import type { AgentExecutionRunRuntime, AgentSessionRuntime } from '@happier-dev/plugin-sdk/agents/runtime';
+import { readSessionCapabilityNoticeV1, SessionCapabilityNoticeV1Schema } from '@happier-dev/protocol';
 
 runAgentMcpToolPolicyContract(createPiMcpToolPolicyContractFixture());
+
+it('keeps healthy MCP callable after optional initialize failure through real Pi startup and notice publication', async () => {
+  const stage = 'initialize';
+  const input = createPiMcpToolPolicyContractFixture({ brokenServer: stage });
+  const cwd = await mkdtemp(join(tmpdir(), 'happier-pi-optional-mcp-contract-'));
+  let runtime: AgentSessionRuntime | undefined;
+  try {
+    const fixture = await input.fixtureServer.prepare({ cwd });
+    runtime = await input.openSession({ kind: 'create', sessionId: 'pi-optional-mcp', cwd,
+      mcpServers: Object.fromEntries(fixture.servers.map(server => [server.key, server.config])),
+      mcpServersStrictMode: false,
+    });
+    expect(input.observeCapabilityNotices()).toHaveLength(1);
+    const notice = readSessionCapabilityNoticeV1(input.observeCapabilityNotices()[0]);
+    expect(SessionCapabilityNoticeV1Schema.parse(notice)).toEqual({ v: 1,
+      items: [{ kind: 'mcp_server', name: 'broken', code: `mcp_${stage}_failed` }] });
+    expect(JSON.stringify(input.observeCapabilityNotices())).not.toContain('private-failure-sentinel');
+    const result = await input.invokeTool(runtime, { server: 'a', tool: 'echo', arguments: {}, approvalScope: 'once' });
+    expect(result.outcome).toBe('completed');
+    expect(input.observeServerCalls()).toEqual([expect.objectContaining({ server: 'a', privateTokenDelivered: true })]);
+  } finally {
+    try { await runtime?.dispose(); }
+    finally { await input.fixtureServer.dispose(); await rm(cwd, { recursive: true, force: true }); }
+  }
+});
+
+it.each(['session', 'run'] as const)('refuses strict MCP startup through the actual Pi %s leaf', async kind => {
+  const input = createPiMcpToolPolicyContractFixture({ brokenServer: 'initialize' });
+  const cwd = await mkdtemp(join(tmpdir(), 'happier-pi-strict-mcp-contract-'));
+  const openedRuntimes: (AgentSessionRuntime | AgentExecutionRunRuntime)[] = [];
+  try {
+    const fixture = await input.fixtureServer.prepare({ cwd });
+    const mcpServers = Object.fromEntries(fixture.servers.map(server => [server.key, server.config]));
+    const opening = kind === 'session'
+      ? input.openSession({ kind: 'create', sessionId: 'pi-strict-mcp', cwd, mcpServers, mcpServersStrictMode: true })
+      : input.openRun({ kind: 'create', runId: 'pi-strict-mcp', cwd,
+      profile: { pluginId: 'fixture', localId: 'profile' }, input: { text: 'unreachable' },
+      mcpServers, mcpServersStrictMode: true });
+    await expect(opening.then(runtime => { openedRuntimes.push(runtime); return runtime; })).rejects.toThrow(/MCP/);
+    expect(input.observeServerCalls()).toEqual([]);
+  } finally {
+    for (const runtime of openedRuntimes) await runtime.dispose();
+    await input.fixtureServer.dispose(); await rm(cwd, { recursive: true, force: true });
+  }
+});
 
 it('rejects a miswired native MCP approval correlation before host approval or server receipt', async () => {
   const input = createPiMcpToolPolicyContractFixture({ corruptNativeApprovalCorrelation: true });

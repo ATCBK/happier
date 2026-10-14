@@ -41,11 +41,9 @@ function resolveExecutionRunCanonicalBackendTargetKey(
   const requestedAgentTarget = readRequestedAgentTarget(input);
 
   if (requestedAgentTarget) {
-    const routingId = resolveExecutionRunAgentRoutingId(requestedAgentTarget.identity, catalog);
-    const contribution = routingId ? catalog.agentDefinitionsById.get(routingId) : null;
-    return contribution?.identity
-      ? buildBackendTargetKeyV2({ ...requestedAgentTarget, identity: contribution.identity })
-      : null;
+    // Comparing a complete identity does not admit an executable. A runner's
+    // absent global catalog cannot invalidate its daemon-admitted Run target.
+    return buildBackendTargetKeyV2(requestedAgentTarget);
   }
 
   try {

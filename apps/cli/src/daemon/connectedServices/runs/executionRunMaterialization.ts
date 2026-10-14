@@ -89,6 +89,13 @@ type ResolveAuthForSpawnInput = Readonly<{ parentSessionId: string }> & Pick<
     | 'activateQualifiedPurposeBindings'
 >;
 
+type CapturedExecutionRunRunnerIdentity = Readonly<{
+    /** Canonical tracked Session object, also used by the exact exit owner. */
+    identity: object;
+    parentSessionId: string;
+    isCurrent(): boolean;
+}>;
+
 type ResolveAuthForSpawn = (
     input: ResolveAuthForSpawnInput,
 ) => ReturnType<typeof resolveConnectedServiceAuthForSpawn>;
@@ -171,12 +178,9 @@ export type CreateExecutionRunConnectedServicesBridgeDeps = Readonly<{
     captureRunnerIdentity: (input: Readonly<{
         runnerPid: number;
         expectedParentSessionId?: string;
-    }>) => Readonly<{
-        /** Existing daemon-local tracked-runner identity object; never a newly minted authority. */
-        identity: object;
-        parentSessionId: string;
-        isCurrent(): boolean;
-    }> | null;
+        /** Fresh materialization must belong to this runner's canonical retained Run. */
+        runId?: string;
+    }>) => CapturedExecutionRunRunnerIdentity | null | Promise<CapturedExecutionRunRunnerIdentity | null>;
     acquireAgentPurposeContributions: (input: Readonly<{
         agentId: CatalogAgentId;
     }>) => Promise<Readonly<{
@@ -462,7 +466,7 @@ export function createExecutionRunConnectedServicesBridge(
         runnerPid: number;
         agentId: CatalogAgentId;
         runner: NonNullable<
-            ReturnType<CreateExecutionRunConnectedServicesBridgeDeps['captureRunnerIdentity']>
+            Awaited<ReturnType<CreateExecutionRunConnectedServicesBridgeDeps['captureRunnerIdentity']>>
         >;
         connectedServicesBindings: Parameters<
             typeof resolveQualifiedPurposeBindingSnapshotForAgentSpawn
@@ -660,7 +664,7 @@ export function createExecutionRunConnectedServicesBridge(
             return false;
         }
         return await withRunKeyMutation(registration.runKey, async () => {
-            const runner = deps.captureRunnerIdentity({
+            const runner = await deps.captureRunnerIdentity({
                 runnerPid: input.runnerPid,
                 expectedParentSessionId: input.sessionId,
             });
@@ -887,8 +891,9 @@ export function createExecutionRunConnectedServicesBridge(
                 return blocked(`Execution-run connected services are not supported for backend '${agentId}'`);
             }
 
-            const runner = deps.captureRunnerIdentity({
+            const runner = await deps.captureRunnerIdentity({
                 runnerPid: input.runnerPid,
+                runId: input.runId,
             });
             if (!runner || !runner.isCurrent()) {
                 return blocked(
@@ -1150,7 +1155,7 @@ export function createExecutionRunConnectedServicesBridge(
         if (!parsed.success) return refused;
         const request = parsed.data;
         const entry = retainedCleanupByRunKey.get(request.runId);
-        const runner = deps.captureRunnerIdentity({ runnerPid: request.runnerPid });
+        const runner = await deps.captureRunnerIdentity({ runnerPid: request.runnerPid });
         let target = deps.getRunRuntimeTarget?.(request.runId);
         const hasCurrentAuthority = () => Boolean(entry && entry.authorityActive && !entry.retiring
             && retainedCleanupByRunKey.get(request.runId) === entry
@@ -1207,7 +1212,7 @@ export function createExecutionRunConnectedServicesBridge(
         const input = parsed.data;
         return await withRunKeyMutation(input.runId, async () => {
             const entry = retainedCleanupByRunKey.get(input.runId);
-            const runner = deps.captureRunnerIdentity({ runnerPid: input.runnerPid });
+            const runner = await deps.captureRunnerIdentity({ runnerPid: input.runnerPid });
             if (!entry || !runner || !entry.authorityActive || entry.retiring
                 || entry.activationId !== input.activationId || entry.runnerPid !== input.runnerPid
                 || runner.identity !== entry.runnerIdentity || !runner.isCurrent() || !entry.isCurrent()
@@ -1222,7 +1227,7 @@ export function createExecutionRunConnectedServicesBridge(
         if (!parsed.success || signal.aborted) return { status: 'failed', reason: 'runtime_recovery_invalid' };
         const input = parsed.data;
         const entry = retainedCleanupByRunKey.get(input.runId);
-        const runner = deps.captureRunnerIdentity({ runnerPid: input.runnerPid });
+        const runner = await deps.captureRunnerIdentity({ runnerPid: input.runnerPid });
         let target = deps.getRunRuntimeTarget?.(input.runId);
         const isCurrent = () => Boolean(!signal.aborted && entry && target && entry.authorityActive && !entry.retiring
             && retainedCleanupByRunKey.get(input.runId) === entry && entry.activationId === input.activationId
@@ -1276,7 +1281,7 @@ export function createExecutionRunConnectedServicesBridge(
         const input = parsed.data;
         return await withRunKeyMutation(input.runId, async () => {
             const entry = retainedCleanupByRunKey.get(input.runId);
-            const runner = deps.captureRunnerIdentity({ runnerPid: input.runnerPid });
+            const runner = await deps.captureRunnerIdentity({ runnerPid: input.runnerPid });
             const isCurrent = () => Boolean(entry && entry.authorityActive && !entry.retiring
                 && entry.activationId === input.activationId && entry.runnerPid === input.runnerPid
                 && runner?.identity === entry.runnerIdentity && runner.isCurrent() && entry.isCurrent());
@@ -1346,7 +1351,7 @@ export function createExecutionRunConnectedServicesBridge(
             // terminal receipt is already validated, so its cleanup is complete.
             if (!cleanup) return true;
             const runner = input.sessionId
-                ? deps.captureRunnerIdentity({
+                ? await deps.captureRunnerIdentity({
                     runnerPid: input.runnerPid,
                     expectedParentSessionId: input.sessionId,
                 })

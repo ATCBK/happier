@@ -1,5 +1,6 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
+import type { SpawnOptions } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 
@@ -9,11 +10,32 @@ import { getAgentCliRuntimeSpec } from '@happier-dev/agents';
 import { resolvePlatformFromNodePlatform } from '@happier-dev/cli-common/agents';
 import { describe, expect, it, vi } from 'vitest';
 
-import { bindAgentCliLaunchSpec } from '@/packagedRuntime/managedTools/agentCliLaunchSpec';
+import { bindAgentCliLaunchSpec, buildAgentCliLaunchSpecFromResolution } from '@/packagedRuntime/managedTools/agentCliLaunchSpec';
 import { prepareManagedAgentCliLaunch } from '@/packagedRuntime/managedTools/prepareManagedAgentCliLaunch';
 
 import { resolveExecutablePluginRuntimeRegistry } from '../../../resolveExecutablePluginRuntimeRegistry';
 import { createRetainedAgentCliSystemToolService } from './agentCliBinding';
+import { createClaudeNativeSdkQueryContext } from '../../../../../../../../packages/plugins/claude/src/agent/sdk/nativeExec.js';
+import { createClaudeAgentSdkTurnOperations } from '../../../../../../../../packages/plugins/claude/src/agent/runtime/remote/sdk/session.js';
+import { createEventsFixture, createPluginContextFixture, createTerminalHostFixture } from '../../../../../../../../packages/plugins/claude/src/agent/runtime/engine.testkit.js';
+import { createStablePluginExecService } from '../../../invocation/services/exec';
+import { resolvePluginPathWithinRoots } from '../../../invocation/services/filesystem';
+import { captureProcessTree, terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
+import { isPidAlive } from '@/testkit/process/spawn';
+import type { AgentSessionRuntimeEvent } from '@happier-dev/protocol/runtime';
+
+const windowsSpawnBoundary = vi.hoisted(() => ({ wrapperPath: null as string | null }));
+// Windows command-shell execution is the OS boundary; grant authorization and SDK owners remain real.
+vi.mock('node:child_process', async importOriginal => {
+    const actual = await importOriginal<typeof import('node:child_process')>();
+    return {
+        ...actual,
+        spawn: (command: string, args: readonly string[], options?: SpawnOptions) =>
+            actual.spawn(command, windowsSpawnBoundary.wrapperPath && args[0]?.endsWith('agent_cli_windows_shim_runner.cjs')
+                ? [windowsSpawnBoundary.wrapperPath, ...args.slice(2)] : args, options),
+    };
+});
+
 
 type AgentCliBindingFixture = Readonly<{
     agentId: 'claude' | 'codex' | 'opencode';
@@ -52,6 +74,75 @@ const fixtures: readonly AgentCliBindingFixture[] = Object.freeze([
 ]);
 
 describe('Agent CLI system-tool binding (integration)', () => {
+    it.each(['direct', 'wrapped'] as const)('qualifies the actual provider exit through SDK binding (%s)', async mode => {
+        if (process.platform === 'win32') return; // Windows shell creation is adapted at the OS boundary on this host.
+        const directory = await mkdtemp(join(tmpdir(), 'happier-sdk-exit-qualification-'));
+        const pidPath = join(directory, 'native-pids.json');
+        const vendorPath = join(directory, 'vendor.js');
+        const shimPath = join(directory, 'vendor.cmd');
+        const records = [
+            { type: 'system', subtype: 'init', session_id: 'native-exit-qualification' },
+            { type: 'system', subtype: 'task_started', session_id: 'native-exit-qualification',
+                task_id: 'owned-background-task', task_type: 'local_agent', is_backgrounded: true },
+        ];
+        await writeFile(vendorPath, `
+            const fs = require('node:fs');
+            process.on('SIGTERM', () => process.exit(0));
+            let providerReady = Promise.resolve();
+            ${mode === 'wrapped' ? `
+            const child = require('node:child_process').spawn(process.execPath, ['-e',
+                'process.send(process.pid); setInterval(() => {}, 1000);'],
+                { detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+            providerReady = new Promise(resolve => child.once('message', pid => {
+                fs.writeFileSync(${JSON.stringify(pidPath)}, JSON.stringify({ root: process.pid, provider: pid }));
+                resolve();
+            }));
+            child.unref();` : `fs.writeFileSync(${JSON.stringify(pidPath)}, JSON.stringify({ root: process.pid, provider: process.pid }));`}
+            process.stdin.once('data', () => void providerReady.then(() => process.stdout.write(${JSON.stringify(records.map(record => JSON.stringify(record)).join('\n')+'\n')})));
+            setInterval(() => {}, 1000);
+        `);
+        await writeFile(shimPath, '@echo off\r\n');
+        await chmod(shimPath, 0o755);
+        const launch = buildAgentCliLaunchSpecFromResolution({ source: 'override', command: mode === 'direct' ? vendorPath : shimPath },
+            { platform: mode === 'wrapped' ? 'win32' : process.platform, processEnv: { HAPPIER_JS_RUNTIME_PATH: process.execPath } });
+        if (!launch) throw new Error('The canonical Agent CLI launch could not be prepared');
+        const systemTools = createRetainedAgentCliSystemToolService({ agentId: 'claude', binding: { toolId: 'claude-cli' },
+            definition: { toolId: 'claude-cli', displayName: 'Claude Code CLI', lookupNames: ['claude'] }, launch,
+            delegate: { resolve: async () => { throw new Error('Unexpected fallback outside the exact Agent CLI binding'); } } });
+        const exec = createStablePluginExecService({
+            allowedExecutables: [{ kind: 'systemTool', id: 'claude-cli' }],
+            signal: new AbortController().signal, isOccurrenceCurrent: () => true, systemTools,
+            resolveExecutable: async () => { throw new Error('The exact resolution grant was not consumed'); },
+            resolvePath: path => resolvePluginPathWithinRoots({ pluginData: directory, workspace: directory, projects: new Map() }, path),
+        });
+        windowsSpawnBoundary.wrapperPath = mode === 'wrapped' ? vendorPath : null;
+        const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service,
+            { exec: createClaudeNativeSdkQueryContext(exec) });
+        const operations = createClaudeAgentSdkTurnOperations({ ctx, directory, launchEnv: {}, permissionMode: 'default',
+            happierSessionId: 'sdk-exit-qualification', publishSdkMessages: true });
+        const activity: AgentSessionRuntimeEvent[] = [];
+        operations.subscribeCanonicalAgentSessionEvents(event => activity.push(event));
+        let captured: Extract<Awaited<ReturnType<typeof captureProcessTree>>, { status: 'ok' }> | undefined;
+        try {
+            operations.beginProviderTurn('qualification-turn');
+            await operations.sendProviderTurnPrompt('launch background work');
+            await vi.waitFor(() => expect(activity.at(-1)).toMatchObject({ state: 'active', activeCount: 1 }), { timeout: 10_000 });
+            const pids = JSON.parse(await readFile(pidPath, 'utf8')) as { root: number; provider: number };
+            const capture = await captureProcessTree({ pid: pids.root });
+            if (capture.status !== 'ok') throw new Error('Fixture process generations could not be captured');
+            captured = capture;
+            process.kill(pids.root, 'SIGTERM');
+            await vi.waitFor(() => expect(activity.at(-1)).toMatchObject({ state: mode === 'direct' ? 'idle' : 'unknown', activeCount: 0 }), { timeout: 10_000 });
+            expect(isPidAlive(pids.root)).toBe(false);
+            expect(isPidAlive(pids.provider)).toBe(mode === 'wrapped');
+        } finally {
+            if (captured) await terminateProcessTree({ targets: captured.capturedTargets, tree: false });
+            await operations.disposeProviderSession();
+            windowsSpawnBoundary.wrapperPath = null;
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+
     it('uses the retained exact launch only for the bound Agent CLI tool', async () => {
         if (process.platform === 'win32') return;
 

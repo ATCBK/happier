@@ -8,22 +8,25 @@ import type {
 import { buildKiloOpenCodePermissionEnv, sanitizeKiloMcpName } from '../permissions/kiloPermissionPolicy.js';
 
 export function buildKiloAcpToolNameResolver(
-  request: Pick<AgentSessionOpenRequest, 'mcpServers' | 'mcpToolPolicy'>,
+  request: Pick<AgentSessionOpenRequest, 'mcpServers'>,
 ): AgentAcpToolNameResolver {
-  const keys = Object.keys(request.mcpServers ?? {}).sort((a, b) => sanitizeKiloMcpName(b).length - sanitizeKiloMcpName(a).length);
+  const keys = Object.keys(request.mcpServers ?? {});
   return ({ toolName, input }) => {
     const acp = input._acp !== null && typeof input._acp === 'object' ? input._acp as Readonly<Record<string, unknown>> : undefined;
     for (const name of [toolName, acp?.title]) {
       if (typeof name !== 'string') continue;
-      const key = keys.find((key) => name.startsWith(`${sanitizeKiloMcpName(key)}_`));
-      if (!key) continue;
+      const matches = keys.filter((key) => name.startsWith(`${sanitizeKiloMcpName(key)}_`));
+      if (matches.length === 0) continue;
+      if (matches.length !== 1) throw new Error('Kilo MCP server identity is ambiguous');
+      const key = matches[0]!;
+      // Happier binding names are fixed by its Action owner, which already
+      // recognizes the native prefix without treating it as third-party policy.
+      if (key === 'happier') return name;
       const suffix = name.slice(sanitizeKiloMcpName(key).length + 1);
-      if (!suffix) continue;
-      const tools = Object.prototype.hasOwnProperty.call(request.mcpToolPolicy ?? {}, key)
-        ? Object.keys(request.mcpToolPolicy![key]!.tools).filter((tool) => sanitizeKiloMcpName(tool) === suffix)
-        : [];
-      if (tools.length > 1) continue;
-      return `mcp__${key}__${tools[0] ?? suffix}`;
+      // A native underscore could be a raw underscore, dot, slash or another
+      // replaced character. A birth policy is not a complete tool inventory.
+      if (!/^[a-zA-Z0-9-]+$/.test(suffix)) throw new Error('Kilo MCP tool identity is lossy');
+      return `mcp__${key}__${suffix}`;
     }
     return toolName;
   };

@@ -30,7 +30,9 @@ import { createLocalScmRepositoryFixture } from '@/scm/contracts/scmBackendContr
 import { removeTempDir } from '@/testkit/fs/tempDir';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
 import { ScmDiffSummaryProfile } from './kinds/scmDiffSummary/ScmDiffSummaryProfile';
-import { clearActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { ProfileRecordV1Schema, sealProfileRecordContentV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { reloadConfiguration } from '@/configuration';
 import { listExecutionRunMarkers } from '@/daemon/executionRunRegistry';
 import { finishExecutionRun } from './finishExecutionRun';
@@ -156,6 +158,78 @@ describe('startExecutionRun', () => {
     vi.stubEnv('HAPPIER_CLAUDE_DYNAMIC_MODEL_PROBE_ENABLED', '0');
   });
   afterEach(() => vi.unstubAllEnvs());
+  it.each(['delegate', 'voice_agent'] as const)('prepares the Account Launch Profile for a no-role %s run', async intent => {
+    const runs = new Map<string, ExecutionRunState>();
+    const controllers = new Map<string, ExecutionRunController>();
+    const nativePrompts: string[] = [];
+    let runtime: TestExecutionRunHostRuntime;
+    runtime = createTestExecutionRunHostRuntime({ onSendPrompt: async (_runtimeId, prompt) => {
+      nativePrompts.push(prompt);
+      runtime.emitMessage({ type: 'model-output', fullText: 'READY' });
+    }, onWaitForTurnCompletion: async () => {} });
+    const createRuntime = () => runtime;
+    const voiceAgentManager = new VoiceAgentManager({ createRuntime });
+    const previousSnapshot = getActiveAccountSettingsSnapshot();
+    const credentials = bindRequesterSessionCredentialScope({
+      token: `header.${Buffer.from(JSON.stringify({ sub: 'persona-owner' })).toString('base64url')}.signature`, encryption: null,
+    }, { serverId: configuration.activeServerId, serverHttpBaseUrl: configuration.apiServerUrl });
+    const record = ProfileRecordV1Schema.parse({ v: 1, id: 'focused', enabled: true, secretBindings: {},
+      definition: { kind: 'inline', profile: { v: 2, id: 'focused', name: 'Focused', createdAt: 1, updatedAt: 1 } },
+      promptStack: [{ id: 'persona', enabled: true, placement: 'system_append', ref: { kind: 'doc', artifactId: 'persona-doc' } }] });
+    setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: resolveAccountSettingsScopeKey(credentials),
+      settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [] });
+    const document = { id: 'persona-doc', ownerAccountId: 'persona-owner', access: 'owner', encryptionMode: 'plain',
+      header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_doc.v2', title: 'Persona' }),
+      body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, markdown: 'PERSONA_INSTRUCTIONS', createdAtMs: 1, updatedAtMs: 1 }) }),
+      dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+    // Only Account HTTP and native Agent execution are synthetic; catalog admission,
+    // Profile/Artifact opening, prompt composition and Voice preparation remain real.
+    const read = vi.spyOn(axios, 'get').mockImplementation(async input => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith('/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (path.endsWith('/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (path.endsWith('/entity-rows/profiles')) return { status: 200, data: { status: 'listed',
+        rows: [{ id: record.id, revision: 1, content: sealProfileRecordContentV1({ mode: 'plain', material: null, record }) }],
+        nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: 1, transferControl: { status: 'absent' } } };
+      if (path.endsWith('/reference-guard')) return { status: 200, data: { status: 'ready', revision: 1 } };
+      if (path.endsWith('/transfer')) return { status: 200, data: { status: 'absent' } };
+      if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+      if (path === '/v1/artifacts') return { status: 200, data: [{ ...document, body: null }] };
+      if (path === '/v1/artifacts/persona-doc') return { status: 200, data: document };
+      throw new Error(`Unexpected Launch Profile read: ${path}`);
+    });
+    try {
+      const started = await startExecutionRun({
+        params: { sessionId: 'parent_session_1', intent, launchProfileId: 'focused',
+          backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, instructions: 'PERSONA_RUN_TASK',
+          accountSettings: {}, promptCredentials: credentials,
+          permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived',
+          ioMode: intent === 'voice_agent' ? 'streaming' : 'request_response',
+          ...(intent === 'voice_agent' ? { bootstrapMode: 'ready_handshake' as const } : {}),
+        },
+        parentProvider: 'codex', sendAcp: async () => {}, streamedTranscriptSession: null,
+        createRuntime, getNowMs: () => 1, budgetRegistry: null, runs, controllers,
+        enqueueMarkerWrite: async () => {}, writeActivityMarker: async () => {}, finishRun: async () => {},
+        executeBoundedRun: async () => {}, send: async () => ({ ok: true }), voiceAgentManager,
+      });
+      const run = runs.get(started.runId);
+      expect(run?.launchProfileId).toBe('focused');
+      expect(run?.instructions).toContain('PERSONA_INSTRUCTIONS');
+      expect(run?.instructions).toContain('PERSONA_RUN_TASK');
+      expect(run?.profileSourceCustody).toBeUndefined();
+      if (intent === 'voice_agent') {
+        expect(nativePrompts.join('\n')).toContain('PERSONA_INSTRUCTIONS');
+        expect(nativePrompts.join('\n')).toContain('PERSONA_RUN_TASK');
+      }
+    } finally {
+      read.mockRestore();
+      if (previousSnapshot) setActiveAccountSettingsSnapshot(previousSnapshot);
+      else clearActiveAccountSettingsSnapshot();
+      await Promise.all([...controllers.values()].flatMap(controller => controller.kind === 'backend' ? [controller.backend.dispose()] : []));
+      await voiceAgentManager.dispose();
+    }
+  });
   it.each(['builder'])('inherits Session memory for a delegate with role %s without copying lead instructions', async roleId => {
     const runs = new Map<string, ExecutionRunState>();
     const controllers = new Map<string, ExecutionRunController>();

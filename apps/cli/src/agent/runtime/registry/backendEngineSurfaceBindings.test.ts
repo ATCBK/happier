@@ -699,7 +699,7 @@ describe('resolveBackendExecutionSurfacesFromNativeAgentRuntime', () => {
     expect(attach).not.toHaveBeenCalled();
   });
 
-  it('keeps process, projection, cancellation, and terminal-result ownership in the existing host orchestration', async () => {
+  it.each([true, false])('keeps process, projection, cancellation, and terminal-result ownership in the existing host orchestration (qualified=%s)', async (qualified) => {
     const resolveLaunch = vi.fn(async () => ({
       argv: ['terminal', '--model', 'fast'],
       environment: {
@@ -730,7 +730,9 @@ describe('resolveBackendExecutionSurfacesFromNativeAgentRuntime', () => {
       args: ['host-prefix'],
       source: 'managed',
       resolvedPath: '/opt/happier/agent',
+      ...(qualified ? { providerExitOwnership: 'direct' as const } : {}),
     }));
+    const executionObservations: unknown[] = [];
     const waitForTermination = vi.fn(async () => ({ type: 'exited' as const, code: 7 }));
     const stop = vi.fn(async () => undefined);
     const launch = vi.fn(async () => ({ pid: 123, waitForTermination, stop }));
@@ -824,6 +826,7 @@ describe('resolveBackendExecutionSurfacesFromNativeAgentRuntime', () => {
       isolation: { env: { ISOLATED_ENV: 'two' }, unsetEnvKeys: ['HOST_REMOVE'] },
       signal,
       host,
+      ...{ observeTerminalExecution: (observation: unknown) => { executionObservations.push(observation); } },
     })).resolves.toEqual({
       type: 'process_exited',
       exitCode: 7,
@@ -832,6 +835,14 @@ describe('resolveBackendExecutionSurfacesFromNativeAgentRuntime', () => {
         value: 'provider-session-1',
       }],
     });
+    const preparedPlan = await resolveLaunch.mock.results[0]?.value;
+    expect(executionObservations).toEqual([
+      { kind: 'started', plan: preparedPlan },
+      qualified
+        ? { kind: 'provider_stopped', plan: preparedPlan, exitCode: 7, signal: null }
+        : { kind: 'observation_lost', plan: preparedPlan },
+    ]);
+    expect(Reflect.get(Object(executionObservations[0]), 'plan')).toBe(preparedPlan);
     expect(diagnostics).toEqual([]);
     expect(resolveLaunch).toHaveBeenCalledWith({
       sessionId: 'session-1',
@@ -1099,16 +1110,20 @@ describe('resolveBackendExecutionSurfacesFromNativeAgentRuntime', () => {
     }
   });
 
-  it('returns terminal control through the existing host switch owner', async () => {
+  it.each(['switch', 'retry', 'natural_exit'] as const)('settles terminal control after physical stop outcome=%s', async outcome => {
+    const failedStop = outcome !== 'switch';
     let finishProcess!: () => void;
     const processFinished = new Promise<void>((resolve) => {
       finishProcess = resolve;
     });
     let switchHandler: ((request: { target: 'local' | 'remote' | 'unknown' }) => boolean | Promise<boolean>) | undefined;
+    const stopFailure = new Error('physical control stop rejected');
     const stop = vi.fn(async () => finishProcess());
+    if (failedStop) stop.mockRejectedValueOnce(stopFailure);
+    let inputHandler: (() => void | Promise<void>) | undefined;
     const host = {
       input: {
-        subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })),
+        subscribe: vi.fn((handler: typeof inputHandler) => { inputHandler = handler; return { unsubscribe: vi.fn() }; }),
       },
       switching: {
         register: vi.fn((handler: typeof switchHandler) => {
@@ -1159,16 +1174,22 @@ describe('resolveBackendExecutionSurfacesFromNativeAgentRuntime', () => {
       directory: '/repo',
       host,
     });
-    await vi.waitFor(() => expect(switchHandler).toBeTypeOf('function'));
-    const accepted = await switchHandler?.({ target: 'remote' });
-    if (!accepted) finishProcess();
-
-    expect(accepted).toBe(true);
-    await expect(result).resolves.toEqual({
-      type: 'control_returned',
-      reason: 'switch_requested',
-    });
-    expect(stop).toHaveBeenCalledOnce();
+    try {
+      await vi.waitFor(() => expect(switchHandler).toBeTypeOf('function'));
+      if (failedStop) await expect(inputHandler?.()).rejects.toBe(stopFailure);
+      if (outcome === 'natural_exit') {
+        finishProcess();
+        await expect(result).resolves.toEqual({ type: 'process_exited', exitCode: 0 });
+      } else {
+        const accepted = await switchHandler?.({ target: 'remote' });
+        expect(accepted).toBe(true);
+        await expect(result).resolves.toEqual({
+          type: 'control_returned',
+          reason: failedStop ? 'pending_input' : 'switch_requested',
+        });
+        if (!failedStop) expect(stop).toHaveBeenCalledOnce();
+      }
+    } finally { finishProcess(); await result.catch(() => undefined); }
   });
 
   it('never releases terminal transcript follow bindings the admission barrier owns', async () => {
@@ -1280,6 +1301,64 @@ describe('resolveBackendExecutionSurfacesFromNativeAgentRuntime', () => {
       directory: '/repo',
     })).rejects.toThrow(/retired runtime generation/i);
     expect(resolveLaunch).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('preserves stale launch failure when physical cleanup fails=%s', async (cleanupFails) => {
+    let current = true;
+    const cleanupFailure = new Error('stale process cleanup rejected');
+    const stop = vi.fn(async () => {
+      if (cleanupFails) throw cleanupFailure;
+    });
+    const observeTerminalExecution = vi.fn(async (_observation: unknown) => undefined);
+    const surfaces = resolveBackendExecutionSurfacesFromNativeAgentRuntime({
+      backend: createBackend(),
+      runtime: createNativeRuntime(() => ({ argv: ['--terminal'] })),
+      agentId: 'acme.runtime.provider',
+      isCurrent: () => current,
+      declaredAgentSurfaceFamilies: new Set(['terminalRuntime']),
+      diagnostics: [],
+    });
+    const launch = surfaces.terminalRuntime!.launch!({
+      sessionId: 'session-1',
+      metadata: {},
+      modelSelection: null,
+      directory: '/repo',
+      runWithCurrentPublisherPermit: allowCurrentPublisherEffect,
+      observeTerminalExecution,
+      host: {
+        input: { subscribe: vi.fn() },
+        switching: { register: vi.fn() },
+        process: {
+          resolveAgentCliExecutable: async () => ({
+            executable: { path: '/opt/happier/agent', hostGrant: { kind: 'agent-cli', grantId: 'grant-1' } },
+            args: [], source: 'managed', resolvedPath: '/opt/happier/agent',
+          }),
+          launch: async () => {
+            current = false;
+            return { pid: 123, stop, waitForTermination: async () => ({ type: 'exited', code: 0 }) };
+          },
+        },
+        projection: {
+          publishControlState: vi.fn(), publishProviderSessionId: vi.fn(),
+          publishSubagentStarted: vi.fn(), publishSubagentCompleted: vi.fn(),
+        },
+      },
+    });
+    const failure: unknown = await launch.catch((error: unknown) => error);
+    if (cleanupFails) {
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw new Error('cleanup failure was lost');
+      expect(failure.errors).toEqual([failure.cause, cleanupFailure]);
+      expect(failure.cause).toBeInstanceOf(Error);
+      expect(String(failure.cause)).toMatch(/retired runtime generation/i);
+    } else {
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toMatch(/retired runtime generation/i);
+    }
+    expect(stop).toHaveBeenCalledOnce();
+    expect(observeTerminalExecution.mock.calls.map(([observation]) => observation)).toEqual([
+      expect.objectContaining({ kind: 'launch_failed' }),
+    ]);
   });
 
   it('refuses to spawn after async launch preparation when publisher authority is no longer current', async () => {
@@ -1508,6 +1587,7 @@ describe('resolveBackendExecutionSurfacesFromNativeAgentRuntime', () => {
   });
 
   it('restores the leaf-declared exit presentation when host process launch fails', async () => {
+    const executionObservations: unknown[] = [];
     const resolveLaunch = vi.fn(async () => ({
       argv: [],
       presentation: {
@@ -1533,6 +1613,7 @@ describe('resolveBackendExecutionSurfacesFromNativeAgentRuntime', () => {
       modelSelection: null,
       runWithCurrentPublisherPermit: allowCurrentPublisherEffect,
       directory: '/repo',
+      observeTerminalExecution: observation => { executionObservations.push(observation); },
       host: {
         input: { subscribe: vi.fn() },
         switching: { register: vi.fn() },
@@ -1556,6 +1637,7 @@ describe('resolveBackendExecutionSurfacesFromNativeAgentRuntime', () => {
         },
       },
     })).rejects.toThrow('spawn failed');
+    expect(executionObservations).toEqual([{ kind: 'launch_failed', plan: await resolveLaunch.mock.results[0]?.value }]);
     expect(publishControlState.mock.calls.map(([projection]) => projection)).toEqual([
       { target: 'local' },
       { target: 'remote' },

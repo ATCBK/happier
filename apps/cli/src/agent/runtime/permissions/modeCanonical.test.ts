@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizePermissionModeToIntent, resolvePermissionModeUpdatedAtFromMessage } from './modeCanonical';
+import { normalizePermissionModeToIntent } from './modeCanonical';
 
 describe('normalizePermissionModeToIntent', () => {
   it('maps acceptEdits to safe-yolo', () => {
@@ -20,14 +20,3 @@ describe('normalizePermissionModeToIntent', () => {
     expect(normalizePermissionModeToIntent(123)).toBe(null);
   });
 });
-
-describe('resolvePermissionModeUpdatedAtFromMessage', () => {
-  it('prefers server-created message timestamp', () => {
-    expect(resolvePermissionModeUpdatedAtFromMessage({ createdAt: 111 }, () => 999)).toBe(111);
-  });
-
-  it('falls back to nowMs when createdAt is missing', () => {
-    expect(resolvePermissionModeUpdatedAtFromMessage({}, () => 999)).toBe(999);
-  });
-});
-

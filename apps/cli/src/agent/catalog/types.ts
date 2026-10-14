@@ -54,7 +54,6 @@ import type {
 } from '@/capabilities/probes/preflightSessionControlsProbeAdapterTypes';
 import type {
   ConnectedServiceMaterializedHomeFreshness,
-  ConnectedServiceMaterializedHomeRootResolver,
 } from '@/daemon/connectedServices/materialization/materializedHomeFreshness';
 import type { ConnectedServiceRefreshCoordinator } from '@/daemon/connectedServices/refresh/ConnectedServiceRefreshCoordinator';
 import type { ConnectedServiceQuotaFetcherDescriptor } from '@/daemon/connectedServices/quotas/types';
@@ -290,11 +289,10 @@ export type AgentCatalogEntry = Readonly<{
    */
   shouldRestartConnectedServiceOnCredentialUpdate?: (serviceId: ConnectedServiceId) => boolean;
   /**
-   * Optional daemon-owned retained-home root resolver projected from provider connected-services
-   * metadata. Refresh/freshness orchestration uses this so it checks the same home root that
-   * materialization writes.
+   * Admitted native-home facts for synchronous source admission. Physical layout
+   * remains owned by the connected-account materialization owner.
    */
-  resolveConnectedServiceMaterializedHomeRoot?: ConnectedServiceMaterializedHomeRootResolver;
+  connectedAccountNativeHome?: AgentConnectedAccountStateSharingDescriptorV1['nativeHome'];
   /**
    * Optional provider-owned runtime-auth adapter for connected-service account groups.
    *

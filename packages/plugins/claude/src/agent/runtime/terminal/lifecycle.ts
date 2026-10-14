@@ -9,7 +9,7 @@ export type ClaudeTerminalLifecycleObservation =
     | Readonly<{ type: 'turn_failed'; agentId: string; turnId: string | null; reason: 'stop_failure_hook'; detail?: string; evidence?: unknown; source: 'hook'; sidechainAgentId?: string | null }>
     | Readonly<{ type: 'turn_failed'; agentId: string; turnId: string | null; reason: 'transcript_api_error'; source: 'transcript' }>
     | Readonly<{ type: 'turn_aborted'; agentId: string; turnId: string | null; reason: 'user_interrupt'; detail: string; source: 'transcript' }>
-    | Readonly<{ type: 'process_exited'; agentId: string; exitCode: number | null; signal: string | null }>;
+    | Readonly<{ type: 'process_exited'; agentId: string; exitCode: number | null; signal: string | null; nativeExited?: true }>;
 
 export type ClaudeTerminalHookEvent = Readonly<{
     agentId: string;

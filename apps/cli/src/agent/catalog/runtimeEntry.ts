@@ -49,6 +49,25 @@ export async function observeCurrentAgentSessionFactory(agentId: CatalogAgentId)
   }
 }
 
+async function acquireRegistryCatalogEntry(
+  registry: ResolvedExecutablePluginRuntimeRegistry,
+  agentId: CatalogAgentId,
+): Promise<AgentCatalogEntry | null> {
+  return registry.acquireAgentCatalogEntry
+    ? await registry.acquireAgentCatalogEntry(agentId)
+    : registry.contributes.agents.find((agent) => agent.id === agentId)?.catalogEntry ?? null;
+}
+
+/** The caller's existing lease owns this entry and its executable hooks. */
+export async function readRegistryCatalogHook<T>(
+  registry: ResolvedExecutablePluginRuntimeRegistry,
+  agentId: CatalogAgentId,
+  read: (entry: AgentCatalogEntry) => T | Promise<T>,
+): Promise<T | null> {
+  const entry = await acquireRegistryCatalogEntry(registry, agentId);
+  return entry ? await read(entry) : null;
+}
+
 async function acquireCurrentCatalogEntry(
   agentId: CatalogAgentId,
 ): Promise<Readonly<{
@@ -71,9 +90,7 @@ async function acquireCurrentCatalogEntry(
     throw error;
   }
   try {
-    const entry = lease.registry.acquireAgentCatalogEntry
-      ? await lease.registry.acquireAgentCatalogEntry(agentId)
-      : lease.registry.contributes.agents.find((agent) => agent.id === agentId)?.catalogEntry ?? null;
+    const entry = await acquireRegistryCatalogEntry(lease.registry, agentId);
     return Object.freeze({ entry, release: lease.release });
   } catch (error) {
     await lease.release().catch(() => {});

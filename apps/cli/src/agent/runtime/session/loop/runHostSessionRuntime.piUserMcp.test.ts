@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { accountSettingsParse, type McpServerCatalogEntryV1 } from '@happier-dev/protocol';
 import { ApiClient } from '@/api/api';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
@@ -94,6 +95,7 @@ it('passes materialized selected user MCP servers to a native_extension Agent op
   });
   const opened = new Error('Agent open boundary observed');
   let request: HostSessionRuntimeFactoryParams | undefined;
+  let privateConfigPath: string | undefined;
   const api = await ApiClient.create(credentials);
   await expect(runHostSessionRuntime({ credentials, directory: metadata.path,
     accountSettingsContext: { ...snapshot, whenRefreshed: null } }, {
@@ -105,14 +107,25 @@ it('passes materialized selected user MCP servers to a native_extension Agent op
       homeDir: '/tmp', happyHomeDir: '/tmp', happyLibDir: '/tmp' },
     terminalDisplay: () => null, shouldRenderTerminalDisplay: () => false,
     formatPromptErrorMessage: String,
-    createSessionRuntime: params => { request = params; throw opened; },
+    createSessionRuntime: params => {
+      request = params;
+      expect(params.mcpServersStrictMode).toBe(true);
+      expect(Object.keys(params.mcpServers)).toEqual(['selected']);
+      expect(JSON.stringify(params.mcpServers)).not.toContain('materialized-value');
+      privateConfigPath = params.mcpServers.selected?.env?.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE;
+      expect(privateConfigPath).toBeTruthy();
+      const privateConfig = JSON.parse(readFileSync(privateConfigPath!, 'utf8'));
+      expect(privateConfig).toMatchObject({ command: 'echo', args: ['selected'], env: { USER_VALUE: 'materialized-value' } });
+      if (process.platform !== 'win32') expect(statSync(privateConfigPath!).mode & 0o777).toBe(0o600);
+      throw opened;
+    },
   }, {
     initializeBackendApiContextFn: async () => ({ api, machineId: 'pi-machine' }),
     initializeBackendRunSessionFn: async () => ({ session, reconnectionHandle: null,
       reportedSessionId: session.sessionId, attachedToExistingSession: false }),
   })).rejects.toBe(opened);
-  expect(request?.mcpServers).toEqual({ selected: { command: 'echo', args: ['selected'],
-    env: { USER_VALUE: 'materialized-value' } } });
+  expect(request?.mcpServers.selected?.env).toMatchObject({ HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE: privateConfigPath });
+  expect(existsSync(privateConfigPath!)).toBe(false);
   } finally {
     await runtimeFixture.dispose();
   }

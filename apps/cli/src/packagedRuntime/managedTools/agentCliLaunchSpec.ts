@@ -16,6 +16,8 @@ export type AgentCliLaunchSpec = Readonly<{
   resolvedPath: string;
   command: string;
   args: readonly string[];
+  /** The builder launches the provider in this process rather than a shell-shim child. */
+  providerExitOwnership?: 'direct';
 }>;
 
 /**
@@ -39,6 +41,7 @@ export function bindAgentCliLaunchSpec(params: Readonly<{
       resolvedPath: params.spec.resolvedPath,
       command: params.spec.command,
       args: Object.freeze([...params.spec.args]),
+      ...(params.spec.providerExitOwnership ? { providerExitOwnership: params.spec.providerExitOwnership } : {}),
     }),
   });
 }
@@ -103,6 +106,7 @@ export function buildAgentCliLaunchSpecFromResolution(
       resolvedPath: resolved.command,
       command: resolved.command,
       args: [],
+      providerExitOwnership: 'direct',
     };
   }
   if (!runtimeCommand) return null;
@@ -128,5 +132,6 @@ export function buildAgentCliLaunchSpecFromResolution(
     resolvedPath: resolved.command,
     command: launchCommand,
     args: [resolved.command],
+    providerExitOwnership: 'direct',
   };
 }

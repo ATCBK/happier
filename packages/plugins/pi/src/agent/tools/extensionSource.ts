@@ -1,14 +1,16 @@
 export const PI_HAPPIER_TOOLS_CONFIG_FLAG = 'happier-tools-config';
 export const PI_MCP_APPROVAL_CALL_PREFIX = 'happier:mcp-approval:';
+export const PI_MCP_CAPABILITY_NOTICE_RECORD_TYPE = 'happier-pi-mcp-capability-notice';
 
 export function buildPiHappierToolsExtensionSource(): string {
   return `// Happier Pi native tools extension. Generated; tool policy is host-owned.
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import fs, { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 const CONFIG_FLAG = ${JSON.stringify(PI_HAPPIER_TOOLS_CONFIG_FLAG)};
 const MCP_APPROVAL_CALL_PREFIX = ${JSON.stringify(PI_MCP_APPROVAL_CALL_PREFIX)};
+const MCP_CAPABILITY_NOTICE_RECORD_TYPE = ${JSON.stringify(PI_MCP_CAPABILITY_NOTICE_RECORD_TYPE)};
 const BRIDGE_OUTPUT_MAX_BYTES = 1024 * 1024;
 const BRIDGE_OUTPUT_MAX_LINES = 4000;
 const TOOL_OUTPUT_MAX_BYTES = 50 * 1024;
@@ -30,6 +32,7 @@ function isConfig(value) {
     && typeof value.directory === "string" && value.directory.trim()
     && typeof value.systemPrompt === "string"
     && Array.isArray(value.tools)
+    && (value.mcpServersStrictMode === undefined || typeof value.mcpServersStrictMode === "boolean")
     && value.tools.every((tool) => (
       tool && typeof tool === "object"
       && typeof tool.name === "string" && tool.name.trim()
@@ -218,6 +221,10 @@ function openMcpServer(server, cwd) {
     stdio: ["pipe", "pipe", "ignore"],
   });
   const pending = new Map();
+  const spawned = new Promise((resolve, reject) => {
+    child.once("spawn", resolve);
+    child.once("error", reject);
+  });
   let nextId = 0;
   let failure = null;
   const closed = new Promise((resolve) => child.once("close", resolve));
@@ -270,7 +277,7 @@ function openMcpServer(server, cwd) {
     });
   });
   return {
-    request, notify,
+    spawned, request, notify,
     async close() {
       fail(new Error("MCP session closed"));
       lines.close();
@@ -312,19 +319,37 @@ export default function happierPiToolsExtension(pi) {
         },
       });
     }
+    const failures = [];
+    const publishFailures = () => {
+      // Pi 0.82.1 redirects extension stdout writes to stderr in RPC mode.
+      // Emit this protocol record on the original stdout descriptor instead.
+      if (failures.length) fs.writeSync(1, JSON.stringify({ type: MCP_CAPABILITY_NOTICE_RECORD_TYPE,
+        notice: { v: 1, items: failures } }) + "\\n");
+    };
     try {
       const names = [];
       for (const [serverName, server] of Object.entries(config.mcpServers || {})) {
-        const connection = openMcpServer(server, config.directory);
-        connections.push(connection);
-        const initialized = await connection.request("initialize", { protocolVersion: "2024-11-05",
-          capabilities: {}, clientInfo: { name: "happier-pi", version: "1" } });
-        if (initialized.protocolVersion !== "2024-11-05") throw new Error("MCP server negotiated an unsupported protocol version");
-        connection.notify("notifications/initialized", {});
-        let cursor;
-        do {
-          const catalog = await connection.request("tools/list", cursor ? { cursor } : {});
-          for (const tool of catalog.tools) {
+        let connection;
+        let stage = "spawn";
+        try {
+          connection = openMcpServer(server, config.directory);
+          connections.push(connection);
+          await connection.spawned;
+          stage = "initialize";
+          const initialized = await connection.request("initialize", { protocolVersion: "2024-11-05",
+            capabilities: {}, clientInfo: { name: "happier-pi", version: "1" } });
+          if (initialized.protocolVersion !== "2024-11-05") throw new Error("MCP server negotiated an unsupported protocol version");
+          connection.notify("notifications/initialized", {});
+          stage = "list";
+          const tools = [];
+          let cursor;
+          do {
+            const catalog = await connection.request("tools/list", cursor ? { cursor } : {});
+            tools.push(...catalog.tools);
+            cursor = catalog.nextCursor;
+          } while (cursor);
+          // A failed later page must not leave tools bound to a closed server.
+          for (const tool of tools) {
             if (server.enabledTools && !server.enabledTools.includes(tool.name)) continue;
             const policy = config.mcpToolPolicy && Object.hasOwn(config.mcpToolPolicy, serverName)
               ? config.mcpToolPolicy[serverName] : undefined;
@@ -348,12 +373,22 @@ export default function happierPiToolsExtension(pi) {
               },
             });
           }
-          cursor = catalog.nextCursor;
-        } while (cursor);
+        } catch (error) {
+          if (connection) {
+            connections.splice(connections.indexOf(connection), 1);
+            await connection.close();
+          }
+          // Raw peer/process errors can contain resolved secrets. Publish only
+          // the observed stage and server identity through the host notice seam.
+          failures.push({ kind: "mcp_server", name: serverName, code: "mcp_" + stage + "_failed" });
+          if (config.mcpServersStrictMode === true) throw new Error("MCP server " + serverName + " could not start (" + stage + ")");
+        }
       }
       if (names.length) pi.setActiveTools([...new Set([...pi.getActiveTools(), ...names])]);
+      publishFailures();
     } catch (error) {
       await closeConnections();
+      publishFailures();
       throw error;
     }
   });

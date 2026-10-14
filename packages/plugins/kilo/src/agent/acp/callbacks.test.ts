@@ -3,14 +3,32 @@ import { describe, expect, it } from 'vitest';
 import { buildKiloAcpEnv, buildKiloAcpToolNameResolver } from './callbacks.js';
 
 describe('Kilo ACP callbacks', () => {
-  it('uses the longest known MCP key and recovers native tool spellings without claiming unknown tools', () => {
+  it('maps only injective MCP tool spellings and leaves other tools unchanged', () => {
     const resolver = buildKiloAcpToolNameResolver({
-      mcpServers: { docs: { command: '/fixture' }, 'docs.team__prod': { command: '/fixture' } },
-      mcpToolPolicy: { 'docs.team__prod': { unlisted: 'ask', tools: Object.fromEntries([['file.read', 'off'], ['__proto__', 'off']] as const) } },
+      mcpServers: { 'docs.team': { command: '/fixture' } },
     });
-    expect(resolver({ toolName: 'other', input: { _acp: { title: 'docs_team__prod_file_read' } } })).toBe('mcp__docs.team__prod__file.read');
-    expect(resolver({ toolName: 'docs_team__prod___proto__', input: {} })).toBe('mcp__docs.team__prod____proto__');
-    expect(resolver({ toolName: 'unknown_file_read', input: {} })).toBe('unknown_file_read');
+    expect(resolver({ toolName: 'other', toolCallId: 'call', context: { toolCallCountSincePrompt: 1 }, input: { _acp: { title: 'docs_team_echo' } } })).toBe('mcp__docs.team__echo');
+    expect(resolver({ toolName: 'unknown_file_read', toolCallId: 'call', context: { toolCallCountSincePrompt: 1 }, input: {} })).toBe('unknown_file_read');
+  });
+
+  it('refuses lossy tool aliases even when a birth policy names one candidate', () => {
+    const birthRequest = {
+      mcpServers: { docs: { command: '/fixture' } },
+      mcpToolPolicy: { docs: { unlisted: 'ask', tools: { 'file.read': 'ask' } } },
+    };
+    const resolver = buildKiloAcpToolNameResolver(birthRequest);
+    expect(() => resolver({ toolName: 'docs_file_read', toolCallId: 'call', context: { toolCallCountSincePrompt: 1 }, input: {} })).toThrow();
+  });
+
+  it('refuses server alias collisions and ambiguous server/tool boundaries', () => {
+    for (const names of [['docs.team', 'docs_team'], ['docs', 'docs_team']]) {
+      const resolver = buildKiloAcpToolNameResolver({ mcpServers: Object.fromEntries(names.map(name => [name, { command: '/fixture' }])) });
+      expect(() => resolver({ toolName: 'docs_team_echo', toolCallId: 'call', context: { toolCallCountSincePrompt: 1 }, input: {} })).toThrow();
+    }
+  });
+  it('leaves the built-in Happier tool spelling to its Action permission owner', () => {
+    const resolver = buildKiloAcpToolNameResolver({ mcpServers: { happier: { command: '/fixture' } } });
+    expect(resolver({ toolName: 'other', toolCallId: 'call', context: { toolCallCountSincePrompt: 1 }, input: { _acp: { title: 'happier_session_start' } } })).toBe('happier_session_start');
   });
   it('injects canonical-permission-aware KILO_PERMISSION without mutating host env', () => {
     const env = buildKiloAcpEnv({

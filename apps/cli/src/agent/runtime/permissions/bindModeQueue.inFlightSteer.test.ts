@@ -68,6 +68,25 @@ function createQueue() {
 }
 
 describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
+  it('restores the baseline mode before steering into a turn that has a per-input override', async () => {
+    const { session, emitUserMessage } = createSessionHarness();
+    const { queue } = createQueue();
+    const steerText = vi.fn(async () => {});
+    const applyConfigDeltaInFlight = vi.fn(async () => ({ status: 'applied' as const }));
+    registerPermissionModeMessageQueueBinding({
+      session, queue, getCurrentPermissionMode: () => 'default', setCurrentPermissionMode: () => {},
+      inFlightSteer: {
+        readActivePermissionMode: () => 'read-only',
+        isTurnInFlight: () => true, supportsInFlightSteer: () => true,
+        steerText, applyConfigDeltaInFlight, registerProviderAcceptedEffect: () => undefined,
+      },
+    });
+    emitUserMessage({ content: { text: 'use the baseline for this input' }, meta: {} });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(applyConfigDeltaInFlight).toHaveBeenCalledWith({ permissionMode: 'default' });
+    expect(steerText).toHaveBeenCalled();
+    expect(queue.size()).toBe(0);
+  });
   it('retains only content-free facts for the actually invoked steer request', async () => {
     const { session, emitUserMessage } = createSessionHarness();
     const { queue } = createQueue();
@@ -1608,7 +1627,7 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
     // remote-dev UIMSG starvation: the current mode can be held in a provider-alias form
     // ('acceptEdits') while the message carries the canonical intent ('safe-yolo') of the SAME
     // mode. A raw string compare reads that as a mode change and blocks steering forever; the
-    // canonical didChange from maybeUpdatePermissionModeMetadata must gate the steer instead.
+    // Canonical effective-mode comparison must gate the steer instead.
     const { session, emitUserMessage } = createSessionHarness();
     const { queue, spyPush } = createQueue();
 

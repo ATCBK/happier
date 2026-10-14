@@ -719,138 +719,188 @@ export function resolveBackendExecutionSurfacesFromNativeAgentRuntime(params: Re
     const runLaunch = async (
         normalizedRequest: HostTerminalLaunchRequest,
     ): Promise<HostTerminalRunResult> => {
-        assertCurrentNativeAgentTerminalGeneration(params);
-        const request = await resolveTerminalRuntimeLaunchRequestContext({
-            request: normalizedRequest,
-            resolveServices: params.resolveTerminalRuntimeLaunchServices,
-            resolveSignal: params.resolveTerminalRuntimeLaunchSignal,
-            resolveHostOrchestration: params.resolveTerminalRuntimeHostOrchestration,
-        });
-        const host = request.host;
-        if (!host?.process.resolveAgentCliExecutable) {
-            throw new Error(`Native Agent terminal launch for '${params.agentId}' requires host Agent CLI executable resolution`);
-        }
-        const plan = request.preparedLaunchPlan ?? await terminal.resolveLaunch({
-            sessionId: request.sessionId,
-            cwd: request.directory,
-            metadata: projectTerminalAgentLaunchMetadata(request.metadata),
-            ...(request.configuration ? { configuration: request.configuration } : {}),
-            modelSelection: request.modelSelection,
-        });
-        assertNativeAgentTerminalLaunchPlan(plan);
-        assertCurrentNativeAgentTerminalGeneration(params);
-
-        const planValues = plan.environment?.values ?? {};
-        const environment = {
-            ...(request.env ?? {}),
-            ...(request.isolation?.env ?? {}),
-            ...planValues,
-        };
-        const unsetEnvKeys = [...new Set([
-            ...(request.isolation?.unsetEnvKeys ?? []),
-            ...(plan.environment?.unset ?? []),
-        ])];
-        const executable = await host.process.resolveAgentCliExecutable({
-            agentId: params.agentId,
-            cwd: request.directory,
-            ...(Object.keys(environment).length > 0 ? { env: environment } : {}),
-            signal: request.signal,
-        });
-        assertCurrentNativeAgentTerminalGeneration(params);
-
-        await publishNativeAgentTerminalControlPresentation({
-            host,
-            presentation: plan.presentation?.onLaunch,
-        });
+        let preparedPlan = normalizedRequest.preparedLaunchPlan;
         try {
-            // Keep every awaited preparation step above this permit. Its
-            // exact-current check linearizes the launch, and the first local
-            // effect must be the process-owner invocation with no intervening
-            // await or competing currentness decision.
-            const permittedLaunch =
-                await request.runWithCurrentPublisherPermit(
-                    () => host.process.launch({
-                        executable: executable.executable,
-                        args: [...executable.args, ...plan.argv],
-                        cwd: request.directory,
-                        ...(Object.keys(environment).length > 0 ? { env: environment } : {}),
-                        ...(unsetEnvKeys.length > 0 ? { unsetEnvKeys } : {}),
-                        stdio: plan.process?.stdio,
-                        windowsHide: plan.process?.windowsHide,
-                        windowsVerbatimArguments: plan.process?.windowsVerbatimArguments,
-                        signal: request.signal,
-                    }),
-                );
-            if (permittedLaunch.status === 'blocked') {
-                throw new HostTerminalModelSelectionBlockedError();
+            assertCurrentNativeAgentTerminalGeneration(params);
+            const request = await resolveTerminalRuntimeLaunchRequestContext({
+                request: normalizedRequest,
+                resolveServices: params.resolveTerminalRuntimeLaunchServices,
+                resolveSignal: params.resolveTerminalRuntimeLaunchSignal,
+                resolveHostOrchestration: params.resolveTerminalRuntimeHostOrchestration,
+            });
+            const host = request.host;
+            if (!host?.process.resolveAgentCliExecutable) {
+                throw new Error(`Native Agent terminal launch for '${params.agentId}' requires host Agent CLI executable resolution`);
             }
-            const processHandle = permittedLaunch.value;
-            if (!params.isCurrent()) {
-                await processHandle.stop().catch(() => undefined);
-                assertCurrentNativeAgentTerminalGeneration(params);
-            }
-            let requestedControlReason: HostTerminalControlReturnReason | null = null;
-            let confirmedControlReason: HostTerminalControlReturnReason | null = null;
-            let stopForControlPromise: Promise<void> | null = null;
-            const requestControlReturn = async (
-                reason: HostTerminalControlReturnReason,
-            ): Promise<void> => {
-                requestedControlReason ??= reason;
-                stopForControlPromise ??= processHandle.stop();
-                await stopForControlPromise;
-                confirmedControlReason = requestedControlReason;
+            const plan = request.preparedLaunchPlan ?? await terminal.resolveLaunch({
+                sessionId: request.sessionId,
+                cwd: request.directory,
+                metadata: projectTerminalAgentLaunchMetadata(request.metadata),
+                ...(request.configuration ? { configuration: request.configuration } : {}),
+                modelSelection: request.modelSelection,
+            });
+            preparedPlan = plan;
+            assertNativeAgentTerminalLaunchPlan(plan);
+            assertCurrentNativeAgentTerminalGeneration(params);
+
+            const planValues = plan.environment?.values ?? {};
+            const environment = {
+                ...(request.env ?? {}),
+                ...(request.isolation?.env ?? {}),
+                ...planValues,
             };
-            const inputSubscription = host.input.subscribe(
-                async () => await requestControlReturn('pending_input'),
-            );
-            let switchSubscription: ReturnType<typeof host.switching.register> | null = null;
+            const unsetEnvKeys = [...new Set([
+                ...(request.isolation?.unsetEnvKeys ?? []),
+                ...(plan.environment?.unset ?? []),
+            ])];
+            const executable = await host.process.resolveAgentCliExecutable({
+                agentId: params.agentId,
+                cwd: request.directory,
+                ...(Object.keys(environment).length > 0 ? { env: environment } : {}),
+                signal: request.signal,
+            });
+            assertCurrentNativeAgentTerminalGeneration(params);
+
+            await publishNativeAgentTerminalControlPresentation({
+                host,
+                presentation: plan.presentation?.onLaunch,
+            });
             try {
-                switchSubscription = host.switching.register(async (request) => {
-                    if (request.target !== 'remote') return false;
-                    try {
-                        await requestControlReturn('switch_requested');
-                        return true;
-                    } catch {
-                        return false;
-                    }
-                });
-                const termination = await processHandle.waitForTermination();
-                const pendingControlStop = stopForControlPromise;
-                if (pendingControlStop) {
-                    await pendingControlStop;
-                    confirmedControlReason ??= requestedControlReason;
+                // Keep every awaited preparation step above this permit. Its
+                // exact-current check linearizes the launch, and the first local
+                // effect must be the process-owner invocation with no intervening
+                // await or competing currentness decision.
+                const permittedLaunch =
+                    await request.runWithCurrentPublisherPermit(
+                        () => host.process.launch({
+                            executable: executable.executable,
+                            args: [...executable.args, ...plan.argv],
+                            cwd: request.directory,
+                            ...(Object.keys(environment).length > 0 ? { env: environment } : {}),
+                            ...(unsetEnvKeys.length > 0 ? { unsetEnvKeys } : {}),
+                            stdio: plan.process?.stdio,
+                            windowsHide: plan.process?.windowsHide,
+                            windowsVerbatimArguments: plan.process?.windowsVerbatimArguments,
+                            signal: request.signal,
+                        }),
+                    );
+                if (permittedLaunch.status === 'blocked') {
+                    throw new HostTerminalModelSelectionBlockedError();
                 }
-                assertCurrentNativeAgentTerminalGeneration(params);
-                if (confirmedControlReason) {
+                const processHandle = permittedLaunch.value;
+                if (!params.isCurrent()) {
+                    try {
+                        assertCurrentNativeAgentTerminalGeneration(params);
+                    } catch (error) {
+                        try {
+                            await processHandle.stop();
+                        } catch (cleanupError) {
+                            throw new AggregateError([error, cleanupError], 'Retired terminal launch and process cleanup failed', { cause: error });
+                        }
+                        throw error;
+                    }
+                }
+                const executionStarted = processHandle.pid !== null;
+                if (executionStarted) await request.observeTerminalExecution?.({ kind: 'started', plan });
+                let requestedControlReason: HostTerminalControlReturnReason | null = null;
+                let confirmedControlReason: HostTerminalControlReturnReason | null = null;
+                let stopForControlPromise: Promise<void> | null = null;
+                const requestControlReturn = async (
+                    reason: HostTerminalControlReturnReason,
+                ): Promise<void> => {
+                    requestedControlReason ??= reason;
+                    const stopAttempt = processHandle.stop();
+                    stopForControlPromise = stopAttempt;
+                    try {
+                        await stopAttempt;
+                    } catch (error) {
+                        if (stopForControlPromise === stopAttempt) stopForControlPromise = null;
+                        throw error;
+                    }
+                    confirmedControlReason = requestedControlReason;
+                };
+                const inputSubscription = host.input.subscribe(
+                    async () => await requestControlReturn('pending_input'),
+                );
+                let switchSubscription: ReturnType<typeof host.switching.register> | null = null;
+                try {
+                    switchSubscription = host.switching.register(async (request) => {
+                        if (request.target !== 'remote') return false;
+                        try {
+                            await requestControlReturn('switch_requested');
+                            return true;
+                        } catch {
+                            return false;
+                        }
+                    });
+                    let termination: HostTerminalProcessTermination;
+                    try {
+                        termination = await processHandle.waitForTermination();
+                    } catch (error) {
+                        try {
+                            await request.observeTerminalExecution?.({ kind: executionStarted ? 'observation_lost' : 'launch_failed', plan });
+                        } catch (cleanupError) {
+                            throw new AggregateError([error, cleanupError], 'Terminal observation cleanup failed after execution failure', { cause: error });
+                        }
+                        throw error;
+                    }
+                    if (!executionStarted) {
+                        await request.observeTerminalExecution?.({ kind: 'launch_failed', plan });
+                    } else if (executable.providerExitOwnership === 'direct'
+                        && (termination.type === 'exited' || termination.type === 'signaled')) {
+                        await request.observeTerminalExecution?.({ kind: 'provider_stopped', plan,
+                            exitCode: termination.type === 'exited' ? termination.code : null,
+                            signal: termination.type === 'signaled' ? termination.signal : null });
+                    } else {
+                        await request.observeTerminalExecution?.({ kind: 'observation_lost', plan });
+                    }
+
+                    const pendingControlStop = stopForControlPromise;
+                    if (pendingControlStop) {
+                        await pendingControlStop;
+                        confirmedControlReason ??= requestedControlReason;
+                    }
+                    assertCurrentNativeAgentTerminalGeneration(params);
+                    if (confirmedControlReason) {
+                        return {
+                            type: 'control_returned',
+                            reason: confirmedControlReason,
+                            ...(plan.resultMetadata?.sessionStateUpdates
+                                ? { sessionStateUpdates: plan.resultMetadata.sessionStateUpdates }
+                                : {}),
+                        };
+                    }
                     return {
-                        type: 'control_returned',
-                        reason: confirmedControlReason,
+                        type: 'process_exited',
+                        exitCode: mapTerminalProcessTerminationToExitCode(termination),
                         ...(plan.resultMetadata?.sessionStateUpdates
                             ? { sessionStateUpdates: plan.resultMetadata.sessionStateUpdates }
                             : {}),
                     };
+                } finally {
+                    switchSubscription?.unsubscribe();
+                    inputSubscription?.unsubscribe();
                 }
-                return {
-                    type: 'process_exited',
-                    exitCode: mapTerminalProcessTerminationToExitCode(termination),
-                    ...(plan.resultMetadata?.sessionStateUpdates
-                        ? { sessionStateUpdates: plan.resultMetadata.sessionStateUpdates }
-                        : {}),
-                };
             } finally {
-                switchSubscription?.unsubscribe();
-                inputSubscription?.unsubscribe();
+                // `ES-PEP-EU2` removes the redundant readiness path now that one
+                // terminal-follow barrier exists. The barrier that admits the
+                // binding before launch is the same owner that releases it exactly
+                // once, and it races the ready binding against this launch; a second
+                // release here would dispose a binding that owner still holds.
+                await publishNativeAgentTerminalControlPresentation({
+                    host,
+                    presentation: plan.presentation?.onExit,
+                });
             }
-        } finally {
-            // `ES-PEP-EU2` removes the redundant readiness path now that one
-            // terminal-follow barrier exists. The barrier that admits the
-            // binding before launch is the same owner that releases it exactly
-            // once, and it races the ready binding against this launch; a second
-            // release here would dispose a binding that owner still holds.
-            await publishNativeAgentTerminalControlPresentation({
-                host,
-                presentation: plan.presentation?.onExit,
-            });
+        } catch (error) {
+            if (preparedPlan) {
+                try {
+                    await normalizedRequest.observeTerminalExecution?.({ kind: 'launch_failed', plan: preparedPlan });
+                } catch (cleanupError) {
+                    throw new AggregateError([error, cleanupError], 'Terminal preparation cleanup failed after launch failure', { cause: error });
+                }
+            }
+            throw error;
         }
     };
     const launch = (async (rawRequest: unknown): Promise<HostTerminalRunResult> => {

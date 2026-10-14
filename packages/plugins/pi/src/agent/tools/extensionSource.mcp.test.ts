@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import fs, { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { SessionCapabilityNoticeV1Schema } from '@happier-dev/protocol';
 import { buildPiHappierToolsExtensionSource } from './extensionSource.js';
 import type { AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
 
@@ -38,6 +39,14 @@ lines.on('close', () => process.exit(0));
 `;
 
 describe('Pi extension user MCP', () => {
+  it.each(['spawn', 'initialize', 'list'] as const)('isolates optional %s failure, publishes its typed notice, and cleans every child', async stage => {
+    await checkStartupFailure(stage, false);
+  });
+
+  it.each(['spawn', 'initialize', 'list'] as const)('refuses strict %s failure and cleans every child', async stage => {
+    await checkStartupFailure(stage, true);
+  });
+
   it.each([
     { enabledTools: ['echo'], mcpToolPolicy: undefined },
     { enabledTools: undefined, mcpToolPolicy: { fixture: { unlisted: 'ask', tools: { toString: 'off', echo: 'allow' } } } },
@@ -96,3 +105,90 @@ describe('Pi extension user MCP', () => {
     }
   });
 });
+
+async function checkStartupFailure(stage: 'spawn' | 'initialize' | 'list', strict: boolean) {
+  const root = mkdtempSync(join(tmpdir(), 'happier-pi-mcp-startup-'));
+  const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
+  const tools: Tool[] = [];
+  const notices: unknown[] = [];
+  const write = fs.writeSync;
+  // The Pi stdout pipe is the transport boundary; generated extension logic and
+  // the exact host consumer schema are real.
+  const stdout = vi.spyOn(fs, 'writeSync').mockImplementation((...args: Parameters<typeof fs.writeSync>) => {
+    const text = String(args[1]);
+    if (text.includes('happier-pi-mcp-capability-notice')) {
+      expect(args[0]).toBe(1);
+      notices.push(JSON.parse(text));
+      return Buffer.byteLength(text);
+    }
+    return write(...args);
+  });
+  const pidPaths = ['good', 'broken', 'later'].map(name => join(root, `${name}.pid`));
+  try {
+    const extensionPath = join(root, 'extension.mjs');
+    const serverPath = join(root, 'server.mjs');
+    const brokenPath = join(root, 'broken.mjs');
+    const configPath = join(root, 'config.json');
+    const pidSource = `import { writeFileSync } from 'node:fs'; writeFileSync(process.env.PID_FILE, String(process.pid));\n`;
+    writeFileSync(extensionPath, buildPiHappierToolsExtensionSource());
+    writeFileSync(serverPath, pidSource + serverSource);
+    writeFileSync(brokenPath, pidSource + serverSource.replace('let result;', `
+      if (message.method === ${JSON.stringify(stage === 'initialize' ? 'initialize' : 'tools/list')}
+        ${stage === 'list' ? '&& message.params.cursor' : ''}) {
+        process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id,
+          error: { code: -32603, message: 'private-startup-diagnostic-sentinel' } }) + '\\n');
+        return;
+      }
+      let result;`));
+    writeFileSync(configPath, JSON.stringify({ v: 1, directory: root, systemPrompt: '', tools: [],
+      mcpServersStrictMode: strict,
+      mcpServers: {
+        good: { command: process.execPath, args: [serverPath], env: { PID_FILE: pidPaths[0], MCP_FIXTURE_PREFIX: 'good:' } },
+        broken: { command: stage === 'spawn' ? join(root, 'missing-command') : process.execPath,
+          args: [brokenPath], env: { PID_FILE: pidPaths[1] } },
+        later: { command: process.execPath, args: [serverPath], env: { PID_FILE: pidPaths[2], MCP_FIXTURE_PREFIX: 'later:' } },
+      },
+    }));
+    const module = await import(pathToFileURL(extensionPath).href);
+    let activeTools: string[] = [];
+    module.default({ registerFlag() {}, getFlag: () => configPath,
+      registerTool(tool: Tool) { tools.push(tool); }, getActiveTools: () => activeTools,
+      setActiveTools: (names: string[]) => { activeTools = names; },
+      on(name: string, handler: (...args: unknown[]) => unknown) {
+        handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+      },
+    });
+    const start = async () => { for (const handler of handlers.get('session_start') ?? []) await handler({}); };
+    if (strict) {
+      const startup = start();
+      await expect(startup).rejects.toThrow(/MCP/);
+      await startup.catch(error => expect(String(error)).not.toContain('private-startup-diagnostic-sentinel'));
+    }
+    else {
+      await start();
+      expect(activeTools).toEqual(['mcp__good__toString', 'mcp__good__echo', 'mcp__later__toString', 'mcp__later__echo']);
+      const echo = tools.find(tool => tool.name === 'mcp__good__echo')!;
+      expect(await echo.execute('good-call', { text: 'alive' }, undefined, undefined,
+        { cwd: root, ui: { confirm: async () => true } })).toMatchObject({ content: [{ type: 'text', text: 'good:alive' }] });
+      expect(tools.some(tool => tool.name.startsWith('mcp__broken__'))).toBe(false);
+    }
+    expect(notices).toHaveLength(1);
+    const wire = notices[0] as { notice: unknown };
+    expect(SessionCapabilityNoticeV1Schema.parse(wire.notice)).toEqual({ v: 1,
+      items: [{ kind: 'mcp_server', name: 'broken', code: `mcp_${stage}_failed` }] });
+    expect(JSON.stringify(notices)).not.toContain('private-startup-diagnostic-sentinel');
+    for (const handler of handlers.get('session_shutdown') ?? []) { await handler({}); await handler({}); }
+    for (const pidPath of pidPaths) {
+      try {
+        const pid = Number(readFileSync(pidPath, 'utf8'));
+        expect(() => process.kill(pid, 0)).toThrow();
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      }
+    }
+  } finally {
+    for (const handler of handlers.get('session_shutdown') ?? []) await handler({});
+    stdout.mockRestore();
+    rmSync(root, { recursive: true, force: true });
+  }
+}

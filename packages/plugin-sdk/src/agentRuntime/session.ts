@@ -722,6 +722,8 @@ export type AgentSessionOpenRequest =
     configuration?: AgentSessionConfigurationSnapshot;
     connectedAccounts?: readonly AgentSessionConnectedAccountSelection[];
     mcpServers?: Readonly<Record<string, AgentSessionMcpLaunchConfig>>;
+    /** Host-resolved startup failure policy; optional servers may be skipped. */
+    mcpServersStrictMode?: boolean;
     mcpToolPolicy?: Readonly<Record<string, AgentSessionMcpToolPolicy>>;
     skills?: AgentSessionSkillDelivery;
     providerBinding?: AgentSessionProviderBinding;
@@ -875,6 +877,11 @@ export interface AgentSessionRuntime extends Disposable {
     | Readonly<{ kind: 'terminal_launch'; plan: AgentTerminalLaunchPlan }>
     | Readonly<{ kind: 'managed_terminal'; handle: TerminalHostHandle }>
   >;
+  /** Observes this prepared terminal's actual host-owned execution; grants no process control. */
+  observeTerminalExecution?(input:
+    | Readonly<{ kind: 'started' | 'observation_lost' | 'launch_failed'; plan: AgentTerminalLaunchPlan }>
+    | Readonly<{ kind: 'provider_stopped'; plan: AgentTerminalLaunchPlan; exitCode: number | null; signal: string | null }>
+  ): void | Promise<void>;
   /**
    * Receives ordered native source evidence after preceding output has durable
    * custody. Initial replay establishes provider correlation only; it must not

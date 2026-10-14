@@ -7,6 +7,7 @@ import type { DurableProviderInputAcceptanceV1 } from '@/agent/runtime/session/i
 import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
 import type { ExecutionRunPermissionRequestStore } from '@/agent/runtime/bridges/executionRun/executionRunPermissionResponseTarget';
 import type { ExecutionRunWorkflowObservationBinding } from '@/agent/runtime/bridges/executionRun/executionRunWorkflowObservation';
+import type { ExecutionRunProfileContributionCatalog } from '@/agent/executionRuns/profiles/intentRegistry';
 
 export type ExecutionRunControllerOccurrenceV1 = Readonly<{
   runId: string;
@@ -42,6 +43,8 @@ export type ExecutionRunLiveIntervention = Readonly<{
 
 export type ExecutionRunBackendController = {
   kind: 'backend';
+  /** Same admitted snapshot as this occurrence's executable runtime. */
+  profileCatalog?: ExecutionRunProfileContributionCatalog;
   /** Stable identity for this exact controller lifetime, including resume replacements. */
   controllerOccurrenceId: string;
   backend: ExecutionRunHostRuntime;
@@ -119,7 +122,11 @@ export type ExecutionRunBackendController = {
 
 export type ExecutionRunVoiceAgentController = {
   kind: 'voice_agent';
+  profileCatalog?: ExecutionRunProfileContributionCatalog;
   controllerOccurrenceId: string;
+  /** Same controller-owned occurrence proof used by backend Runs. */
+  executionRunOccurrence?: ExecutionRunControllerOccurrenceV1;
+  releaseSessionInputAttachment?: () => Promise<void>;
   voiceAgentId: string;
   cancelled: boolean;
   lastMarkerWriteAtMs: number;

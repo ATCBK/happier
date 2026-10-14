@@ -143,6 +143,57 @@ function retainedRunnerInputs() {
 }
 
 describe('retained Runner managed dependencies', () => {
+    it('resolves first-party development dependencies from the retained path runner bundle', async () => {
+        const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-retained-path-home-'));
+        const runtimeRoot = join(happyHomeDir, 'source-bundles', 'runner-a', 'apps', 'cli');
+        const pluginRoot = join(happyHomeDir, 'source-bundles', 'runner-a', 'packages', 'plugins', 'antigravity');
+        const systemExecutable = basename(process.execPath);
+        const definition = {
+            id: 'tool', title: 'Retained path tool', description: 'Source-bundle dependency',
+            sources: [{ kind: 'system' as const, executableNames: [systemExecutable] }],
+            executable: systemExecutable,
+        };
+        try {
+            await mkdir(join(runtimeRoot, 'package-dist'), { recursive: true });
+            await mkdir(join(pluginRoot, '.happier-plugin'), { recursive: true });
+            await writeFile(join(pluginRoot, '.happier-plugin', 'plugin.json'), JSON.stringify(manifest({
+                pluginId: 'happier.agent.antigravity', definition,
+            })), 'utf8');
+            const sourceCustody = { kind: 'development' as const, registeredRootId: pluginRoot };
+            const binding = createAgentSessionRunnerFactoryBinding({
+                v: 1, pluginId: 'happier.agent.antigravity', pluginVersion: '1.0.0',
+                agentId: 'antigravity', localAgentId: 'antigravity', sourceCustody,
+                locator: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
+                normalizedModulePath: 'runtime.mjs', loadMode: 'immutable-js',
+            });
+            const host = await createRetainedRunnerManagedDependenciesHost({
+                paths: resolvePluginStorePaths({ happyHomeDir }), binding,
+                hostAccessRequests: [{ required: true, request: {
+                    id: 'runner-process', capability: 'process', reason: 'Exercise retained path dependency',
+                    scope: { executables: [{ kind: 'managedDependency', id: {
+                        pluginId: 'happier.agent.antigravity', localId: 'tool',
+                    } }] },
+                } }],
+                retention: {
+                    v: 1, sourceCustodies: [sourceCustody],
+                    qualifiedDependencyIds: ['happier.agent.antigravity/tool'],
+                    sourceCandidates: [{ qualifiedDependencyId: 'happier.agent.antigravity/tool',
+                        sourceCustody, manifestAuthority: 'bundled_first_party' }],
+                },
+                agentManifestAuthority: 'bundled_first_party',
+                runnerSnapshotIdentity: `path:${runtimeRoot}`,
+                env: { ...process.env, PATH: dirname(process.execPath) },
+            });
+            const executable = await host.resolveExecutable({ kind: 'managedDependency', id: {
+                pluginId: 'happier.agent.antigravity', localId: 'tool',
+            } }, 'happier.agent.antigravity');
+            expect(basename(executable.command)).toBe(systemExecutable);
+            executable.release();
+        } finally {
+            await rm(happyHomeDir, { recursive: true, force: true });
+        }
+    });
+
     it('keeps the exact bundled collision winner while preserving a non-conflicting external control', async () => {
         const happyHomeDir = await mkdtemp(join(
             tmpdir(),

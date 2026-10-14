@@ -87,6 +87,17 @@ type ExecutionRunRpcFailure = Readonly<{
   details?: unknown;
 }>;
 
+function executionRunSetupFailure(error: unknown): ExecutionRunRpcFailure {
+  const providerCode = ProviderErrorCodeV1Schema.safeParse(
+    error && typeof error === 'object' && 'code' in error ? error.code : undefined,
+  );
+  return {
+    ok: false,
+    errorCode: providerCode.success ? providerCode.data : 'execution_run_failed',
+    error: error instanceof Error ? error.message : providerCode.success ? providerCode.data : 'Execution setup failed',
+  };
+}
+
 /** Caller input to a Voice run belongs to the present user, not its opener. */
 export function admitExecutionRunCallerTurn(
   run: Pick<NonNullable<ReturnType<ExecutionRunHostBridgeContract['get']>>, 'intent'>,
@@ -418,11 +429,7 @@ export function createExecutionRunRpcActionDeps(params: ExecutionRunRpcActionDep
     try {
       accountSettings = await params.context.resolveAccountSettings?.() ?? null;
     } catch (error) {
-      return beforeStart({
-        ok: false,
-        error: error instanceof Error ? error.message : 'Execution setup failed',
-        errorCode: 'execution_run_failed',
-      });
+      return beforeStart(executionRunSetupFailure(error));
     }
 
     try {
@@ -1021,11 +1028,9 @@ export function createExecutionRunRpcActionExecutor(
       try {
         await params.context.resolveAccountSettings?.();
       } catch (error) {
-        if (actionId !== 'execution.run.start') throw error;
+        if (!isAgentStartActionV1(actionId)) throw error;
         return {
-          ok: false,
-          errorCode: 'execution_run_failed',
-          error: error instanceof Error ? error.message : 'Execution setup failed',
+          ...executionRunSetupFailure(error),
           details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated'),
         };
       }

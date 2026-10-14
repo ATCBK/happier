@@ -113,6 +113,7 @@ type NativeAgentRunUsagePublisher = Readonly<{
 type NativeAgentSessionContextLease = Readonly<{
     context: AgentSessionRuntimeContext;
     mcpServers?: AgentSessionOpenRequest['mcpServers'];
+    mcpServersStrictMode?: AgentSessionOpenRequest['mcpServersStrictMode'];
     mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
     subscribeMcpToolPolicy?: (listener: (policy: NonNullable<AgentSessionOpenRequest['mcpToolPolicy']>) => void) => () => void;
     skills?: AgentSessionOpenRequest['skills'];
@@ -146,6 +147,7 @@ export type NativeAgentSessionContextLeaseFactory = ((params: Readonly<{
 type NativeAgentExecutionRunContextLease = Readonly<{
     context: AgentExecutionRunRuntimeContextV1;
     mcpServers?: AgentSessionOpenRequest['mcpServers'];
+    mcpServersStrictMode?: AgentSessionOpenRequest['mcpServersStrictMode'];
     mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
     skills?: AgentSessionOpenRequest['skills'];
     skillIndex?: string;
@@ -389,6 +391,7 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
         let context: AgentExecutionRunRuntimeContextV1;
         let mcpMaterial: Awaited<ReturnType<typeof materializeMcpServerConfigRecord>> | null = null;
         let mcpServers: AgentSessionOpenRequest['mcpServers'];
+        let mcpServersStrictMode: AgentSessionOpenRequest['mcpServersStrictMode'];
         let mcpToolPolicy: AgentSessionOpenRequest['mcpToolPolicy'];
         try {
             if (params.capabilitySelection?.mcp && (params.capabilitySelection.mcp.managedServersEnabled || params.capabilitySelection.mcp.forceIncludeServerIds.length > 0)) {
@@ -436,6 +439,7 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
                 const identities = { mcpServerIdentities: Object.fromEntries(Object.entries(selected.mcpServerIdentities)
                     .filter(([name]) => Object.hasOwn(mcpMaterial!.mcpServers, name))) };
                 mcpServers = await resolveAgentSessionMcpLaunchConfigs(mcpMaterial.mcpServers, params.start, signal);
+                mcpServersStrictMode = selected.strictMode;
                 resolvedRunMcpServers = projectResolvedMcpServers({ mcpServers: mcpMaterial.mcpServers,
                     identities: identities.mcpServerIdentities, scope: { executionRunId: runId, directory: params.directory } });
                 const capturedMcpAccount = params.resolveAccountSettingsSnapshot?.readOperationContext?.();
@@ -495,6 +499,7 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
         return Object.freeze({
             context,
             ...(mcpServers ? { mcpServers } : {}),
+            ...(mcpServersStrictMode !== undefined ? { mcpServersStrictMode } : {}),
             ...(mcpToolPolicy ? { mcpToolPolicy } : {}),
             async dispose() {
                 try {
@@ -1105,6 +1110,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                 ...(request.kind === 'create' ? { input: withRunSkillIndex(request.input, executionRunContextLease?.skillIndex) } : {}),
                 ...(executionRunContextLease?.mcpServers ? { mcpServers: executionRunContextLease.mcpServers } : {}),
                 ...(executionRunContextLease?.mcpToolPolicy ? { mcpToolPolicy: executionRunContextLease.mcpToolPolicy } : {}),
+                ...(executionRunContextLease?.mcpServersStrictMode !== undefined ? { mcpServersStrictMode: executionRunContextLease.mcpServersStrictMode } : {}),
                 ...(executionRunContextLease?.skills ? { skills: executionRunContextLease.skills } : {}),
             };
             try {
@@ -1429,6 +1435,7 @@ export function createNativeAgentSessionExecutionRunHostRuntime(params: Readonly
                             ...(request.kind === 'create' ? { input: withRunSkillIndex(request.input, sessionContext.skillIndex) } : {}),
                             ...(sessionContext.mcpServers ? { mcpServers: sessionContext.mcpServers } : {}),
                             ...(sessionContext.mcpToolPolicy ? { mcpToolPolicy: sessionContext.mcpToolPolicy } : {}),
+                            ...(sessionContext.mcpServersStrictMode !== undefined ? { mcpServersStrictMode: sessionContext.mcpServersStrictMode } : {}),
                             ...(sessionContext.skills ? { skills: sessionContext.skills } : {}),
                         },
                         sessionId: sessionContext.context.session.id,
@@ -1630,6 +1637,7 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                 cwd: params.options.cwd,
                 ...(sessionContext.mcpServers ? { mcpServers: sessionContext.mcpServers } : {}),
                 ...(sessionContext.mcpToolPolicy ? { mcpToolPolicy: sessionContext.mcpToolPolicy } : {}),
+                ...(sessionContext.mcpServersStrictMode !== undefined ? { mcpServersStrictMode: sessionContext.mcpServersStrictMode } : {}),
                 ...(sessionContext.skills ? { skills: sessionContext.skills } : {}),
                 stateSharing: resolveNativeAgentSessionStateSharingPolicy(params.lease.agentId),
                 ...(launchEnvironment ? { launchEnvironment } : {}),

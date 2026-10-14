@@ -55,6 +55,8 @@ export type AgentRuntimeContext = PluginInvocationContext & Readonly<{
 export type AgentSessionHookProviderPayload = Readonly<Record<string, unknown>>;
 
 export type AgentSessionHookServerStartRequest = Readonly<{
+  /** Ephemeral resources for one execution; omission preserves the host's Session retention. */
+  lifetime?: 'invocation';
   onSessionHook?: (providerSessionId: string, data: AgentSessionHookProviderPayload) => void | Promise<void>;
   onPermissionHook?: (data: AgentSessionHookProviderPayload) => unknown | Promise<unknown>;
   onStatuslineUpdate?: (data: AgentSessionHookProviderPayload) => void | Promise<void>;
@@ -89,6 +91,7 @@ export type AgentSessionHookPluginFile =
   | Readonly<{ path: string; contents: string; json?: never }>;
 
 export type AgentSessionHookPluginDirCreateRequest = Readonly<{
+  lifetime?: 'invocation';
   files: readonly AgentSessionHookPluginFile[];
 }>;
 
@@ -389,6 +392,12 @@ export type AgentTerminalHostService = Readonly<{
   injectUserPrompt(handle: TerminalHostHandle, input: TerminalPromptInput): Promise<TerminalInputInjectionResult>;
   interruptTurn(handle: TerminalHostHandle): Promise<void>;
   evaluateLiveness(handle: TerminalHostHandle): Promise<TerminalHostLivenessV1>;
+  /** Observe the owned child once it exits; null means this host has no exit source.
+   * Wrapper exit alone does not prove native provider closure. */
+  subscribeExit?(
+    handle: TerminalHostHandle,
+    listener: (exit: Readonly<{ code: number | null; signal: string | null; nativeExited?: true }>) => void,
+  ): Promise<Disposable | null>;
   captureInputState(handle: TerminalHostHandle): Promise<TerminalInputState | null>;
   controlPort(handle: TerminalHostHandle): Promise<TerminalControlPort | null>;
   dispose(handle: TerminalHostHandle, intent: AgentTerminalHostDisposeIntent): Promise<void>;

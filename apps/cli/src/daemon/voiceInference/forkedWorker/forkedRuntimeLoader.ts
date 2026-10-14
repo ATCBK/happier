@@ -43,7 +43,7 @@ export type CreateForkedVoiceInferenceRuntimeHandleParams = Readonly<{
   channelFactory?: VoiceInferenceWorkerChannelFactory;
   onSnapshot?: (snapshot: ForkedVoiceInferenceRuntimeSnapshot) => void;
   loggerDebug?: (message: string, payload?: unknown) => void;
-  /** Test seam around the managed-installable boundary; production acquires the exact CLI voice component. */
+  /** Test seam around the managed-installable boundary; production resolves the canonical Voice runtime. */
   prepareRuntime?: () => Promise<unknown>;
   /** Observe only the exact child owned by this runtime; intended for process-lifecycle tests. */
   onWorkerProcess?: (process: ForkedVoiceInferenceWorkerProcessObservation) => void;

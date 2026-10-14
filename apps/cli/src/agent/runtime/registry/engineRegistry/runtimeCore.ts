@@ -840,6 +840,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                                 ? { mcpServers: runToolBinding.mcpServers }
                                                 : {}),
                                             ...(runToolBinding?.mcpToolPolicy ? { mcpToolPolicy: runToolBinding.mcpToolPolicy } : {}),
+                                            ...(runToolBinding?.mcpServersStrictMode !== undefined ? { mcpServersStrictMode: runToolBinding.mcpServersStrictMode } : {}),
                                             ...(runToolBinding?.subscribeMcpToolPolicy ? { subscribeMcpToolPolicy: runToolBinding.subscribeMcpToolPolicy } : {}),
                                             ...(runToolBinding?.skills ? { skills: runToolBinding.skills } : {}),
                                             ...(runToolBinding?.observeSkillUse ? { observeSkillUse: runToolBinding.observeSkillUse } : {}),

@@ -10,6 +10,7 @@ import {
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { resolveHomeDirFromEnvironment } from '@happier-dev/plugin-sdk/fs';
 import { PluginError } from '@happier-dev/plugin-sdk';
+import { SESSION_CAPABILITY_NOTICE_SIDECAR_KEY } from '@happier-dev/plugin-sdk/sessions';
 import { join } from 'node:path';
 
 import {
@@ -105,6 +106,7 @@ async function openPiSession(
           || join(resolveHomeDirFromEnvironment(launchEnv), '.pi', 'agent');
         const toolPreparation = preparePiHappierToolsExtension({ agentDir,
           ...(config ? { config } : { directory: request.cwd }),
+          mcpServersStrictMode: request.mcpServersStrictMode,
           mcpServers: request.mcpServers, mcpToolPolicy: request.mcpToolPolicy });
         preparedTools = await lifecycle.waitFor(
           toolPreparation,
@@ -130,6 +132,14 @@ async function openPiSession(
           sessionId: request.sessionId,
           eagerStart: true,
           sessionOpenLifecycle: lifecycle,
+          mcpServersStrictMode: request.mcpServersStrictMode,
+          async publishCapabilityNotice(notice) {
+            await context.session.services.transcripts.publishSessionEvent({
+              type: 'message',
+              message: notice.items.map(item => `${item.name} couldn't start · ${item.detail ?? item.code}`).join('\n'),
+              [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: notice,
+            });
+          },
           ...(preparedTools ? { happierToolsExtension: preparedTools } : {}),
         }),
         'provider runtime startup',
@@ -239,6 +249,7 @@ async function openPiExecutionRun(
             || join(resolveHomeDirFromEnvironment(launchEnv), '.pi', 'agent');
           preparedTools = await lifecycle.waitFor(preparePiHappierToolsExtension({
             agentDir, directory: request.cwd,
+            mcpServersStrictMode: request.mcpServersStrictMode,
             mcpServers: request.mcpServers, mcpToolPolicy: request.mcpToolPolicy,
           }), 'MCP tools extension preparation', async lateTools => await lateTools.dispose());
         }
@@ -255,6 +266,7 @@ async function openPiExecutionRun(
             resumeProviderSessionId: request.kind === 'resume' ? request.checkpointId : null,
             eagerStart: true,
             sessionOpenLifecycle: lifecycle,
+            mcpServersStrictMode: request.mcpServersStrictMode,
             ...(preparedTools ? { happierToolsExtension: preparedTools } : {}),
           }),
           'provider runtime startup',

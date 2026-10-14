@@ -1,4 +1,4 @@
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { isDeepStrictEqual } from 'node:util';
 import {
@@ -32,7 +32,14 @@ export type RetainedBundledPluginRoot = Readonly<{
     cacheIdentity: string;
 }>;
 
-/** A pinned runner's attested source may supersede a daemon-current bootstrap source. */
+function resolveRunnerPathSourceRoot(runnerSnapshotIdentity: string): string | null {
+    if (!runnerSnapshotIdentity.startsWith('path:')) return null;
+    const runtimeRoot = runnerSnapshotIdentity.slice('path:'.length);
+    if (basename(runtimeRoot) !== 'cli' || basename(dirname(runtimeRoot)) !== 'apps') return null;
+    return dirname(dirname(runtimeRoot));
+}
+
+/** A retained runner publication may supersede a daemon-current bootstrap source. */
 export function runnerPinnedBundledCustodyCanSupersedeBootstrap(
     bootstrapCustody: PluginSourceCustodyV1,
     attestedCustody: PluginSourceCustodyV1,
@@ -54,7 +61,7 @@ export function selectRunnerManagedDependencySourceCustody(
         : registeredCustody;
 }
 
-/** The runner's pinned publication owns its bundled Agent declaration and version. */
+/** The runner's retained publication owns its first-party Agent declaration and version. */
 export async function attestFreshRunnerAgentBinding(params: Readonly<{
     binding: AgentSessionRunnerBindingV1;
     paths: PluginStorePaths;
@@ -62,14 +69,46 @@ export async function attestFreshRunnerAgentBinding(params: Readonly<{
     moduleUrl?: string;
 }>): Promise<AgentSessionRunnerBindingV1> {
     const custody = params.binding.sourceCustody;
-    if (
-        custody.kind !== 'bundled_first_party'
-        || custody.packagedRuntime.kind !== 'pinned_runner_snapshot'
-    ) return params.binding;
     const snapshotId = params.runnerSnapshotIdentity.startsWith('snapshot:')
         ? params.runnerSnapshotIdentity.slice('snapshot:'.length)
         : '';
+    const isBundledFirstPartyDevelopmentSource =
+        custody.kind === 'development'
+        && BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.some(
+            ({ pluginId }) => pluginId === params.binding.pluginId,
+        );
+    const isPinnedBundledSource = custody.kind === 'bundled_first_party'
+        && custody.packagedRuntime.kind === 'pinned_runner_snapshot';
+    if (!isBundledFirstPartyDevelopmentSource && !isPinnedBundledSource) {
+        return params.binding;
+    }
     if (!snapshotId || snapshotId.includes('/') || snapshotId.includes('\\')) {
+        if (isBundledFirstPartyDevelopmentSource) {
+            if (!params.runnerSnapshotIdentity.startsWith('path:')) return params.binding;
+            const source = await attestRetainedPluginSource({
+                paths: params.paths,
+                pluginId: params.binding.pluginId,
+                custody,
+                manifestAuthority: 'bundled_first_party',
+                runnerSnapshotIdentity: params.runnerSnapshotIdentity,
+            });
+            if (!source.manifest.contributes.agents.some(
+                (agent) => agent.id === params.binding.localAgentId,
+            )) {
+                throw new Error('Runner Agent development source has no admitted Agent declaration');
+            }
+            if ('kind' in params.binding) {
+                return Object.freeze({ ...params.binding, pluginVersion: source.manifest.version });
+            }
+            const factory = readRetainedBundledAgentFactory(source.manifest, params.binding.localAgentId);
+            return createAgentSessionRunnerFactoryBinding({
+                ...params.binding,
+                pluginVersion: source.manifest.version,
+                locator: factory.locator,
+                normalizedModulePath: factory.normalizedModulePath,
+                loadMode: factory.loadMode,
+            });
+        }
         throw new Error('Runner Agent bundled source has no pinned snapshot identity');
     }
     const runnerCustody = Object.freeze({
@@ -119,6 +158,12 @@ export function retainedAgentSourceMatchesRunner(
     binding: AgentSessionRunnerBindingV1,
 ): boolean {
     const custody = binding.sourceCustody;
+    if (custody.kind === 'development') {
+        const sourceRoot = resolveRunnerPathSourceRoot(runnerSnapshotIdentity);
+        return sourceRoot !== null
+            && BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.some(({ pluginId }) => pluginId === binding.pluginId)
+            && isCanonicalAbsolutePathInsideRoot(sourceRoot, custody.registeredRootId);
+    }
     if (custody.kind !== 'bundled_first_party') return true;
     return custody.packagedRuntime.kind === 'pinned_runner_snapshot'
         ? runnerSnapshotIdentity === `snapshot:${custody.packagedRuntime.snapshotId}`
@@ -137,10 +182,9 @@ export function currentAgentBindingMatchesRetainedRunner(params: Readonly<{
     )) return false;
     const currentCustody = params.currentBinding.sourceCustody;
     const retainedCustody = params.retainedBinding.sourceCustody;
-    if (
-        currentCustody.kind === 'bundled_first_party'
-        && retainedCustody.kind === 'bundled_first_party'
-    ) {
+    if ((currentCustody.kind === 'bundled_first_party' && retainedCustody.kind === 'bundled_first_party')
+        || (retainedCustody.kind === 'development'
+            && BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.some(({ pluginId }) => pluginId === params.retainedBinding.pluginId))) {
         return params.currentBinding.pluginId === params.retainedBinding.pluginId
             && params.currentBinding.agentId === params.retainedBinding.agentId
             && params.currentBinding.localAgentId === params.retainedBinding.localAgentId;
@@ -233,7 +277,8 @@ export async function resolveRetainedBundledPluginRoot(params: Readonly<{
 
 type RetainedPluginSourceCustody =
     | ManagedPluginSourceCustodyV1
-    | BundledFirstPartyPluginSourceCustodyV1;
+    | BundledFirstPartyPluginSourceCustodyV1
+    | Extract<PluginSourceCustodyV1, Readonly<{ kind: 'development' }>>;
 
 export type RetainedPluginSourceAttestation = Readonly<{
     rootPath: string;
@@ -247,12 +292,13 @@ export type RetainedPluginSourceAttestation = Readonly<{
     assertStillAvailable(): Promise<void>;
 }>;
 
-/** Attests restart-stable managed or bundled custody without interpreting a contribution family. */
+/** Attests restart-stable managed or first-party runner custody without interpreting a contribution family. */
 export async function attestRetainedPluginSource(params: Readonly<{
     paths: PluginStorePaths;
     pluginId: string;
     custody: RetainedPluginSourceCustody;
     manifestAuthority?: 'external' | 'bundled_first_party';
+    runnerSnapshotIdentity?: string;
     resolveBundledPluginRoot?: typeof resolveRetainedBundledPluginRoot;
 }>): Promise<RetainedPluginSourceAttestation> {
     const generation = params.custody.kind === 'managed'
@@ -270,6 +316,21 @@ export async function attestRetainedPluginSource(params: Readonly<{
             custody: params.custody,
         })
         : null;
+    const developmentRoot = params.custody.kind === 'development'
+        ? await realpath(params.custody.registeredRootId)
+        : null;
+    const runnerSourceRoot = params.custody.kind === 'development'
+        ? resolveRunnerPathSourceRoot(params.runnerSnapshotIdentity ?? '')
+        : null;
+    if (developmentRoot) {
+        const canonicalRunnerSourceRoot = runnerSourceRoot ? await realpath(runnerSourceRoot) : null;
+        if (!canonicalRunnerSourceRoot
+            || params.manifestAuthority !== 'bundled_first_party'
+            || !BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.some(({ pluginId }) => pluginId === params.pluginId)
+            || !isCanonicalAbsolutePathInsideRoot(canonicalRunnerSourceRoot, developmentRoot)) {
+            throw new Error('Retained first-party development source does not belong to the runner path');
+        }
+    }
     if (generation) {
         await assertContainedRegularGenerationFile(
             generation.rootPath,
@@ -277,8 +338,8 @@ export async function attestRetainedPluginSource(params: Readonly<{
             'Retained plugin generation manifest',
         );
     }
-    const rootPath = await realpath(generation?.rootPath ?? bundledRoot!.rootPath);
-    const manifestAuthority = params.custody.kind === 'bundled_first_party'
+    const rootPath = await realpath(generation?.rootPath ?? bundledRoot?.rootPath ?? developmentRoot!);
+    const manifestAuthority = params.custody.kind === 'bundled_first_party' || params.custody.kind === 'development'
         ? 'bundled_first_party' as const
         : params.manifestAuthority ?? 'external' as const;
     const manifest = await readPluginManifest({
@@ -295,7 +356,7 @@ export async function attestRetainedPluginSource(params: Readonly<{
         rootPath,
         cacheIdentity: generation
             ? `managed:${generation.record.immutableGenerationId}`
-            : bundledRoot!.cacheIdentity,
+            : bundledRoot?.cacheIdentity ?? `development:${params.runnerSnapshotIdentity}:${rootPath}`,
         manifestAuthority,
         manifest: manifest.manifest,
         managedGeneration: generation,
@@ -310,10 +371,18 @@ export async function attestRetainedPluginSource(params: Readonly<{
                 }
                 return;
             }
-            const resolved = await (params.resolveBundledPluginRoot
-                ?? resolveRetainedBundledPluginRoot)({
-                pluginId: params.pluginId,
-                custody: params.custody as BundledFirstPartyPluginSourceCustodyV1,
+            if (params.custody.kind === 'development') {
+                const currentRoot = await realpath(params.custody.registeredRootId);
+                const currentRunnerSourceRoot = resolveRunnerPathSourceRoot(params.runnerSnapshotIdentity ?? '');
+                if (!currentRunnerSourceRoot
+                    || currentRoot !== rootPath
+                    || !isCanonicalAbsolutePathInsideRoot(await realpath(currentRunnerSourceRoot), currentRoot)) {
+                    throw new Error('Retained first-party development source changed during attestation');
+                }
+                return;
+            }
+            const resolved = await (params.resolveBundledPluginRoot ?? resolveRetainedBundledPluginRoot)({
+                pluginId: params.pluginId, custody: params.custody,
             });
             if (
                 resolved.cacheIdentity !== bundledRoot!.cacheIdentity

@@ -4,6 +4,16 @@ import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import { applySessionRuntimeControls } from './sessionRuntimeControls';
 
 describe('applySessionRuntimeControls', () => {
+  it('retains applied child selection through control installation and withdraws it on retirement', async () => {
+    const target: Partial<SessionRuntimeControls> = {};
+    const applied = { status: 'applied' as const,
+      backendTarget: { kind: 'backend' as const, backendId: 'acme/parent' },
+      modelId: 'parent-applied-model', connectedServices: null };
+    applySessionRuntimeControls(target, { readAppliedChildSelection: async () => applied });
+    expect(await target.readAppliedChildSelection?.()).toEqual(applied);
+    applySessionRuntimeControls(target, null);
+    expect(target.readAppliedChildSelection).toBeUndefined();
+  });
   it('copies and clears generic connected-service auth controls', () => {
     const target: Partial<SessionRuntimeControls> = {
       applyConnectedServiceAuthGeneration: vi.fn(),

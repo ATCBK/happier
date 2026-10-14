@@ -23,6 +23,7 @@ export type RuntimeOverrideTarget = Readonly<{
 }>;
 
 export type RuntimeOverrideSynchronizers = Readonly<{
+  dispose?: () => Promise<void>;
   syncFromMetadata: () => void;
   flushPendingAfterStart: () => Promise<void>;
   flushAfterSettledTurn?: (turnId?: string) => Promise<void>;
@@ -186,6 +187,7 @@ export function createRuntimeOverrideSynchronizers(params: Readonly<{
   };
 
   return {
+    dispose: async () => { await capabilitySync?.dispose(); },
     syncFromMetadata: () => {
       capabilitySync?.syncFromMetadata();
       modelSync.syncFromMetadata();

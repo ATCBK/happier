@@ -288,7 +288,7 @@ it('reuses the admitted prompt route and observed catalog instead of the unavail
   expect(catalogReads).toBe(0);
 });
 
-it('withdraws cached private prompt facts when its admitted Account catalog changes during a document read', async () => {
+it('keeps admitted prompt facts when the same Account catalog changes during a document read', async () => {
   catalogReadAvailable = true;
   await resolver(true, false);
   const { getActiveAccountSettingsSnapshot, commitActivePromptLibraryCatalog,
@@ -304,21 +304,18 @@ it('withdraws cached private prompt facts when its admitted Account catalog chan
     commitActivePromptLibraryCatalog({ scopeKey: snapshot.scopeKey!, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
       catalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] } });
   };
-  await expect(prepare({ baseOverride: 'CONTEXT_BASE' })).rejects.toMatchObject({
-    code: 'context_source_unavailable', status: 'preparation_pending',
-  });
-  expect(prepare.readCodingPromptBehavior?.()).toBeNull();
-  expect(prepare.readComposition?.()).toBeNull();
-  expect(prepare.readStartupInstructions?.()).toBeNull();
+  expect(await prepare({ baseOverride: 'CONTEXT_BASE' })).toContain('CONTEXT_ACCOUNT');
+  expect(prepare.readCodingPromptBehavior?.()).not.toBeNull();
+  expect(prepare.readComposition?.()).not.toBeNull();
+  expect(prepare.readStartupInstructions?.()?.instructions).toContain('CONTEXT_ACCOUNT');
 });
 
-async function withdrawAdmittedPromptCatalog() {
-  const { getActiveAccountSettingsSnapshot, commitActivePromptLibraryCatalog,
-    getActiveAccountSettingsSnapshotLifetimeToken } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
+async function retireAdmittedPromptAccount() {
+  const { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
+  const { resolveAccountSettingsScopeKey } = await import('@/settings/accountSettings/accountSettingsScopeKey');
   const snapshot = getActiveAccountSettingsSnapshot();
   if (!snapshot?.scopeKey) throw new Error('Account was not admitted');
-  commitActivePromptLibraryCatalog({ scopeKey: snapshot.scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
-    catalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] } });
+  setActiveAccountSettingsSnapshot({ ...snapshot, scopeKey: resolveAccountSettingsScopeKey({ token: 'replacement-account', encryption: null }) });
 }
 
 it('keeps a ready-empty plan current without a native startup instruction marker', async () => {
@@ -335,7 +332,7 @@ it('keeps a ready-empty plan current without a native startup instruction marker
   expect(prepare.readCodingPromptBehavior?.()).not.toBeNull();
 });
 
-it('refuses native open when the real prepared plan is withdrawn during open attestation', async () => {
+it('refuses native open when the prepared Account lifetime retires during open attestation', async () => {
   const prepare = await resolver(true, false);
   const { createNativeAgentRuntimeSessionPlanFixture: createNativeAgentRuntimeSessionPlan } = await import('@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit');
   const { createSessionHostServiceOwners } = await import('@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit');
@@ -361,7 +358,9 @@ it('refuses native open when the real prepared plan is withdrawn during open att
         startupInstructions: { versions: [1], revisionChanges: 'resume' } } },
     }] } }), files: {
       'daemon.mjs': `import { createRuntime } from './runtime.mjs';
-        export function activate(api) { api.agents.register('fixture', createRuntime); }`,
+        export function activate(api) { api.agents.register('fixture', createRuntime, {
+          sessionRunnerFactory: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 }
+        }); }`,
       'runtime.mjs': `import { appendFile } from 'node:fs/promises';
         export async function createRuntime() { return { sessions: { async open() {
           await appendFile(${JSON.stringify(openedPath)}, 'opened\\n');
@@ -374,12 +373,14 @@ it('refuses native open when the real prepared plan is withdrawn during open att
   try {
     const lease = fixture.registry.agentRuntimesByAgentId.get(agentId);
     const agent = fixture.registry.contributes.agentDefinitionsById.get(agentId);
-    if (!lease?.hasPrimaryRuntime || !agent) throw new Error('Expected current authored Agent admission');
+    if (!lease?.hasPrimaryRuntime || !agent) {
+      throw new Error(`Expected current authored Agent admission: ${JSON.stringify(fixture.registry.pluginDiagnosticsByPluginId[pluginId] ?? [])}`);
+    }
     const plan = await createNativeAgentRuntimeSessionPlan({
       runtime: await lease.createRuntime({ signal: generation.signal }), lease, agent,
       backend: projectEngineRuntimeContributionFromAgent(agent, agentId), generationSignal: generation.signal,
       createSessionHostServiceOwners,
-      attestSessionOpen: async ({ phase }) => { if (phase === 'prepare') await withdrawAdmittedPromptCatalog(); },
+      attestSessionOpen: async ({ phase }) => { if (phase === 'prepare') await retireAdmittedPromptAccount(); },
       sessionInput: buildPluginSessionBindingInput({ credentials, directory: '/tmp/project' }),
     });
     if (!plan.config.createSessionRuntime) throw new Error('Expected native Session construction');

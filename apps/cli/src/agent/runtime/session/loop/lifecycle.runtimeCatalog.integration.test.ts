@@ -345,7 +345,7 @@ describe('runSessionLoopLifecycle presence renewal', () => {
       await run;
     }
   });
-  it('parks idle until the configured renewal deadline and retires renewal on disposal', async () => {
+  it('suppresses duplicate idle publication and leaves renewal to the Session transport', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const initialTime = Date.now();
@@ -353,19 +353,9 @@ describe('runSessionLoopLifecycle presence renewal', () => {
       runPermissionModePromptLoopFn: async (loopParams) => {
         expect(params.session.keepAlive).toHaveBeenCalledWith(false, 'remote');
         loopParams.keepAlive(); // A duplicate immediate publication must not move the lease deadline.
-        await vi.advanceTimersToNextTimerAsync();
-        expect(Date.now()).toBe(initialTime + configuration.sessionKeepAliveIdleMs);
-        expect(params.session.keepAlive).toHaveBeenCalledTimes(2);
-        await vi.advanceTimersToNextTimerAsync();
+        await vi.advanceTimersByTimeAsync(2 * configuration.sessionKeepAliveIdleMs);
         expect(Date.now()).toBe(initialTime + 2 * configuration.sessionKeepAliveIdleMs);
-        expect(params.session.keepAlive).toHaveBeenCalledTimes(3);
-        // A wall-clock correction must not suppress and permanently retire the next lease renewal.
-        vi.setSystemTime(Date.now() - 2 * configuration.sessionKeepAliveIdleMs);
-        await vi.advanceTimersToNextTimerAsync();
-        expect(params.session.keepAlive).toHaveBeenCalledTimes(4);
-        vi.setSystemTime(Date.now() - configuration.sessionKeepAliveIdleMs + 1);
-        await vi.advanceTimersToNextTimerAsync();
-        expect(params.session.keepAlive).toHaveBeenCalledTimes(5);
+        expect(params.session.keepAlive).toHaveBeenCalledTimes(1);
       },
     });
     try {
@@ -373,13 +363,13 @@ describe('runSessionLoopLifecycle presence renewal', () => {
         ...params, deps: { ...params.deps, cleanupBackendRunResourcesFn: cleanupBackendRunResources },
       });
       await vi.advanceTimersByTimeAsync(2 * configuration.sessionKeepAliveIdleMs);
-      expect(params.session.keepAlive).toHaveBeenCalledTimes(5);
+      expect(params.session.keepAlive).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('publishes host thinking transitions immediately and renews at the resulting cadence', async () => {
+  it('publishes host thinking transitions immediately without a competing renewal timer', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const params = createLifecycleParams({
@@ -388,15 +378,15 @@ describe('runSessionLoopLifecycle presence renewal', () => {
         loopParams.setThinking(true);
         expect(params.session.keepAlive).toHaveBeenLastCalledWith(true, 'remote');
         const thinkingStartedAt = Date.now();
-        await vi.advanceTimersToNextTimerAsync();
+        await vi.advanceTimersByTimeAsync(configuration.sessionKeepAliveThinkingMs);
         expect(Date.now()).toBe(thinkingStartedAt + configuration.sessionKeepAliveThinkingMs);
-        expect(params.session.keepAlive).toHaveBeenCalledTimes(3);
+        expect(params.session.keepAlive).toHaveBeenCalledTimes(2);
         loopParams.setThinking(false);
         expect(params.session.keepAlive).toHaveBeenLastCalledWith(false, 'remote');
         const settledAt = Date.now();
-        await vi.advanceTimersToNextTimerAsync();
+        await vi.advanceTimersByTimeAsync(configuration.sessionKeepAliveIdleMs);
         expect(Date.now()).toBe(settledAt + configuration.sessionKeepAliveIdleMs);
-        expect(params.session.keepAlive).toHaveBeenCalledTimes(5);
+        expect(params.session.keepAlive).toHaveBeenCalledTimes(3);
       },
     });
     try {
@@ -404,7 +394,7 @@ describe('runSessionLoopLifecycle presence renewal', () => {
         ...params, deps: { ...params.deps, cleanupBackendRunResourcesFn: cleanupBackendRunResources },
       });
       await vi.advanceTimersByTimeAsync(configuration.sessionKeepAliveThinkingMs);
-      expect(params.session.keepAlive).toHaveBeenCalledTimes(5);
+      expect(params.session.keepAlive).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }
@@ -1755,6 +1745,9 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
   });
 
   it.each(['native', 'http'] as const)('settles a %s Browser tool when the real host Stop cancels its containing turn', async entrypoint => {
+    // Session policy must retain its reviewed waiver despite the launching
+    // process's standalone CLI policy.
+    vi.stubEnv('HAPPIER_ACTIONS_SETTINGS_V1', JSON.stringify({ v: 1, actions: {} }));
     const lease = await pluginReloadController.acquireRuntimeRegistry({
       resolveRuntimeRegistry: async () => await resolveExecutablePluginRuntimeRegistry({
         contributes: getResolvedContributionRegistry(), pluginIds: [],
@@ -1897,6 +1890,7 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
       release(); terminate?.({ kind: 'killSession' }); await pending?.catch(() => undefined); await running;
       await mcpClient?.close(); mcpServer?.stop();
       vi.restoreAllMocks(); await lease.release();
+      vi.unstubAllEnvs();
     }
   });
 
@@ -2437,7 +2431,7 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
     );
   });
 
-  it('projects turn-failed runtime issues into visible durable diagnostics when no assistant text was committed', async () => {
+  it.each(['turn-failed', 'input-rejected'] as const)('projects %s runtime issues into visible durable diagnostics when no assistant text was committed', async kind => {
     const baseParams = createLifecycleParams({ policyAgentId: 'opencode' });
     let runtimeEventHandler: RuntimeTurnMessageHandler | null = null;
     const session = baseParams.session as unknown as {
@@ -2460,7 +2454,7 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
       deps: {
         ...baseParams.deps,
         runPermissionModePromptLoopFn: vi.fn(async () => {
-          runtimeEventHandler?.(canonicalRuntimeEvent({
+          if (kind === 'turn-failed') runtimeEventHandler?.(canonicalRuntimeEvent({
             kind: 'turn-start',
             sessionId: 'session-1',
             emittedAtMs: 1,
@@ -2468,10 +2462,10 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
             startedBy: 'host',
           }));
           runtimeEventHandler?.(canonicalRuntimeEvent({
-            kind: 'turn-failed',
+            kind,
             sessionId: 'session-1',
             emittedAtMs: 2,
-            turnId: 'turn-1',
+            ...(kind === 'turn-failed' ? { turnId: 'turn-1' } : { inputIds: ['turn-1'], retryable: true }),
             diagnostic: {
               code: 'opencode_empty_provider_response',
               severity: 'error',
@@ -2489,17 +2483,22 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
       'opencode',
       {
         type: 'message',
-        message: expect.stringContaining('Provider session failed'),
+        message: expect.stringContaining('OpenCode completed provider tool work'),
       },
       {
         localId: 'turn-1:runtime_issue',
         meta: expect.objectContaining({
-          runtimeIssueCode: 'agent_session_error',
+          runtimeIssueCode: 'opencode_empty_provider_response',
           runtimeIssueSource: 'agent_session_error',
         }),
         provenance: { kind: 'non_dependent', source: 'background' },
       },
     );
+    if (kind === 'input-rejected') {
+      expect(session.enqueueAgentMessageCommitted).not.toHaveBeenCalledWith('opencode', expect.objectContaining({ type: 'turn_failed' }), expect.anything());
+      expect(session.enqueueSessionTurnMutation).not.toHaveBeenCalled();
+      return;
+    }
     expect(session.enqueueAgentMessageCommitted).toHaveBeenCalledWith(
       'opencode',
       { type: 'turn_failed', id: 'turn-1' },
@@ -2507,7 +2506,7 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
         localId: 'turn-1:turn_failed',
         meta: expect.objectContaining({
           source: 'runtime',
-          runtimeIssueCode: 'agent_session_error',
+          runtimeIssueCode: 'opencode_empty_provider_response',
         }),
         provenance: { kind: 'non_dependent', source: 'background' },
       },
@@ -2516,7 +2515,7 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
       action: 'fail',
       turnId: 'turn-1',
       issue: expect.objectContaining({
-        code: 'agent_session_error',
+        code: 'opencode_empty_provider_response',
       }),
     }));
   });
@@ -2682,7 +2681,7 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
     );
   });
 
-  it('does not add a generic runtime diagnostic when the runtime already streamed assistant text before failing', async () => {
+  it('retains the failure cause when the runtime streamed a partial answer before failing', async () => {
     const baseParams = createLifecycleParams({ policyAgentId: 'cursor' });
     let runtimeEventHandler: RuntimeTurnMessageHandler | null = null;
     const session = baseParams.session as unknown as {
@@ -2749,11 +2748,11 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
         }),
       }),
     );
-    expect(session.enqueueAgentMessageCommitted).not.toHaveBeenCalledWith(
+    expect(session.enqueueAgentMessageCommitted).toHaveBeenCalledWith(
       'cursor',
       expect.objectContaining({
         type: 'message',
-        message: expect.stringContaining('turn failed'),
+        message: expect.stringContaining('Cursor failed after streaming partial output'),
       }),
       expect.objectContaining({ localId: 'turn-3:runtime_issue' }),
     );

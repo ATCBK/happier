@@ -382,7 +382,7 @@ function normalizeExecutionRunStartFailureDetails(
     value: unknown,
 ): ExecutionRunStartFailureDetailsV1 {
     return withExecutionRunStartFailureDetails(
-        undefined,
+        value,
         readExecutionRunStartRunCreation(value),
     );
 }

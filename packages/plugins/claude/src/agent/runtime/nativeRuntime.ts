@@ -139,6 +139,7 @@ type ClaudeNativePromptCustodyOperations =
 export type ClaudeNativeSessionOperations = ClaudeRuntimeTurnOperations & Readonly<{
   refreshSkills?: AgentSessionRuntime['refreshSkills'];
   prepareTerminalPresentation?: AgentSessionRuntime['prepareTerminalPresentation'];
+  observeTerminalExecution?: AgentSessionRuntime['observeTerminalExecution'];
   supportsEffort?: boolean;
   observeSourceTranscript?: AgentSessionRuntime['observeSourceTranscript'];
   subscribeEffectiveModel?: ClaudeEffectiveModelEvidenceSubscription;
@@ -654,6 +655,7 @@ export function createClaudeNativeSessionRuntimeFromOperations(
         },
         source: observation.source,
         scope: observation.scope,
+        ...(observation.scope === 'turn_delta' && observation.turnId ? { turnId: observation.turnId } : {}),
         ...(observation.modelId ? { modelId: observation.modelId } : {}),
         tokens: observation.tokens,
         ...(observation.cost ? { cost: observation.cost } : {}),
@@ -751,6 +753,10 @@ export function createClaudeNativeSessionRuntimeFromOperations(
         if (disposed) throw new Error('Claude runtime is disposed.');
         return await operations.prepareTerminalPresentation!(presentationRequest);
       },
+    } : {}),
+    ...(operations.observeTerminalExecution ? {
+      observeTerminalExecution: (input: Parameters<NonNullable<AgentSessionRuntime['observeTerminalExecution']>>[0]) =>
+        operations.observeTerminalExecution!(input),
     } : {}),
     ...(runtimeDescriptorV1 ? { runtimeDescriptorV1 } : {}),
     ...(operations.observeSourceTranscript ? {

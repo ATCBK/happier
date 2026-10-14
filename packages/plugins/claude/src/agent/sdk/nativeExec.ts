@@ -31,9 +31,11 @@ function decode(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
 
-function toClaudeSdkExecResult(result: PluginProcessResult): ClaudeSdkExecResult {
+function toClaudeSdkExecResult(result: PluginProcessResult, providerExitOwnership: 'direct' | undefined): ClaudeSdkExecResult {
   const observed = result.termination.observed;
   return {
+    ...(providerExitOwnership === 'direct' && (observed.kind === 'exit' || observed.kind === 'signal')
+      ? { providerStopped: true as const } : {}),
     exitCode: observed.kind === 'exit' ? observed.exitCode : null,
     signal: observed.kind === 'signal' ? observed.signal : null,
     stdout: decode(result.stdout),
@@ -69,7 +71,7 @@ export function createClaudeNativeSdkQueryContext(exec: ExecService, reportArtif
       let status: 'running' | 'exited' | 'disposed' = 'running';
       const exit = handle.wait().then((result) => {
         status = 'exited';
-        return toClaudeSdkExecResult(result);
+        return toClaudeSdkExecResult(result, resolvedExecutable.providerExitOwnership);
       });
       const client: ClaudeSdkJsonStreamClient = {
         closed: exit.then(() => undefined),

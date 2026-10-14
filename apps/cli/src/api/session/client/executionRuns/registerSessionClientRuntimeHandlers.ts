@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createRunnerExecutionRunSnapshotResolver } from '@/agent/runtime/session/process/runnerExecutionRunSnapshot';
 
 import { resolveAgentIdFromSessionMetadata, resolvePermissionIntentFromSessionMetadata } from '@happier-dev/agents';
 import { parseSessionPermissionModeAlias } from '@happier-dev/protocol/sessions/metadata/permission-modes';
@@ -142,6 +143,8 @@ export function registerSessionClientRuntimeHandlers(
         actionsSettingsProvider?: RuntimeActionSettingsProvider;
         metadataPath: string;
         metadata: unknown;
+        /** Machine already bound by the hosting Session's transport composition. */
+        localMachineId?: string | null;
         sessionId: string;
         session?: RunnerMcpSessionWithContext<ApiSessionClient>;
         getSessionMetadata: () => Metadata | null;
@@ -276,9 +279,13 @@ export function registerSessionClientRuntimeHandlers(
         : { mode: 'e2ee' as const, dataEncryptionKey: transcriptQueryContext.encryptionKey };
     const parentProvider = resolveSessionClientParentProvider(params.metadata);
     const workingDirectory = params.metadataPath ?? process.cwd();
-    const sessionMachineId = typeof (params.metadata as { machineId?: unknown })?.machineId === 'string'
+    const metadataMachineId = typeof (params.metadata as { machineId?: unknown })?.machineId === 'string'
         ? (params.metadata as { machineId: string }).machineId.trim()
         : '';
+    const currentMetadataMachineId = params.getSessionMetadata()?.machineId;
+    const sessionMachineId = params.localMachineId?.trim()
+        || (typeof currentMetadataMachineId === 'string' ? currentMetadataMachineId.trim() : '')
+        || metadataMachineId;
     const parentSessionForTools = params.session;
     const accountVoiceFollowReconciler = parentSessionForTools && runtimeAccountId
         ? createSessionFollowContextReconciler({
@@ -323,14 +330,9 @@ export function registerSessionClientRuntimeHandlers(
         savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[];
         signal?: AbortSignal;
     }>) => {
-        try {
-            const snapshot = await ownerAccountSnapshots(input);
-            ownerAccountOperationContext = ownerAccountSnapshots.readOperationContext() ?? undefined;
-            return snapshot;
-        } catch (error) {
-            if (error && typeof error === 'object' && 'code' in error && error.code === 'provider_authorization_changed') return null;
-            throw error;
-        }
+        const snapshot = await ownerAccountSnapshots(input);
+        ownerAccountOperationContext = ownerAccountSnapshots.readOperationContext() ?? undefined;
+        return snapshot;
     }, { readOperationContext: ownerAccountSnapshots.readOperationContext });
     const resolveOwnerAccountSettings = async (): Promise<AccountSettings | null> => {
         return (await resolveOwnerAccountSettingsSnapshot())?.settings ?? null;
@@ -538,6 +540,7 @@ export function registerSessionClientRuntimeHandlers(
                     ? renderSkillIndexV1(runSkills.indexItems, params.sessionId) : '';
                 return {
                     ...(mcpServers ? { mcpServers } : {}),
+                    ...(resolved.mcpServersStrictMode !== undefined ? { mcpServersStrictMode: resolved.mcpServersStrictMode } : {}),
                     mcpServerIdentities: resolved.mcpServerIdentities,
                     resolvedMcpServers: resolved.resolvedServers,
                     ...(mcpToolPolicy ? { mcpToolPolicy } : {}),
@@ -897,6 +900,8 @@ export function registerSessionClientRuntimeHandlers(
 
     registerExecutionRunHandlers(params.rpcHandlerManager, {
         sessionId: params.sessionId,
+        resolveExecutionRunProfileCatalog: createRunnerExecutionRunSnapshotResolver({ sessionId: params.sessionId,
+          ...(sessionMachineId ? { machineId: sessionMachineId } : {}) }),
         readPromptCredentials: readOwnerAccountCredentials,
         readModelProjection: createAccountScopedProviderModelProjectionReader({ serverUrl: params.serverUrl,
             readCredentials: readOwnerAccountCredentials, readAccountSettingsSnapshot: resolveOwnerAccountSettingsSnapshot,

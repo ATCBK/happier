@@ -196,6 +196,7 @@ export type RuntimeTurnOperations = Readonly<{
    * Session identity publication remains owned by provider acceptance.
    */
   prepareTerminalPresentation?: AgentSessionRuntime['prepareTerminalPresentation'];
+  observeTerminalExecution?: AgentSessionRuntime['observeTerminalExecution'];
   readSessionIdentity: () => RuntimeTurnSessionIdentity;
   updateSessionRuntimeConfig: (update: RuntimeTurnConfigUpdate) => Promise<RuntimeConfigUpdateOutcomeV1 | void>;
   resetOrDisposeRuntime: (

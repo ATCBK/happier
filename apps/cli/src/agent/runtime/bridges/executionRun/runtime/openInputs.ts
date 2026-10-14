@@ -35,6 +35,12 @@ export type ResolvedExecutionRunChildSelection = Readonly<{
     inheritedFromDifferentAgent: boolean;
 }>;
 
+export function readExecutionRunAppliedParentModelId(parent: ExecutionRunAppliedParentSelection): string | null {
+    return parent.status === 'applied'
+        ? parent.teamCredentialModel?.modelId ?? parent.modelSelection?.modelId ?? parent.modelId
+        : null;
+}
+
 function childSelectionRefusal(code: 'execution_run_parent_selection_unavailable' | 'execution_run_child_choice_required', message: string) {
     return Object.assign(createExecutionRunCodedError(code, message), { code });
 }
@@ -79,6 +85,8 @@ export type ExecutionRunChildSelectionInput = Readonly<{
     parent?: ExecutionRunAppliedParentSelection;
     childSelection?: 'agentDefault';
     agentDefaultSelection?: ProviderBoundModelRef | null;
+    /** Host-resolved summary default; ordinary attached children still require applied parent custody. */
+    fallbackSelection?: ProviderBoundModelRef;
 }>;
 
 export function resolveExecutionRunChildSelection(input: ExecutionRunChildSelectionInput): ResolvedExecutionRunChildSelection {
@@ -136,6 +144,10 @@ function resolveExecutionRunChildSelectionInput(input: ExecutionRunChildSelectio
     const parent = input.parent;
     if (!parent || parent.status !== 'applied') {
         if (hasExplicitCredentialRoute && modelId !== undefined) return explicit;
+        if (!hasExplicitCredentialRoute && input.fallbackSelection) {
+            return resolveExecutionRunChildSelectionInput({ ...input, lifecycle: 'independent',
+                modelSelection: { ...input.fallbackSelection, modelId: modelId ?? input.fallbackSelection.modelId } });
+        }
         throw childSelectionRefusal('execution_run_parent_selection_unavailable',
             'The parent applied model and route are unavailable. Choose an explicit child model and route.');
     }
@@ -155,11 +167,15 @@ function resolveExecutionRunChildSelectionInput(input: ExecutionRunChildSelectio
     if (parent.modelSelection && parent.teamCredentialModel) {
         throw childSelectionRefusal('execution_run_parent_selection_unavailable', 'The parent applied route is inconsistent.');
     }
-    const parentModelId = parent.teamCredentialModel?.modelId ?? parent.modelSelection?.modelId ?? parent.modelId;
+    const parentModelId = readExecutionRunAppliedParentModelId(parent);
     const parentModelTargetKey = parent.teamCredentialModel?.agentTargetKey ?? parent.modelSelection?.agentTargetKey;
     if ((parent.modelId !== null && parent.modelId !== parentModelId)
         || (parentModelTargetKey && !areExecutionRunBackendTargetsEqual(parentModelTargetKey, parent.backendTarget))) {
         throw childSelectionRefusal('execution_run_parent_selection_unavailable', 'The parent applied model and route are inconsistent.');
+    }
+    if (!parentModelId && !modelId && input.fallbackSelection) {
+        return resolveExecutionRunChildSelectionInput({ ...input, lifecycle: 'independent',
+            modelSelection: input.fallbackSelection });
     }
     const inheritedTeam = parent.teamCredentialModel
         ? TeamCredentialProviderModelSelectionV1Schema.parse(parent.teamCredentialModel)

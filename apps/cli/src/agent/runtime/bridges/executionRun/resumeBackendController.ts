@@ -119,6 +119,7 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
   profileCatalog?: ExecutionRunProfileContributionCatalog;
   causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1;
   attachRetainedRunSessionInput?: AttachRetainedRunSessionInput;
+  registerRunOccurrence?: (params: Parameters<AttachRetainedRunSessionInput>[0]) => () => void;
 }>): Promise<ExecutionRunEnsureResult> {
   if (args.run.retentionPolicy !== 'resumable') {
     return { ok: false, errorCode: 'execution_run_not_allowed', error: 'Not resumable', resumeFailureKind: 'permanent' };
@@ -188,6 +189,7 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
 
   const resumeCtrl: ExecutionRunBackendController = {
     kind: 'backend',
+    ...(args.profileCatalog ? { profileCatalog: args.profileCatalog } : {}),
     controllerOccurrenceId,
     backend,
     backendSupportsResume: false,
@@ -231,6 +233,10 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
   };
   args.controllers.set(args.runId, resumeCtrl);
   materialization.publishProvisioning();
+  const releaseOccurrence = args.registerRunOccurrence?.({
+    runId: args.runId, sidechainId: args.run.sidechainId, controller: resumeCtrl,
+  });
+  if (releaseOccurrence) resumeCtrl.releaseSessionInputAttachment = async () => releaseOccurrence();
   const isCurrentResumeOccurrence = materialization.isCurrent;
 
   const rollbackProvisionalResume = (): void => {
@@ -325,7 +331,11 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
         sidechainId: args.run.sidechainId,
         controller: resumeCtrl,
       });
-      resumeCtrl.releaseSessionInputAttachment = attachment?.release;
+      const releaseOccurrence = resumeCtrl.releaseSessionInputAttachment;
+      resumeCtrl.releaseSessionInputAttachment = async () => {
+        await releaseOccurrence?.();
+        await attachment?.release();
+      };
     }
     const current = args.runs.get(args.runId)!;
     const preparedRegistration = materialization.readRegistration();

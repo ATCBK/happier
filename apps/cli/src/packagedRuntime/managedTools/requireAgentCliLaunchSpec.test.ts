@@ -79,6 +79,7 @@ describe('requireAgentCliLaunchSpec', () => {
       command: process.execPath,
       args: [expect.stringMatching(/agent_cli_windows_shim_runner\.cjs$/u), shimPath],
     });
+    expect(Reflect.get(launch, 'providerExitOwnership')).toBeUndefined();
   });
 
   it('resolves a managed JS runtime .cmd wrapper to the direct runtime binary on Windows', async () => {
@@ -106,6 +107,7 @@ describe('requireAgentCliLaunchSpec', () => {
     // managed runtime binary (runtime/node.exe), never stay a .cmd shim.
     const launch = requireAgentCliLaunchSpec('gemini');
     expect(launch).toEqual({
+      providerExitOwnership: 'direct',
       source: 'override',
       resolvedPath: agentCliPath,
       command: runtimeBinaryPath,
@@ -145,6 +147,7 @@ describe('requireAgentCliLaunchSpec', () => {
     process.env.HAPPIER_JS_RUNTIME_PATH = runtimePath;
 
     expect(requireAgentCliLaunchSpec('gemini')).toEqual({
+      providerExitOwnership: 'direct',
       source: 'system',
       resolvedPath: agentCliPath,
       command: runtimePath,
@@ -163,6 +166,7 @@ describe('requireAgentCliLaunchSpec', () => {
     delete process.env.HAPPIER_JS_RUNTIME_PATH;
 
     expect(requireAgentCliLaunchSpec('gemini')).toEqual({
+      providerExitOwnership: 'direct',
       source: 'system',
       resolvedPath: agentCliPath,
       command: agentCliPath,
@@ -187,6 +191,7 @@ describe('requireAgentCliLaunchSpec', () => {
     delete process.env.HAPPIER_JS_RUNTIME_PATH;
 
     expect(requireAgentCliLaunchSpec('ohMyPi')).toEqual({
+      providerExitOwnership: 'direct',
       source: 'system',
       resolvedPath: agentCliPath,
       command: bunPath,
@@ -215,6 +220,7 @@ describe('requireAgentCliLaunchSpec', () => {
     delete process.env.HAPPIER_JS_RUNTIME_PATH;
 
     expect(requireAgentCliLaunchSpec('ohMyPi')).toEqual({
+      providerExitOwnership: 'direct',
       source: 'override',
       resolvedPath: agentCliPath,
       command: bunPath,
@@ -233,6 +239,7 @@ describe('requireAgentCliLaunchSpec', () => {
     await writeManagedExecutable(binPath, '#!/bin/sh\necho ok\n');
 
     expect(requireAgentCliLaunchSpec('gemini')).toEqual({
+      providerExitOwnership: 'direct',
       source: 'managed',
       resolvedPath: binPath,
       command: binPath,

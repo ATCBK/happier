@@ -53,6 +53,8 @@ export type { SessionRuntimeAuthRefreshResult } from '../services/sessions.js';
 export type { SessionRuntimeAuthServices } from '../services/sessions.js';
 export type { SessionRuntimeIssueV1 } from '../services/sessions.js';
 export { SessionRuntimeIssueV1Schema } from '../services/sessions.js';
+export type { SessionCapabilityNoticeV1 } from '../services/sessions.js';
+export { SESSION_CAPABILITY_NOTICE_SIDECAR_KEY, SessionCapabilityNoticeV1Schema } from '../services/sessions.js';
 export type { SessionSystemRecord } from '../services/sessions.js';
 export type { SessionSystemRecordAddress } from '../services/sessions.js';
 export type { SessionSystemRecordDeleteRequest } from '../services/sessions.js';

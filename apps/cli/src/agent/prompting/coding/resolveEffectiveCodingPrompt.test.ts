@@ -10,6 +10,7 @@ import type { Credentials, StoredCredentials } from '@/persistence';
 import { readAiLaunchProfileCollection } from '@happier-dev/protocol/profiles/read';
 import type { ProfileCatalogSnapshotV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
 import { buildMemoryRecallGuidanceBlockV1 } from '@happier-dev/protocol/prompts/memoryRecallGuidanceV1';
+import { PromptStackEntryV1Schema } from '@happier-dev/protocol/prompts/library/promptStacksV1';
 
 import {
   resolveAgentCompositionPromptText,
@@ -199,22 +200,13 @@ describe('resolveEffectiveCodingPromptText', () => {
 
     await expect(resolveEffectiveCodingPromptPlan({ toolDelivery: 'native_mcp',
       credentials,
-      settings: {
-        promptStacksV1: {
-          v: 1,
-          surfaces: {
-            coding: [{
-              id: 'retained-private-instructions',
-              ref: { kind: 'doc', artifactId: 'private-prompt' },
-              enabled: true,
-              placement: 'system_append',
-              editPolicy: 'user_only',
-            }],
-            voice: [],
-            profilesById: {},
-          },
-        },
-      },
+      settings: {},
+      accountEntries: [PromptStackEntryV1Schema.parse({
+        id: 'retained-private-instructions',
+        ref: { kind: 'doc', artifactId: 'private-prompt' },
+        enabled: true,
+        placement: 'system_append',
+      })],
       profileId: null,
       baseOverride: 'BASE',
       memoryRecallGuidanceEnabled: false,
@@ -249,33 +241,19 @@ describe('resolveEffectiveCodingPromptText', () => {
       }),
     };
 
+    const accountEntries = [PromptStackEntryV1Schema.parse({
+      id: 'e1',
+      ref: { kind: 'doc', artifactId: 'd1' },
+      enabled: true,
+      placement: 'system_append',
+    })];
+    const profileEntries = [PromptStackEntryV1Schema.parse({
+      id: 'e2',
+      ref: { kind: 'doc', artifactId: 'd2' },
+      enabled: true,
+      placement: 'system_append',
+    })];
     const settings = {
-      promptStacksV1: {
-        v: 1,
-        surfaces: {
-          coding: [
-            {
-              id: 'e1',
-              ref: { kind: 'doc', artifactId: 'd1' },
-              enabled: true,
-              placement: 'system_append',
-              editPolicy: 'user_only',
-            },
-          ],
-          voice: [],
-          profilesById: {
-            p1: [
-              {
-                id: 'e2',
-                ref: { kind: 'doc', artifactId: 'd2' },
-                enabled: true,
-                placement: 'system_append',
-                editPolicy: 'user_only',
-              },
-            ],
-          },
-        },
-      },
       executionRunsGuidanceEnabled: false,
     };
 
@@ -284,7 +262,8 @@ describe('resolveEffectiveCodingPromptText', () => {
       settings,
       profileId: 'p1',
       currentProfile: null,
-      profileEntries: settings.promptStacksV1.surfaces.profilesById.p1,
+      accountEntries,
+      profileEntries,
       baseOverride: 'BASE',
       memoryRecallGuidanceEnabled: false,
       readArtifact: async (ref) => {
@@ -299,7 +278,8 @@ describe('resolveEffectiveCodingPromptText', () => {
       settings,
       profileId: 'p1',
       currentProfile: null,
-      profileEntries: settings.promptStacksV1.surfaces.profilesById.p1,
+      accountEntries,
+      profileEntries,
       baseOverride: 'BASE',
       memoryRecallGuidanceEnabled: false,
       readArtifact: async (ref) => {
@@ -568,7 +548,7 @@ describe('resolveEffectiveCodingPromptText', () => {
 
     expect(out).toContain('Happier tools are available through the CLI bridge');
     expect(out).toContain('when you need to discover the available built-in Happier tools');
-    expect(out).toContain('plugin-action-or-tool-id');
+    expect(out).toContain('<plugin-id>/actions/<local-id>');
     expect(out).toContain('Use the listed tool `name` verbatim for `--tool`');
     expect(out).toContain('ActionSpec IDs (for example, `subagents.delegate.start`) are not tool names');
     expect(out).toContain('invoke the listed `action_execute` tool and pass the ID as `actionId`');

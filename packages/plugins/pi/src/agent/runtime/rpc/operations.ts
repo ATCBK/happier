@@ -23,6 +23,8 @@ import type {
 import { raceWithTimeout } from '@happier-dev/plugin-sdk/async';
 import {
   normalizeSlashCommandName,
+  SessionCapabilityNoticeV1Schema,
+  type SessionCapabilityNoticeV1,
 } from '@happier-dev/plugin-sdk/sessions';
 import {
   createAgentSessionPreAdmissionBuffer,
@@ -70,7 +72,7 @@ import {
   type PiBlockingExtensionUiRequest,
   type PiExtensionUiResponse,
 } from './extensionUi.js';
-import { PI_MCP_APPROVAL_CALL_PREFIX } from '../../tools/extensionSource.js';
+import { PI_MCP_APPROVAL_CALL_PREFIX, PI_MCP_CAPABILITY_NOTICE_RECORD_TYPE } from '../../tools/extensionSource.js';
 
 const PI_VERSION_PROBE_TIMEOUT_MS = 30_000;
 // Session opening is one provider-lifecycle operation. Keep every RPC in that
@@ -185,6 +187,8 @@ type PiRuntimeOperationsParams = Readonly<{
   eagerStart?: boolean;
   sessionOpenLifecycle?: PiSessionOpenLifecycle;
   happierToolsExtension?: Readonly<{ extensionPath: string; configPath: string }>;
+  mcpServersStrictMode?: boolean;
+  publishCapabilityNotice?: (notice: SessionCapabilityNoticeV1) => Promise<void>;
 }>;
 
 type PiAvailableCommand = Readonly<{
@@ -1078,21 +1082,7 @@ function createRuntimeOperations(params: Readonly<{
 
 export type PiSessionRuntime = AgentSessionRuntime;
 
-export type PiExecutionRunConversationParams = Readonly<{
-  skills?: AgentSessionOpenRequest['skills'];
-  services: PiRuntimeOperationsParams['services'];
-  logger: PluginLoggerService;
-  cwd: string;
-  env: Readonly<Record<string, string>>;
-  unsetEnvKeys?: readonly string[];
-  permissionMode?: PiPermissionMode;
-  initialSessionId?: string | null;
-  resumeSessionSelector?: string | null;
-  resumeProviderSessionId?: string | null;
-  eagerStart?: boolean;
-  sessionOpenLifecycle?: PiSessionOpenLifecycle;
-  happierToolsExtension?: Readonly<{ extensionPath: string; configPath: string }>;
-}>;
+export type PiExecutionRunConversationParams = Omit<PiRuntimeOperationsParams, 'sessionId' | 'models'>;
 
 export type PiConversationRuntime = Pick<
   AgentSessionRuntime,
@@ -1508,9 +1498,31 @@ async function createPiConversationRuntimeOperations(
         },
       })
     : null;
+  let mcpStartupFailure: Error | null = null;
+  let capabilityNoticePublication = Promise.resolve();
   rpc = createPiJsonStreamRpcClient({
     handle,
     onEvent(record) {
+      if (record.type === PI_MCP_CAPABILITY_NOTICE_RECORD_TYPE) {
+        const parsed = SessionCapabilityNoticeV1Schema.safeParse(record.notice);
+        if (!parsed.success) {
+          mcpStartupFailure = new Error('Pi emitted an invalid MCP capability notice');
+          return;
+        }
+        const notice = parsed.data;
+        if (params.mcpServersStrictMode === true) {
+          mcpStartupFailure = new Error(`Pi MCP startup failed (${notice.items.map(item => item.code).join(', ')})`);
+        }
+        capabilityNoticePublication = capabilityNoticePublication.then(async () => {
+          if (params.publishCapabilityNotice) await params.publishCapabilityNotice(notice);
+          else params.logger.warn('[PiRuntime] MCP servers could not start', {
+            items: notice.items.map(({ name, code }) => ({ name, code })),
+          });
+        }).catch((error: unknown) => {
+          mcpStartupFailure = error instanceof Error ? error : new Error('Pi MCP capability notice publication failed');
+        });
+        return;
+      }
       const catalog = parsePiModelDiscoveryRecord(record);
       if (catalog) {
         modelsSource?.observeCatalog(catalog);
@@ -1643,6 +1655,8 @@ async function createPiConversationRuntimeOperations(
           : undefined,
         sessionOpenLifecycle ?? undefined,
       );
+      await capabilityNoticePublication;
+      if (mcpStartupFailure) throw mcpStartupFailure;
     } catch (error) {
       await runtime.dispose();
       throw error;

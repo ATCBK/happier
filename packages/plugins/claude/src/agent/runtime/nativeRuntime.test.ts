@@ -22,6 +22,7 @@ import {
   type ClaudeNativeSessionFactory,
 } from './nativeRuntime.js';
 import * as claudeNativeRuntimeModule from './nativeRuntime.js';
+import { createClaudeAgentSdkTurnOperations } from './remote/sdk/session.js';
 import type { ClaudeUsageObservation } from '../usage/types.js';
 import type { ClaudeProviderEvent } from './providerEvents.js';
 import { claudeHandoffSurface } from '../surfaces/sessions/handoff/providerOps.js';
@@ -153,6 +154,177 @@ const context = {
 } as unknown as AgentSessionRuntimeContext;
 
 describe('createClaudeNativeRuntime', () => {
+  it('reports failed local hook resource cleanup without losing positive provider exit', async () => {
+    const exec = createSdkExecFixture();
+    const hooks = createSessionHooksFixture();
+    const cleanupFailure = new Error('hook resource close rejected');
+    hooks.serverDispose.mockRejectedValue(cleanupFailure);
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service,
+      { exec: exec.service, sessionHooks: hooks.service });
+    const operations = createClaudeAgentSdkTurnOperations({ ctx, directory: '/tmp/claude-project', launchEnv: {},
+      permissionMode: 'default', happierSessionId: 'local-cleanup-session' });
+    const runtime = createClaudeNativeSessionRuntimeFromOperations(operations,
+      { kind: 'create', sessionId: 'local-cleanup-session', cwd: '/tmp/claude-project' }, context);
+    const activity: AgentSessionRuntimeEvent[] = [];
+    const subscription = runtime.watch(event => { if (event.kind === 'runtime-activity-snapshot') activity.push(event); });
+    try {
+      const presentation = await runtime.prepareTerminalPresentation!();
+      if (presentation.kind !== 'terminal_launch') throw new Error('Expected a local plan');
+      const observe = runtime.observeTerminalExecution;
+      if (typeof observe !== 'function') throw new Error('Expected terminal lifecycle observation');
+      await observe({ kind: 'started', plan: presentation.plan });
+      await hooks.service.startServer.mock.calls.at(-1)?.[0].onSessionHook('local-cleanup-native', {
+        hook_event_name: 'PostToolUse', session_id: 'local-cleanup-native', tool_name: 'Agent',
+        tool_input: { run_in_background: true }, tool_response: { status: 'async_launched', agentId: 'local-cleanup-task' },
+      });
+      expect(activity.at(-1)).toMatchObject({ state: 'active', activeCount: 1 });
+      await expect(observe({ kind: 'provider_stopped', plan: presentation.plan, exitCode: 0, signal: null })).rejects.toBe(cleanupFailure);
+      expect(activity.at(-1)).toMatchObject({ state: 'idle', activeCount: 0 });
+      expect(ctx.logger.warn.mock.calls.some(call => call[1]?.error === 'claude_session_hook_cleanup_failed')).toBe(true);
+    } finally {
+      subscription.dispose();
+      hooks.serverDispose.mockResolvedValue(undefined);
+      await runtime.dispose();
+    }
+  });
+
+  it('preserves hook preparation and server cleanup failures together', async () => {
+    const hooks = createSessionHooksFixture();
+    const preparationFailure = new Error('plugin directory creation rejected');
+    const cleanupFailure = new Error('prepared server close rejected');
+    hooks.service.createPluginDir.mockRejectedValue(preparationFailure);
+    hooks.serverDispose.mockRejectedValue(cleanupFailure);
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service,
+      { exec: createSdkExecFixture().service, sessionHooks: hooks.service });
+    const operations = createClaudeAgentSdkTurnOperations({ ctx, directory: '/tmp/claude-project', launchEnv: {},
+      permissionMode: 'default', happierSessionId: 'local-setup-cleanup-session' });
+    await expect(operations.prepareTerminalPresentation()).rejects.toMatchObject({
+      errors: [preparationFailure, cleanupFailure], cause: preparationFailure,
+    });
+    expect(ctx.logger.warn.mock.calls.some(call => call[1]?.error === 'claude_session_hook_cleanup_failed')).toBe(true);
+    await operations.disposeProviderSession();
+  });
+
+  it('releases every local hook resource when one owned binding fails cleanup', async () => {
+    const hooks = createSessionHooksFixture();
+    const liveServers = new Set<object>();
+    const cleanupFailure = new Error('first local server close rejected');
+    let first = true;
+    hooks.service.startServer.mockImplementation(async () => {
+      const resource = {};
+      liveServers.add(resource);
+      const rejectCleanup = first;
+      first = false;
+      return { port: 43123, sessionHookSecretFile: '/tmp/session-hook.secret',
+        permissionHookSecretFile: '/tmp/permission-hook.secret', stop() {},
+        async dispose() { liveServers.delete(resource); if (rejectCleanup) throw cleanupFailure; } };
+    });
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service,
+      { exec: createSdkExecFixture().service, sessionHooks: hooks.service });
+    const operations = createClaudeAgentSdkTurnOperations({ ctx, directory: '/tmp/claude-project', launchEnv: {},
+      permissionMode: 'default', happierSessionId: 'local-all-cleanup-session' });
+    const runtime = createClaudeNativeSessionRuntimeFromOperations(operations,
+      { kind: 'create', sessionId: 'local-all-cleanup-session', cwd: '/tmp/claude-project' }, context);
+    const firstPresentation = await runtime.prepareTerminalPresentation!();
+    if (firstPresentation.kind !== 'terminal_launch') throw new Error('Expected local plan');
+    await runtime.observeTerminalExecution!({ kind: 'started', plan: firstPresentation.plan });
+    const secondPresentation = await runtime.prepareTerminalPresentation!();
+    if (secondPresentation.kind !== 'terminal_launch') throw new Error('Expected local plan');
+    await runtime.observeTerminalExecution!({ kind: 'started', plan: secondPresentation.plan });
+    await expect(runtime.dispose()).rejects.toBe(cleanupFailure);
+    expect(liveServers.size).toBe(0);
+  });
+
+  it('releases an unused local preparation without retiring a different prepared binding', async () => {
+    const exec = createSdkExecFixture();
+    const hooks = createSessionHooksFixture();
+    // Hook-server allocation is the host network/resource boundary.
+    const liveServers = new Set<object>();
+    hooks.service.startServer.mockImplementation(async () => {
+      const resource = {};
+      liveServers.add(resource);
+      return { port: 43123, sessionHookSecretFile: '/tmp/session-hook.secret',
+        permissionHookSecretFile: '/tmp/permission-hook.secret', stop() {},
+        async dispose() { liveServers.delete(resource); } };
+    });
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service,
+      { exec: exec.service, sessionHooks: hooks.service });
+    const operations = createClaudeAgentSdkTurnOperations({ ctx, directory: '/tmp/claude-project', launchEnv: {},
+      permissionMode: 'default', happierSessionId: 'local-unused-session' });
+    const runtime = createClaudeNativeSessionRuntimeFromOperations(operations,
+      { kind: 'create', sessionId: 'local-unused-session', cwd: '/tmp/claude-project' }, context);
+    try {
+      const first = await runtime.prepareTerminalPresentation!();
+      const second = await runtime.prepareTerminalPresentation!();
+      if (first.kind !== 'terminal_launch' || second.kind !== 'terminal_launch') throw new Error('Expected prepared local terminal plans');
+      expect(liveServers.size).toBe(1);
+      const observe = runtime.observeTerminalExecution;
+      if (typeof observe === 'function') await observe({ kind: 'launch_failed', plan: first.plan });
+      expect(liveServers.size).toBe(1);
+      if (typeof observe === 'function') await observe({ kind: 'launch_failed', plan: second.plan });
+      expect(liveServers.size).toBe(0);
+    } finally { await runtime.dispose(); }
+    expect(liveServers.size).toBe(0);
+  });
+
+  it.each(['provider_stopped', 'observation_lost'] as const)('observes a real local resume through its own hook authority (%s)', async (outcome) => {
+    const exec = createSdkExecFixture();
+    const hooks = createSessionHooksFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service,
+      { exec: exec.service, sessionHooks: hooks.service });
+    const operations = createClaudeAgentSdkTurnOperations({
+      ctx, directory: '/tmp/claude-project', launchEnv: {}, permissionMode: 'default',
+      happierSessionId: 'local-resume-session',
+    });
+    const runtime = createClaudeNativeSessionRuntimeFromOperations(operations,
+      { kind: 'create', sessionId: 'local-resume-session', cwd: '/tmp/claude-project' }, context);
+    const activity: AgentSessionRuntimeEvent[] = [];
+    const subscription = runtime.watch(event => { if (event.kind === 'runtime-activity-snapshot') activity.push(event); });
+    try {
+      operations.beginProviderTurn('old-remote-turn');
+      await operations.sendProviderTurnPrompt('launch exact child');
+      const oldProcess = exec.processes[0];
+      if (!oldProcess) throw new Error('Expected the owned native process');
+      await oldProcess.emit({ type: 'system', subtype: 'init', session_id: 'local-resume-native' });
+      await oldProcess.emit({ type: 'system', subtype: 'task_started', session_id: 'local-resume-native',
+        task_id: 'same-resumed-task', task_type: 'local_agent', is_backgrounded: true });
+      await oldProcess.emit({ type: 'result', subtype: 'success', is_error: false, session_id: 'local-resume-native',
+        result: 'foreground complete', queued_turn_count: 0, num_turns: 1, total_cost_usd: 0, duration_ms: 1, duration_api_ms: 1 });
+      await operations.waitForProviderTurnCompletion();
+      await oldProcess.exitWith({ exitCode: 0, signal: null });
+      await vi.waitFor(() => expect(activity.at(-1)).toMatchObject({ state: 'idle', activeCount: 0 }));
+      const oldHook = hooks.service.startServer.mock.calls[0]?.[0];
+      const presentation = await runtime.prepareTerminalPresentation!();
+      if (presentation.kind !== 'terminal_launch') throw new Error('Expected the SDK local terminal plan');
+      const localHook = hooks.service.startServer.mock.calls.at(-1)?.[0];
+      const resume = { hook_event_name: 'SubagentStart', session_id: 'local-resume-native', agent_id: 'same-resumed-task' };
+      // Preparing resources is not evidence that the host launched a provider.
+      await localHook.onSessionHook('local-resume-native', resume);
+      expect(activity.at(-1)).toMatchObject({ state: 'idle', activeCount: 0 });
+      const observe = runtime.observeTerminalExecution;
+      if (typeof observe === 'function') await observe({ kind: 'started', plan: presentation.plan });
+      await localHook.onSessionHook('local-resume-native', resume);
+      await vi.waitFor(() => expect(activity.at(-1)).toMatchObject({ state: 'active', activeCount: 1 }));
+      expect(localHook.sessionHookSecret).not.toBe(oldHook.sessionHookSecret);
+      await oldHook.onSessionHook('local-resume-native', resume);
+      await oldHook.onSessionHook('local-resume-native', { hook_event_name: 'PostToolUse',
+        session_id: 'local-resume-native', tool_name: 'TaskStop', tool_input: { task_id: 'same-resumed-task' },
+        tool_response: { task_id: 'same-resumed-task', status: 'stopped' } });
+      expect(activity.at(-1)).toMatchObject({ state: 'active', activeCount: 1 });
+      if (typeof observe === 'function') await observe({ kind: outcome, plan: presentation.plan,
+        ...(outcome === 'provider_stopped' ? { exitCode: 0, signal: null } : {}) });
+      await vi.waitFor(() => expect(activity.at(-1)).toMatchObject({
+        state: outcome === 'provider_stopped' ? 'idle' : 'unknown', activeCount: 0,
+      }));
+      await localHook.onSessionHook('local-resume-native', resume);
+      await oldHook.onSessionHook('local-resume-native', resume);
+      expect(activity.at(-1)).toMatchObject({ state: outcome === 'provider_stopped' ? 'idle' : 'unknown', activeCount: 0 });
+    } finally {
+      subscription.dispose();
+      await runtime.dispose();
+    }
+  });
+
   it.each([
     { unifiedTerminalEnabled: false, requestedHost: 'herdr' as const, placement: 'runner' },
     { unifiedTerminalEnabled: true, requestedHost: 'herdr' as const, placement: 'runner' },
@@ -1736,8 +1908,9 @@ describe('createClaudeNativeRuntime', () => {
 
     native.publishUsage({
       provider: 'claude',
-      source: 'claude-sdk-result',
-      scope: 'session_final',
+      source: 'claude-assistant-usage',
+      scope: 'turn_delta',
+      turnId: 'host-paid-turn',
       key: 'claude-session',
       modelId: 'deepseek-ai/DeepSeek-V3.1',
       tokens: {
@@ -1757,8 +1930,9 @@ describe('createClaudeNativeRuntime', () => {
       expect.objectContaining({
         kind: 'usage-observed',
         observationId: expect.any(String),
-        source: 'claude-sdk-result',
-        scope: 'session_final',
+        source: 'claude-assistant-usage',
+        scope: 'turn_delta',
+        turnId: 'host-paid-turn',
         modelId: 'deepseek-ai/DeepSeek-V3.1',
         tokens: {
           input: 10,

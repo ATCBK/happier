@@ -169,6 +169,7 @@ export function createAgentExternalSessionsExecutionSurface(
                 ...invocation(
                     request.maxBytes ?? EXTERNAL_SESSIONS_INVOCATION_POLICY.listCandidates.maxSerializedBytes,
                     request.signal,
+                    request.deadlineAtMs,
                 ),
                 ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
                 ...(request.searchTerm === undefined ? {} : { searchTerm: request.searchTerm }),
