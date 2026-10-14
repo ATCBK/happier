@@ -1636,6 +1636,7 @@ describe('registerMachineRpcHandlers', () => {
     }
   });
 
+
   it('routes execution-run authority through the exact live Session owner', async () => {
     const registered = new Map<string, (params: unknown) => Promise<unknown>>();
     const rpcHandlerManager = {

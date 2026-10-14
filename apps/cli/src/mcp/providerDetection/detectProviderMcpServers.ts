@@ -5,6 +5,7 @@ import type {
   McpDiscoveredEndpoint as PluginMcpDiscoveredEndpoint,
   McpDiscoveryRequest as PluginMcpDiscoveryRequest,
 } from '@happier-dev/plugin-sdk/mcp';
+import { normalizeDetectedMcpServerV1 } from '@happier-dev/plugin-sdk/mcp';
 
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import type { ResolvedMcpEndpointDiscoveryResult } from '@/mcp/runtimeTypes';
@@ -369,6 +370,11 @@ export async function detectProviderMcpServers(params: Readonly<{
 
         const discovered = normalizeDiscoveryResult(provider, outcome.value);
         warnings.push(...discovered.warnings);
+        for (const native of outcome.value.detectedServers ?? []) {
+          const server = normalizeDetectedMcpServerV1({ ...native, provider, loadedInHappierSessions: entry.loadedInHappierSessions });
+          if (server) servers.push(server);
+          else warnings.push(Object.freeze({ provider, code: 'unsupported' as const, path: `plugin:${entry.registration.id}` }));
+        }
         for (const endpoint of discovered.endpoints) {
           try {
             assertDiscoveredMcpEndpointSafeForDetection(endpoint);

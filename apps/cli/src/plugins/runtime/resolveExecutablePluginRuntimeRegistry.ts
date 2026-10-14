@@ -3551,6 +3551,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
     }
     const mcpDiscoveryAttachments = new Map<string, Readonly<{
         endpoints: NonNullable<PluginMcpDiscoveryResult['endpoints']>;
+        detectedServers?: PluginMcpDiscoveryResult['detectedServers'];
         warnings: NonNullable<PluginMcpDiscoveryResult['warnings']>;
     }>>();
     const mcpDiscoveryAttachmentKey = (
@@ -3721,6 +3722,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                             mcpDiscoveryAttachmentKey(callerSeed.correlationId, ref),
                             Object.freeze({
                                 endpoints: projectPluginMcpDiscoveredEndpoints(result.endpoints),
+                                ...(result.detectedServers ? { detectedServers: Object.freeze([...result.detectedServers]) } : {}),
                                 warnings: projectPluginMcpDiscoveryWarnings(result.warnings),
                             }),
                         );
@@ -7482,6 +7484,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 const attachment = mcpDiscoveryAttachments.get(attachmentKey);
                 return Object.freeze({
                     endpoints: attachment?.endpoints ?? Object.freeze([]),
+                    ...(attachment?.detectedServers ? { detectedServers: attachment.detectedServers } : {}),
                     warnings: projectPluginMcpDiscoveryWarningsToLegacyDetection(
                         declaration.definition.metadata?.agentId,
                         attachment?.warnings,
