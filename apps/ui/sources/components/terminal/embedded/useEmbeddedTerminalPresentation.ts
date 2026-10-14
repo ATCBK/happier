@@ -17,7 +17,7 @@ export function useEmbeddedTerminalPresentation(input: Readonly<{
     const { controller, terminalKey } = input;
     const router = useRouter();
     const onOpenApproval = React.useMemo(() => controller.approvalId && controller.approvalServerId
-        ? () => router.push(`/inbox/approvals/${encodeURIComponent(controller.approvalId!)}?serverId=${encodeURIComponent(controller.approvalServerId!)}`)
+        ? () => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(controller.approvalId!)}?serverId=${encodeURIComponent(controller.approvalServerId!)}`)
         : undefined, [controller.approvalId, controller.approvalServerId, router]);
     const seenBell = React.useRef(controller.terminalBell ?? null);
     if (input.focused) seenBell.current = controller.terminalBell ?? null;
