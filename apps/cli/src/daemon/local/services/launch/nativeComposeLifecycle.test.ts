@@ -47,6 +47,25 @@ describe('Compose exact native resource lifetime', () => {
         expect(await h.control.lifecycle.inspect()).toMatchObject({ phase: 'stopped', endpoint: null });
         expect(h.requests.every(args => !args.includes('--file'))).toBe(true);
     });
+    it('clears an unknown occurrence with no native launch or captured identity, but retains captured resources', async () => {
+        const neverStarted = fixture();
+        neverStarted.fail();
+        expect(await neverStarted.control.lifecycle.inspect()).toMatchObject({ phase: 'unknown' });
+        expect(await neverStarted.control.lifecycle.stop()).toEqual({ status: 'stopped' });
+        expect(await neverStarted.control.lifecycle.inspect()).toMatchObject({ phase: 'stopped' });
+        expect(neverStarted.requests.some(args => args.includes('stop'))).toBe(false);
+        const captured = fixture();
+        expect(await captured.control.lifecycle.inspect()).toMatchObject({ phase: 'running' });
+        captured.fail();
+        expect(await captured.control.lifecycle.stop()).toEqual({ status: 'termination_incomplete' });
+        expect(await captured.control.lifecycle.inspect()).toMatchObject({ phase: 'unknown' });
+    });
+    it('discovers an incumbent during Stop before treating a fresh capture as empty', async () => {
+        const h = fixture();
+        expect(await h.control.lifecycle.stop()).toEqual({ status: 'termination_incomplete' });
+        expect(h.requests).toContainEqual(['stop', 'a'.repeat(64)]);
+        expect(await h.control.lifecycle.inspect()).toMatchObject({ phase: 'running' });
+    });
     it('retires only proved-stopped IDs before replacement and observes optional published endpoints', async () => {
         const h = fixture();
         await h.control.lifecycle.inspect();

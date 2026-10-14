@@ -31,7 +31,7 @@ export type ProjectSetupExecutionInput = Readonly<{
     requesterAccountId: string;
     terminalCustody?: TerminalPtyCustody;
     operation: ProjectSetupOperationContext;
-    terminalSessions: Pick<TerminalPtySessionManager, 'prepare' | 'ensure' | 'waitForExit' | 'requestStop'>;
+    terminalSessions: Pick<TerminalPtySessionManager, 'prepare' | 'ensure' | 'waitForExit' | 'requestStop' | 'observeOutput'>;
     environmentIo: ProjectNativeEnvironmentIoForHost;
     hostEnvironment?: NodeJS.ProcessEnv;
     platform?: NodeJS.Platform;
@@ -260,7 +260,7 @@ export async function authorizePreparedProjectCommand(input: ProjectSetupExecuti
     });
 }
 
-function projectBaseEnvironment(input: Pick<ProjectSetupExecutionInput, 'hostEnvironment'>, plan: PreparedProjectSetupPlan): Record<string, string> {
+export function projectBaseEnvironment(input: Pick<ProjectSetupExecutionInput, 'hostEnvironment'>, plan: PreparedProjectSetupPlan): Record<string, string> {
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(input.hostEnvironment ?? process.env)) {
         if (value !== undefined) env[key] = value;

@@ -9,7 +9,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ProjectDefinitionInspectOutputSchema } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
 import { readProjectManifestDocument } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestDocument';
 import { ProjectCommandActionOutputV1Schema } from '@happier-dev/protocol/actions/actionCompletion';
-import { bindExternalActionExecutionAuthorizationHttpPathV1, ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema, ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { bindExternalActionExecutionAuthorizationHttpPathV1, ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema, ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions';
 import nacl from 'tweetnacl';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
@@ -81,13 +81,16 @@ describe('Project finite Actions through exact Machine transport', () => {
     const input = { workspace, phase: 'setup' as const, expectedEffectDigest: 'reviewed' };
     const owner = executor();
     expect(await owner.execute('projects.prepare', input, { surface: 'agent', authority: 'account_automation' })).toMatchObject({ ok: false });
-    expect(boundary).not.toHaveBeenCalled();
+    // Ask first prepares passive review facts; policy still prevents the effect.
+    expect(boundary.mock.calls.map(([request]) => request.method)).toEqual(['daemon.projects.inspect.v1']);
+    boundary.mockClear();
     const signal = new AbortController().signal;
     expect(await owner.execute('projects.prepare', input, { surface: 'agent', authority: 'account_automation', signal,
       actionRequestId: 'original-invocation', actionsSettings: ActionsSettingsV1Schema.parse({ v: 1,
         approvalWaivedSurfaces: { 'projects.prepare': ['agent'] } }) })).toEqual({ ok: true, result: pending });
     expect(boundary).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine', method: 'daemon.projects.prepare.v1',
       request: input, requestId: 'original-invocation', signal, authorityCeiling: 'account_automation' }));
+    expect(boundary.mock.calls.some(([request]) => request.method === 'daemon.projects.inspect.v1')).toBe(false);
   });
   it('refuses another Home, unsupported output and grants hidden in the semantic input', async () => {
     const boundary = vi.spyOn(machineTransport, 'callExactMachineRpc').mockResolvedValue({ kind: 'prepared' });
@@ -170,6 +173,8 @@ describe('Project finite Actions through exact Machine transport', () => {
       approvalWaivedSurfaces: { 'projects.script.run': ['cli'] } });
     const context = { surface: 'cli' as const, actionRequestId: 'original-placement-invocation' };
     let available = true;
+    let sourceListed = true;
+    let tokenEpochCurrent = true;
     const reply = (data: unknown) => ({ status: 200, data, statusText: 'OK', headers: {},
       config: { headers: new AxiosHeaders() } });
     // Only the captured Home HTTP and exact Machine RPC are substituted. The
@@ -194,34 +199,41 @@ describe('Project finite Actions through exact Machine transport', () => {
     const installed = ExternalActionMachineBootstrapV1Schema.parse({ id: 'selected-worker', installationId: 'selected-installation',
       kind: 'persistent', active: false, revokedAt: null, replacedByMachineId: null,
       access: { custodian: { accountId: 'requester', displayName: 'Requester' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } });
+    const source = ExternalActionMachineBootstrapV1Schema.parse({ ...installed, id: workspace.machineId,
+      installationId: 'source-installation' });
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       if (url.endsWith('/v1/account/encryption')) return reply({ mode: 'plain', updatedAt: 1 });
       if (url.endsWith('/v1/machines/selected-worker')) return reply({ machine: installed });
-      if (url.endsWith('/v1/machines')) return reply([installed]);
+      if (url.endsWith(`/v1/machines/${source.id}`)) return reply({ machine: source });
+      if (url.endsWith('/v1/machines')) return reply(sourceListed ? [source, installed] : [installed]);
       throw new Error(`Unexpected captured Home inventory request: ${url}`);
     });
     const posts = vi.spyOn(axios, 'post').mockImplementation(async (url, body, config) => {
       expect(config?.headers).toMatchObject({ Authorization: `Bearer ${token}` });
       const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
-      expect(request.machineId).toBe(installed.id);
-      expect(request.envelope).toEqual({ v: 1, requestId: context.actionRequestId, target: { kind: 'machine', machineId: installed.id }, input });
-      if (url === `https://home.test${bindExternalActionExecutionAuthorizationHttpPathV1('projects.script.run')}`) return reply(
+      const actionId = url === 'https://home.test/v1/actions/projects.inspect' || url === `https://home.test${bindExternalActionExecutionAuthorizationHttpPathV1('projects.inspect')}`
+        ? 'projects.inspect' : 'projects.script.run';
+      const target = actionId === 'projects.inspect' ? source : installed;
+      const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.envelope);
+      expect(request.machineId).toBe(target.id);
+      expect(envelope).toMatchObject({ target: { kind: 'machine', machineId: target.id },
+        input: actionId === 'projects.inspect' ? { workspace } : input });
+      if (actionId === 'projects.script.run') expect(envelope.requestId).toBe(context.actionRequestId);
+      if (url === `https://home.test${bindExternalActionExecutionAuthorizationHttpPathV1(actionId)}`) return reply(
         ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-issued-finite-authorization', binding: {
-          accountId: 'requester', custodianAccountId: 'requester', authentication: { kind: 'terminal', tokenEpoch: 1 },
-          serverIdentityId: 'srv_finite_home', machineId: installed.id, installationId: installed.installationId,
-          accountEncryptionMode: 'plain', actionId: 'projects.script.run', requestId: context.actionRequestId,
+          accountId: 'requester', custodianAccountId: 'requester', authentication: { kind: 'terminal', tokenEpoch: tokenEpochCurrent ? 1 : 2 },
+          serverIdentityId: 'srv_finite_home', machineId: target.id, installationId: target.installationId,
+          accountEncryptionMode: 'plain', actionId, requestId: envelope.requestId,
           requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope), target: request.envelope.target,
         } }));
-      expect(url).toBe('https://home.test/v1/actions/projects.script.run');
-      expect(request.executionAuthorization?.binding).toMatchObject({ machineId: installed.id, installationId: installed.installationId,
-        requestId: context.actionRequestId, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope) });
-      return reply({ v: 1, actionId: 'projects.script.run', requestId: context.actionRequestId, execution: { ok: true, result: pending } });
+      expect(url).toBe(`https://home.test/v1/actions/${actionId}`);
+      expect(request.executionAuthorization?.binding).toMatchObject({ actionId, machineId: target.id, installationId: target.installationId,
+        authentication: { kind: 'terminal', tokenEpoch: 1 }, requestId: envelope.requestId,
+        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope) });
+      return reply(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId, requestId: envelope.requestId,
+        execution: { ok: true, result: actionId === 'projects.inspect' ? inspection : pending } }));
     });
     const transport = vi.spyOn(machineTransport, 'callExactMachineRpc').mockImplementation(async request => {
-      if (request.method === getActionSpec('projects.inspect').bindings?.rpcMethod) {
-        expect(request.machineId).toBe(workspace.machineId);
-        return inspection;
-      }
       if (request.method === getActionSpec('projects.worker.status').bindings?.rpcMethod) {
         expect(request.request).toMatchObject({ workspace: { serverId: 'home', refId: workspace.workspaceId },
           destination: { kind: 'machine', machineId: request.machineId }, purpose: 'finite', memoryDemand });
@@ -239,14 +251,28 @@ describe('Project finite Actions through exact Machine transport', () => {
         serverId: 'home', serverHttpBaseUrl: 'https://home.test' }),
     });
     const input = { workspace, selection: { kind: 'named' as const, name: 'check' } };
+    const effectPosts = () => posts.mock.calls.filter(([url]) => url === 'https://home.test/v1/actions/projects.script.run');
     expect(await owner.execute('projects.script.run', input, context)).toEqual({ ok: true, result: pending });
-    expect(posts).toHaveBeenCalledTimes(2);
+    expect(effectPosts()).toHaveLength(1);
+    expect(posts.mock.calls.some(([url]) => url === 'https://home.test/v1/actions/projects.inspect')).toBe(true);
     if (kind === 'pool') expect(home.mock.calls.some(([request]) => request.url?.endsWith('/v1/machines/pools/get'))).toBe(true);
     available = false;
     transport.mockClear();
     expect(await owner.execute('projects.script.run', input, context)).toMatchObject({ ok: false,
       errorCode: 'choice_required' });
     expect(transport.mock.calls.some(([request]) => request.method === 'daemon.projects.script.run.v1')).toBe(false);
-    expect(posts).toHaveBeenCalledTimes(2);
+    expect(effectPosts()).toHaveLength(1);
+    // The SOURCE read must remain on original Account admission. Omitting its
+    // inventory or returning a root for a different epoch cannot reach effects.
+    available = true;
+    sourceListed = false;
+    expect(await owner.execute('projects.script.run', input, context)).toMatchObject({ ok: false,
+      errorCode: 'admission_unavailable' });
+    expect(effectPosts()).toHaveLength(1);
+    sourceListed = true;
+    tokenEpochCurrent = false;
+    expect(await owner.execute('projects.script.run', input, context)).toMatchObject({ ok: false,
+      errorCode: 'admission_unavailable' });
+    expect(effectPosts()).toHaveLength(1);
   });
 });

@@ -172,14 +172,6 @@ describe('createLocalServiceLauncherFeed', () => {
             browserTargetKind: target.browserTarget?.kind ?? null,
         }))).toEqual([
             {
-                id: 'preview:preview-a',
-                source: 'registered_preview',
-                state: 'available',
-                unavailableReason: null,
-                actions: ['open_preview'],
-                browserTargetKind: 'localServicePreview',
-            },
-            {
                 id: 'inventory:inventory-a',
                 source: 'inventory_entry',
                 state: 'available',
@@ -204,6 +196,8 @@ describe('createLocalServiceLauncherFeed', () => {
                 browserTargetKind: null,
             },
         ]);
+        expect(snapshot.targets.find(target => target.id === 'inventory:inventory-a')?.browserTarget)
+            .toMatchObject({ kind: 'localServicePreview', targetId: 'preview-a' });
     });
 
     it('preserves private-preview registration for a listening detected entry without a raw loopback target', async () => {

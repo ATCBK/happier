@@ -169,6 +169,27 @@ function defaultConfig(overrides?: Partial<TerminalPtySessionManagerConfig>): Te
 const BASH_ENV: NodeJS.ProcessEnv = { SHELL: '/bin/bash' };
 
 describe('finite natural tree settlement', () => {
+  it('replays retained finished output after the live output age window, through the strict stream consumer', () => {
+    let clock = 0;
+    const provider = new FakePtyProvider();
+    const manager = createTerminalPtySessionManager({ ptyProvider: provider, platform: 'linux', env: BASH_ENV,
+      config: defaultConfig({ bufferRetentionMs: 1000 }), now: () => clock });
+    try {
+      const accepted = manager.ensure({ terminalKey: 'finished-replay', cwd: '/fixture', holdUntilExit: true,
+        launchProcess: { file: '/installed/echo', args: [] } });
+      if (!accepted.ok) throw new Error(accepted.errorCode);
+      provider.spawned[0]!.pty.emitData(Buffer.from('世界🚀\u0000\n'));
+      clock = 500;
+      provider.spawned[0]!.pty.emitExit({ exitCode: 0 });
+      clock = 2000;
+      const output = TerminalStreamReadResponseSchema.parse(manager.readByteStream({ terminalId: accepted.terminalId, byteOffset: 0 }));
+      if (!output.ok) throw new Error(output.code);
+      expect(output.frames.some(frame => frame.t === 'gap')).toBe(false);
+      expect(Buffer.concat(output.frames.flatMap(frame => frame.t === 'bytes' ? [decodeTerminalStreamBytesFrame(frame)] : [])).toString('utf8')).toBe('世界🚀\u0000\n');
+      expect(output.done).toBe(true);
+      expect(output.frames.at(-1)).toMatchObject({ t: 'exit', exitCode: 0 });
+    } finally { manager.dispose(); }
+  });
   it('retains finite Windows custody when fresh census cannot verify Job absence', async () => {
     const custody = { executablePath: 'C:\\tools\\happier-process-custody.exe', jobName: 'Local\\finite-census-unavailable',
       handshakePath: 'C:\\tmp\\finite-census-unavailable.json' };
@@ -404,6 +425,32 @@ type ByteCapableSessionManager = ReturnType<typeof createTerminalPtySessionManag
 };
 
 describe('TerminalPtySessionManager', () => {
+  it.each(['linux', 'win32'] as const)('projects the retained latest line across chunk boundaries and releases its observer (%s)', platform => {
+    const provider = new FakeByteHookProvider();
+    const manager = createTerminalPtySessionManager({ ptyProvider: provider, config: defaultConfig(), env: BASH_ENV, platform });
+    const lines: string[] = [];
+    try {
+      const terminal = manager.ensure({ terminalKey: 'output', cwd: '/project' });
+      if (!terminal.ok) throw new Error(terminal.errorCode);
+      const pty = provider.spawned[0]!.pty;
+      const emit = (text: string) => platform === 'win32' ? pty.emitData(text) : pty.emitByteHookData(Buffer.from(text));
+      emit('old\nchecking \u001b[');
+      emit('32m世界🚀\u001b[0m\r\n');
+      const unsubscribe = manager.observeOutput({ terminalId: terminal.terminalId, maxLength: 10, onOutput: line => lines.push(line) });
+      expect(lines.at(-1)).toBe('cking 世界🚀');
+      emit('first\rreplacement');
+      expect(lines.at(-1)).toBe('eplacement');
+      emit('\r\n\r\n');
+      expect(lines.at(-1)).toBe('eplacement');
+      unsubscribe();
+      const observed = [...lines];
+      emit('after unsubscribe');
+      expect(lines).toEqual(observed);
+      const retained = manager.read({ terminalId: terminal.terminalId, cursor: 0, maxBytes: 1000, maxEvents: 100 });
+      expect(retained.ok && retained.events.filter(event => event.t === 'data').map(event => event.data).join('')).toBe(
+        'old\nchecking \u001b[32m世界🚀\u001b[0m\r\nfirst\rreplacement\r\n\r\nafter unsubscribe');
+    } finally { manager.dispose(); }
+  });
   it('refuses fresh terminal starts and restarts during drain without disturbing attached terminal custody', () => {
     const provider = new FakePtyProvider();
     const admissionDrain = createDaemonAdmissionDrain();

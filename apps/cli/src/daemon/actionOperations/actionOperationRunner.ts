@@ -7,7 +7,7 @@ import type {
 } from '@happier-dev/protocol/actions';
 import { ActionOperationDomainRefV1Schema, ActionOperationFailureV1Schema, ActionOperationObservationV1Schema } from '@happier-dev/protocol/actions/operations/v1';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
-import { ProjectSetupConsentFailureDetailsV1Schema } from '@happier-dev/protocol/actions/projectActionFamily';
+import { ProjectPrepareNoLaunchResultV1Schema, ProjectSetupConsentFailureDetailsV1Schema } from '@happier-dev/protocol/actions/projectActionFamily';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 
 import { parseActionOperationProgressUpdate } from './actionOperationProgress';
@@ -268,7 +268,10 @@ export function createActionOperationRunner(deps: Readonly<{
           } else if (executionResult.ok) {
             deps.store.succeed(operationId, executionResult.result);
             const completed = deps.store.get(request.scope, operationId)?.domainRef;
-            if (action.actionId === 'projects.prepare' && completed?.kind === 'projectCommand' && completed.purpose === 'setup') {
+            const setupResult = action.actionId === 'projects.prepare'
+              ? ProjectPrepareNoLaunchResultV1Schema.safeParse(executionResult.result) : null;
+            if (setupResult?.success && setupResult.data.kind === 'success'
+              && completed?.kind === 'projectCommand' && completed.purpose === 'setup') {
               // Completion is target-local evidence, not remembered consent.
               // Wake the existing continuation, which joins any in-flight
               // review and revalidates input, custody and setup success.
@@ -276,7 +279,8 @@ export function createActionOperationRunner(deps: Readonly<{
                 const held = deps.store.get(request.scope, heldId);
                 const target = held?.domainRef;
                 if (held?.setupReview && target?.kind === 'projectCommand'
-                  && (target.purpose === 'script' || target.purpose === 'exec')
+                  && (target.purpose === 'setup' || target.purpose === 'script' || target.purpose === 'exec')
+                  && held.setupReview.reviewedEffectDigest === setupResult.data.reviewedEffectDigest
                   && target.serverId === completed.serverId && target.machineId === completed.machineId
                   && target.workspaceRefId === completed.workspaceRefId && target.cwd === completed.cwd) {
                   invocation.resumeSetupReview();

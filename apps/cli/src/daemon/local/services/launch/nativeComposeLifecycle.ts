@@ -1,4 +1,7 @@
 import type { ManagedServiceNativeObservationV1 } from '@happier-dev/plugin-sdk/managed-services';
+import { hostname } from 'node:os';
+import { PluginError } from '@happier-dev/plugin-sdk';
+import type { LocalServiceNativePrerequisiteV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 import type { HostAuthorizedPluginExecLaunch } from '@/plugins/runtime/invocation/services/exec';
 import type { ProjectBuiltinNativeLifecycle } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
 import type { ProjectNativeEnvironmentIo } from '@/workspaces/environment/produceProjectNativeEnvironment';
@@ -6,6 +9,48 @@ import type { ProjectNativeEnvironmentIo } from '@/workspaces/environment/produc
 type Container = Readonly<{ id: string; service: string; state: string; health: string; ports: Readonly<Record<string, unknown>> }>;
 const unknown: ManagedServiceNativeObservationV1 = { phase: 'unknown', readiness: 'not_reported', endpoint: null };
 const stopped: ManagedServiceNativeObservationV1 = { phase: 'stopped', readiness: 'not_reported', endpoint: null };
+
+export class NativeComposePrerequisiteError extends PluginError {
+    constructor(cause: LocalServiceNativePrerequisiteV1['cause']) {
+        const prerequisite: LocalServiceNativePrerequisiteV1 = { tool: 'docker', machineName: hostname(), cause };
+        super({ code: 'native_tool_unavailable', message: 'Docker is unavailable on this machine', details: { prerequisite } });
+    }
+}
+
+function dockerFailureCause(stderr: string, code?: unknown): LocalServiceNativePrerequisiteV1['cause'] {
+    // Permission precedes Docker's generic "daemon is not running" advice on Windows.
+    if (code === 'EACCES' || code === 'EPERM' || /permission denied|access is denied|operation not permitted/iu.test(stderr)) return 'permission_denied';
+    if (code === 'ENOENT') return 'not_installed';
+    if (code === 'ECONNREFUSED' || /cannot connect to the docker daemon|connection refused|no such file or directory|the system cannot find the file specified/iu.test(stderr)) return 'not_running';
+    return 'unavailable';
+}
+
+/** Read-only engine prerequisite, reused for review and the final authorized environment. */
+export async function assertNativeComposeAvailable(input: Readonly<{
+    io: Pick<ProjectNativeEnvironmentIo, 'run'>;
+    command: string;
+    prefix: readonly string[];
+    cwd: string;
+    env: Readonly<Record<string, string>>;
+    signal?: AbortSignal;
+}>): Promise<void> {
+    const assertNotCancelled = () => {
+        if (input.signal?.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+    };
+    assertNotCancelled();
+    let output: Awaited<ReturnType<ProjectNativeEnvironmentIo['run']>>;
+    try {
+        output = await input.io.run({ command: input.command, args: [...input.prefix, 'info', '--format', '{{.ID}}'],
+            cwd: input.cwd, env: input.env, ...(input.signal ? { signal: input.signal } : {}) });
+    } catch (error) {
+        assertNotCancelled();
+        // Unsettled probe-process custody is not a native prerequisite refusal.
+        if (record(error) && error.code === 'plugin_exec_termination_incomplete') throw error;
+        throw new NativeComposePrerequisiteError(dockerFailureCause('', record(error) ? error.code : undefined));
+    }
+    assertNotCancelled();
+    if (output.exitCode !== 0) throw new NativeComposePrerequisiteError(dockerFailureCause(output.stderr ?? ''));
+}
 
 function record(value: unknown): value is Record<string, unknown> {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -64,6 +109,8 @@ export function createNativeComposeLifecycle(input: Readonly<{
     let launch: HostAuthorizedPluginExecLaunch | undefined;
     let prefix: readonly string[] = [];
     let ids: readonly string[] | undefined;
+    let starterStarted = false;
+    let cleared = false;
     const run = (args: readonly string[], signal?: AbortSignal) => {
         if (!launch?.cwd) throw new Error('native_service_admission_required');
         const env: Record<string, string> = {};
@@ -99,7 +146,9 @@ export function createNativeComposeLifecycle(input: Readonly<{
             if (observe(await read(options?.signal)).phase !== 'stopped') throw new Error('native_service_stop_unconfirmed');
             // Retire only an observed stopped generation before admitting its replacement.
             ids = undefined;
+            cleared = false;
         },
+        markStarted() { starterStarted = true; },
         get redactedValues() { return Object.values(launch?.env ?? {}).filter((value): value is string => typeof value === 'string' && value.length > 0); },
         async logs(options) {
             const rows = await read(options?.signal);
@@ -113,23 +162,42 @@ export function createNativeComposeLifecycle(input: Readonly<{
             return output.join('\n');
         },
         async inspect(options) {
+            if (cleared) return stopped;
             try { return observe(await read(options?.signal)); }
             catch (error) { if (options?.signal?.aborted) throw error; return unknown; }
         },
         async stop(options) {
             try {
+                if (options?.signal?.aborted) options.signal.throwIfAborted();
+                if (cleared) return { status: 'stopped' };
                 const before = await read(options?.signal);
-                if (!before) return { status: 'termination_incomplete' };
+                if (!before) {
+                    // Observe any recoverable incumbent first. An old Unknown
+                    // binding that never launched or captured a native resource
+                    // has nothing of ours to terminate when observation is down.
+                    if (!ids?.length && !starterStarted) { cleared = true; return { status: 'stopped' }; }
+                    return { status: 'termination_incomplete' };
+                }
                 if (observe(before).phase === 'stopped') return { status: 'stopped' };
                 if (!ids?.length) return { status: 'termination_incomplete' };
                 const result = await run(['stop', ...before.map(row => row.id)], options?.signal);
                 if (result.exitCode !== 0) return { status: 'termination_incomplete' };
                 return { status: observe(await read(options?.signal)).phase === 'stopped' ? 'stopped' : 'termination_incomplete' };
-            } catch (error) { if (options?.signal?.aborted) throw error; return { status: 'termination_incomplete' }; }
+            } catch (error) {
+                if (options?.signal?.aborted) throw error;
+                if (!ids?.length && !starterStarted) { cleared = true; return { status: 'stopped' }; }
+                return { status: 'termination_incomplete' };
+            }
         },
     };
     return {
         lifecycle,
+        async assertAvailable(signal?: AbortSignal) {
+            if (!launch?.cwd) throw new Error('native_service_admission_required');
+            const env: Record<string, string> = {};
+            for (const [key, value] of Object.entries(launch.env ?? {})) if (value !== undefined) env[key] = value;
+            await assertNativeComposeAvailable({ io: input.io, command: launch.command, prefix, cwd: launch.cwd, env, signal });
+        },
         bindLaunch(value: HostAuthorizedPluginExecLaunch) {
             const args = value.args ?? [];
             if (args.length < input.args.length || args.slice(-input.args.length).some((arg, index) => arg !== input.args[index])) {

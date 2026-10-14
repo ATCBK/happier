@@ -1,6 +1,8 @@
 import axios from 'axios';
 import nacl from 'tweetnacl';
-import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { bindExternalActionExecutionAuthorizationHttpPathV1, ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema, ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { admitRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
 import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalActionExecutionAuthorization';
 import { chmod, copyFile, cp, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -33,7 +35,6 @@ import { createLocalServiceActionConfirmationNonceV1, createProjectServiceDeclar
 import { computeWorkspaceSyncPolicyDigest, type WorkspaceSyncRelationshipV1 } from '@happier-dev/protocol';
 import type { ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { ApiClient } from '@/api/api';
-import * as machineTransport from '@/session/transport/rpc/machineRpc';
 import { createProjectDefinitionAction, registerProjectDefinitionHandlers } from '@/rpc/handlers/projectDefinitions';
 import { createProjectFiniteSourceManifestInspector } from '@/daemon/startup/createDaemonMachineBootstrapRuntime';
 import { createWorkspaceSyncWorkerPreparation, prepareWorkspaceSyncBetween } from '@/workspaces/sync/workspaceSyncPreparation';
@@ -46,7 +47,7 @@ import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { registerDaemonLocalServicesMachineRpcHandlers } from '@/rpc/handlers/daemonLocalServices';
 import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorization';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { DaemonLocalServiceLauncherSnapshotResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
+import { DaemonLocalServiceLauncherSnapshotResponseV1Schema, DaemonLocalServiceLauncherStartResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import { createDefaultWorkspaceExecutionSettingsV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 import { createProcessActionOwnerAdapters } from '@/daemon/processes/actions/processActionOwnerAdapters';
 import { MachineProcessesStartAgainResultV1Schema } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
@@ -76,6 +77,7 @@ import { reloadConfiguration } from '@/configuration';
 import { updateSettings } from '@/persistence';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 import { assertActionOutputContract } from '@/testkit/actionOutputContract';
+import { buildLocalServiceRows } from '../../../../../../../apps/ui/sources/sync/domains/local/services/serviceRow';
 
 class ObservedSetupPty implements PtyProcess {
     readonly pid = 3456;
@@ -93,7 +95,7 @@ describe('accepted Project Service declaration starter', () => {
     const cleanups: Array<() => Promise<void>> = [];
     afterEach(async () => { vi.restoreAllMocks(); withdrawActiveProjectAccountRowsSnapshot(); await Promise.all(cleanups.splice(0).map(cleanup => cleanup())); });
 
-    async function fixture(setup = false, source?: unknown, finiteAccepting = true, workerExecution?: 'portable' | 'primary', profileId = 'home', homeId = profileId) {
+    async function fixture(setup = false, source?: unknown, finiteAccepting = true, workerExecution?: 'portable' | 'primary', profileId = 'home', homeId = profileId, supervisorPlatform?: NodeJS.Platform) {
         const root = await mkdtemp(join(tmpdir(), 'happier-project-service-'));
         await mkdir(join(root, '.happier'));
         const command = `${JSON.stringify(process.execPath)} -e "setInterval(() => {}, 1000)"`;
@@ -104,8 +106,25 @@ describe('accepted Project Service declaration starter', () => {
         const workspace = { id: 'accepted', serverId: homeId, machineId: 'machine', rootPath: root, createdAtMs: 1, projectKey: 'project' };
         const targetRoot = workerExecution ? await mkdtemp(join(tmpdir(), 'happier-project-service-target-')) : root;
         const targetWorkspace = workerExecution ? { ...workspace, id: 'worker-ref', machineId: 'worker-machine', rootPath: targetRoot } : workspace;
-        const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`, encryption: null,
+        const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'owner', tokenEpoch: 1,
+            provenance: { v: 1, kind: 'terminal', authority: 'account_automation' } })).toString('base64url')}.signature`, encryption: null,
             credentialProvenance: 'stored_session' as const };
+        const serverIdentityId = homeId.startsWith('srv_') ? homeId : 'srv_serviceHome';
+        const machines = [workspace, ...(workerExecution ? [targetWorkspace] : [])].map(value => ExternalActionMachineBootstrapV1Schema.parse({
+            id: value.machineId, installationId: value.machineId === workspace.machineId ? 'source-installation' : 'installation',
+            kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
+            access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+        }));
+        const sourceHandlers = new Map<string, (input: unknown, context?: RpcHandlerContext) => Promise<unknown>>();
+        let sourceListed = true;
+        let mintedEpoch = 1;
+        // Authenticated feature discovery supplies the installed Home identity;
+        // the actual SOURCE inspector and original Account transport remain real.
+        if (workerExecution) vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+            expect(String(input)).toBe('https://home.example/v1/features/authenticated');
+            return new Response(JSON.stringify(FeaturesResponseSchema.parse({ features: {},
+                capabilities: { serverIdentity: { serverIdentityId } } })), { status: 200 });
+        });
         const basePolicy = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
         const relationship: WorkspaceSyncRelationshipV1 = { v: 1, relationshipId: 'source-worker', controllerMachineId: workspace.machineId,
             alphaWorkspaceRefId: workspace.id, betaWorkspaceRefId: targetWorkspace.id, mode: 'keep_synced', enabled: true,
@@ -119,18 +138,46 @@ describe('accepted Project Service declaration starter', () => {
         vi.spyOn(axios, 'get').mockImplementation(async url => {
             const path = new URL(String(url)).pathname;
             if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 0 } };
+            if (path === '/v1/machines') return { status: 200, data: sourceListed ? machines : machines.filter(machine => machine.id !== workspace.machineId) };
             if (path.startsWith('/v1/machines/')) {
                 const publishedMachine = [workspace, targetWorkspace].find(value => path === `/v1/machines/${encodeURIComponent(value.machineId)}`);
                 if (!publishedMachine) throw new Error(`Unknown fixture Machine path: ${path}`);
                 return { status: 200, data: { machine: {
-                    id: publishedMachine.machineId, metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0, storageMode: 'plain',
-                    access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+                    ...machines.find(machine => machine.id === publishedMachine.machineId),
+                    metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0, storageMode: 'plain',
                 } } };
             }
             return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
         });
         let trustedSetupDigest: string | null = null;
-        const post = vi.spyOn(axios, 'post').mockImplementation(async url => {
+        const post = vi.spyOn(axios, 'post').mockImplementation(async (url, body, options) => {
+            const path = new URL(String(url)).pathname;
+            if (path === bindExternalActionExecutionAuthorizationHttpPathV1('projects.inspect') || path === '/v1/actions/projects.inspect') {
+                expect(options?.headers).toMatchObject({ Authorization: `Bearer ${credentials.token}` });
+                const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+                const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.envelope);
+                const sourceMachine = machines[0]!;
+                expect(request.machineId).toBe(sourceMachine.id);
+                expect(envelope).toMatchObject({ target: { kind: 'machine', machineId: sourceMachine.id }, input: { workspace: {
+                    serverId: homeId, workspaceId: workspace.id, machineId: workspace.machineId, rootPath: root,
+                } } });
+                if (path !== '/v1/actions/projects.inspect') return { status: 200, data: ExternalActionExecutionAuthorizationV1Schema.parse({
+                    v: 1, token: 'home-issued-source-inspection', binding: { accountId: 'owner', custodianAccountId: 'owner',
+                        authentication: { kind: 'terminal', tokenEpoch: mintedEpoch }, accountEncryptionMode: 'plain', serverIdentityId,
+                        machineId: sourceMachine.id, installationId: sourceMachine.installationId, actionId: 'projects.inspect',
+                        requestId: envelope.requestId, target: envelope.target,
+                        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope) },
+                }) };
+                expect(request.executionAuthorization?.binding).toMatchObject({ authentication: { kind: 'terminal', tokenEpoch: 1 },
+                    machineId: sourceMachine.id, installationId: sourceMachine.installationId, actionId: 'projects.inspect', requestId: envelope.requestId });
+                const handler = sourceHandlers.get(getActionSpec('projects.inspect').bindings!.rpcMethod!);
+                if (!handler) throw new Error('SOURCE inspection handler is not registered');
+                const output = await handler(envelope.input, { signal: options?.signal instanceof AbortSignal ? options.signal : ingress.signal,
+                    callerAuthority: 'account_automation', transportRequestId: envelope.requestId });
+                assertActionOutputContract('projects.inspect', output);
+                return { status: 200, data: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.inspect',
+                    requestId: envelope.requestId, execution: { ok: true, result: output } }) };
+            }
             if (String(url).endsWith('/project-trust/read')) return { status: 200, data: trustedSetupDigest === null ? { status: 'absent' }
                 : { status: 'present', revision: 1, content: { t: 'plain', v: { project: { serverId: homeId, projectId: 'project' },
                     reviewedEffectDigest: trustedSetupDigest, approvedAtMs: 1 } } } };
@@ -159,7 +206,8 @@ describe('accepted Project Service declaration starter', () => {
         const operationRuntime = createHostActionOperationRuntime({ machineId: targetWorkspace.machineId,
             custodyBinding: { serverId: homeId, installationId: 'installation' }, resolveAccountId: async () => 'owner',
             ...(workerExecution ? { generateOperationId: () => 'setup-operation' } : {}) });
-        const owner = createManagedServicesOwner({ processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
+        const owner = createManagedServicesOwner({ processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon',
+            ...(supervisorPlatform ? { platform: supervisorPlatform } : {}) }),
             // Plugin dependency installation is unreachable for literal Project commands.
             dependencies: Object.freeze({}) as never, resolveScope: scope => scope });
         cleanups.push(async () => { terminalSessions.dispose(); await owner.dispose(); await rm(root, { recursive: true, force: true });
@@ -192,19 +240,12 @@ describe('accepted Project Service declaration starter', () => {
                             conflictCount: 0, lastCycleObservedAtMs: null };
                     } }) }) : {}) };
         if (workerExecution) {
-            const handlers = new Map<string, (input: unknown, context?: RpcHandlerContext) => Promise<unknown>>();
             registerProjectDefinitionHandlers({ machineId: workspace.machineId,
-                rpcHandlerManager: { registerHandler: (method, handler) => { handlers.set(method, handler); } },
+                rpcHandlerManager: { registerHandler: (method, handler) => { sourceHandlers.set(method, handler); } },
                 actionExecutor: createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
                     serverId: profileId, serverHttpBaseUrl: 'https://home.example', sessionId: 'cli-global', mode: 'plain', ctx: null,
                     projectDefinitionAction: createProjectDefinitionAction({ serverId: profileId,
                         machineId: workspace.machineId, workingDirectory: root, accessPolicy: { kind: 'restrictedRoots', roots: [root] } }) })) });
-            vi.spyOn(machineTransport, 'callExactMachineRpc').mockImplementation(async request => {
-                expect(request.machineId).toBe(workspace.machineId);
-                const handler = handlers.get(request.method);
-                if (!handler) throw new Error('Unknown SOURCE Action');
-                return await handler(request.request, { signal: request.signal ?? ingress.signal });
-            });
             const inspectSourceProjectManifest = createProjectFiniteSourceManifestInspector({ api: await ApiClient.create(credentials),
                 credentials, serverId: profileId, serverHttpBaseUrl: 'https://home.example', accountId: 'owner', ingress, isCurrent: async () => true });
             Object.assign(runtime, { inspectSourceProjectManifest });
@@ -225,12 +266,22 @@ describe('accepted Project Service declaration starter', () => {
             runTargets: () => discoverLocalServiceRunTargets({ roots: [], acceptedWorkspaceRefs: [targetWorkspace] }) });
         const routes = createLocalServiceLauncherRoutes({ feed, history, ...starter });
         return { root, workspace, targetRoot, targetWorkspace, manifest, starter, routes, history, request, ingress, context, owner, post, setupProcesses, operationRuntime, runtime, admissionDrain,
+            async createRuntimeActionExecutor() {
+                const featureGate = createLocalServicesDaemonFeatureGate({ env: {}, resolveServerFeaturesSnapshot: () => ({ status: 'ready',
+                    features: FeaturesResponseSchema.parse({ features: { localServices: { enabled: true, inventory: { enabled: true },
+                        managed: { enabled: true }, actions: { enabled: true }, launcher: { enabled: true } },
+                        browser: { enabled: true, viewTargets: { enabled: true } } }, capabilities: {} }) }) });
+                await featureGate.refresh();
+                return createLocalServicesDaemonRuntimeActionExecutor({ featureGate, ingress, routes: { launcherRoutes: routes } });
+            },
             copies: () => copies, withdrawRelationship() { relationshipCurrent = false; },
             changeCopiedManifest(value: unknown) { copyManifestOverride = value; },
             afterCopy(callback: () => void) { afterCopy = callback; },
             savePlacement(value: ProjectServicePlacementV1) { savedPlacement = value; },
             setNativeTool(value: NonNullable<typeof nativeTool>) { nativeTool = value; },
             trustSetupDigest(value: string) { trustedSetupDigest = value; },
+            publishSource(value: boolean) { sourceListed = value; },
+            mintSourceEpoch(value: number) { mintedEpoch = value; },
             retireRegistryProjection() { projectionLifetime.abort(); } };
     }
 
@@ -337,8 +388,10 @@ describe('accepted Project Service declaration starter', () => {
         } finally { scope.restore(); reloadConfiguration(); }
     });
 
-    it('starts a reviewed Service for an admitted restricted requester without owner credentials', async () => {
+    it.each(['current', 'retired', 'cancelled during currentness'] as const)('reviews a Service with real admitted requester custody (%s)', async state => {
         const h = await fixture();
+        const cancellation = new AbortController();
+        let cancelDuringCurrentness = false;
         const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-proof', binding: {
             accountId: 'bob', principalId: 'bob', credentialId: 'pat', custodianAccountId: 'owner', accountEncryptionMode: 'plain',
             serverIdentityId: 'stable-home', machineId: 'machine', installationId: 'installation', actionId: 'localServices.launcher.start',
@@ -347,12 +400,17 @@ describe('accepted Project Service declaration starter', () => {
                 approve: false, origins: [], models: null, permissionModes: null, create: null },
         } });
         vi.mocked(axios.get).mockImplementation(async url => {
+            if (cancelDuringCurrentness && String(url).endsWith('/currentness')) {
+                await Promise.resolve();
+                cancellation.abort();
+            }
             if (String(url).endsWith('/v1/account/profile')) return { status: 200, data: { id: 'bob' } };
             if (String(url).endsWith('/v2/account/settings')) return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
             return { status: 200, data: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
         });
         const admitted = await admitRequesterAccountActionContext({ authorization, credentials: { token: 'bob', encryption: null },
-            serverId: 'home', serverIdentityId: 'stable-home', serverHttpBaseUrl: 'https://home.example', isCurrent: async () => true });
+            serverId: 'home', serverIdentityId: 'stable-home', serverHttpBaseUrl: 'https://home.example', isCurrent: async () => true,
+            signal: cancellation.signal });
         if (!admitted) throw new Error('Requester custody not admitted');
         const rowPost = h.post.getMockImplementation()!;
         h.post.mockImplementation(async (url, body, options) => String(url).endsWith('/verify')
@@ -364,9 +422,19 @@ describe('accepted Project Service declaration starter', () => {
         // This replaces constructor state, not admission or native review logic.
         Reflect.deleteProperty(h.runtime, 'credentials');
         Object.assign(h.runtime, { accountId: 'bob', accountAuthorization: carrier, isCurrent: admitted.isCurrent });
-        const ingress = { ...h.ingress, callerInputAuthorization: carrier, callerInputConstraints: { models: null, permissionModes: null },
+        const ingress = { ...h.ingress, signal: cancellation.signal, callerInputAuthorization: carrier, callerInputConstraints: { models: null, permissionModes: null },
             machineAdmission: { ...h.ingress.machineAdmission!, actorAccountId: 'bob' } };
+        if (state === 'retired') await admitted.dispose();
+        cancelDuringCurrentness = state === 'cancelled during currentness';
         const review = await h.routes.startTarget!(h.request, ingress, h.context);
+        if (state !== 'current') {
+            assertActionOutputContract('localServices.launcher.start', review);
+            expect(review).toMatchObject({ status: 'denied', reasonCode: state === 'retired'
+                ? 'project_requester_credentials_unavailable' : 'cancelled' });
+            expect(h.owner.listProjectServices()).toEqual([]);
+            await admitted.dispose();
+            return;
+        }
         expect(review).toMatchObject({ status: 'denied', reasonCode: 'project_service_effect_review_required' });
         expect(await h.routes.startTarget!({ ...h.request, expectedEffectDigest: review.reviewedEffectDigest }, ingress, h.context))
             .toMatchObject({ status: 'succeeded' });
@@ -453,6 +521,161 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
         expect((await getBindings()).targets).toEqual([]);
     });
 
+    it.each([
+        ['linux', 'permission_denied', 'permission denied while trying to connect to the docker API at unix:///var/run/docker.sock'],
+        ['darwin', 'not_running', 'Cannot connect to the Docker daemon at unix:///Users/alice/.docker/run/docker.sock. Is the docker daemon running?'],
+        ['win32', 'not_running', 'open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.'],
+        ['win32', 'permission_denied', 'open //./pipe/docker_engine: Access is denied.'],
+        ['linux', 'unavailable', 'Docker endpoint TLS handshake failed'],
+    ] as const)('refuses unavailable Docker before admitting a native resource (%s %s)', async (platform, cause, stderr) => {
+        const h = await fixture(false, { kind: 'native', tool: 'compose', file: 'compose.yaml', target: 'worker' });
+        await writeFile(join(h.root, 'compose.yaml'), 'services:\n  worker:\n    image: alpine:3.22\n');
+        h.setNativeTool({ executablePath: '/installed/docker' });
+        Object.assign(h.runtime, { platform });
+        // Only Docker process IO is replaced. Admission, declaration discovery,
+        // Action/launcher wiring, strict output schema and row projection stay real.
+        const observed: string[][] = [];
+        Object.assign(h.runtime, { environmentIo: { ...h.runtime.environmentIo, async run(request: Parameters<ProjectFiniteActionRuntime['environmentIo']['run']>[0]) {
+            observed.push([...request.args]);
+            return { exitCode: 1, stdout: '', stderr };
+        } } });
+        const execute = await h.createRuntimeActionExecutor();
+        const raw = await execute({
+            actionId: 'localServices.launcher.start', input: h.request, context: h.context,
+        });
+        expect(raw).toMatchObject({ status: 'denied', reasonCode: 'native_tool_unavailable' });
+        const result = DaemonLocalServiceLauncherStartResponseV1Schema.parse(raw);
+        assertActionOutputContract('localServices.launcher.start', result);
+        expect(result).toMatchObject({ status: 'denied', reasonCode: 'native_tool_unavailable',
+            prerequisite: { tool: 'docker', cause, machineName: expect.any(String) } });
+        expect(observed.length).toBeGreaterThan(0);
+        expect(observed.some(args => args.includes('up') || args.includes('stop'))).toBe(false);
+        expect(h.owner.listProjectServices()).toEqual([]);
+        const snapshot = await h.routes.getSnapshot();
+        assertActionOutputContract('localServices.launcher.snapshot', snapshot);
+        expect(snapshot.targets).toHaveLength(1);
+        const rows = buildLocalServiceRows({ inventoryRows: [], launchTargets: snapshot.targets, sessionId: null, scope: 'workspace' });
+        expect(rows[0]).toMatchObject({ status: 'stopped', primaryAction: { kind: 'start' } });
+    });
+
+    it('projects a missing Docker installation as a native prerequisite without acquiring custody', async () => {
+        const h = await fixture(false, { kind: 'native', tool: 'compose', file: 'compose.yaml', target: 'worker' });
+        await writeFile(join(h.root, 'compose.yaml'), 'services:\n  worker:\n    image: alpine:3.22\n');
+        const result = await h.routes.startTarget!(h.request, h.ingress, h.context);
+        assertActionOutputContract('localServices.launcher.start', result);
+        expect(result).toMatchObject({ status: 'denied', reasonCode: 'native_tool_unavailable',
+            prerequisite: { tool: 'docker', cause: 'not_installed', machineName: expect.any(String) } });
+        expect(h.owner.listProjectServices()).toEqual([]);
+    });
+
+    it('keeps cancelled Docker inspection distinct from a native prerequisite', async () => {
+        const h = await fixture(false, { kind: 'native', tool: 'compose', file: 'compose.yaml', target: 'worker' });
+        await writeFile(join(h.root, 'compose.yaml'), 'services:\n  worker:\n    image: alpine:3.22\n');
+        h.setNativeTool({ executablePath: '/installed/docker' });
+        const cancellation = new AbortController();
+        Object.assign(h.ingress, { signal: cancellation.signal });
+        Object.assign(h.runtime, { environmentIo: { ...h.runtime.environmentIo, async run() {
+            cancellation.abort();
+            return { exitCode: 1, stdout: '', stderr: 'permission denied' };
+        } } });
+        const result = await h.routes.startTarget!(h.request, h.ingress, h.context);
+        assertActionOutputContract('localServices.launcher.start', result);
+        expect(result).toMatchObject({ status: 'denied', reasonCode: 'cancelled' });
+        expect(result).not.toHaveProperty('prerequisite');
+        expect(h.owner.listProjectServices()).toEqual([]);
+    });
+
+    it.each([false, true])('composes Stop and reloaded row projection for an unknown Compose binding with captured identity=%s', async captured => {
+        const h = await fixture(false, { kind: 'native', tool: 'compose', file: 'compose.yaml', target: 'worker' });
+        await writeFile(join(h.root, 'compose.yaml'), 'services:\n  worker:\n    image: alpine:3.22\n');
+        h.setNativeTool({ executablePath: '/installed/docker' });
+        let unavailable = false;
+        let settled = false;
+        let project = '';
+        const id = 'a'.repeat(64);
+        Object.assign(h.runtime, { environmentIo: { ...h.runtime.environmentIo, async run(request: Parameters<ProjectFiniteActionRuntime['environmentIo']['run']>[0]) {
+            if (unavailable) return { exitCode: 1, stdout: '', stderr: 'permission denied while trying to connect to the docker API at unix:///var/run/docker.sock' };
+            const filter = request.args.find(arg => arg.startsWith('label=com.docker.compose.project='));
+            if (filter) project = filter.slice('label=com.docker.compose.project='.length);
+            const stdout = request.args.includes('ps') ? captured ? id : 'invalid-container-list'
+                : request.args.includes('inspect') ? JSON.stringify([{ Id: id,
+                    Config: { Labels: { 'com.docker.compose.project': project, 'com.docker.compose.service': 'worker' } },
+                    State: { Status: settled ? 'exited' : 'running' }, NetworkSettings: { Ports: {} } }]) : '';
+            return { exitCode: 0, stdout };
+        } } });
+        const review = await h.routes.startTarget!(h.request, h.ingress, h.context);
+        if (!review.reviewedEffectDigest) throw new Error('Expected Compose effect review');
+        const started = await h.routes.startTarget!({ ...h.request, expectedEffectDigest: review.reviewedEffectDigest }, h.ingress, h.context);
+        expect(started).toMatchObject({ status: 'succeeded' });
+        if (!started.currentTarget) throw new Error('Expected real managed Compose binding');
+        unavailable = true;
+        const routes = createLocalServiceActionRoutes({ machineId: 'machine',
+            inventoryRegistry: createLocalServiceInventoryRegistry(), projectManagedServices: h.owner,
+            verifyConfirmationNonce: request => request.confirmationNonce === createLocalServiceActionConfirmationNonceV1(request) });
+        const stop = { requestId: 'docker-unknown-stop', action: 'stop_managed' as const, target: started.currentTarget, force: false };
+        try {
+            const result = await routes.execute({ ...stop, confirmationNonce: createLocalServiceActionConfirmationNonceV1(stop) });
+            assertActionOutputContract('localServices.actions.stopManaged', result);
+            expect(result).toMatchObject(captured ? { status: 'failed', reasonCode: 'plugin_managed_server_termination_incomplete' } : { status: 'succeeded' });
+            const snapshot = await h.routes.getSnapshot();
+            assertActionOutputContract('localServices.launcher.snapshot', snapshot);
+            const rows = buildLocalServiceRows({ inventoryRows: [], launchTargets: snapshot.targets, sessionId: null, scope: 'workspace' });
+            expect(rows).toHaveLength(1);
+            expect(rows[0]).toMatchObject({ status: captured ? 'unavailable' : 'stopped' });
+            expect(h.owner.listProjectServices()).toHaveLength(captured ? 1 : 0);
+        } finally { unavailable = false; settled = true; }
+    });
+
+    it('retains incomplete cleanup when an admitted starter ran but Docker lost observation before capturing an identity', async () => {
+        const h = await fixture(false, { kind: 'native', tool: 'compose', file: 'compose.yaml', target: 'worker' });
+        await writeFile(join(h.root, 'compose.yaml'), 'services:\n  worker:\n    image: alpine:3.22\n');
+        // OS executable boundary: a finite successful starter, with real host
+        // process custody. Docker observation is independently unavailable afterwards.
+        h.setNativeTool({ executablePath: process.execPath, args: ['-e', 'process.exit(0)', '--'] });
+        let lists = 0;
+        let recovered = false;
+        Object.assign(h.runtime, { environmentIo: { ...h.runtime.environmentIo, async run(request: Parameters<ProjectFiniteActionRuntime['environmentIo']['run']>[0]) {
+            if (request.args.includes('ps') && ++lists > 2 && !recovered) return {
+                exitCode: 1, stdout: '', stderr: 'permission denied while trying to connect to the docker API at unix:///var/run/docker.sock',
+            };
+            return { exitCode: 0, stdout: '' };
+        } } });
+        const review = await h.routes.startTarget!(h.request, h.ingress, h.context);
+        if (!review.reviewedEffectDigest) throw new Error('Expected Compose effect review');
+        try {
+            const started = await h.routes.startTarget!({ ...h.request, expectedEffectDigest: review.reviewedEffectDigest }, h.ingress, h.context);
+            expect(started).toMatchObject({ status: 'succeeded' });
+            const handle = h.owner.listProjectServices()[0];
+            if (!handle) throw new Error('Expected retained uncertain native resource');
+            await expect(handle.stop()).rejects.toMatchObject({ code: 'plugin_managed_server_termination_incomplete' });
+            expect(h.owner.listProjectServices()).toEqual([handle]);
+        } finally { recovered = true; }
+    });
+
+    it('releases native custody when the OS never gave the starter a process identity', async () => {
+        // The macOS host path directly spawns the target. Linux systemd-run may
+        // acquire a launcher PID even when the target executable is missing.
+        const h = await fixture(false, { kind: 'native', tool: 'compose', file: 'compose.yaml', target: 'worker' }, true, undefined, 'home', 'home', 'darwin');
+        await writeFile(join(h.root, 'compose.yaml'), 'services:\n  worker:\n    image: alpine:3.22\n');
+        h.setNativeTool({ executablePath: `${h.root}-removed-docker` });
+        // The resolved tool was removed at the OS boundary after prerequisite
+        // inspection. An actual failed spawn produces no PID or native resource.
+        let lists = 0;
+        let recovered = false;
+        Object.assign(h.runtime, { environmentIo: { ...h.runtime.environmentIo, async run(request: Parameters<ProjectFiniteActionRuntime['environmentIo']['run']>[0]) {
+            if (request.args.includes('ps') && ++lists > 2 && !recovered) return { exitCode: 1, stdout: '', stderr: 'permission denied' };
+            return { exitCode: 0, stdout: '' };
+        } } });
+        const review = await h.routes.startTarget!(h.request, h.ingress, h.context);
+        if (!review.reviewedEffectDigest) throw new Error('Expected Compose effect review');
+        try {
+            const started = await h.routes.startTarget!({ ...h.request, expectedEffectDigest: review.reviewedEffectDigest }, h.ingress, h.context);
+            expect(started.status).toBe('denied');
+            expect(h.owner.listProjectServices()).toEqual([]);
+            expect(h.owner.readRetainedSemanticCustodyCount()).toBe(0);
+        } finally { recovered = true; }
+    });
+
     it.skipIf(!process.env.FX16_DOCKER_PATH)('qualifies installed detached Compose through declaration admission, observation and exact Stop', async () => {
         const h = await fixture(false, { kind: 'native', tool: 'compose', file: 'compose.yaml', target: 'worker' });
         await writeFile(join(h.root, 'compose.yaml'), 'services:\n  worker:\n    image: alpine:3.22\n    command: [sh, -c, "echo fx16-service-output; echo fx16-service-error >&2; exec sleep 3600"]\n');
@@ -530,11 +753,7 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
             source: { kind: 'command', command: `exec ${JSON.stringify(process.execPath)} -e ${JSON.stringify(treeScript)}` },
         } } };
         await writeFile(join(h.root, '.happier/project.json'), JSON.stringify({ ...manifest, environment: importedPixiEnvironment }));
-        const pluginManifest = detachedNative ? { ...pixiPlugin.manifest, contributes: { ...pixiPlugin.manifest.contributes,
-            projectNativeAdapters: pixiPlugin.manifest.contributes?.projectNativeAdapters?.map(adapter => ({ ...adapter,
-                roles: [...adapter.roles, 'nativeServiceLifecycle'] })),
-        } } : pixiPlugin.manifest;
-        const ingested = ingestCanonicalPluginManifest(pluginManifest, { sourceProvenance: 'registryCustodied' });
+        const ingested = ingestCanonicalPluginManifest(pixiPlugin.manifest, { sourceProvenance: 'registryCustodied' });
         if (!ingested.ok) throw new Error('Expected admitted public native fixture');
         const environmentObservation: { signal?: AbortSignal } = {};
         let nativeHelper: Awaited<ReturnType<PluginInvocationContext['services']['exec']['spawn']>> | undefined;
@@ -793,6 +1012,7 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
             expect(environmentObservation.signal?.aborted).toBe(true);
             return;
         }
+        let capturedTree: Extract<Awaited<ReturnType<typeof processTreeBoundary.captureProcessTree>>, { status: 'ok' }> | undefined;
         const terminate = vi.spyOn(processTreeBoundary, 'terminateProcessTree').mockRejectedValue(new Error('OS tree termination could not be observed'));
         try {
             if (exitedRoot) {
@@ -804,6 +1024,13 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
                     || !('childPid' in pids) || typeof pids.childPid !== 'number') throw new Error('Expected actual OS tree identities');
                 const parentPid = pids.parentPid;
                 const childPid = pids.childPid;
+                // The canonical identity-safe owner cannot discover survivors
+                // from a departed numeric root. Retain exact fixture identities
+                // before injecting that unexpected root exit for explicit cleanup.
+                const captured = await processTreeBoundary.captureProcessTree({ pid: parentPid });
+                expect(captured).toMatchObject({ status: 'ok', capturedTargets: expect.arrayContaining([expect.objectContaining({ pid: childPid })]) });
+                if (captured.status !== 'ok') throw new Error('Expected observed fixture tree before root exit');
+                capturedTree = captured;
                 process.kill(parentPid, 'SIGKILL');
                 await expect.poll(() => {
                     try { process.kill(parentPid, 0); return true; } catch { return false; }
@@ -815,6 +1042,16 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
             expect(h.owner.listProjectServices()).toEqual([handle]);
             expect(environmentObservation.signal?.aborted).toBe(false);
         } finally { terminate.mockRestore(); }
+        if (capturedTree) {
+            // Restoring the OS adapter cannot manufacture custody. The real
+            // Service Stop must still retain the environment while this known
+            // survivor exists; settle only the fixture's captured generations.
+            await expect(handle.stop()).rejects.toMatchObject({ code: 'plugin_managed_server_termination_incomplete' });
+            expect(h.owner.listProjectServices()).toEqual([handle]);
+            expect(environmentObservation.signal?.aborted).toBe(false);
+            expect(await processTreeBoundary.terminateProcessTree({ targets: capturedTree.capturedTargets, tree: false }))
+                .toMatchObject({ status: 'complete' });
+        }
         await handle?.stop();
         expect(h.owner.listProjectServices()).toEqual([]);
         expect(environmentObservation.signal?.aborted).toBe(true);
@@ -834,6 +1071,15 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
 
     it('receives an immutable portable SOURCE, copies only during Start, and publishes actual worker custody without a finite slot', async () => {
         const h = await fixture(false, undefined, false, 'portable');
+        h.publishSource(false);
+        expect(await h.routes.startTarget!(h.request, h.ingress, h.context)).toMatchObject({ status: 'denied', reasonCode: 'admission_unavailable' });
+        expect(h.copies()).toBe(0);
+        expect(h.owner.listProjectServices()).toEqual([]);
+        h.publishSource(true);
+        h.mintSourceEpoch(2);
+        expect(await h.routes.startTarget!(h.request, h.ingress, h.context)).toMatchObject({ status: 'denied', reasonCode: 'admission_unavailable' });
+        expect(h.copies()).toBe(0);
+        h.mintSourceEpoch(1);
         const review = await h.routes.startTarget!(h.request, h.ingress, h.context);
         expect(review).toMatchObject({ status: 'denied', reasonCode: 'project_service_effect_review_required', reviewedEffectDigest: expect.any(String) });
         expect(h.copies()).toBe(0);

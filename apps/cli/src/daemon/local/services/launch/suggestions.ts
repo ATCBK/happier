@@ -367,18 +367,23 @@ export function buildLocalServiceLauncherSnapshot(
         .sort((a, b) => a.port - b.port || a.id.localeCompare(b.id));
     const terminalUrlCandidates = [...(input.terminalUrlCandidates ?? [])].sort((a, b) => a.sourceId.localeCompare(b.sourceId));
     const workspaceFileAssetCandidates = [...(input.workspaceFileAssetCandidates ?? [])].sort((a, b) => a.assetRef.localeCompare(b.assetRef));
-    const inventoryIds = new Set(input.inventoryEntries.map((entry) => entry.id));
     const targets: LocalServiceLaunchTargetV1[] = [];
-
-    for (const preview of previews) {
-        targets.push(targetFromPreview(preview));
-    }
-
     const availableInventoryEntries = inventoryEntries.filter((entry) => entry.state === 'listening');
     const unavailableInventoryEntries = inventoryEntries.filter((entry) => entry.state !== 'listening');
+    const previewByEntry = new Map(inventoryEntries.map(entry => [entry.id,
+        previews.find(candidate => previewMatchesEntry(candidate, entry))]));
+    const joinedPreviewIds = new Set(availableInventoryEntries.flatMap(entry => {
+        const preview = previewByEntry.get(entry.id);
+        return preview ? [preview.previewId] : [];
+    }));
+    // A registered preview is access to the same listener, not a second service. Keep its
+    // resource/route on the listener row; previews without current listening evidence stay visible.
+    for (const preview of previews) {
+        if (!joinedPreviewIds.has(preview.previewId)) targets.push(targetFromPreview(preview));
+    }
 
     for (const entry of availableInventoryEntries) {
-        const preview = previews.find((candidate) => previewMatchesEntry(candidate, entry));
+        const preview = previewByEntry.get(entry.id);
         targets.push(targetFromInventoryEntry(entry, preview, input.terminateDetectedEnabled === true,
             declarationTitleForEntry(entry, runTargets)));
     }
@@ -400,7 +405,7 @@ export function buildLocalServiceLauncherSnapshot(
     }
 
     for (const entry of unavailableInventoryEntries) {
-        const preview = previews.find((candidate) => previewMatchesEntry(candidate, entry));
+        const preview = previewByEntry.get(entry.id);
         targets.push(targetFromInventoryEntry(entry, preview, input.terminateDetectedEnabled === true,
             declarationTitleForEntry(entry, runTargets)));
     }

@@ -18,6 +18,28 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 }
 
 describe('discoverLocalServiceRunTargets', () => {
+    it('keeps the manifest authority for a same-name native service in each accepted checkout', async () => {
+        const root = await makeRepo();
+        try {
+            await mkdir(join(root, '.happier'));
+            await writeJson(join(root, '.happier/project.json'), { version: 1, services: {
+                db: { source: { kind: 'native', tool: 'compose', file: 'compose.yaml', target: 'db' } },
+                web: { source: { kind: 'command', command: 'node server.js' }, port: 5173 },
+            } });
+            await writeFile(join(root, 'compose.yaml'), 'services:\n  db:\n    image: postgres\n  cache:\n    image: redis\n');
+            await writeFile(join(root, 'Procfile'), 'web: node server.js\n');
+            const refs = ['one', 'two'].map(id => ({ id, serverId: 'home', machineId: 'machine', rootPath: root, createdAtMs: 1 }));
+            const targets = await discoverLocalServiceRunTargets({ roots: [], acceptedWorkspaceRefs: refs });
+            const snapshot = LocalServiceLauncherSnapshotV1Schema.parse(buildLocalServiceLauncherSnapshot({
+                machineId: 'machine', updatedAt: 1, runTargets: targets, inventoryEntries: [], previewResources: [],
+            }));
+            for (const ref of refs) {
+                const declarations = snapshot.targets.filter(target => target.workspaceId === ref.id);
+                expect(declarations.map(target => target.title).sort()).toEqual(['cache', 'db', 'web']);
+                expect(declarations.find(target => target.title === 'db')?.declaration?.selection).toEqual({ kind: 'manifest', name: 'db' });
+            }
+        } finally { await rm(root, { recursive: true, force: true }); }
+    });
     it('names detected listeners from one matching declaration in their own accepted checkout without granting managed custody', async () => {
         const root = await makeRepo();
         try {

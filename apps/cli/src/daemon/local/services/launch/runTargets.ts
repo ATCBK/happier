@@ -148,6 +148,7 @@ export async function discoverLocalServiceRunTargets(input: Readonly<{
                 packageScript: { packageName: target.packageName, packageManager, scriptName: target.scriptName } });
         }
         const manifest = await readProjectManifest({ root: workspace.rootPath });
+        const manifestServices = manifest.document?.status === 'valid' ? manifest.document.manifest.services ?? {} : {};
         if (manifest.document?.status === 'valid') {
             for (const [name, service] of Object.entries(manifest.document.manifest.services ?? {})) {
                 declarations.push({ ...declarationTarget(workspace, { kind: 'manifest', name }),
@@ -157,7 +158,11 @@ export async function discoverLocalServiceRunTargets(input: Readonly<{
         }
         const detected = await inspectProjectDefinitions(workspace.rootPath);
         for (const entry of detected.entries) {
-            if (entry.usage === 'service') declarations.push(declarationTarget(workspace, { kind: 'native', source: entry.source }));
+            // Named Project declarations own their service; native discovery is an offer only
+            // when the Project has not already declared that name for this checkout.
+            if (entry.usage === 'service' && !Object.hasOwn(manifestServices, entry.source.target)) {
+                declarations.push(declarationTarget(workspace, { kind: 'native', source: entry.source }));
+            }
         }
     }
     const unqualified = targets.filter(target => !(input.acceptedWorkspaceRefs ?? []).some(workspace => isWorkspacePathWithin(workspace.rootPath, target.cwd)));

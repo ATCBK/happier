@@ -4,6 +4,13 @@ import { ProjectManifestV1Schema, ProjectManifestV1StoredSchema } from './projec
 import { editProjectManifestDocument, readProjectManifestDocument } from './projectManifestDocument.js';
 
 describe('project manifest documents', () => {
+  it('explains invalid fields with their location and required value instead of schema jargon', () => {
+    const document = readProjectManifestDocument('{"version":2,"scripts":{"test":{"execution":false,"source":{"kind":"command","command":"echo ok"}}}}');
+    expect(document.status).toBe('invalid');
+    expect(document.diagnostics).toContainEqual({ code: 'invalid_field', path: ['version'], message: 'version: Use 1.' });
+    expect(document.diagnostics.find(diagnostic => diagnostic.path.join('.') === 'scripts.test.execution')?.message)
+      .toBe('scripts.test.execution: Choose "primary" or "portable".');
+  });
   const bytes = '{\n  "version": 1,\n  "future": {"keep": [1, 2]},\n  "scripts": {\n    "build": {"source": {"kind":"command", "command":"old", "futureSource":true}, "futureEntry":{"ok":true}},\n    "test": {"source":{"kind":"native", "tool":"package_script", "file":"package.json", "target":"test"}}\n  }\n}\n';
 
   it('projects usable known fields while diagnosing and retaining recursive unknown content', () => {

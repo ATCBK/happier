@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { withProcessOwnerEnvironment } from '@/processes/ownerTag';
 import { stripCliApiTokenEnvironment } from '@/auth/cliApiToken';
 import { randomUUID } from 'node:crypto';
+import { stripVTControlCharacters } from 'node:util';
 import { probeProcessGroupLiveness } from '@happier-dev/cli-common/process';
 
 import { TERMINAL_STREAM_MAX_FRAME_DECODED_BYTES, TERMINAL_STREAM_MAX_FRAMES } from '@happier-dev/protocol/terminal/stream';
@@ -176,6 +177,8 @@ export type TerminalPtySessionManager = Readonly<{
   ensure: (input: TerminalPtyEnsureInput) => EnsureOk | ErrorResult;
   waitForExit: (input: Readonly<{ terminalId: string; signal?: AbortSignal; onOutcomeUncertain?: () => void }>) => Promise<TerminalProcessExitObservation>;
   requestStop: (input: Readonly<{ terminalId: string }>) => Promise<TerminalProcessStopObservation>;
+  /** Observe a bounded presentation of the existing retained output, never another log. */
+  observeOutput: (input: Readonly<{ terminalId: string; maxLength: number; onOutput(line: string): void }>) => () => void;
   read: (input: Readonly<{ terminalId: string; cursor: number; maxBytes: number; maxEvents: number }>) => ReadOk | ErrorResult;
   readBytes: (input: Readonly<{ terminalId: string; byteOffset: number; maxBytes: number; maxChunks: number }>) => TerminalByteReadResult;
   readByteStream: (input: TerminalByteStreamReadRequest) => TerminalByteStreamReadResponse;
@@ -301,6 +304,7 @@ type PtySession = {
   stopPending: boolean;
   stopUnconfirmed: boolean;
   exitObservers: Set<(observation: TerminalProcessExitEvent) => void>;
+  outputObservers: Set<() => void>;
   cols: number;
   rows: number;
   pty: PtyProcess;
@@ -398,6 +402,29 @@ function pushDecodedText(
     pushEvent(session.buffer, { t: 'data', data: chunk }, config);
   }
   pushDetectedUrls(session, session.urlDetector.ingest(text), config, streamByteOffset);
+  for (const observer of session.outputObservers) observer();
+}
+
+function latestRetainedOutputLine(buffer: EventBuffer, maxLength: number): string | null {
+  let raw = '';
+  let latest = '';
+  for (let index = buffer.events.length - 1; index >= 0; index--) {
+    const event = buffer.events[index]!;
+    if (event.t !== 'data') continue;
+    raw = event.data + raw;
+    // Decode terminal controls across retained chunk boundaries; CR is an updated line.
+    const lines = stripVTControlCharacters(raw).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').split(/\r\n|[\r\n]/);
+    const last = lines.findLastIndex(line => line.trim().length > 0);
+    if (last < 0) continue;
+    latest = lines[last]!.trim();
+    // A preceding newline proves the full line; otherwise read earlier retained chunks.
+    // The caller's schema bound also lets us stop at the latest visible suffix of a long line.
+    if (last > 0 || latest.length >= maxLength) break;
+  }
+  if (!latest) return null;
+  const bounded = latest.slice(-maxLength);
+  // Do not cut an astral character in half at the strict schema's UTF-16 bound.
+  return /^[\udc00-\udfff]/.test(bounded) ? bounded.slice(1) : bounded;
 }
 
 export function createTerminalPtySessionManager(params: Readonly<{
@@ -501,6 +528,7 @@ export function createTerminalPtySessionManager(params: Readonly<{
   const removeSession = (session: PtySession): void => {
     for (const observer of session.exitObservers) observer({ kind: 'unavailable' });
     session.exitObservers.clear();
+    session.outputObservers.clear();
     retireSessionOwner(session, () => {
       try {
         session.pty.kill();
@@ -633,7 +661,9 @@ export function createTerminalPtySessionManager(params: Readonly<{
       maxBytes: config.bufferMaxBytes,
       maxChunks: config.bufferMaxEvents,
       maxAgeMs: config.bufferRetentionMs,
-      now,
+      // Once a process ends, its retained output must remain replayable for
+      // the lifetime of this terminal. Live age and byte/count bounds still apply.
+      now: () => session.ended ? session.lastActivityAtMs : now(),
     });
     const urlDetector = createTerminalUrlDetector({
       bufferLimit: config.urlParseBufferLimit,
@@ -651,6 +681,7 @@ export function createTerminalPtySessionManager(params: Readonly<{
       stopPending: false,
       stopUnconfirmed: false,
       exitObservers: new Set(),
+      outputObservers: new Set(),
       cols,
       rows,
       pty,
@@ -1352,6 +1383,17 @@ export function createTerminalPtySessionManager(params: Readonly<{
     isFiniteHeld: (terminalId) => sessionsById.get(terminalId)?.finiteHold === true,
     waitForExit,
     requestStop,
+    observeOutput: ({ terminalId, maxLength, onOutput }) => {
+      const session = sessionsById.get(terminalId);
+      if (!session) return () => {};
+      const observe = () => {
+        const line = latestRetainedOutputLine(session.buffer, maxLength);
+        if (line !== null) onOutput(line);
+      };
+      session.outputObservers.add(observe);
+      observe();
+      return () => { session.outputObservers.delete(observe); };
+    },
     restart,
     read,
     readBytes,

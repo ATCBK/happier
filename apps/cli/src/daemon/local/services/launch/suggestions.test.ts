@@ -108,10 +108,15 @@ describe('buildLocalServiceLauncherSnapshot', () => {
         };
         const input = { machineId: 'machine-a', updatedAt: 3_000, runTargets: [], previewResources: [preview] };
         const withListener = buildLocalServiceLauncherSnapshot({ ...input, inventoryEntries: [inventoryEntry()] });
+        expect(withListener.targets).toHaveLength(1);
         expect(withListener.targets.find((target) => target.source === 'inventory_entry')).toMatchObject({ source: 'inventory_entry', actions: ['open_preview', 'register_preview'], browserTarget: { kind: 'localServicePreview', targetId: 'preview-a' } });
         const withoutListener = buildLocalServiceLauncherSnapshot({ ...input, inventoryEntries: [] });
         expect(withoutListener.targets).toHaveLength(1);
         expect(withoutListener.targets[0]).toMatchObject({ source: 'registered_preview', state: 'available', actions: ['open_preview'] });
+        const foreign = buildLocalServiceLauncherSnapshot({ ...input, inventoryEntries: [inventoryEntry({ machineId: 'other' })] });
+        expect(foreign.targets).toHaveLength(2);
+        const stale = buildLocalServiceLauncherSnapshot({ ...input, inventoryEntries: [inventoryEntry({ state: 'stale' })] });
+        expect(stale.targets.find(target => target.source === 'registered_preview')?.actions).toContain('open_preview');
     });
     it('projects scripts, inventory entries, and registered previews into stable launcher targets', () => {
         const snapshot = buildLocalServiceLauncherSnapshot({
@@ -172,20 +177,19 @@ describe('buildLocalServiceLauncherSnapshot', () => {
 
         expect(LocalServiceLauncherSnapshotV1Schema.parse(snapshot)).toEqual(snapshot);
         expect(snapshot.targets.map((target) => [target.id, target.source, target.state, target.actions])).toEqual([
-            ['preview:preview-a', 'registered_preview', 'available', ['open_preview']],
             ['inventory:inventory-a', 'inventory_entry', 'available', ['open_preview', 'register_preview']],
             ['package:web:dev', 'package_script', 'unavailable', []],
             ['inventory:inventory-stale', 'inventory_entry', 'unavailable', []],
         ]);
         expect(snapshot.targets[0]?.browserTarget?.kind).toBe('localServicePreview');
-        expect(snapshot.targets[1]).toMatchObject({
+        expect(snapshot.targets[0]).toMatchObject({
             title: 'Local Vite App',
             kind: 'vite',
             browserTarget: { targetId: 'preview-a' },
         });
-        expect(snapshot.targets[2]?.unavailableReason).toBe('launch_unavailable');
-        expect(snapshot.targets[2]).not.toHaveProperty('sessionId');
-        expect(snapshot.targets[3]?.unavailableReason).toBe('stale_service');
+        expect(snapshot.targets[1]?.unavailableReason).toBe('launch_unavailable');
+        expect(snapshot.targets[1]).not.toHaveProperty('sessionId');
+        expect(snapshot.targets[2]?.unavailableReason).toBe('stale_service');
     });
 
     it('requires canonical preview registration rather than handing a remote viewer loopback', () => {

@@ -230,6 +230,14 @@ export type DaemonLocalServiceLauncherStartRequestV1 = z.infer<
   typeof DaemonLocalServiceLauncherStartRequestV1Schema
 >;
 
+/** Content-free native prerequisite; private CLI output never travels with it. */
+export const LocalServiceNativePrerequisiteV1Schema = lazyZodSchema(() => z.object({
+  tool: z.literal('docker'),
+  machineName: LocalServiceLauncherLabelV1Schema,
+  cause: z.enum(['not_installed', 'not_running', 'permission_denied', 'unavailable']),
+}).strict());
+export type LocalServiceNativePrerequisiteV1 = z.infer<typeof LocalServiceNativePrerequisiteV1Schema>;
+
 export const DaemonLocalServiceLauncherStartResponseV1Schema = lazyZodSchema(() => z
   .object({
     protocolVersion: z.literal(1),
@@ -237,6 +245,7 @@ export const DaemonLocalServiceLauncherStartResponseV1Schema = lazyZodSchema(() 
     targetId: z.string().trim().min(1).max(256),
     status: z.enum(['succeeded', 'denied', 'failed']),
     reasonCode: z.string().trim().min(1).max(256).optional(),
+    prerequisite: LocalServiceNativePrerequisiteV1Schema.optional(),
     reviewedEffect: StrictJsonValueSchema.optional(),
     reviewedEffectDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     currentTarget: LocalServiceManagedServiceActionTargetV1Schema.optional(),
