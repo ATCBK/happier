@@ -108,7 +108,32 @@ describe('requester-qualified live Session network observation', () => {
       { category: 'session', state: 'settled' }, { category: 'input', state: 'active' },
       { category: 'agents', state: 'settled' }, { category: 'attention', state: 'settled' },
     ] });
+    queue.discardMatching(() => true);
+    metadata = { machineId: 'machine', path: '/project', flavor: 'codex' };
+    const ownInventory = await source.read();
+    const inventory = { coverage: 'unknown' as const, items: [...ownInventory.items,
+      { category: 'session' as const, ownerRef: {}, attribution: { kind: 'unknown' as const }, state: 'unknown' as const }] };
+    const beforeDecision = rpcTokens.length;
+    expect(await readCurrentSessionEligibility({ access: input, inventory })).toMatchObject({ eligible: true });
+    // The first facts already came from this exact admitted Session. The final
+    // post-draft RPC remains fresh; repeating the preliminary RPC adds another
+    // full requester proof without protecting a distinct decision boundary.
+    expect(rpcTokens.length - beforeDecision).toBe(1);
+    posts.mockImplementationOnce(async () => {
+      queue.pushImmediate('new input after the supplied settled observation', 'mode');
+      return { data: { items: [] } };
+    });
+    expect(await readCurrentSessionEligibility({ access: input, inventory }))
+      .toMatchObject({ eligible: false, reasons: expect.arrayContaining([{ kind: 'working' }]) });
+    queue.discardMatching(() => true);
+    const beforeIncomplete = rpcTokens.length;
+    expect(await readCurrentSessionEligibility({ access: input,
+      inventory: { ...inventory, items: inventory.items.filter(item => item.category !== 'attention') } }))
+      .toMatchObject({ eligible: true });
+    expect(rpcTokens.length - beforeIncomplete).toBe(2);
     loseAdmissionDuringRpc = true;
+    expect(await readCurrentSessionEligibility({ access: input, inventory })).toMatchObject({ eligible: false });
+    current = true;
     expect(await source.read()).toMatchObject({ coverage: 'unknown', items: [
       { category: 'session', state: 'unknown' }, { category: 'input', state: 'unknown' },
       { category: 'agents', state: 'unknown' }, { category: 'attention', state: 'unknown' },

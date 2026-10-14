@@ -38,6 +38,9 @@ import { processRef } from '../processes/view/processRef';
 import { createIdleTerminalPolicy } from './idleTerminalPolicy';
 import { createIdleTerminalPolicyFixture } from './idleTerminalPolicy.testkit';
 import { createDaemonGuard, type DaemonGuard } from './createDaemonGuard';
+import { evaluateSessionEligibility } from './sessionEligibility';
+import type { TrackedSession } from '../types';
+import { SessionGuardNoticeStateV1Schema, type SessionGuardNoticeStateV1 } from '@happier-dev/protocol/machines/guard/sessionGuardStateV1';
 
 const epoch = Date.UTC(2026, 9, 10);
 const target = { serverId: 'home', machineId: 'machine', installationId: 'installation' };
@@ -63,7 +66,7 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
         readPolicy(): MachineGuardPolicyV1;
         ownership: ReturnType<typeof createProcessOwnershipRuntime>;
         createPolicyWork(activityLog: ActivityLog): GuardPolicyWork & Readonly<{ refreshOnTick(): void; stop(): void }>;
-    }>) {
+    }>, idleSession = false) {
         let guard: DaemonGuard | undefined;
         let pressure: 'critical' | 'calm' = projectService ? 'calm' : 'critical';
         let available = 100;
@@ -73,6 +76,8 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
         let working = projectService;
         let connections = 0;
         let activityReadBoundary: (() => Promise<void>) | undefined;
+        let factsReadBoundary: (() => Promise<void>) | undefined;
+        const notices: SessionGuardNoticeStateV1[] = [];
         const workspace = { id: 'workspace', rootPath: '/project', serverId: target.serverId, machineId: target.machineId, createdAtMs: epoch - 60000 };
         const declaration = { workspaceRefId: workspace.id, selection: { kind: 'manifest' as const, name: 'dev-server' } };
         const originalStart = { machineId: target.machineId, targetId: 'project:workspace:manifest:dev-server',
@@ -125,15 +130,23 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
         }); await sampler.start(); cleanup.push(() => sampler.stop());
         const summary = createMachineResourceSummary({ sampler, nowMs: Date.now, readNearlyFull: () => null,
             onError: error => { throw error; } }); cleanup.push(() => summary.stop());
+        let metadataVersion = 1;
+        let metadata: Record<string, unknown> = policyAvailable ? { resourcesPolicyV1: { v: 1,
+            guard: auxiliary?.readPolicy() ?? { memoryGuard: { enabled: !idleSession, sustainMs: 60000 } } } }
+            : { resourcesPolicyV1: { v: 2 } };
         const policy = createMachineResourcesPolicyRuntime({ port: {
-            read: async () => ({ status: 'ready', metadataVersion: 1,
-                metadata: policyAvailable ? { resourcesPolicyV1: { v: 1, guard: auxiliary?.readPolicy() ?? { memoryGuard: { enabled: true, sustainMs: 60000 } } } }
-                    : { resourcesPolicyV1: { v: 2 } } }),
-            compareAndSwap: async () => ({ status: 'unavailable' }),
+            read: async () => ({ status: 'ready', metadataVersion, metadata: auxiliary
+                ? { resourcesPolicyV1: { v: 1, guard: auxiliary.readPolicy() } } : metadata }),
+            compareAndSwap: async input => {
+                if (!idleSession) return { status: 'unavailable' };
+                metadata = input.metadata; metadataVersion++;
+                return { status: 'applied', metadata, metadataVersion };
+            },
         } }); await policy.reload(); cleanup.push(() => policy.stop());
-        const workspaceSession = { pid: 2001, happySessionId: 'workspace-session', startedBy: 'daemon' as const, spawnOptions: { directory: '/project/nested' } };
+        const workspaceSession: TrackedSession = { pid: idleSession ? 1001 : 2001, happySessionId: 'workspace-session',
+            processStartTimeMs: 123450, startedBy: 'daemon', spawnOptions: { directory: '/project/nested' } };
         const sessionProducer = createSessionLiveWorkProducer({
-            readSessions: () => projectService ? [workspaceSession] : [],
+            readSessions: () => projectService || idleSession ? [workspaceSession] : [],
             // Session activity RPC is a network boundary, reconciled by the real inventory producer.
             readActivity: async () => {
                 await activityReadBoundary?.();
@@ -158,13 +171,20 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
             listRoots: snapshot => serviceOwner ? listHappierProcessRoots({ snapshot, platform: 'linux',
                 daemonScopeKey,
                 managedServices: serviceOwner.readProcessRoots() }) : snapshot.rows.filter(row => row.pid === 1001).map(row => ({
-                pid: row.pid, start: row.start, owner: { kind: 'browser_sidecar' }, live: true, ownerCreatedAtMs: epoch - 60000,
+                pid: row.pid, start: row.start, owner: idleSession ? { kind: 'session', sessionId: workspaceSession.happySessionId! }
+                    : { kind: 'browser_sidecar' }, live: true, ownerCreatedAtMs: epoch - 60000,
                 stop: async () => { stops++; },
             })),
         });
         const keepAwake = createKeepAwake({ platform: 'linux', exists: () => false }); cleanup.push(() => keepAwake.release());
-        const projectFacts = createReadGuardFacts({ readBrowsers: () => [], trackedSessions: () => [], readInventory: () => inventory.read(),
-            readServiceTargets: () => serviceOwner?.readResourceTargets() ?? [], readSessionEligibility: async () => { throw new Error('No owned Session root'); },
+        const projectFacts = createReadGuardFacts({ readBrowsers: () => [], trackedSessions: () => idleSession ? [workspaceSession] : [], readInventory: () => inventory.read(),
+            readServiceTargets: () => serviceOwner?.readResourceTargets() ?? [], readSessionEligibility: async (tracked, liveWork) => {
+                if (!idleSession) throw new Error('No owned Session root');
+                return evaluateSessionEligibility({ tracked, inventory: liveWork, draft: { status: 'absent' }, resume: {
+                    sessionId: tracked.happySessionId!, rawSession: { machineId: target.machineId, path: '/project' },
+                    metadata: { machineId: target.machineId, path: '/project', flavor: 'codex', codexSessionId: 'native' },
+                } });
+            },
             readServices: async () => {
                 // Native socket counters only; real normalization joins the exact owner and generation.
                 const owners = await ownership.readOwners({ freshness: 'shared' });
@@ -174,26 +194,32 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
                     processes: new Map(owners.snapshot.rows.map(row => [row.pid, { pid: row.pid, ppid: row.ppid ?? undefined,
                         processStartTimeMs: row.start.startTimeMs, censusRow: row, command: 'vite', processOwnership: 'self' as const }])) });
             } });
-        const readFacts = async (owners: GuardFacts['ownership'], readSignal?: AbortSignal): Promise<GuardFacts> => projectService
+        const readFacts = async (owners: GuardFacts['ownership'], readSignal?: AbortSignal): Promise<GuardFacts> => {
+            await factsReadBoundary?.();
+            return projectService || idleSession
             ? projectFacts({ ownership: owners, inventory: await inventory.read(), signal: readSignal }) : ({ ownership: owners,
             inventory: await inventory.read(), targets: owners.status === 'ok' ? owners.roots.map(root => ({
                 kind: 'browser', root, ownerRef: root, label: 'private browser', idle: true, settledAt: epoch - 60000,
                 wayBack: [{ label: 'reopen', actionId: 'browser.view.open', input: {} }],
             })) : [] });
+        };
         guard = await createDaemonGuard({ activeServerDir: directory, sampler, summary, policy, inventory,
             ownership: auxiliary?.ownership ?? ownership, keepAwake,
             ...(auxiliary ? { createPolicyWork: auxiliary.createPolicyWork } : {}),
             readFacts, readTarget: () => target, readLeftBehind: () => ({ count: 0, footprintBytes: 0 }),
             ceilingCapability: { status: 'unavailable', reason: 'no_user_manager' }, signal, nowMs: Date.now, platform: 'linux',
             // Native stop and notification admission are genuine outward system boundaries.
-            stopTarget: async candidate => { await candidate.root.stop?.(); return { status: 'stopped' }; }, notice: async () => true,
+            stopTarget: async candidate => { await candidate.root.stop?.(); return { status: 'stopped' }; },
+            notice: async (_candidate, state) => { notices.push(SessionGuardNoticeStateV1Schema.parse(state)); return true; },
             notifyEpisode: async () => {}, onError: error => { throw error; },
         }); cleanup.push(() => guard!.stop());
         const drain = async () => {
             await sampler.start();
             for (let read = 0; read < 4; read++) { await guard!.activityLog.list({ range: 'today' }); for (let turn = 0; turn < 20; turn++) await Promise.resolve(); }
         }; await drain();
-        return { guard, sampler, summary, policy, inventory, intervals, drain, originalStart,
+        return { guard, sampler, summary, policy, inventory, intervals, drain, originalStart, notices,
+            duringFactsRead: (boundary: () => Promise<void>) => { factsReadBoundary = boundary; },
+            async metadataOnlyChange() { metadataVersion++; await policy.reload(); },
             holdActivity() {
                 let entered!: () => void;
                 let finish!: () => void;
@@ -209,11 +235,47 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
             available: (bytes: number) => { available = bytes; }, get stops() { return stops; }, get nativeReads() { return nativeReads; } };
     }
 
+    it('warns from the real idle policy despite unrelated metadata revisions during fresh fact reads', async () => {
+        const f = await setup(undefined, true, false, undefined, true);
+        f.duringFactsRead(async () => {
+            // Authenticated metadata and Session transport are separate network boundaries.
+            await new Promise<void>(resolve => setTimeout(resolve, 60000));
+            await f.metadataOnlyChange();
+        });
+        const current = f.policy.read();
+        if (current.status !== 'ready') throw new Error('Policy fixture unavailable');
+        expect(await f.policy.set({ expectedRevision: current.revision,
+            patch: { guard: { idleSessions: { enabled: true, afterMs: 360000, warnBeforeMs: 300000 } } } }))
+            .toMatchObject({ status: 'applied' });
+        await f.drain();
+        await vi.advanceTimersByTimeAsync(180000); await f.drain();
+        expect(f.notices).toContainEqual({ kind: 'stopping', rule: 'idle_sessions', stopAt: epoch + 360000 });
+        expect(f.guard.runtime.readSessionWarning('workspace-session')).toEqual({ stopAt: epoch + 360000 });
+        f.duringFactsRead(async () => {});
+        const observed = MachineGuardWatchResultV1Schema.parse({ changed: true, since: 1,
+            view: await f.guard.watch.readView(requester) });
+        if (!observed.changed) throw new Error('Guard view fixture unavailable');
+        expect(observed.view.idle)
+            .toContainEqual(expect.objectContaining({ sessionRef: 'workspace-session', status: 'stops_at', stopAt: epoch + 360000 }));
+        await vi.advanceTimersByTimeAsync(180000); await f.drain();
+        expect(f.stops).toBe(1);
+        expect((await f.guard.activityLog.list({ range: 'today' })).entries)
+            .toContainEqual(expect.objectContaining({ kind: 'stopped_session', rule: 'idle_sessions', outcome: 'done' }));
+        const afterStop = f.policy.read();
+        if (afterStop.status !== 'ready') throw new Error('Policy fixture unavailable');
+        expect(await f.policy.set({ expectedRevision: afterStop.revision, patch: { guard: { idleSessions: { enabled: false } } } }))
+            .toMatchObject({ status: 'applied' });
+        await f.drain();
+        expect(f.guard.runtime.readSessionWarning('workspace-session')).toBeUndefined();
+    });
+
     it('runs confirmed left-behind policy work through the same factory Activity and summary, with no Off reads or subscriptions', async () => {
         const native = createGuardLeftBehindFixture();
         await native.observe(); native.advance(60000); await native.observe();
         vi.setSystemTime(native.now());
         const taggedRow = native.rows.get(300)!;
+        const rootStart = native.roots[0]?.start;
+        if (!rootStart) throw new Error('Left-behind fixture requires its captured process birth');
         let mode: 'off' | 'automatic' = 'off';
         const readPolicy = () => MachineGuardPolicyV1Schema.parse({ leftBehind: { mode, graceMs: 60000 } });
         const signals: number[] = [];
@@ -238,7 +300,7 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
                 const actuator = createLeftBehindActuator({ activity, nowMs: native.now,
                     readPolicy: () => readPolicy().leftBehind, confirmed: () => native.tracker.confirmed(),
                     readRestoration: () => ({ attribution: guardLeftBehindAttribution, wayBack: [{ label: 'start_again',
-                        actionId: 'machines.processes.startAgain', input: { machineId: 'machine', ref: processRef(200, native.roots[0]!.start) } }] }),
+                        actionId: 'machines.processes.startAgain', input: { machineId: 'machine', ref: processRef(200, rootStart) } }] }),
                     executeAction: request => actions.execute('machines.processes.leftBehind.cleanUp',
                         { serverId: 'home', machineId: 'machine', refs: [...request.refs] },
                         { surface: 'rpc', authority: 'account_automation', actionCaller: { kind: 'host' },
