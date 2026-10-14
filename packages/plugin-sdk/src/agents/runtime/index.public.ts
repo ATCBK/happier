@@ -436,3 +436,4 @@ export { resolveAcpToolPermissionPolicy } from '../../agentRuntime/projections.j
 export { resolveRecoverableTurnFailureRetryDecision } from '../../agentRuntime/projections.js';
 export { resolveRecoverableTurnFailureSecondFailure } from '../../agentRuntime/projections.js';
 export { resolveTerminalPromptWriteTimeoutMs } from '../../runtime/promptWriteTimeout.js';
+export { isSessionPermissionShellToolName, matchSessionPermissionToolIdentifier, parseSessionPermissionToolIdentifier } from '../../agentRuntime/projections.js';

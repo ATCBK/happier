@@ -714,8 +714,8 @@ type _SessionMcpServerMustStayDataOnly = AssertTrue<
   Equal<keyof AgentSessionMcpServer, 'id' | 'name' | 'transport'>
 >;
 
-type _SessionMcpServiceMustExposeOnlyServerResolution = AssertTrue<
-  Equal<keyof AgentSessionMcpService, 'resolveServers'>
+type _SessionMcpServiceMustExposeOnlyScopedResolution = AssertTrue<
+  Equal<keyof AgentSessionMcpService, 'resolveServers' | 'resolveToolNaming'>
 >;
 
 type _SessionHookServiceMustExposeOnlyTheExistingLifecycleOwner = AssertTrue<

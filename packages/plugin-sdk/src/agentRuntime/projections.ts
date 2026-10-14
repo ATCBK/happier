@@ -7,6 +7,11 @@ import {
 import {
   parsePermissionIntentAlias as canonicalParsePermissionIntentAlias,
 } from '@happier-dev/agents/permissions';
+import {
+  isSessionPermissionShellToolName as canonicalIsSessionPermissionShellToolName,
+  matchSessionPermissionToolIdentifier as canonicalMatchSessionPermissionToolIdentifier,
+  parseSessionPermissionToolIdentifier as canonicalParseSessionPermissionToolIdentifier,
+} from '@happier-dev/protocol/runtime/permissionIntentV1';
 import { AgentExecutionRunEventSchema as canonicalAgentExecutionRunEventSchema } from '@happier-dev/protocol/runtime/agentExecutionRunV1';
 import { AgentRuntimeJsonValueSchema as canonicalAgentRuntimeJsonValueSchema, AgentSessionRuntimeEventSchema as canonicalAgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import { AgentSessionProviderBindingV1Schema as canonicalAgentSessionProviderBindingV1Schema } from '@happier-dev/protocol/providers/sessions/agentSessionProviderBindingV1';
@@ -419,6 +424,15 @@ export const AgentSessionRuntimeEventSchema: Readonly<{
   canonicalAgentSessionRuntimeEventSchema;
 export const parsePermissionIntentAlias: (raw: string) => AgentPermissionIntent | null =
   canonicalParsePermissionIntentAlias;
+
+/** Native adapters consume the host's identity grammar, without authorizing arguments. */
+export const isSessionPermissionShellToolName: (name: string) => boolean = canonicalIsSessionPermissionShellToolName;
+export const parseSessionPermissionToolIdentifier: (identifier: string) => Readonly<{ name: string; spec?: string }> = canonicalParseSessionPermissionToolIdentifier;
+export const matchSessionPermissionToolIdentifier: (identifier: string, toolName: string) =>
+  | Readonly<{ kind: 'tool' }>
+  | Readonly<{ kind: 'readPath'; spec: string }>
+  | Readonly<{ kind: 'shellCommand'; spec: string }>
+  | null = canonicalMatchSessionPermissionToolIdentifier;
 export {
   isRuntimeConfigUpdateOutcomeApplied,
 } from '@happier-dev/agents/runtime/session/runtimeConfigUpdateOutcome';

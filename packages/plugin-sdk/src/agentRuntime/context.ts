@@ -19,7 +19,7 @@ import type {
 import type { AgentRuntimeProtocolComposers } from './acp.js';
 import type { Disposable } from '../lifecycle.js';
 import type { JsonValue } from '../identity.js';
-import type { AgentPermissionIntent } from './session.js';
+import type { AgentPermissionIntent, AgentSessionMcpLaunchConfig } from './session.js';
 import type {
   AgentModelOptionOverrideRule,
   AgentSessionAuthRefreshClassificationV1,
@@ -308,6 +308,18 @@ export type AgentSessionMcpServer = Readonly<{
  * service and from Session-handle MCP elicitation.
  */
 export interface AgentSessionMcpService {
+  /** Projects only this transport's names; the canonical inventory and tool authority stay host-owned.
+   * Each read observes the current inventory. Missing/removed aliases supply no canonical identity. */
+  resolveToolNaming?(
+    request: Readonly<{ serverName: string; toolNameMaxLength: number }>,
+    options?: Readonly<{ signal?: AbortSignal }>,
+  ): Promise<Readonly<{
+    launchConfig: AgentSessionMcpLaunchConfig;
+    /** Reserved marker owned by the transport projection; ordinary names never start with it. */
+    aliasPrefix: string;
+    tools: readonly Readonly<{ originalName: string; projectedName: string }>[];
+  }> | null>;
+
   resolveServers(options?: Readonly<{ signal?: AbortSignal }>): Promise<readonly AgentSessionMcpServer[]>;
 }
 

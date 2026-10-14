@@ -31,6 +31,7 @@ import type {
     PluginConnectedAccountRegistrationApi,
 } from './services/index.js';
 import type { HttpMethod } from './services/io.js';
+import type { DetectedMcpServerV1 } from './mcp.js';
 import type {
     PluginMcpDiscoveredServer,
     PluginMcpGetPromptResult,
@@ -307,6 +308,8 @@ export type PluginMcpDiscoveryResult = Readonly<{
     items: readonly PluginMcpDiscoveredServer[];
     nextCursor?: string;
     endpoints?: readonly PluginMcpDiscoveredEndpoint[];
+    /** Native configuration for Found/adoption; values are never returned. */
+    detectedServers?: readonly DetectedMcpServerV1[];
     warnings?: readonly Readonly<{
         code: 'read_failed' | 'parse_failed' | 'unsupported';
         path?: string;

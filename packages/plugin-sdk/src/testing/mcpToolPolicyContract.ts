@@ -1,7 +1,8 @@
 import { strict as assert } from 'node:assert';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createReadStream } from 'node:fs';
 import { afterEach, beforeEach, describe, it } from 'vitest';
 import { projectMcpToolLaunchPolicyV1 } from '@happier-dev/protocol/mcp/servers/tools/resolveMcpToolDecisionV1';
 import { AgentSessionConfigurationSnapshotV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
@@ -211,7 +212,19 @@ export function runAgentMcpToolPolicyContract(input: AgentMcpToolPolicyContractI
                 artifacts.push(launch);
                 for (const path of new Set([...launch.filesWritten, ...(input.nativeConfigFiles?.() ?? [])])) {
                     if (fixture.privateConfigFiles?.includes(path)) continue;
-                    try { if ((await stat(path)).isFile()) artifacts.push(await readFile(path, 'utf8')); }
+                    try {
+                        if (!(await stat(path)).isFile()) continue;
+                        // Native Agents also write large state/cache files. Scan
+                        // all bytes without retaining each whole file as a string.
+                        const overlap = Math.max(0, ...fixture.secrets.flatMap(secret => [secret.length,
+                            JSON.stringify(secret).slice(1, -1).length])) - 1;
+                        let tail = '';
+                        for await (const chunk of createReadStream(path, { encoding: 'utf8' })) {
+                            const text = tail + chunk;
+                            assertMcpToolPolicySecrets(fixture.secrets, [text]);
+                            tail = overlap > 0 ? text.slice(-overlap) : '';
+                        }
+                    }
                     catch (error) { if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error; }
                 }
             };

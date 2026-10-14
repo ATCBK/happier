@@ -17,6 +17,19 @@ type StdioMcpTransport = Extract<McpServerTransportV1, { kind: 'stdio' }>;
 type ManagedMcpTransport = Extract<McpServerTransportV1, { kind: 'managed' }>;
 
 describe('normalizeDetectedMcpServerV1', () => {
+  it('drops unrecognized native configuration fields and refuses credential-bearing remote URLs', () => {
+    const input = { provider: 'codex', name: 'native', transport: 'stdio',
+      stdio: { command: 'bridge', args: [], env: { TOKEN: 'private-native-value' } },
+      envKeys: ['TOKEN'], enabled: false,
+      source: { kind: 'user', path: '/home/config.toml', raw: 'private-native-value' },
+      env: { TOKEN: 'private-native-value' } };
+    const result = normalizeDetectedMcpServerV1(input);
+    expect(result).toEqual({ provider: 'codex', name: 'native', transport: 'stdio',
+      stdio: { command: 'bridge', args: [] }, envKeys: ['TOKEN'], enabled: false,
+      source: { kind: 'user', path: '/home/config.toml' } });
+    expect(normalizeDetectedMcpServerV1({ ...input, stdio: undefined, transport: 'http',
+      remote: { url: 'https://user:private-native-value@example.test/mcp', headers: [] } })).toBeNull();
+  });
   it('uses one canonical tool-page result across MCP clients and server runtimes', () => {
     expectTypeOf<Awaited<ReturnType<PluginMcpClient['listTools']>>>()
       .toEqualTypeOf<PluginMcpToolPage>();

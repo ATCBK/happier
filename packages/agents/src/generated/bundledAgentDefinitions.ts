@@ -1482,6 +1482,10 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
     },
     "tools": {
       "delivery": "native_mcp",
+      "mcpToolControl": {
+        "approval": "host",
+        "off": "hidden"
+      },
       "support": "supported"
     }
   },
@@ -2580,6 +2584,10 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
     },
     "tools": {
       "delivery": "native_mcp",
+      "mcpToolControl": {
+        "approval": "host",
+        "off": "blocked"
+      },
       "support": "supported"
     }
   },
