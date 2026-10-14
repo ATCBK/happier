@@ -206,8 +206,15 @@ function factSlot(screen: Awaited<ReturnType<typeof renderScreen>>, id: string) 
     return screen.findAllByType(HappierDisclosure).find(node => node.props.testID === `memory.fact.${id}.slot`) ?? null;
 }
 async function renderDocument(ref: PromptDocArtifactRefV1, props: Omit<React.ComponentProps<typeof Host>, 'documentRef'> = {}) {
+    console.info('SDK-D host render starts');
     const screen = await renderScreen(<Host documentRef={ref} {...props} />);
+    const reportReadWait = () => console.info('SDK-D host reader', screen.findByType(MemoryDocumentBody).props.source.status,
+        homes.requests.map(({ path }) => path).slice(-12));
+    console.info('SDK-D host render finished', screen.findByType(MemoryDocumentBody).props.source.status);
+    const signal = caseSignal;
+    signal.addEventListener('abort', reportReadWait, { once: true });
     await settled(() => expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready'));
+    signal.removeEventListener('abort', reportReadWait);
     return screen;
 }
 async function readMemory(ref: PromptDocArtifactRefV1, topic?: string) {
