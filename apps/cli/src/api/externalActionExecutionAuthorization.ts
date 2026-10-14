@@ -33,10 +33,34 @@ import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64'
 import { projectRequesterSessionCredentialDisclosure, sealExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { encodeStoredCredentials } from '@/persistence';
 import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import { isMachineTerminalActionId } from '@happier-dev/protocol/actions/specs/machineTerminal';
+import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import type { ManagedWakeTargetV1 } from '@happier-dev/protocol/machines/managed/managedIntentV1';
 import { MachineEnvironmentApplyInputV1Schema, type MachineEnvironmentApplyInputV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 
 export type ExternalActionMachineRequestSigningKey = string | Uint8Array;
+
+/** Fresh authenticated installation publication; offline is not revocation. */
+export async function readExternalActionInstalledMachine(input: Readonly<{
+  serverHttpBaseUrl: string;
+  machineId: string;
+  headers: Readonly<Record<string, string>>;
+  signal?: AbortSignal;
+}>): Promise<(z.infer<typeof ExternalActionMachineBootstrapV1Schema> & Readonly<{ installationPublicKey?: string | null }>) | null> {
+  const publication = await axios.get<unknown>(`${normalizeServerHttpBaseUrl(input.serverHttpBaseUrl)}/v1/machines/${encodeURIComponent(input.machineId)}`, {
+    headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), ...input.headers },
+    ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true,
+  });
+  const raw = publication.data && typeof publication.data === 'object' && 'machine' in publication.data
+    ? publication.data.machine : null;
+  const installed = ExternalActionMachineBootstrapV1Schema.extend({
+    installationPublicKey: z.string().base64().nullish(),
+  }).passthrough().safeParse(raw);
+  return publication.status >= 200 && publication.status < 300 && installed.success
+    && installed.data.id === input.machineId && installed.data.installationId
+    && installed.data.kind === 'persistent' && installed.data.revokedAt === null
+    && installed.data.replacedByMachineId === null ? installed.data : null;
+}
 
 /** Schema-checked provenance projection only; Home still verifies the issued root and current principal. */
 export function resolveExternalActionRootInvocationAuthority(authorization: ExternalActionExecutionAuthorizationV1): ActionRequiredAuthority {
@@ -73,11 +97,11 @@ type OriginalAccountActionInput = Readonly<{
   signal?: AbortSignal;
 }>;
 
-/** A positively observed own target retains the caller's incumbent daemon path. */
-/** These finite receivers require an exact installed-Machine proof even for
- * an original requester's own target; no local bearer bridge can replace it. */
+/** Finite work and terminal control need requester custody even on an own
+ * target. Local approval replay alone does not provide Machine admission. */
 export function requiresOriginalAccountMachineActionProof(actionId: string): boolean {
-  return Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, actionId) || actionId === 'machines.environment.apply';
+  return Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, actionId) || actionId === 'projects.inspect'
+    || actionId === 'machines.environment.apply' || isMachineTerminalActionId(actionId);
 }
 
 export function dispatchOriginalAccountAction(input: OriginalAccountActionInput & Readonly<{ foreignTargetOnly: true }>): Promise<ActionExecuteResult | null>;
@@ -153,20 +177,12 @@ export async function dispatchOriginalAccountAction(input: OriginalAccountAction
     if (!input.serverIdentityId) return fail('admission_unavailable');
     if (foreign && !input.onRequesterSessionCredentialDisclosure) return fail('requester_credential_disclosure_required');
     const readInstalledMachine = async (observed: CurrentAccountMachineInventoryItem) => {
-      const publication = await axios.get<unknown>(`${homeUrl}/v1/machines/${encodeURIComponent(observed.id)}`, {
-        headers, ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true,
-      });
-      const raw = publication.data && typeof publication.data === 'object' && 'machine' in publication.data
-        ? publication.data.machine : null;
-      const installed = ExternalActionMachineBootstrapV1Schema.extend({
-        installationPublicKey: z.string().base64().nullish(),
-      }).passthrough().safeParse(raw);
-      if (publication.status < 200 || publication.status >= 300 || !installed.success || !installed.data.installationId
-        || installed.data.id !== observed.id || installed.data.kind !== 'persistent' || installed.data.revokedAt !== null
-        || installed.data.replacedByMachineId !== null || installed.data.access?.accessState !== 'ready'
-        || installed.data.access.custodian.accountId !== observed.access?.custodian.accountId
-        || installed.data.access.resourceMode !== observed.access?.resourceMode || !await isCurrent()) return null;
-      return installed.data;
+      const installed = await readExternalActionInstalledMachine({ serverHttpBaseUrl: homeUrl,
+        machineId: observed.id, headers, ...(input.signal ? { signal: input.signal } : {}) });
+      if (!installed || installed.access?.accessState !== 'ready'
+        || installed.access.custodian.accountId !== observed.access?.custodian.accountId
+        || installed.access.resourceMode !== observed.access?.resourceMode || !await isCurrent()) return null;
+      return installed;
     };
     const installed = await readInstalledMachine(machine);
     if (!installed) return fail('admission_unavailable');
@@ -401,7 +417,10 @@ export async function projectExternalActionRequesterHttpAuthorization(input: Rea
   const locallyCurrent = async (signal?: AbortSignal): Promise<boolean> => {
     try {
       if (input.signal?.aborted || signal?.aborted) return false;
-      const current = input.isCurrent ? await input.isCurrent() : true;
+      // Installed custody supplies the Account projection's exact function as
+      // its local guard. Read it once here; a distinct Machine guard still runs.
+      const current = input.isCurrent && input.isCurrent !== requesterAccountProjection?.isCurrent
+        ? await input.isCurrent() : true;
       if (!current || input.signal?.aborted || signal?.aborted) return false;
       const accountCurrent = !requesterAccountProjection
         || await requesterAccountProjection.isCurrent();
@@ -801,7 +820,9 @@ export async function mintExternalActionExecutionAuthorization(input: Readonly<{
         headers: { Authorization: `Bearer ${input.pat}`, 'Content-Type': 'application/json',
           ...(readAuthTokenProvenance(decodeJwtPayload(input.pat), { allowLegacyHome: false })?.provenance.kind === 'terminal'
             ? { [AUTHORITY_CEILING_HEADER_V1]: 'account_automation' } : {}) },
-        timeout: 15_000,
+        // An admitted Action owns cancellation; authorization preparation must
+        // not impose a shorter lifetime on that still-current operation.
+        timeout: input.signal ? 0 : 15_000,
         ...(input.signal ? { signal: input.signal } : {}),
         validateStatus: () => true,
       },
@@ -882,7 +903,7 @@ async function prepareExternalActionHandoffAuthorization(input: Omit<
       headers: { ...createExternalActionAuthorizedRequestHeaders({ authorization: root,
         effectActionId: 'session.handoff', target: binding.target, installationId: input.sourceInstallationId,
         privateKey: input.privateKey, method: 'POST', path, body }), 'Content-Type': 'application/json' },
-      timeout: 15_000,
+      timeout: input.signal ? 0 : 15_000,
       ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true,
     });
     if (input.signal?.aborted || response.status < 200 || response.status >= 300) return null;
@@ -939,7 +960,7 @@ export async function verifyExternalActionExecutionAuthorizationCurrent(input: R
   try {
     const response = await axios.post<unknown>(`${input.serverHttpBaseUrl}${path}`, body, {
       headers: { ...headers, 'Content-Type': 'application/json' },
-      timeout: 15_000,
+      timeout: input.signal ? 0 : 15_000,
       ...(input.signal ? { signal: input.signal } : {}),
       validateStatus: () => true,
     });
