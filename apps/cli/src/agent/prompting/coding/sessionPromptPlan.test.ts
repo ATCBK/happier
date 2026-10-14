@@ -12,7 +12,7 @@ import { shouldDenyAgentSessionTitleToolCall } from '@/agent/permissions/codingP
 import { createApiSessionClientFixture, createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/createHandler';
 import { applySessionRuntimeControls } from '@/api/session/sessionRuntimeControls';
-import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, beginActiveProfileCatalogRefresh, beginActivePromptLibraryCatalogRefresh, getActiveAccountSettingsSnapshotLifetimeToken, getActiveAccountSettingsSnapshot, commitActivePromptLibraryCatalog } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, beginActiveProfileCatalogRefresh, beginActivePromptLibraryCatalogRefresh, getActiveAccountSettingsSnapshotLifetimeToken, getActiveAccountSettingsSnapshot, commitActivePromptLibraryCatalog, commitActiveProfileCatalog } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
@@ -306,7 +306,7 @@ describe('session prompt-plan producer', () => {
     expect(resolve.readStartupInstructions?.()).toBeNull();
   });
 
-  it('withdraws prepared policy after a catalog-only Profile change without a Settings revision change', async () => {
+  it.each([null, 'focused'])('withdraws prepared policy after a catalog-only Profile change only for the selected Profile (%s)', async profileId => {
     const credentials = { token: 'current-profile-context-token', encryption: null };
     const scopeKey = resolveAccountSettingsScopeKey(credentials);
     const settings = accountSettingsParse({});
@@ -326,15 +326,32 @@ describe('session prompt-plan producer', () => {
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials, accountSettingsContext: { source: 'network', settings, scopeKey,
         settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], whenRefreshed: null } },
-      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata({ profileId: 'focused' }) },
+      session: { ...createApiSessionClientFixture(), sessionId: 'test-session', getMetadataSnapshot: () => createTestMetadata({ profileId }) },
       agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project', memoryRecallGuidanceEnabled: false,
       readNativeSessionId: () => 'native', daemonBridge,
     });
     await resolve();
-    expect(resolve.readCodingPromptBehavior?.()?.sessionTitleUpdates).toBe('ongoing');
+    const preparedBehavior = resolve.readCodingPromptBehavior?.();
+    expect(preparedBehavior).not.toBeNull();
+    if (profileId) expect(preparedBehavior?.sessionTitleUpdates).toBe('ongoing');
+    const catalog = getActiveAccountSettingsSnapshot()?.profileCatalog;
+    if (catalog?.status !== 'ready') throw new Error('Missing prepared Profile catalog');
+    commitActiveProfileCatalog({ scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), catalog: {
+      ...catalog, referenceGuardRevision: 2, records: [...catalog.records, { revision: 1, record: ProfileRecordV1Schema.parse({
+        v: 1, id: 'unrelated', enabled: true, promptStack: [], secretBindings: {},
+        definition: { kind: 'inline', profile: { v: 2, id: 'unrelated', name: 'Unrelated', createdAt: 1, updatedAt: 1 } },
+      }) }],
+    } });
+    expect(resolve.readCodingPromptBehavior?.()).toEqual(preparedBehavior);
+    expect(resolve.assertPreparedPlanCurrent).not.toThrow();
     beginActiveProfileCatalogRefresh({ scopeKey, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() });
-    expect(resolve.readCodingPromptBehavior?.()).toBeNull();
-    expect(resolve.assertPreparedPlanCurrent).toThrow(expect.objectContaining({ reason: 'active-account-profile-changed' }));
+    if (profileId) {
+      expect(resolve.readCodingPromptBehavior?.()).toBeNull();
+      expect(resolve.assertPreparedPlanCurrent).toThrow(expect.objectContaining({ reason: 'active-account-profile-changed' }));
+    } else {
+      expect(resolve.readCodingPromptBehavior?.()).toEqual(preparedBehavior);
+      expect(resolve.assertPreparedPlanCurrent).not.toThrow();
+    }
   });
 
   it('prepares the current Session context without an Account stack and never reuses its previous document', async () => {
