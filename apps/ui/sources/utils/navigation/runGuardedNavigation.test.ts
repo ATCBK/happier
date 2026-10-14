@@ -18,6 +18,7 @@ describe('runGuardedNavigation', () => {
         const { registerMountedTabUnsavedChangesGuard, runGuardedTabNavigation } = await loadRunGuardedNavigationModule();
         let resolveDecision!: (decision: UnsavedChangesDecision) => void;
         const oldGuard = { isDirtyRef: { current: true }, tag: 'retired-editor',
+            onDiscard: vi.fn(),
             requestDecision: () => new Promise<UnsavedChangesDecision>(resolve => { resolveDecision = resolve; }) };
         const retire = registerMountedTabUnsavedChangesGuard('tab', oldGuard);
         retireMountedGuards.push(retire);
@@ -31,22 +32,106 @@ describe('runGuardedNavigation', () => {
         resolveDecision('discard');
         expect(await pending).toBe(false);
         expect(navigate).not.toHaveBeenCalled();
+        expect(oldGuard.isDirtyRef.current).toBe(true);
+        expect(oldGuard.onDiscard).not.toHaveBeenCalled();
         expect(replacement.isDirtyRef.current).toBe(true);
     });
 
-    it('waits for all closing editors and stops the whole batch when a later editor refuses', async () => {
+    it.each(['throws', 'refuses'] as const)('applies batch discard effects only after admission and restores protection if final navigation %s', async failure => {
+        const { registerMountedTabUnsavedChangesGuard, runGuardedTabNavigation } = await loadRunGuardedNavigationModule();
+        const ignoreRef = { current: false };
+        const first = { isDirtyRef: { current: true }, ignoreRef, tag: 'first-editor',
+            requestDecision: async (): Promise<UnsavedChangesDecision> => 'discard',
+            onDiscard: vi.fn(() => { ignoreRef.current = true; }) };
+        let current = true;
+        const second = { isDirtyRef: { current: true }, tag: 'second-editor',
+            requestDecision: async (): Promise<UnsavedChangesDecision> => {
+                expect(first.isDirtyRef.current).toBe(true);
+                expect(first.onDiscard).not.toHaveBeenCalled();
+                current = false;
+                return 'discard';
+            } };
+        retireMountedGuards.push(registerMountedTabUnsavedChangesGuard('first', first), registerMountedTabUnsavedChangesGuard('second', second));
+        const navigate = vi.fn(() => {
+            if (failure === 'throws') throw new Error('navigation failed');
+            return false;
+        });
+        expect(await runGuardedTabNavigation(['first', 'second'], navigate, { isCurrent: () => current })).toBe(false);
+        expect(first.isDirtyRef.current).toBe(true);
+        expect(second.isDirtyRef.current).toBe(true);
+        expect(first.onDiscard).not.toHaveBeenCalled();
+        expect(navigate).not.toHaveBeenCalled();
+        expect(await runGuardedTabNavigation(['first'], navigate)).toBe(false);
+        expect(first.onDiscard).toHaveBeenCalledOnce();
+        expect(first.isDirtyRef.current).toBe(true);
+        expect(ignoreRef.current).toBe(false);
+        const departed = vi.fn(() => {
+            expect(first.isDirtyRef.current).toBe(false);
+            expect(ignoreRef.current).toBe(true);
+        });
+        expect(await runGuardedTabNavigation(['first'], departed)).toBe(true);
+        expect(departed).toHaveBeenCalledOnce();
+    });
+
+    it('keeps earlier discard decisions protective when a later save owns its departure', async () => {
+        const { registerMountedTabUnsavedChangesGuard, runGuardedTabNavigation } = await loadRunGuardedNavigationModule();
+        const first = { isDirtyRef: { current: true }, tag: 'retained-editor',
+            requestDecision: async (): Promise<UnsavedChangesDecision> => 'discard', onDiscard: vi.fn() };
+        const second = { isDirtyRef: { current: true }, tag: 'saved-editor', continueOnSave: false,
+            requestDecision: async (): Promise<UnsavedChangesDecision> => 'save', onSave: async () => true };
+        retireMountedGuards.push(registerMountedTabUnsavedChangesGuard('first', first), registerMountedTabUnsavedChangesGuard('second', second));
+        const navigate = vi.fn();
+        expect(await runGuardedTabNavigation(['first', 'second'], navigate)).toBe(true);
+        expect(navigate).not.toHaveBeenCalled();
+        expect(first.onDiscard).not.toHaveBeenCalled();
+        expect(first.isDirtyRef.current).toBe(true);
+        expect(second.isDirtyRef.current).toBe(false);
+    });
+
+    it.each(['keepEditing', 'refuses', 'throws'] as const)('rearms a saved surviving editor when batch navigation %s', async failure => {
+        const { registerMountedTabUnsavedChangesGuard, runGuardedTabNavigation } = await loadRunGuardedNavigationModule();
+        const ignoreRef = { current: false };
+        const first = { isDirtyRef: { current: true }, ignoreRef, tag: 'saved-retained-editor',
+            requestDecision: vi.fn(async (): Promise<UnsavedChangesDecision> => 'save'),
+            onSave: async () => { ignoreRef.current = true; return true; } };
+        const second = { isDirtyRef: { current: true }, tag: 'later-editor',
+            requestDecision: async (): Promise<UnsavedChangesDecision> => failure === 'keepEditing' ? 'keepEditing' : 'discard' };
+        retireMountedGuards.push(registerMountedTabUnsavedChangesGuard('first', first), registerMountedTabUnsavedChangesGuard('second', second));
+        const navigate = vi.fn(() => {
+            if (failure === 'throws') throw new Error('navigation failed');
+            return false;
+        });
+        expect(await runGuardedTabNavigation(['first', 'second'], navigate)).toBe(false);
+        expect(first.isDirtyRef.current).toBe(false);
+        expect(ignoreRef.current).toBe(false);
+        first.isDirtyRef.current = true;
+        first.requestDecision.mockResolvedValue('keepEditing');
+        expect(await runGuardedTabNavigation(['first'], navigate)).toBe(false);
+        expect(first.requestDecision).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['keepEditing', 'save'] as const)('restores a surviving editor when a later editor refuses with %s', async decision => {
         const { registerMountedTabUnsavedChangesGuard, runGuardedTabNavigation, setActiveUnsavedChangesGuard } = await loadRunGuardedNavigationModule();
-        const first = { isDirtyRef: { current: true }, tag: 'first-editor',
+        const ignoreRef = { current: false };
+        const first = { isDirtyRef: { current: true }, ignoreRef, tag: 'first-editor',
+            onDiscard: vi.fn(() => { ignoreRef.current = true; }),
             requestDecision: vi.fn(async (): Promise<UnsavedChangesDecision> => 'discard') };
         const second = { isDirtyRef: { current: true }, tag: 'second-editor',
-            requestDecision: vi.fn(async (): Promise<UnsavedChangesDecision> => 'save'), onSave: async () => false };
+            requestDecision: vi.fn(async (): Promise<UnsavedChangesDecision> => decision), onSave: async () => false };
         retireMountedGuards.push(registerMountedTabUnsavedChangesGuard('first', first), registerMountedTabUnsavedChangesGuard('second', second));
         setActiveUnsavedChangesGuard(first);
         const navigate = vi.fn();
         expect(await runGuardedTabNavigation(['first', 'second'], navigate, { includeActiveGuard: true })).toBe(false);
         expect(navigate).not.toHaveBeenCalled();
         expect(first.requestDecision).toHaveBeenCalledOnce();
+        expect(first.isDirtyRef.current).toBe(true);
+        expect(ignoreRef.current).toBe(false);
+        expect(first.onDiscard).not.toHaveBeenCalled();
         expect(second.isDirtyRef.current).toBe(true);
+        first.requestDecision.mockResolvedValue('keepEditing');
+        expect(await runGuardedTabNavigation(['first'], navigate)).toBe(false);
+        expect(first.requestDecision).toHaveBeenCalledTimes(2);
+        expect(navigate).not.toHaveBeenCalled();
     });
 
     it('runs navigation immediately when no guard is active', async () => {
@@ -125,10 +210,13 @@ describe('runGuardedNavigation', () => {
     it('restores dirty state when navigation throws after discard', async () => {
         const { setActiveUnsavedChangesGuard, runGuardedNavigation } = await loadRunGuardedNavigationModule();
         const isDirtyRef = { current: true };
+        const ignoreRef = { current: false };
 
         setActiveUnsavedChangesGuard({
             isDirtyRef,
+            ignoreRef,
             requestDecision: async () => 'discard',
+            onDiscard: () => { ignoreRef.current = true; },
             tag: 'test.discardNavigationThrows',
         });
 
@@ -136,6 +224,7 @@ describe('runGuardedNavigation', () => {
             throw new Error('navigation failed');
         })).resolves.toBe(false);
         expect(isDirtyRef.current).toBe(true);
+        expect(ignoreRef.current).toBe(false);
     });
 
     it('saves changes and continues navigation when the user chooses save', async () => {
@@ -189,12 +278,14 @@ describe('runGuardedNavigation', () => {
         const { setActiveUnsavedChangesGuard, runGuardedNavigation } = await loadRunGuardedNavigationModule();
 
         const isDirtyRef = { current: true };
-        const onSave = vi.fn(async () => false);
+        const ignoreRef = { current: false };
+        const onSave = vi.fn(async () => { ignoreRef.current = true; isDirtyRef.current = false; return false; });
         const requestDecision = vi.fn(async (): Promise<UnsavedChangesDecision> => 'save');
         const navigate = vi.fn();
 
         setActiveUnsavedChangesGuard({
             isDirtyRef,
+            ignoreRef,
             requestDecision,
             onSave,
             tag: 'test.saveFailed',
@@ -205,6 +296,7 @@ describe('runGuardedNavigation', () => {
         expect(didNavigate).toBe(false);
         expect(onSave).toHaveBeenCalledTimes(1);
         expect(isDirtyRef.current).toBe(true);
+        expect(ignoreRef.current).toBe(false);
         expect(navigate).not.toHaveBeenCalled();
     });
 

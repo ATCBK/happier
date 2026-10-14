@@ -209,6 +209,71 @@ describe('ArtifactEditor', () => {
         await screen.unmount();
     });
 
+    it('protects both retained hosted editors after a cancelled bulk discard, including subsequent edits and unload', async () => {
+        await restoreEditorHome('https://artifact-editor-cancelled-batch.test');
+        const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+        const ArtifactEditor = await loadArtifactEditor();
+        type UnloadEvent = { preventDefault: () => void; returnValue?: string };
+        type UnloadHandler = (event: UnloadEvent) => void;
+        const unloadHandlers = new Set<UnloadHandler>();
+        const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
+        Object.defineProperty(globalThis, 'window', { configurable: true, value: {
+            addEventListener: (type: string, handler: UnloadHandler) => { if (type === 'beforeunload') unloadHandlers.add(handler); },
+            removeEventListener: (type: string, handler: UnloadHandler) => { if (type === 'beforeunload') unloadHandlers.delete(handler); },
+        } });
+        const host = (tabId: string, focused: boolean) => <DestinationInstanceHost tabId={tabId}
+            ref={{ kind: 'artifacts', params: { workspacePathname: '/artifacts/new' } }} pathname="/artifacts/new" focused={focused} visible
+            navigation={{ back: navigation.back, replace: navigation.replace, push: navigation.push,
+                canGoBack: () => navigation.canGoBack, pushRetainingCurrent: navigation.push }}>
+            <ArtifactEditor artifact={null} mode="new" />
+        </DestinationInstanceHost>;
+        const screens: Awaited<ReturnType<typeof renderScreen>>[] = [];
+        try {
+            const first = await renderScreen(host('first-artifact', true));
+            const second = await renderScreen(host('second-artifact', false));
+            screens.push(first, second);
+            await act(async () => {
+                first.changeTextByTestId('artifact-editor:body:source', 'First draft');
+                second.changeTextByTestId('artifact-editor:body:source', 'Second draft');
+            });
+            const choose = async (choice: 'common.keepEditing' | 'common.discard') => {
+                await vi.waitFor(() => expect(vi.mocked(Modal.alert).mock.calls.at(-1)?.[2]).toBeDefined());
+                const buttons = vi.mocked(Modal.alert).mock.calls.at(-1)?.[2];
+                vi.mocked(Modal.alert).mockClear();
+                await act(async () => { await buttons?.find(button => button.text === choice)?.onPress?.(); });
+            };
+            const closeAll = vi.fn();
+            const batch = runGuardedTabNavigation(['first-artifact', 'second-artifact'], closeAll);
+            await choose('common.discard');
+            await choose('common.keepEditing');
+            expect(await batch).toBe(false);
+            expect(closeAll).not.toHaveBeenCalled();
+            expect(first.findByTestId('artifact-editor:body:source')?.props.value).toBe('First draft');
+            expect(second.findByTestId('artifact-editor:body:source')?.props.value).toBe('Second draft');
+            await act(async () => { first.changeTextByTestId('artifact-editor:body:source', 'First draft continued'); });
+            const closeFirst = vi.fn();
+            const nextClose = runGuardedTabNavigation(['first-artifact'], closeFirst);
+            await choose('common.keepEditing');
+            expect(await nextClose).toBe(false);
+            expect(closeFirst).not.toHaveBeenCalled();
+            expect(first.findByTestId('artifact-editor:body:source')?.props.value).toBe('First draft continued');
+            const unloads = [...unloadHandlers].map(handler => {
+                const event: UnloadEvent = { preventDefault: vi.fn() };
+                handler(event);
+                return event;
+            });
+            expect(unloads).toHaveLength(2);
+            for (const event of unloads) {
+                expect(event.preventDefault).toHaveBeenCalledOnce();
+                expect(event.returnValue).toBe('');
+            }
+        } finally {
+            for (const screen of screens) await screen.unmount();
+            if (originalWindowDescriptor) Object.defineProperty(globalThis, 'window', originalWindowDescriptor);
+            else Reflect.deleteProperty(globalThis, 'window');
+        }
+    });
+
     it('saves against the opening full revision after another writer advances the head, retaining the refused draft', async () => {
         const opening: DecryptedArtifact = { id: 'document', title: 'Opening', isDecrypted: true,
             header: { kind: 'artifact.legacy', title: 'Opening' }, rawHeader: { kind: 'artifact.legacy', title: 'Opening' },

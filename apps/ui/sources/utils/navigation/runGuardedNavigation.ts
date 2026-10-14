@@ -128,24 +128,31 @@ export function runUnsavedChangesGuard(
 
         if (decision === 'discard') {
             const wasDirty = guard.isDirtyRef.current;
+            const wasIgnored = guard.ignoreRef?.current;
             try {
                 guard.isDirtyRef.current = false;
                 await guard.onDiscard?.();
                 await (intent === 'history' && guard.onHistoryLeave ? guard.onHistoryLeave : navigate)();
             } catch {
                 guard.isDirtyRef.current = wasDirty;
+                if (guard.ignoreRef && wasIgnored !== undefined) guard.ignoreRef.current = wasIgnored;
                 return false;
             }
             return true;
         }
 
         let didSave = false;
+        const dirtyBeforeSave = guard.isDirtyRef.current;
+        const ignoredBeforeSave = guard.ignoreRef?.current;
         try {
             didSave = await guard.onSave?.() ?? false;
         } catch {
-            return false;
+            didSave = false;
         }
         if (!didSave) {
+            // A refused or failed save leaves the editor mounted and protective.
+            guard.isDirtyRef.current = dirtyBeforeSave;
+            if (guard.ignoreRef && ignoredBeforeSave !== undefined) guard.ignoreRef.current = ignoredBeforeSave;
             return false;
         }
 
@@ -178,10 +185,13 @@ export function runGuardedNavigation(navigate: () => void | Promise<void>, inten
     return runUnsavedChangesGuard(guard, navigate, intent);
 }
 
-/** Settle every affected editor before the caller changes tab membership once. */
+/**
+ * Settle every affected editor before the caller changes tab membership once.
+ * A continuation that cannot perform the admitted close returns false.
+ */
 export function runGuardedTabNavigation(
     tabIds: readonly string[],
-    navigate: () => void | Promise<void>,
+    navigate: () => void | boolean | Promise<void | boolean>,
     options: Readonly<{ includeActiveGuard?: boolean; isCurrent?: () => boolean }> = {},
 ): true | Promise<boolean> {
     const mountedEditors = tabIds.map(tabId => ({ tabId, dirtyRef: mountedTabGuards.get(tabId)?.isDirtyRef }));
@@ -189,6 +199,43 @@ export function runGuardedTabNavigation(
         ...tabIds.map(tabId => mountedTabGuards.get(tabId)),
         ...(options.includeActiveGuard ? [activeUnsavedChangesGuard] : []),
     ].filter((guard): guard is ActiveUnsavedChangesGuard => guard != null))];
+    const pendingDiscards: ActiveUnsavedChangesGuard[] = [];
+    const savedEditors: { guard: ActiveUnsavedChangesGuard; wasIgnored: boolean | undefined }[] = [];
+    // A saved editor stays mounted if the batch is not admitted: re-arm its
+    // guard (its content is saved, so it is clean) without a second prompt path.
+    const settle = (result: true | Promise<boolean>): true | Promise<boolean> => {
+        if (result === true) return true;
+        return result.then(allowed => {
+            if (!allowed) {
+                for (const { guard, wasIgnored } of savedEditors) {
+                    if (guard.ignoreRef && wasIgnored !== undefined) guard.ignoreRef.current = wasIgnored;
+                }
+            }
+            return allowed;
+        });
+    };
+    const discardAndNavigate = async (): Promise<boolean> => {
+        const ignored = pendingDiscards.map(guard => guard.ignoreRef?.current);
+        let departed = false;
+        try {
+            for (const guard of pendingDiscards) {
+                guard.isDirtyRef.current = false;
+                await guard.onDiscard?.();
+            }
+            departed = await navigate() !== false;
+            return departed;
+        } catch {
+            return false;
+        } finally {
+            if (!departed) {
+                for (const [index, guard] of pendingDiscards.entries()) {
+                    guard.isDirtyRef.current = true;
+                    const wasIgnored = ignored[index];
+                    if (guard.ignoreRef && wasIgnored !== undefined) guard.ignoreRef.current = wasIgnored;
+                }
+            }
+        }
+    };
     const proceed = (index: number): true | Promise<boolean> => {
         if (options.isCurrent && !options.isCurrent()) return Promise.resolve(false);
         if (mountedEditors.some(editor => mountedTabGuards.get(editor.tabId)?.isDirtyRef !== editor.dirtyRef)) {
@@ -196,15 +243,33 @@ export function runGuardedTabNavigation(
         }
         const guard = guards[index];
         if (!guard) {
+            if (pendingDiscards.length) return discardAndNavigate();
             const continuation = navigate();
-            return continuation ? continuation.then(() => true) : true;
+            if (continuation === false) return Promise.resolve(false);
+            return continuation && typeof continuation !== 'boolean'
+                ? continuation.then(allowed => allowed !== false)
+                : true;
         }
         let continued = false;
-        const result = runUnsavedChangesGuard(guard, () => { continued = true; });
+        const result = runUnsavedChangesGuard({
+            ...guard,
+            onSave: guard.onSave && (async () => {
+                const wasIgnored = guard.ignoreRef?.current;
+                const saved = await guard.onSave!();
+                if (saved) savedEditors.push({ guard, wasIgnored });
+                return saved;
+            }),
+            onDiscard: () => {
+                // A later refusal (or a save that owns departure) leaves this
+                // editor mounted. Keep its draft protective until batch admission.
+                guard.isDirtyRef.current = true;
+                pendingDiscards.push(guard);
+            },
+        }, () => { continued = true; });
         if (result === true) return proceed(index + 1);
         // A successful save may own its own continuation. Never turn that
         // success into permission to execute the originally requested close.
         return result.then(allowed => allowed && continued ? proceed(index + 1) : allowed);
     };
-    return proceed(0);
+    return settle(proceed(0));
 }
