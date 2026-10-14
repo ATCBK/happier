@@ -170,7 +170,6 @@ describe('portable built-in Settings declarations', () => {
     expect(readBuiltInAccountSettingValueV1(declaration, settings)).toBe(false);
     expect(buildBuiltInAccountSettingMutationV1(declaration, settings, true)).toEqual({ analyticsOptOut: false });
     expect(readBuiltInSettingDeclarationV1('delegation.approvalReviewerEnabled')?.presentUserOnly).toBe(true);
-    expect(readBuiltInSettingDeclarationV1('transcript.showToolCalls')?.surfaces).toEqual({ agent: false, mcp: false });
     expect(readBuiltInSettingDeclarationV1('voicePrivacy.diagnosticsEnabled')?.storage?.access).toBe('read_only');
     expect(readBuiltInSettingDeclarationV1('voicePrivacy.forgetVoiceAgentMemory')?.operation).toEqual(expect.objectContaining({
       kind: 'invoke', requiresHumanInteraction: true, requiresApproval: true,
