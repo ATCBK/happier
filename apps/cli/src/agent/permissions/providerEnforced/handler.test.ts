@@ -11,6 +11,10 @@ import { __resetToolTraceForTests } from '@/agent/tools/trace/toolTrace';
 import { ServerBoundPermissionRpcHandlerManager } from '../testkit/serverBoundPermissionRpcHandlerManager';
 import { createNativeAgentSessionServices } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions';
 import { readSessionWorkspaceWritesV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { createClaudeAgentSdkTurnOperations } from '../../../../../../packages/plugins/claude/src/agent/runtime/remote/sdk/session';
+import { createClaudeNativePermissionEngine } from '../../../../../../packages/plugins/claude/src/agent/permissions/nativePermissionEngine';
+import { createSdkExecFixture, createEventsFixture, createPluginContextFixture, createSessionHooksFixture, createTerminalHostFixture } from '../../../../../../packages/plugins/claude/src/agent/runtime/engine.testkit';
 
 beforeEach(() => {
   resetActiveAccountSettingsSnapshotForTests();
@@ -146,6 +150,56 @@ describe('QA Edit button payloads at the native permission owner', () => {
 });
 
 describe('native Agent tool approval policy', () => {
+  it.each(['Read', 'read', 'rEaD', 'scoped'])(
+    'projects %s configuration into native launch tools and enforces the same host policy', async spelling => {
+      const directory = mkdtempSync(join(tmpdir(), 'happier-claude-policy-'));
+      const attachments = join(directory, 'attachments');
+      mkdirSync(attachments);
+      const inside = join(attachments, 'lead.txt');
+      const outside = join(directory, 'canary.txt');
+      writeFileSync(inside, 'lead');
+      writeFileSync(outside, 'private');
+      const allowedTools = [spelling === 'scoped' ? `rEaD(${attachments}/**)` : spelling, 'wEbSeArCh', 'mcp__wilson__*'];
+      const session = new FakeSession();
+      session.metadata = { allowedTools, unlistedTools: 'deny' };
+      const handler = new ProviderEnforcedPermissionHandler(session as unknown as ConstructorParameters<typeof ProviderEnforcedPermissionHandler>[0], { logPrefix: '[Native projection]' });
+      handler.setPermissionMode('yolo');
+      const services = createNativeAgentSessionServices({ permissionHandler: handler,
+        pluginId: 'happier.agent.claude', contributionId: 'claude', runtimeId: 'claude',
+        sessionId: session.sessionId, occurrenceId: 'projection-occurrence',
+        signal: new AbortController().signal, isCurrent: () => true });
+      const exec = createSdkExecFixture();
+      const hooks = createSessionHooksFixture();
+      const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service,
+        { exec: exec.service, sessionHooks: hooks.service });
+      const permissionEngine = createClaudeNativePermissionEngine({ services } as unknown as Parameters<typeof createClaudeNativePermissionEngine>[0]);
+      const operations = createClaudeAgentSdkTurnOperations({ ctx, permissionEngine, directory,
+        happierSessionId: session.sessionId, launchEnv: {}, permissionMode: 'yolo', allowedTools, unlistedTools: 'deny' });
+      try {
+        await operations.sendProviderTurnPrompt('process the attachment');
+        const args = exec.spawnClient.mock.calls[0]?.[0].launch.args ?? [];
+        expect(args[args.indexOf('--tools') + 1]).toBe('Read,WebSearch');
+        const nativeReadRule = spelling === 'scoped' ? `Read(${attachments}/**)` : 'Read';
+        expect(args[args.indexOf('--allowedTools') + 1]).toBe(`${nativeReadRule},WebSearch,mcp__wilson__*`);
+        const hook = hooks.service.startServer.mock.calls[0]?.[0].onPermissionHook;
+        for (const [name, input, allowed] of [
+          ['Read', { file_path: inside }, true],
+          ['Read', { file_path: outside }, spelling !== 'scoped'],
+          ['WebSearch', { query: 'lead' }, true],
+          ['Bash', { command: 'echo private' }, false],
+        ] as const) {
+          const response = await hook({ hook_event_name: 'PreToolUse', tool_name: name, tool_input: input });
+          expect(response.hookSpecificOutput.permissionDecision).toBe(allowed ? 'allow' : 'deny');
+        }
+        expect(session.agentState.requests).toEqual({});
+      } finally {
+        await operations.disposeProviderSession();
+        await handler.reset();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('keeps a birth-approved builtin writer below an admitted read-only ceiling without denying selected external MCP', async () => {
     const session = new FakeSession();
     session.metadata = { allowedTools: ['Write', 'mcp__wilson-intake__*'], unlistedTools: 'deny' };

@@ -2,20 +2,12 @@ import { extractShellCommand } from '@happier-dev/protocol/activity/shellCommand
 import { realpathSync } from 'node:fs';
 import { isAbsolute, relative, sep } from 'node:path';
 import { isShellCommandAllowed } from './shellCommandAllowlist';
+import {
+  isSessionPermissionShellToolName as isShellToolName,
+  matchSessionPermissionToolIdentifier,
+} from '@happier-dev/protocol/runtime/permissionIntentV1';
 
 export { extractShellCommand } from '@happier-dev/protocol/activity/shellCommand';
-
-const SHELL_TOOL_NAMES = new Set(['bash', 'execute', 'shell']);
-
-function isShellToolName(name: string): boolean {
-  return SHELL_TOOL_NAMES.has(name.toLowerCase());
-}
-
-function parseParenIdentifier(value: string): { name: string; spec: string } | null {
-  const match = value.match(/^([^(]+)\((.*)\)$/);
-  if (!match) return null;
-  return { name: match[1], spec: match[2] };
-}
 
 export function makeToolIdentifier(toolName: string, input: unknown): string {
   const command = extractShellCommand(input);
@@ -43,13 +35,7 @@ export function isToolAllowedForSession(
   // Tool-wide approvals: accept direct tool-name identifiers for both shell and non-shell tools.
   for (const item of allowedIdentifiers) {
     if (typeof item !== 'string') continue;
-    if (isShell) {
-      if (isShellToolName(item)) return true;
-      continue;
-    }
-    if (item.toLowerCase() === normalizedToolName) return true;
-    if (normalizedToolName.startsWith('mcp__') && item.toLowerCase().startsWith('mcp__')
-      && item.endsWith('*') && normalizedToolName.startsWith(item.slice(0, -1).toLowerCase())) return true;
+    if (matchSessionPermissionToolIdentifier(item, toolName)?.kind === 'tool') return true;
   }
 
   // Native Read rules need a real-path check: lexical containment alone lets a
@@ -59,8 +45,8 @@ export function isToolAllowedForSession(
     const filePath = record.file_path ?? record.path;
     if (typeof filePath === 'string' && isAbsolute(filePath)) {
       for (const item of allowedIdentifiers) {
-        const parsed = parseParenIdentifier(item);
-        if (parsed?.name.toLowerCase() !== 'read') continue;
+        const parsed = matchSessionPermissionToolIdentifier(item, toolName);
+        if (parsed?.kind !== 'readPath') continue;
         const directoryRule = parsed.spec.endsWith('/**') || parsed.spec.endsWith('\\**');
         const allowedPath = directoryRule ? parsed.spec.slice(0, -3) : parsed.spec;
         if (!isAbsolute(allowedPath)) continue;
@@ -83,9 +69,8 @@ export function isToolAllowedForSession(
     const patterns: Array<{ kind: 'exact'; value: string } | { kind: 'prefix'; value: string }> = [];
     for (const item of allowedIdentifiers) {
       if (typeof item !== 'string') continue;
-      const parsed = parseParenIdentifier(item);
-      if (!parsed) continue;
-      if (!isShellToolName(parsed.name)) continue;
+      const parsed = matchSessionPermissionToolIdentifier(item, toolName);
+      if (parsed?.kind !== 'shellCommand') continue;
 
       const spec = parsed.spec;
       if (spec.endsWith(':*')) {
