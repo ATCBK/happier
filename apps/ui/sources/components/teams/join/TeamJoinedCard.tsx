@@ -3,14 +3,11 @@ import type { TeamInvitationAcceptResultV1 } from '@happier-dev/protocol/teams';
 
 import { getCurrentAuth } from '@/auth/context/currentAuth';
 import { AccountNameField } from '@/components/account/AccountNameField';
+import { useSyncedAccountName } from '@/components/account/useSyncedAccountName';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
 import { setAccountName } from '@/sync/api/account/apiAccountName';
-import {
-  areServerAccountScopesEqual,
-  type ServerAccountScope,
-} from '@/sync/domains/scope/serverAccountScope';
-import { getStorage } from '@/sync/domains/state/storageStore';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 
@@ -23,20 +20,6 @@ type TeamAdmissionSuccess = Extract<
   TeamInvitationAcceptResultV1,
   { outcome: 'joined' | 'already_member' }
 >;
-
-/** The synced name of exactly this Home's Account, or `null` while that profile is not the one in sync. */
-function useSyncedAccountName(
-  scope: ServerAccountScope | null,
-): Readonly<{ name: string | null }> | null {
-  const name = getStorage()((state) =>
-    scope &&
-    areServerAccountScopesEqual(state.profileScope, scope) &&
-    state.profile.id === scope.accountId
-      ? (state.profile.name ?? '')
-      : undefined,
-  );
-  return name === undefined ? null : { name };
-}
 
 /**
  * The one "you're in" card after accepting a Team invitation.
