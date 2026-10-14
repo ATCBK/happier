@@ -49,6 +49,18 @@ describe('ConnectedAccountIdentityText (lab csvc PV: a partial blur that still t
         const screen = await renderScreen(<ConnectedAccountIdentityText value="kevin@gmail.com" />);
 
         expect(blurredRuns(screen)).toHaveLength(0);
-        expect(screen.getTextContent()).toContain('kevin@gmail.com');
+        expect(screen.getTextContent().replace(/\s/g, '')).toContain('kevin@gmail.com');
+    });
+
+    it('keeps an address one string whose domain is one atomic run, so a narrow column wraps it after the @ and never mid-word', async () => {
+        platform.os = 'web';
+        const screen = await renderScreen(<ConnectedAccountIdentityText value="ai1@happier.dev" />);
+        // (The test renderer joins adjacent runs with a space; the DOM text stays "ai1@happier.dev".)
+        expect(screen.getTextContent().replace(/\s/g, '')).toBe('ai1@happier.dev');
+        const atomic = screen.findAll((node) => typeof node.type === 'string'
+            && [node.props?.style].flat(Infinity).some((style: { display?: string } | undefined) => style?.display === 'inline-block'));
+        expect(atomic.map((node) => node.children.join(''))).toEqual(['happier.dev']);
+        const plain = await renderScreen(<ConnectedAccountIdentityText value="ChatGPT account 2" />);
+        expect(plain.getTextContent()).toBe('ChatGPT account 2');
     });
 });
