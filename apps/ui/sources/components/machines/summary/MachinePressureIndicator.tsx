@@ -126,7 +126,7 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: 2,
   },
   wordSmall: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.default('medium'),
   },
   wordLarge: {
@@ -136,7 +136,7 @@ const styles = StyleSheet.create((theme) => ({
     letterSpacing: HAPPIER_DATA_METRICS.statValue.letterSpacing,
   },
   detail: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
   },
 }));

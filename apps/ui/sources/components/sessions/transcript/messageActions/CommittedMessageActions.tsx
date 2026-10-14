@@ -152,6 +152,6 @@ const styles = StyleSheet.create((theme) => ({
     inverted: { marginRight: theme.space.s2 },
     saved: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4, height: 28, paddingHorizontal: theme.space.s6, marginRight: theme.space.s6, borderRadius: 14 },
     savedPressed: { backgroundColor: theme.colors.surface.pressed },
-    savedText: { ...Typography.rowMeta(), color: theme.colors.text.secondary },
+    savedText: { ...Typography.variant('meta'), color: theme.colors.text.secondary },
     savedLink: { color: theme.colors.text.link },
 }));

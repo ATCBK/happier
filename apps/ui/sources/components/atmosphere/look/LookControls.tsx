@@ -671,14 +671,14 @@ function ResetLookRow(
 }
 
 const styles = StyleSheet.create((theme) => ({
-  panelBlock: { paddingHorizontal: 12, paddingBottom: 4, gap: 6 },
+  panelBlock: { paddingHorizontal: theme.space.s12, paddingBottom: theme.space.s4, gap: theme.space.s6 },
   pageBlock: { alignSelf: 'stretch' },
   note: {
     ...Typography.default(),
     ...happierPageTextMetrics('meta'),
     color: theme.colors.text.secondary,
     // The block's control sits 12 in; its note starts where the header's text does.
-    paddingHorizontal: 4,
+    paddingHorizontal: theme.space.s4,
   },
   value: {
     ...Typography.default('medium'),

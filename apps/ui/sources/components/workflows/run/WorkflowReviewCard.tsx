@@ -77,8 +77,8 @@ export type WorkflowReviewCardProps = Readonly<{
 const styles = StyleSheet.create((theme) => ({
     root: { minWidth: 0 },
     filled: { flex: 1, minHeight: 0 },
-    actions: { gap: theme.margins.sm, alignItems: 'stretch' },
-    head: { gap: theme.margins.xs },
+    actions: { gap: theme.space.s8, alignItems: 'stretch' },
+    head: { gap: theme.space.s4 },
     secondary: { color: theme.colors.text.secondary },
     /** A value read back (a step's input, a published result): primary ink in both themes. */
     value: { color: theme.colors.text.primary },

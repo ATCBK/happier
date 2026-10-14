@@ -176,7 +176,7 @@ export const MachineUsingTheMost = React.memo(function MachineUsingTheMost(
 
 const styles = StyleSheet.create((theme) => ({
   meta: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
   },
 }));

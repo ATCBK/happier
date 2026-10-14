@@ -15,6 +15,7 @@ import { t } from '@/text';
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { KeyboardAwareScrollView } from '@/components/ui/keyboardAvoidance';
 import { Icon } from '@/components/ui/icons/Icon';
+import { RoundButton, RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
 import { buildNewSessionLaunchRouteParams } from '@/components/sessions/new/navigation/newSessionRouteParams';
 import { seedAndOpenNewSession } from '@/components/sessions/new/newSessionSeedComposer';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -201,29 +202,28 @@ export const ZenView = React.memo(() => {
 
                     {/* Actions */}
                     <View style={styles.actions}>
-                        <Pressable
-                            onPress={handleWorkOnTask}
-                            style={[styles.actionButton, { backgroundColor: theme.colors.button.primary.background }]}
-                        >
-                            <Icon name="hammer" size={20} color={theme.colors.button.primary.tint} />
-                            <Text style={styles.actionButtonText}>{t('zen.view.workOnTask')}</Text>
-                        </Pressable>
-
-                        <Pressable
-                            onPress={handleClarifyWithAI}
-                            style={[styles.actionButton, { backgroundColor: theme.colors.surface.elevated }]}
-                        >
-                            <Icon name="sparkle" size={20} color={theme.colors.text.primary} />
-                            <Text style={[styles.actionButtonText, { color: theme.colors.text.primary }]}>{t('zen.view.clarify')}</Text>
-                        </Pressable>
-
-                        <Pressable
-                            onPress={handleDelete}
-                            style={[styles.actionButton, { backgroundColor: theme.colors.state.danger.foreground }]}
-                        >
-                            <Icon name="trash" size={20} color={theme.colors.button.primary.tint} />
-                            <Text style={styles.actionButtonText}>{t('zen.view.delete')}</Text>
-                        </Pressable>
+                        <RoundButtonSizeScope size="normal" presentation="uniform">
+                            <RoundButton
+                                size="normal"
+                                title={t('zen.view.workOnTask')}
+                                leading={<Icon name="hammer" size={18} color={theme.colors.button.primary.tint} />}
+                                onPress={handleWorkOnTask}
+                            />
+                            <RoundButton
+                                size="normal"
+                                display="secondary"
+                                title={t('zen.view.clarify')}
+                                leading={<Icon name="sparkle" size={18} color={theme.colors.text.primary} />}
+                                onPress={handleClarifyWithAI}
+                            />
+                            <RoundButton
+                                size="normal"
+                                display="destructive"
+                                title={t('zen.view.delete')}
+                                leading={<Icon name="trash" size={18} color={theme.colors.state.danger.foreground} />}
+                                onPress={handleDelete}
+                            />
+                        </RoundButtonSizeScope>
                     </View>
 
                     {/* Linked Sessions */}
@@ -273,12 +273,12 @@ const styles = StyleSheet.create((theme) => ({
     },
     content: {
         flex: 1,
-        padding: 20,
+        padding: theme.space.s20,
     },
     mainSection: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        marginBottom: 32,
+        marginBottom: theme.space.s32,
     },
     checkbox: {
         width: 28,
@@ -287,77 +287,55 @@ const styles = StyleSheet.create((theme) => ({
         borderWidth: 2,
         alignItems: 'center',
         justifyContent: 'center',
-        marginRight: 16,
-        marginTop: 4,
+        marginRight: theme.space.s16,
+        marginTop: theme.space.s4,
     },
     taskText: {
-        fontSize: 20,
-        lineHeight: 28,
-        ...Typography.default(),
+        ...Typography.variant('title', 'regular'),
     },
     input: {
-        fontSize: 20,
-        lineHeight: 28,
+        ...Typography.variant('title', 'regular'),
         borderBottomWidth: 1,
-        paddingVertical: 8,
-        paddingHorizontal: 4,
+        paddingVertical: theme.space.s8,
+        paddingHorizontal: theme.space.s4,
         minHeight: 60,
-        ...Typography.default(),
     },
     actions: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 12,
-        marginTop: 24,
-    },
-    actionButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-        borderRadius: 8,
-        gap: 8,
-    },
-    actionButtonText: {
-        color: '#FFFFFF',
-        fontSize: 16,
-        fontWeight: '500',
-        ...Typography.default(),
+        gap: theme.space.s12,
+        marginTop: theme.space.s24,
     },
     helperSection: {
-        marginTop: 32,
-        paddingTop: 16,
+        marginTop: theme.space.s32,
+        paddingTop: theme.space.s16,
         borderTopWidth: 1,
         borderTopColor: theme.colors.border.default,
     },
     helperText: {
-        fontSize: 14,
-        ...Typography.default(),
+        ...Typography.variant('reading'),
     },
     linkedSessionsSection: {
-        marginTop: 24,
-        paddingTop: 16,
+        marginTop: theme.space.s24,
+        paddingTop: theme.space.s16,
         borderTopWidth: 1,
         borderTopColor: theme.colors.border.default,
     },
     sectionTitle: {
-        fontSize: 14,
-        fontWeight: '600',
-        marginBottom: 12,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
+        marginBottom: theme.space.s12,
     },
     linkedSession: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s10,
         borderRadius: 8,
-        marginBottom: 8,
-        gap: 8,
+        marginBottom: theme.space.s8,
+        gap: theme.space.s8,
     },
     linkedSessionText: {
         flex: 1,
-        fontSize: 14,
-        ...Typography.default(),
+        ...Typography.variant('label', 'regular'),
     },
 }));

@@ -205,7 +205,7 @@ export default React.memo(function PathPickerScreen() {
                 accessibilityLabel={t('common.done')}
                 style={({ pressed }) => ({
                     opacity: pressed ? motionTokens.press.opacity : 1,
-                    padding: 4,
+                    padding: theme.space.s4,
                 })}
             >
                 <Icon
@@ -276,7 +276,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        padding: 20,
+        padding: theme.space.s20,
     },
     emptyText: {
         fontSize: 16,

@@ -85,14 +85,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     content: {
         alignItems: 'center',
-        gap: 6,
-        paddingLeft: 8,
-        paddingRight: 24,
+        gap: theme.space.s6,
+        paddingLeft: theme.space.s8,
+        paddingRight: theme.space.s24,
     },
     key: {
         minWidth: 44,
         height: 34,
-        paddingHorizontal: 10,
+        paddingHorizontal: theme.space.s10,
         borderRadius: 8,
         alignItems: 'center',
         justifyContent: 'center',
@@ -109,9 +109,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.text.primary,
     },
     label: {
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
     },
     labelMono: {
         ...Typography.mono(),

@@ -162,12 +162,12 @@ export const ApprovalSessionContextCard = React.memo(function ApprovalSessionCon
 const styles = StyleSheet.create((theme) => ({
     // Sheet content of the "Requested by" section: the section owns the chrome.
     card: {
-        gap: 12,
+        gap: theme.space.s12,
     },
     headerRow: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 12,
+        gap: theme.space.s12,
     },
     titleColumn: {
         flex: 1,
@@ -179,10 +179,10 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     contextChips: {
-        marginTop: 8,
+        marginTop: theme.space.s8,
     },
     homeLabel: {
-        marginTop: 8,
+        marginTop: theme.space.s8,
         fontSize: 12,
         color: theme.colors.text.secondary,
     },

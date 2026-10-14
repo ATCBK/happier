@@ -125,7 +125,7 @@ const styles = StyleSheet.create((theme) => ({
         minHeight: 0,
     },
     failure: {
-        paddingHorizontal: theme.margins.md,
-        paddingTop: theme.margins.sm,
+        paddingHorizontal: theme.space.s12,
+        paddingTop: theme.space.s8,
     },
 }));

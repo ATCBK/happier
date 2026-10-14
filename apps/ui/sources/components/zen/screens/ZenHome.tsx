@@ -92,11 +92,11 @@ export const ZenHome = () => {
                         flex: 1,
                         maxWidth: layout.maxWidth,
                         alignSelf: 'stretch',
-                        paddingTop: 20,
+                        paddingTop: theme.space.s20,
                     }}>
                         {undoneTodos.length === 0 ? (
-                            <View style={{ padding: 20, alignItems: 'center' }}>
-                                <Text style={{ color: theme.colors.text.secondary, fontSize: 16 }}>
+                            <View style={{ padding: theme.space.s20, alignItems: 'center' }}>
+                                <Text variant="reading" style={{ color: theme.colors.text.secondary }}>
                                     {t('zen.home.noTasksYet')}
                                 </Text>
                             </View>

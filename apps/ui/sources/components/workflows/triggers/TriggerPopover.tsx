@@ -149,21 +149,21 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: theme.margins.sm,
-        paddingHorizontal: theme.margins.lg,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s16,
         // The foot sits under a scrolling form: a breath above it so the last field never touches it.
-        paddingTop: theme.margins.md,
-        paddingBottom: theme.margins.lg,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s16,
     },
     footEnd: {
         marginLeft: 'auto',
         flexDirection: 'row',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     failure: {
         color: theme.colors.state.danger.foreground,
-        paddingHorizontal: theme.margins.lg,
-        paddingBottom: theme.margins.sm,
+        paddingHorizontal: theme.space.s16,
+        paddingBottom: theme.space.s8,
     },
 }));
 

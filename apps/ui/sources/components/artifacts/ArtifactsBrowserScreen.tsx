@@ -558,12 +558,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 6,
-        marginTop: 8,
+        gap: theme.space.s6,
+        marginTop: theme.space.s8,
     },
     phonePresent: {
         paddingHorizontal: PAGE_LIST_METRICS.sheetInsetPx,
-        marginBottom: 12,
+        marginBottom: theme.space.s12,
     },
     presentText: {
         fontSize: 12.5,
@@ -574,7 +574,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     meter: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     meterTrack: {
         width: 72,
@@ -599,14 +599,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         marginBottom: 14,
     },
     bannerWithoutToolbar: {
-        marginTop: 16,
+        marginTop: theme.space.s16,
     },
     toolbar: {
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 8,
-        marginTop: 20,
+        gap: theme.space.s8,
+        marginTop: theme.space.s20,
         marginBottom: 14,
         marginHorizontal: PAGE_LIST_METRICS.sheetInsetPx,
     },
@@ -626,7 +626,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexBasis: '100%',
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     toolbarChoices: {
         flexGrow: 1,
@@ -636,7 +636,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     grow: {
         flex: 1,
@@ -649,6 +649,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontSize: 13,
         color: theme.colors.text.tertiary,
         textAlign: 'center',
-        marginTop: 12,
+        marginTop: theme.space.s12,
     },
 }));

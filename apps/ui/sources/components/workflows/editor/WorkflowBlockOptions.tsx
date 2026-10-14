@@ -92,10 +92,10 @@ const styles = StyleSheet.create((theme) => ({
     subjectHeader: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
-        paddingHorizontal: theme.margins.lg,
-        paddingTop: theme.margins.md,
-        paddingBottom: theme.margins.sm,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s8,
     },
     subjectTitle: {
         ...Typography.default('semiBold'),

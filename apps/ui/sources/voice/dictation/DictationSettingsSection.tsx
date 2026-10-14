@@ -437,7 +437,7 @@ const styles = StyleSheet.create((theme) => ({
   engineNeeds: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: theme.space.s6,
   },
   engineNeedsText: {
     ...Typography.default(),

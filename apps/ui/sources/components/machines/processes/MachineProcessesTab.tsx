@@ -1034,17 +1034,17 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.space.s6,
   },
   quiet: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
   },
   figure: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.tabular(),
     color: theme.colors.text.secondary,
     textAlign: 'right',
   },
   platform: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
     paddingVertical: theme.space.s12,
     // On the rows' content edge, like the group band's label above it.

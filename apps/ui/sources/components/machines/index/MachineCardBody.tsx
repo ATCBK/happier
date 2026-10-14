@@ -97,18 +97,18 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     name: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
         flexShrink: 0,
         maxWidth: '75%',
     },
     tag: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
         flexShrink: 1,
     },
     line: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     footer: {
@@ -125,7 +125,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     footerText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.tabular(),
         color: theme.colors.text.secondary,
     },

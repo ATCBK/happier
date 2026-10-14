@@ -18,7 +18,7 @@ export type WebDesktopDownloadCtaProps = Readonly<{
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
         width: '100%',
-        gap: 10,
+        gap: theme.space.s10,
         alignItems: 'flex-start',
         borderWidth: 1,
         borderColor: theme.colors.border.modal,
@@ -26,11 +26,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderRadius: 12,
         // Tightened (F-W13-2): the setup columns must fit their content at
         // 1440×900 without scrolling for the primary action.
-        padding: 16,
+        padding: theme.space.s16,
     },
     heading: {
         width: '100%',
-        gap: 4,
+        gap: theme.space.s4,
         alignItems: 'flex-start',
     },
     button: {

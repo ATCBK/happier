@@ -225,13 +225,13 @@ const styles = StyleSheet.create((theme) => ({
     board: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 16,
-        padding: 16,
+        gap: theme.space.s16,
+        padding: theme.space.s16,
     },
     cell: {
         width: 640,
         maxWidth: '100%',
-        gap: 6,
+        gap: theme.space.s6,
     },
     caption: {
         fontSize: 13,

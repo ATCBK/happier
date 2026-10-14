@@ -297,8 +297,8 @@ const styles = StyleSheet.create((theme) => ({
     },
     terminal: {
         flex: 1,
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
         backgroundColor: theme.colors.surface.inset,
     },
     terminalLine: {
@@ -308,11 +308,11 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     formCell: {
-        padding: 12,
+        padding: theme.space.s12,
     },
     enginePane: {
         width: 506,
-        margin: 24,
-        padding: 16,
+        margin: theme.space.s24,
+        padding: theme.space.s16,
     },
 }));

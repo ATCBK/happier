@@ -30,9 +30,9 @@ export function ChangedFilesReviewFindCount(props: Readonly<{ model?: ChangedFil
         () => model?.getFileSnapshot(props.path).count ?? 0,
     );
     // The count wears the match tint (Find lab `.fd-fc`), so the index reads as where the marks are.
-    return count ? <View style={{ minWidth: 18, height: 18, paddingHorizontal: 5, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.find.matchAll }}>
+    return count ? <View style={{ minWidth: 18, height: 18, paddingHorizontal: theme.space.s4, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.find.matchAll }}>
         <Text testID={`scm-review-find-count:${props.path}`} accessibilityLabel={t('find.count', { current: null, total: count })}
-            style={{ color: theme.colors.text.primary, ...Typography.pillLabel(), ...Typography.tabular() }}>{String(count)}</Text>
+            style={{ color: theme.colors.text.primary, ...Typography.variant('micro', 'semiBold'), ...Typography.tabular() }}>{String(count)}</Text>
     </View> : null;
 }
 

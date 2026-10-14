@@ -54,7 +54,7 @@ export function ChangedFilesReviewPhoneFileControl(props: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     control: { backgroundColor: theme.colors.surface.base, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border.default },
-    trigger: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16 },
-    position: { fontSize: 12, color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'], ...Typography.default() },
-    name: { flex: 1, minWidth: 0, fontSize: 13, color: theme.colors.text.primary, ...Typography.default('semiBold') },
+    trigger: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: theme.space.s12, paddingHorizontal: theme.space.s16 },
+    position: { ...Typography.variant('meta'), color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'],  },
+    name: { flex: 1, minWidth: 0, ...Typography.variant('body', 'semiBold'), color: theme.colors.text.primary,  },
 }));

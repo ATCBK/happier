@@ -19,11 +19,11 @@ import {
 const stylesheet = UnistylesStyleSheet.create((theme) => ({
     root: {
         width: '100%',
-        gap: 12,
+        gap: theme.space.s12,
     },
     form: {
         width: '100%',
-        gap: 10,
+        gap: theme.space.s10,
     },
     hint: {
         color: theme.colors.text.secondary,

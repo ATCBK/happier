@@ -357,5 +357,5 @@ const styles = StyleSheet.create((theme) => ({
   },
   frame: { flex: 1, width: '100%', maxWidth: 1440 },
   phone: { maxWidth: 390 },
-  rail: { width: 460, alignSelf: 'flex-end', paddingHorizontal: 12 },
+  rail: { width: 460, alignSelf: 'flex-end', paddingHorizontal: theme.space.s12 },
 }));

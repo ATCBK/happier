@@ -478,8 +478,8 @@ const styles = StyleSheet.create(theme => ({
     guideY: { position: 'absolute', left: 0, right: 0, height: 0, borderTopWidth: 1, borderStyle: 'dashed', borderColor: theme.colors.border.focus },
     snapTarget: { position: 'absolute', borderWidth: 1, borderColor: theme.colors.border.focus, borderStyle: 'dashed', borderRadius: theme.borderRadius.xl },
     // `left: -1` is the slot's own border width, so the chip's edge meets the outline's.
-    snapLabel: { position: 'absolute', left: -1, bottom: '100%', marginBottom: theme.margins.xs,
-        paddingHorizontal: theme.margins.sm, borderRadius: theme.borderRadius.sm,
+    snapLabel: { position: 'absolute', left: -1, bottom: '100%', marginBottom: theme.space.s4,
+        paddingHorizontal: theme.space.s8, borderRadius: theme.borderRadius.sm,
         borderWidth: 1, borderColor: theme.colors.border.focus, backgroundColor: theme.colors.surface.elevated },
-    snapLabelText: { ...Typography.rowMeta(), ...Typography.default('semiBold'), color: theme.colors.border.focus },
+    snapLabelText: { ...Typography.variant('meta'), ...Typography.default('semiBold'), color: theme.colors.border.focus },
 }));

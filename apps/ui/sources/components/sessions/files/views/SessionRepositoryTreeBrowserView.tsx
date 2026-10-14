@@ -35,7 +35,7 @@ function SessionFilesRootHeading(props: Readonly<{ label: string }>) {
         <View testID="repository-tree-session-files-root" accessibilityRole="header" style={[styles.sessionFilesRoot,
             { minHeight: isTouchPrimaryPointer() ? TREE_ROW_METRICS.minHeightPx.touch : TREE_ROW_METRICS.minHeightPx.precise }]}>
             <Icon name="folder" size={16} color={theme.colors.text.secondary} />
-            <Text numberOfLines={1} style={[Typography.rowTitle(), { color: theme.colors.text.primary }]}>{props.label}</Text>
+            <Text numberOfLines={1} style={[Typography.variant('label', 'semiBold'), { color: theme.colors.text.primary }]}>{props.label}</Text>
         </View>
     );
 }

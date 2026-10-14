@@ -77,7 +77,7 @@ function readBoolean(value: unknown, key: string): boolean {
 
 const styles = StyleSheet.create((theme) => ({
     notice: {
-        marginHorizontal: 12,
+        marginHorizontal: theme.space.s12,
         fontSize: 13,
         color: theme.colors.text.secondary,
     },

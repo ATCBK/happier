@@ -153,11 +153,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: theme.space.s8,
     },
     /**
-     * The countdown. `Typography.timestamp()` already carries tabular numerals, which is what keeps
+     * The countdown's micro role carries tabular numerals, which is what keeps
      * the row from twitching sideways once a second as the digits change width.
      */
     clock: {
-        ...Typography.timestamp(),
+        ...({ ...Typography.variant('micro', 'regular'), ...Typography.tabular() }),
         color: theme.colors.text.secondary,
     },
     /**

@@ -207,21 +207,21 @@ const stylesheet = StyleSheet.create((theme) => ({
     // The toolbar sits on the pane without a rule under it; the segmented row or the tree follows.
     searchRow: {
         borderBottomWidth: 0,
-        gap: 4,
-        paddingBottom: 6,
+        gap: theme.space.s4,
+        paddingBottom: theme.space.s6,
     },
     row: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
-        paddingHorizontal: 12,
-        paddingTop: 10,
-        paddingBottom: 6,
+        gap: theme.space.s4,
+        paddingHorizontal: theme.space.s12,
+        paddingTop: theme.space.s10,
+        paddingBottom: theme.space.s6,
     },
     inline: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
     },
     spacer: {
         flex: 1,

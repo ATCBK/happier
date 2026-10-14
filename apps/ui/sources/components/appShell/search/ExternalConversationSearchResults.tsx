@@ -327,21 +327,21 @@ const styles = StyleSheet.create((theme) => ({
     // Hits sit on the palette's menu rows: inset from the card edge with the shared rounded highlight.
     menuRow: { marginHorizontal: MENU_ROW_METRICS.insetPx, borderRadius: MENU_ROW_METRICS.radiusPx, overflow: 'hidden' },
     statusRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s12, paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s8 },
-    statusInline: { ...Typography.rowMeta(), color: theme.colors.text.secondary },
+    statusInline: { ...Typography.variant('meta'), color: theme.colors.text.secondary },
     // The preview column (lab H1r `.fd-preview`): title, where it lives, the matched message, then the
     // two ways out and what opening does.
     preview: { width: PREVIEW_WIDTH, flexShrink: 0, minHeight: 0, gap: theme.space.s8, paddingHorizontal: theme.space.s16, paddingTop: theme.space.s16, paddingBottom: theme.space.s16,
         borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: theme.colors.border.default },
     previewHeading: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
-    previewTitle: { ...Typography.rowTitle(), flex: 1, color: theme.colors.text.primary },
+    previewTitle: { ...Typography.variant('label', 'semiBold'), flex: 1, color: theme.colors.text.primary },
     previewMessage: { marginTop: theme.space.s6, paddingHorizontal: theme.space.s12, paddingVertical: theme.space.s10, borderRadius: 12, backgroundColor: theme.colors.surface.inset },
     previewGrow: { flex: 1, minHeight: 12 },
     // One rhythm down the exchange (lab `.fd-preview`: 8 between who and what, 13/19 message text).
     previewMessages: { gap: theme.space.s12, paddingBottom: theme.space.s4 },
-    previewText: { ...Typography.rowMeta(), color: theme.colors.text.primary },
+    previewText: { ...Typography.variant('meta'), color: theme.colors.text.primary },
     previewActions: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s8 },
     previewEmpty: { marginTop: 'auto', marginBottom: 'auto', textAlign: 'center' },
-    meta: { ...Typography.rowMeta(), color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'] },
+    meta: { ...Typography.variant('meta'), color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'] },
     // Coverage and progress are context, not content: one quiet line.
-    status: { ...Typography.rowMeta(), color: theme.colors.text.secondary, paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s8 },
+    status: { ...Typography.variant('meta'), color: theme.colors.text.secondary, paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s8 },
 }));

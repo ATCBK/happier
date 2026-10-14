@@ -56,14 +56,14 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         borderLeftColor: theme.colors.border.default,
     },
     inspectorContent: {
-        paddingHorizontal: theme.margins.lg,
-        paddingVertical: theme.margins.lg,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s16,
     },
     root: {
-        gap: theme.margins.lg,
+        gap: theme.space.s16,
     },
     outcome: {
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx,
     },
     /** Pause at boundary, Stop and `⋯` at the header's trailing edge (07 §3 identity-first headers). */
@@ -71,14 +71,14 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     /** The view switch hugs its labels at the start of its row rather than spanning the column. */
     viewSwitch: {
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx,
     },
     // A phone gives the view switch the full width (lab phone-P1); the view's own actions sit under it.
@@ -91,7 +91,7 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         minHeight: MINIMUM_TARGET_SIZE,
     },
     /** Wide: the view's own actions close the tab row at its trailing edge (lab run-A); phones stack them. */
@@ -103,7 +103,7 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         alignItems: 'center',
     },
     sheetBody: {
-        padding: theme.margins.lg,
+        padding: theme.space.s16,
     },
     pageSection: {
         paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx,
@@ -111,7 +111,7 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
     technicalToggle: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     /**
      * The completion moment's visible half: a brief semantic success wash on
@@ -122,16 +122,16 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
     outcomeCompleted: {
         backgroundColor: theme.colors.state.success.background,
         borderRadius: theme.borderRadius.xl,
-        paddingHorizontal: theme.margins.md,
-        paddingVertical: theme.margins.sm,
-        marginHorizontal: -theme.margins.md,
-        marginVertical: -theme.margins.sm,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
+        marginHorizontal: -theme.space.s12,
+        marginVertical: -theme.space.s8,
     },
     /** The Run's state mark leads its sentence, centred on the first line. */
     outcomeLine: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     outcomeSentence: {
         ...Typography.default('regular'),
@@ -153,7 +153,7 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
     actions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.md,
+        gap: theme.space.s12,
         flexWrap: 'wrap',
     },
     /** A problem sentence and its repair on one line (wrapping under it when narrow), never a full-width bar. */
@@ -161,8 +161,8 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        columnGap: theme.margins.md,
-        rowGap: theme.margins.xs,
+        columnGap: theme.space.s12,
+        rowGap: theme.space.s4,
     },
     problemText: {
         flexShrink: 1,
@@ -199,7 +199,7 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     section: {
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     sectionLabel: {
         ...Typography.default('regular'),
@@ -207,13 +207,13 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
     },
     /** A body section's heading ("Needs you"), in the row-title role. */
     sectionTitle: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     sectionHeading: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     /** A changing count, tabular so it cannot shift the label beside it. */
     sectionCount: {
@@ -224,7 +224,7 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
     detailRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     detailKey: {
         ...Typography.default('regular'),

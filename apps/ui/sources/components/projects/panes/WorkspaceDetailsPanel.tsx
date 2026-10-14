@@ -252,7 +252,7 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
     }, [effectiveRootPath, openWorkspaceSyncDetails, props.workspaceRef.machineId, props.workspaceRef.serverId, selectedWorkspaceRef]);
 
     const renderEmptyState = React.useCallback(() => (
-        <ItemList testID="project-details-info" containerStyle={{ paddingTop: 12 }}>
+        <ItemList testID="project-details-info" containerStyle={{ paddingTop: theme.space.s12 }}>
             <ItemGroup title={t('projects.detail.groupTitle')}>
                 <Item title={t('projects.detail.fields.name')} detail={displayName} mode="info" />
                 <Item title={t('projects.detail.fields.machine')} detail={machineName} mode="info" />
@@ -266,8 +266,8 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
                 onOpenConflicts={openWorkspaceSyncConflicts}
             />
             {props.renderEmptyStateSupplementaryContent ? props.renderEmptyStateSupplementaryContent() : null}
-            <View style={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 6 }}>
-                <Text style={{ color: theme.colors.text.secondary, fontSize: 13, ...Typography.default(), textAlign: 'center', maxWidth: 680 }}>
+            <View style={{ alignItems: 'center', paddingHorizontal: theme.space.s24, paddingTop: theme.space.s6 }}>
+                <Text style={{ color: theme.colors.text.secondary, ...Typography.variant('body'),  textAlign: 'center', maxWidth: 680 }}>
                     {t('projects.details.emptyBody')}
                 </Text>
             </View>
@@ -288,7 +288,7 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
     ]);
 
     const renderWorkspaceInfo = React.useCallback(() => (
-        <ItemList testID="project-details-workspace-info" containerStyle={{ paddingTop: 12 }}>
+        <ItemList testID="project-details-workspace-info" containerStyle={{ paddingTop: theme.space.s12 }}>
             <ItemGroup title={t('projects.detail.groupTitle')}>
                 <Item title={t('projects.detail.fields.name')} detail={displayName} mode="info" />
                 <Item title={t('projects.detail.fields.machine')} detail={machineName} mode="info" />

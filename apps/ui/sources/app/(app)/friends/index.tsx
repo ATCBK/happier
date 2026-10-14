@@ -22,12 +22,11 @@ const styles = StyleSheet.create((theme) => ({
   headerContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: theme.space.s16,
   },
   headerTitle: {
-    fontSize: 17,
+    ...Typography.variant('heading'),
     color: theme.colors.chrome.header.foreground,
-    ...Typography.default('semiBold'),
   },
 }));
 

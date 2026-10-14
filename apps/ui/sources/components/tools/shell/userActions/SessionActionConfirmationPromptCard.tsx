@@ -145,7 +145,7 @@ export const SessionActionConfirmationPromptCard = React.memo(function SessionAc
 
 const styles = StyleSheet.create((theme) => ({
     details: {
-        gap: 5,
+        gap: theme.space.s4,
     },
     identifier: {
         fontSize: 12,

@@ -142,7 +142,7 @@ export function useRealtimeCatalogMenuItems(
               ...(category ? { category } : {}),
               rightElement: inUse ? (
                 <View
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 }}
                 >
                   <StatusPill
                     variant="neutral"

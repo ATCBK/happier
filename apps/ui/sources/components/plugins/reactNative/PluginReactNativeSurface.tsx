@@ -172,10 +172,10 @@ const resetFeedbackStyles = StyleSheet.create({
         gap: 8,
     },
     retainedStatusTitle: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
     },
     retainedStatusReason: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
     },
     retainedStatusAction: {
         alignSelf: 'flex-start',

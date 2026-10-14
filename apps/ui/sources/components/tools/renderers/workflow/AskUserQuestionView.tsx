@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View, TouchableOpacity } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -424,22 +425,21 @@ export const projectAskUserQuestionDisplayText: ToolDisplayTextProjector = (tool
 // with react-native-unistyles. The theme is passed as a function parameter.
 const styles = StyleSheet.create((theme) => ({
     container: {
-        gap: 16,
+        gap: theme.space.s16,
     },
     questionSection: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     headerChip: {
         alignSelf: 'flex-start',
         backgroundColor: theme.colors.surface.elevated,
-        paddingHorizontal: 8,
-        paddingVertical: 4,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s4,
         borderRadius: 4,
-        marginBottom: 4,
+        marginBottom: theme.space.s4,
     },
     headerText: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
         textTransform: 'uppercase',
     },
@@ -447,21 +447,21 @@ const styles = StyleSheet.create((theme) => ({
         fontSize: 15,
         fontWeight: '500',
         color: theme.colors.text.primary,
-        marginBottom: 8,
+        marginBottom: theme.space.s8,
     },
     optionsContainer: {
-        gap: 4,
+        gap: theme.space.s4,
     },
     optionButton: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        paddingVertical: 12,
-        paddingHorizontal: 12,
+        paddingVertical: theme.space.s12,
+        paddingHorizontal: theme.space.s12,
         borderRadius: 8,
         backgroundColor: 'transparent',
         borderWidth: 1,
         borderColor: theme.colors.border.default,
-        gap: 10,
+        gap: theme.space.s10,
         minHeight: 44, // Minimum touch target for mobile
     },
     optionButtonSelected: {
@@ -479,7 +479,7 @@ const styles = StyleSheet.create((theme) => ({
         borderColor: theme.colors.text.secondary,
         alignItems: 'center',
         justifyContent: 'center',
-        marginTop: 2,
+        marginTop: theme.space.s2,
     },
     radioOuterSelected: {
         borderColor: theme.colors.radio.active,
@@ -498,7 +498,7 @@ const styles = StyleSheet.create((theme) => ({
         borderColor: theme.colors.text.secondary,
         alignItems: 'center',
         justifyContent: 'center',
-        marginTop: 2,
+        marginTop: theme.space.s2,
     },
     checkboxOuterSelected: {
         borderColor: theme.colors.radio.active,
@@ -508,21 +508,20 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
     },
     optionLabel: {
-        fontSize: 14,
-        fontWeight: '500',
+        ...Typography.variant('label'),
         color: theme.colors.text.primary,
     },
     optionDescription: {
         fontSize: 13,
         color: theme.colors.text.secondary,
-        marginTop: 2,
+        marginTop: theme.space.s2,
     },
     freeformInput: {
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 8,
-        paddingHorizontal: 12,
-        paddingVertical: 12,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s12,
         fontSize: 14,
         color: theme.colors.text.primary,
         backgroundColor: theme.colors.surface.base,
@@ -531,24 +530,24 @@ const styles = StyleSheet.create((theme) => ({
     freeformDescription: {
         fontSize: 13,
         color: theme.colors.text.secondary,
-        marginTop: 6,
-        marginLeft: 2,
+        marginTop: theme.space.s6,
+        marginLeft: theme.space.s2,
     },
     actionsContainer: {
         flexDirection: 'row',
-        gap: 12,
-        marginTop: 8,
+        gap: theme.space.s12,
+        marginTop: theme.space.s8,
         justifyContent: 'flex-end',
     },
     submitButton: {
         backgroundColor: theme.colors.button.primary.background,
-        paddingHorizontal: 20,
-        paddingVertical: 12,
+        paddingHorizontal: theme.space.s20,
+        paddingVertical: theme.space.s12,
         borderRadius: 8,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         minHeight: 44, // Minimum touch target for mobile
     },
     submitButtonDisabled: {
@@ -556,19 +555,17 @@ const styles = StyleSheet.create((theme) => ({
     },
     submitButtonText: {
         color: theme.colors.button.primary.tint,
-        fontSize: 14,
-        fontWeight: '600',
+        ...Typography.variant('label', 'semiBold'),
     },
     submittedContainer: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     submittedItem: {
         flexDirection: 'row',
-        gap: 8,
+        gap: theme.space.s8,
     },
     submittedHeader: {
-        fontSize: 13,
-        fontWeight: '600',
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     submittedValue: {

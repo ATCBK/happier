@@ -40,7 +40,7 @@ function listText(role: keyof typeof HAPPIER_COLLECTION_LIST_TEXT) {
 
 const styles = StyleSheet.create((theme) => ({
     // A line state (a failed read) on the rows' text edge, between the list's rows.
-    stateLine: { paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.contentInset, paddingVertical: theme.margins.xs },
+    stateLine: { paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.contentInset, paddingVertical: theme.space.s4 },
     surface: {
         backgroundColor: theme.colors.surface.base,
     },

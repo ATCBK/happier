@@ -9,7 +9,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     container: {
         flex: 1,
         backgroundColor: theme.colors.surface.base,
-        padding: 20,
+        padding: theme.space.s20,
     },
     section: {
         marginBottom: 30,
@@ -23,7 +23,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     input: {
         backgroundColor: theme.colors.input.background,
-        padding: 12,
+        padding: theme.space.s12,
         borderRadius: 8,
         marginBottom: 15,
         color: theme.colors.input.text,
@@ -39,7 +39,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     qrLabel: {
         fontSize: 14,
         color: theme.colors.text.secondary,
-        marginBottom: 10,
+        marginBottom: theme.space.s10,
         textAlign: 'center',
         ...Typography.default(),
     },

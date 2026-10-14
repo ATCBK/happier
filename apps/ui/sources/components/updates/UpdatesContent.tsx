@@ -282,7 +282,7 @@ export const UpdatesContent = React.memo(function UpdatesContent(props: Readonly
 const styles = StyleSheet.create((theme) => ({
     content: {
         width: '100%',
-        paddingBottom: 24,
+        paddingBottom: theme.space.s24,
     },
     // The popover's rows and footer carry the menu rhythm (`MENU_ROW_METRICS`); nothing extra below.
     compactContent: {
@@ -291,7 +291,7 @@ const styles = StyleSheet.create((theme) => ({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.md,
+        gap: theme.space.s12,
     },
     // The summary line starts on the menu rows' text edge and sits one menu rhythm above them.
     headerCompact: {
@@ -303,7 +303,7 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         minWidth: 0,
         justifyContent: 'center',
-        gap: 2,
+        gap: theme.space.s2,
     },
     // One title line + one meta line: the floor every state lays out on.
     headerTextCompact: {
@@ -312,22 +312,20 @@ const styles = StyleSheet.create((theme) => ({
     headerActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.md,
+        gap: theme.space.s12,
     },
     headerTitle: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: Platform.select({ ios: 14, default: 13 }),
-        lineHeight: Platform.select({ ios: 19, default: 18 }),
+        ...Typography.variant('body', 'semiBold'),
     },
     headerMeta: {
-        ...Typography.timestamp(),
+        ...({ ...Typography.variant('micro', 'regular'), ...Typography.tabular() }),
         color: theme.colors.text.secondary,
     },
     // Two lines tall in every state (title + meta), so a changing status never moves the sections.
     screenSummary: {
         minHeight: 20 + 18,
-        marginTop: 8,
+        marginTop: theme.space.s8,
     },
     screenSummaryTitle: {
         color: theme.colors.text.primary,
@@ -338,8 +336,8 @@ const styles = StyleSheet.create((theme) => ({
     empty: {
         minHeight: 320,
         justifyContent: 'center',
-        paddingHorizontal: 32,
-        paddingVertical: 48,
+        paddingHorizontal: theme.space.s32,
+        paddingVertical: theme.space.s48,
     },
     emptyCompact: {
         minHeight: 220,

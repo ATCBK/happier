@@ -532,7 +532,7 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         paddingTop: HAPPIER_PAGE_METRICS.sectionHeaderGapPx,
         paddingHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx,
     },
@@ -553,7 +553,7 @@ const styles = StyleSheet.create((theme) => ({
     rowAccessory: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.md,
+        gap: theme.space.s12,
     },
     headerActions: {
         flexDirection: 'row',
@@ -562,14 +562,14 @@ const styles = StyleSheet.create((theme) => ({
         minWidth: 0,
         maxWidth: '100%',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     importLine: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: theme.margins.xs,
-        paddingBottom: theme.margins.xl,
+        gap: theme.space.s4,
+        paddingBottom: theme.space.s20,
     },
     importPrompt: {
         ...Typography.default(),

@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -89,18 +90,17 @@ export const WebSearchView = React.memo<ToolViewProps>(({ tool, detailLevel, mes
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        padding: 12,
+        padding: theme.space.s12,
         borderRadius: 8,
         backgroundColor: theme.colors.surface.inset,
-        gap: 12,
+        gap: theme.space.s12,
     },
     row: {
-        gap: 4,
+        gap: theme.space.s4,
     },
     title: {
-        fontSize: 13,
+        ...Typography.variant('body', 'medium'),
         color: theme.colors.text.primary,
-        fontWeight: '500',
     },
     url: {
         fontSize: 12,

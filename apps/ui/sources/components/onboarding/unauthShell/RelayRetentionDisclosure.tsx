@@ -62,18 +62,16 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: '100%',
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 7,
+        gap: theme.space.s6,
     },
     text: {
-        ...Typography.default(),
         flex: 1,
         minWidth: 0,
         color: theme.colors.text.secondary,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
     },
     icon: {
-        marginTop: 2,
+        marginTop: theme.space.s2,
     },
     retry: {
         color: theme.colors.text.primary,

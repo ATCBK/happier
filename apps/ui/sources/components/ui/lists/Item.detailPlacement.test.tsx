@@ -26,14 +26,15 @@ afterEach(() => {
 type Screen = Awaited<ReturnType<typeof renderScreen>>;
 type Node = ReturnType<Screen['findAll']>[number];
 
-async function renderDetailRow(detail: string) {
+async function renderDetailRow(detail: string, title = 'Advanced', withIcon = false) {
   const { Item } = await import('./Item');
   const { ListPresentationProvider } = await import('./listPresentation');
   return renderScreen(
     <ListPresentationProvider value="page">
       <Item
-        title="Advanced"
+        title={title}
         detail={detail}
+        {...(withIcon ? { icon: <span />, showChevron: true } : {})}
         detailTestID="detail"
         onPress={() => {}}
       />
@@ -44,7 +45,7 @@ async function renderDetailRow(detail: string) {
 /** Layout is the platform boundary: the row reports its width, the detail its natural width. */
 async function layout(
   screen: Screen,
-  widths: Readonly<{ row: number; detail: number }>,
+  widths: Readonly<{ row: number; detail: number; title?: number; titleText?: string }>,
 ) {
   const { act } = await import('react-test-renderer');
   const measured = () =>
@@ -67,11 +68,25 @@ async function layout(
             'Service identity · API tokens · Encryption',
         ).length > 0 ||
         node.findAll((child: Node) => child.props?.children === '0.2.10')
-          .length > 0
+          .length > 0 ||
+        node.findAll((child: Node) => child.props?.children === 'Service identity · diagnostics')
+          .length > 0 ||
+        node.findAll(
+          (child: Node) => child.props?.children === 'Orchestrator · hands-off',
+        ).length > 0
       ) {
         node.props.onLayout({
           nativeEvent: {
             layout: { width: widths.detail, height: 20, x: 0, y: 0 },
+          },
+        });
+      } else if (
+        widths.title !== undefined &&
+        node.props?.children === widths.titleText
+      ) {
+        node.props.onLayout({
+          nativeEvent: {
+            layout: { width: widths.title, height: 20, x: 0, y: 0 },
           },
         });
       }
@@ -88,14 +103,14 @@ function visibleDetail(screen: Screen) {
   return nodes[0]!;
 }
 
-function sharesTitleColumn(screen: Screen, detail: Node): boolean {
+function sharesTitleColumn(screen: Screen, detail: Node, title = 'Advanced'): boolean {
   // Beneath the title: the detail and the title sit in the same text column.
   return (
     screen.findAll(
       (node) =>
         typeof node.type === 'string' &&
         node.findAll((child: Node) => child === detail).length > 0 &&
-        node.findAll((child: Node) => child.props?.children === 'Advanced')
+        node.findAll((child: Node) => child.props?.children === title)
           .length > 0 &&
         node.findAll(
           (child: Node) => typeof child.props?.onLayout === 'function',
@@ -119,6 +134,22 @@ describe('Item page row detail placement', () => {
     const screen = await renderDetailRow('0.2.10');
     await layout(screen, { row: 358, detail: 44 });
     expect(sharesTitleColumn(screen, visibleDetail(screen))).toBe(false);
+  });
+
+  it('keeps a value beside a short label that needs far less than the label column', async () => {
+    // "Role · Orchestrator · hands-off" in a ~340px pane: the label needs ~32px, so reserving the
+    // whole 200px label column stacked a value that fits on the line with room to spare.
+    const screen = await renderDetailRow('Orchestrator · hands-off', 'Role');
+    await layout(screen, { row: 340, detail: 150, title: 32, titleText: 'Role' });
+    expect(sharesTitleColumn(screen, visibleDetail(screen), 'Role')).toBe(false);
+  });
+
+  it('counts the row\'s own padding and leading mark, so a short label is never squeezed into wrapping', async () => {
+    // Measured live at 390 (Account → Happier Cloud → Advanced): the row is 356px wide, but 64px of it is
+    // padding and the leading mark, so a 190px value left the 65px "Advanced" label less than its width.
+    const screen = await renderDetailRow('Service identity · diagnostics', 'Advanced', true);
+    await layout(screen, { row: 356, detail: 190, title: 65, titleText: 'Advanced' });
+    expect(sharesTitleColumn(screen, visibleDetail(screen))).toBe(true);
   });
 
   it('keeps a summary trailing on a wide row', async () => {

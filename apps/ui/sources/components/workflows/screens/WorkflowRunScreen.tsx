@@ -148,8 +148,8 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        gap: theme.margins.sm,
-        paddingHorizontal: theme.margins.lg,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s16,
     },
 }));
 
@@ -301,10 +301,10 @@ export function WorkflowRunScreen(props: Readonly<{
 function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedded?: boolean }>): React.ReactElement {
     const { theme } = useUnistyles();
     const contentStyle = React.useMemo(() => ({
-        paddingHorizontal: theme.margins.lg,
-        paddingVertical: theme.margins.lg,
-        gap: theme.margins.lg,
-    }), [theme.margins.lg]);
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s16,
+        gap: theme.space.s16,
+    }), [theme.space.s16]);
     const mountedRef = useMountedRef();
     const router = useDestinationRouter();
     const openProject = useOpenProject();

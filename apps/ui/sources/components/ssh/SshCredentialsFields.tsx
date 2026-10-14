@@ -55,7 +55,7 @@ export const SshCredentialsFields = React.memo(function SshCredentialsFields(pro
     const latestValueRef = React.useRef(value);
     const testIDs = props.testIDs ?? {};
     const resolveTestID = (suffix: keyof NonNullable<typeof testIDs> | string) => `${props.testIDPrefix}-${suffix}`;
-    const margins = theme.margins ?? lightTheme.margins;
+    const space = theme.space ?? lightTheme.space;
     const layoutVariant = props.layoutVariant ?? 'settings';
     const isFormLayout = layoutVariant === 'form';
     const supportedAuthModes = props.supportedAuthModes ?? DEFAULT_SSH_AUTH_MODES;
@@ -212,7 +212,7 @@ export const SshCredentialsFields = React.memo(function SshCredentialsFields(pro
         <>
             {isFormLayout ? (
                 // Host · User · Port on one line (lab `add-flows` M3); narrow widths wrap user and port under the host.
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: margins.sm }}>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.s8 }}>
                     <View style={{ flexGrow: 2, flexBasis: 180, minWidth: 0 }}>
                         <MachineSetupTextField
                             testID={testIDs.sshHost ?? resolveTestID('sshHostInput')}
@@ -257,7 +257,7 @@ export const SshCredentialsFields = React.memo(function SshCredentialsFields(pro
                 </View>
             ) : (
                 <ItemGroup>
-                    <View style={{ paddingHorizontal: margins.lg, paddingVertical: margins.sm, gap: margins.sm }}>
+                    <View style={{ paddingHorizontal: space.s16, paddingVertical: space.s8, gap: space.s8 }}>
                         <MachineSetupTextField
                             testID={testIDs.sshUsername ?? resolveTestID('sshUsernameInput')}
                             label={t('settings.machineSetupRemoteSshUsernameLabel')}
@@ -299,7 +299,7 @@ export const SshCredentialsFields = React.memo(function SshCredentialsFields(pro
 
             {isFormLayout ? (
                 // The choice is a field like the ones above it: its label, the choice, what it means as help.
-                <View style={{ gap: margins.sm }}>
+                <View style={{ gap: space.s8 }}>
                     <MachineSetupFieldLabel>{t('settings.machineSetupRemoteSshAuthMethodLabel')}</MachineSetupFieldLabel>
                     {/* Long translations stay reachable: the choice scrolls rather than clipping a label. */}
                     <ScrollView
@@ -338,13 +338,13 @@ export const SshCredentialsFields = React.memo(function SshCredentialsFields(pro
             {supportsKeyfileAuth && value.authMode === 'keyfile' ? (
                 <>
                     {isFormLayout ? (
-                        <View style={{ gap: margins.sm }}>
+                        <View style={{ gap: space.s8 }}>
                             {renderIdentityFileField()}
                             {renderPrivateKeyPasteField()}
                         </View>
                     ) : (
                         <ItemGroup>
-                            <View style={{ paddingHorizontal: margins.lg, paddingVertical: margins.sm }}>
+                            <View style={{ paddingHorizontal: space.s16, paddingVertical: space.s8 }}>
                                 <MachineSetupTextField
                                     testID={testIDs.sshIdentityFile ?? resolveTestID('sshIdentityFile')}
                                     label={t('settings.machineSetupRemoteSshIdentityFileLabel')}
@@ -378,12 +378,12 @@ export const SshCredentialsFields = React.memo(function SshCredentialsFields(pro
 
             {supportsPasswordAuth && value.authMode === 'password' ? (
                 isFormLayout ? (
-                    <View style={{ gap: margins.sm }}>
+                    <View style={{ gap: space.s8 }}>
                         {renderPasswordField()}
                     </View>
                 ) : (
                     <ItemGroup>
-                        <View style={{ paddingHorizontal: margins.lg, paddingVertical: margins.sm }}>
+                        <View style={{ paddingHorizontal: space.s16, paddingVertical: space.s8 }}>
                             <MachineSetupTextField
                                 testID={testIDs.sshPassword ?? resolveTestID('sshPasswordInput')}
                                 label={t('settings.machineSetupRemoteSshPasswordLabel')}

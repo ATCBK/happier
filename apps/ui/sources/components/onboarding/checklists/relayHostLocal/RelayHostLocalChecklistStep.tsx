@@ -30,7 +30,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: 14,
     },
     list: {
-        gap: 10,
+        gap: theme.space.s10,
         width: '100%',
     },
     error: {

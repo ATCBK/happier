@@ -69,15 +69,35 @@ describe('web overlay material composition', () => {
             }
             expect(material.style.padding).toBe('12px');
             expect(material.style.gap).toBe('8px');
+            const enterRuns = runs.length;
             await act(async () => root.render(<Scene visible={false} preset="auto" />));
-            const exit = runs.at(-1)!;
-            expect(exit.target).toBe(frame);
-            expect(exit.frames[1]).toHaveProperty('transform', 'translate(0px, -8px) scale(0.98)');
-            expect(exit.frames[1]).not.toHaveProperty('opacity');
-            expect(exit.options.duration).toBe(motionTokens.overlay.popover.exitMs);
-            expect(exit.options.fill).toBeUndefined();
+            const [exit, ...fades] = runs.slice(enterRuns);
+            expect(exit!.target).toBe(frame);
+            expect(exit!.frames[1]).toHaveProperty('transform', 'translate(0px, -8px) scale(0.98)');
+            expect(exit!.frames[1]).not.toHaveProperty('opacity');
+            expect(exit!.options.duration).toBe(motionTokens.overlay.popover.exitMs);
+            expect(exit!.options.fill).toBeUndefined();
             expect(frame.style.pointerEvents).toBe('none');
             expect(frame.style.opacity).toBe('');
+            // Leaving, the paint itself and everything beside it fade out and hold until unmount, so the
+            // surface does not end in a cut; no ancestor of a paint fades, so every blur keeps its backdrop.
+            const paints = Array.from(frame.querySelectorAll<HTMLElement>('[data-happy-glass-backdrop]'));
+            const faded = fades.map(run => run.target);
+            for (const layer of paints) expect(faded).toContain(layer);
+            expect(faded).toContain(input);
+            expect(faded).toContain(Array.from(material.children).find(child => child.textContent === 'Continue'));
+            for (const target of faded) expect(paints.some(layer => layer !== target && target.contains(layer))).toBe(false);
+            for (const fade of fades) {
+                expect(fade.frames.at(-1)).toMatchObject({ opacity: 0 });
+                expect(fade.options).toMatchObject({ duration: motionTokens.overlay.popover.exitMs, fill: 'forwards' });
+            }
+            // Opening again mid-way turns each running fade around from where it is.
+            const exitRuns = runs.length;
+            await act(async () => root.render(<Scene visible preset="auto" />));
+            for (const fade of fades) expect(fade.cancel).toHaveBeenCalled();
+            expect(runs.slice(exitRuns).filter(run => faded.includes(run.target)).length).toBe(fades.length);
+            await act(async () => root.render(<Scene visible={false} preset="auto" />));
+            await act(async () => root.render(<Scene visible preset="auto" />));
             await act(async () => root.render(<Scene visible preset="solid" />));
             expect(container.querySelector('[data-testid="draft"]')).toBe(input);
             expect(input.value).toBe('keep this draft');

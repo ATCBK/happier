@@ -266,7 +266,7 @@ export function SourceControlPublishRepositorySection(props: Readonly<{
             title={t('files.sourceControlOperations.update.publishRepository.title')}
             testID="scm-publish-repository-section"
         >
-            <Text style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default() }}>
+            <Text style={{ ...Typography.variant('meta'), color: props.theme.colors.text.secondary,  }}>
                 {t('files.sourceControlOperations.update.publishRepository.body')}
             </Text>
             {successTargets ? (
@@ -334,18 +334,18 @@ export function SourceControlPublishRepositorySection(props: Readonly<{
                     {remediation.commitRequired ? (
                         <Text
                             testID="scm-publish-remediation-commit-required"
-                            style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default() }}
+                            style={{ ...Typography.variant('meta'), color: props.theme.colors.text.secondary,  }}
                         >
                             {t('files.sourceControlOperations.update.publishRepository.commitRequired')}
                         </Text>
                     ) : null}
                     {errorCode === 'UNSAFE_URL' ? (
-                        <Text style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default() }}>
+                        <Text style={{ ...Typography.variant('meta'), color: props.theme.colors.text.secondary,  }}>
                             {t('files.sourceControlOperations.update.publishRepository.unsafeUrl')}
                         </Text>
                     ) : null}
                     {showRemoteConflictRemediation || remediation.remoteConflict ? (
-                        <Text style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default() }}>
+                        <Text style={{ ...Typography.variant('meta'), color: props.theme.colors.text.secondary,  }}>
                             {t('files.sourceControlOperations.update.publishRepository.originConflictRemediation')}
                         </Text>
                     ) : null}
@@ -370,7 +370,7 @@ export function SourceControlPublishRepositorySection(props: Readonly<{
                 <View style={{ gap: 8 }}>
                     <Text
                         testID="scm-publish-repository-unavailable"
-                        style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default() }}
+                        style={{ ...Typography.variant('meta'), color: props.theme.colors.text.secondary,  }}
                     >
                         {t('files.sourceControlOperations.update.publishRepository.targetsUnavailable')}
                     </Text>
@@ -382,7 +382,7 @@ export function SourceControlPublishRepositorySection(props: Readonly<{
                 </View>
             ) : (
                 <View style={{ gap: 8 }}>
-                    <Text style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default() }}>
+                    <Text style={{ ...Typography.variant('meta'), color: props.theme.colors.text.secondary,  }}>
                         {t('common.loading')}
                     </Text>
                     <PublishRemediationAction
@@ -437,7 +437,7 @@ function PublishAuthState(props: Readonly<{
     return (
         <Text
             testID={testID}
-            style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default() }}
+            style={{ ...Typography.variant('meta'), color: props.theme.colors.text.secondary,  }}
         >
             {label}
         </Text>

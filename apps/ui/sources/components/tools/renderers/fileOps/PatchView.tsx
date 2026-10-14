@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -210,33 +211,32 @@ const styles = StyleSheet.create((theme) => ({
     statusRow: {
         flexDirection: 'row',
         justifyContent: 'flex-end',
-        gap: 8,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
     },
     fileContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        padding: 12,
+        gap: theme.space.s8,
+        padding: theme.space.s12,
         backgroundColor: theme.colors.surface.inset,
         borderRadius: 8,
     },
     filesContainer: {
-        padding: 12,
+        padding: theme.space.s12,
         backgroundColor: theme.colors.surface.inset,
         borderRadius: 8,
-        gap: 8,
+        gap: theme.space.s8,
     },
     fileRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     fileName: {
-        fontSize: 14,
+        ...Typography.variant('label'),
         color: theme.colors.text.primary,
-        fontWeight: '500',
     },
     fileNameMulti: {
         fontSize: 13,

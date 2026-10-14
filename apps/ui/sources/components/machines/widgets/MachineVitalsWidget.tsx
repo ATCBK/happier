@@ -688,7 +688,7 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
   },
   ringLabel: {
-    ...Typography.rowTitle(),
+    ...Typography.variant('label', 'semiBold'),
     color: theme.colors.text.primary,
   },
   ringValue: {

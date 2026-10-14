@@ -159,21 +159,21 @@ const ReachPathDiagram = React.memo(function ReachPathDiagram(props: Readonly<{
                 <View testID="home-reach-diagram" style={styles.diagram} accessibilityRole="summary">
                     <View testID="home-reach-diagram-devices" style={styles.node}>
                         <Icon name="device-mobile" color={theme.colors.text.secondary} />
-                        <Text style={[Typography.rowMeta(), styles.center, { color: theme.colors.text.primary }]}>{t('homeGovernance.reach.yourDevices')}</Text>
+                        <Text style={[Typography.variant('meta'), styles.center, { color: theme.colors.text.primary }]}>{t('homeGovernance.reach.yourDevices')}</Text>
                     </View>
                     {arrow}
                     <View testID="home-reach-diagram-address-node" style={[styles.node, styles.addressNode]}>
                         <Icon name="globe" color={theme.colors.text.secondary} />
-                        <Text testID="home-reach-diagram-address" style={[Typography.rowTitle(), styles.center, { color: theme.colors.text.primary }]}>
+                        <Text testID="home-reach-diagram-address" style={[Typography.variant('label', 'semiBold'), styles.center, { color: theme.colors.text.primary }]}>
                             {host ? reachWrappableHost(host) : t('homeGovernance.reach.noAddress')}
                         </Text>
-                        <Text style={[Typography.rowMeta(), styles.center, { color: theme.colors.text.secondary }]}>{props.addressCaption}</Text>
+                        <Text style={[Typography.variant('meta'), styles.center, { color: theme.colors.text.secondary }]}>{props.addressCaption}</Text>
                     </View>
                     {arrow}
                     <View testID="home-reach-diagram-server" style={styles.node}>
                         <Icon name="laptop" color={theme.colors.text.secondary} />
-                        <Text style={[Typography.rowTitle(), styles.center, { color: theme.colors.text.primary }]}>{props.machineLabel}</Text>
-                        <Text style={[Typography.rowMeta(), styles.center, { color: theme.colors.text.secondary }]}>
+                        <Text style={[Typography.variant('label', 'semiBold'), styles.center, { color: theme.colors.text.primary }]}>{props.machineLabel}</Text>
+                        <Text style={[Typography.variant('meta'), styles.center, { color: theme.colors.text.secondary }]}>
                             {direct ? t('homeGovernance.reach.plusDirect') : t('homeGovernance.reach.noDirect')}
                         </Text>
                     </View>
@@ -279,7 +279,7 @@ const AddressRow = React.memo(function AddressRow(props: Readonly<{
                                 testID={`${props.testID}-value`}
                                 selectable
                                 numberOfLines={1}
-                                style={[Typography.rowMeta(), styles.addressText, { color: theme.colors.text.secondary }]}
+                                style={[Typography.variant('meta'), styles.addressText, { color: theme.colors.text.secondary }]}
                             >
                                 {reachAddressHost(props.value)}
                             </Text>

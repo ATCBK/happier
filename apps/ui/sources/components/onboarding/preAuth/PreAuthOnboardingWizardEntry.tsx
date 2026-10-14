@@ -85,8 +85,8 @@ const journeyLoadingStylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.background.canvas,
         alignItems: 'center',
         justifyContent: 'center',
-        gap: theme.margins.md,
-        paddingHorizontal: theme.margins.xxl,
+        gap: theme.space.s12,
+        paddingHorizontal: theme.space.s24,
     },
     label: {
         color: theme.colors.text.secondary,

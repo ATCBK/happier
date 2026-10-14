@@ -51,19 +51,19 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
     },
     list: {
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
     },
     listHeader: {
-        marginBottom: theme.margins.lg,
+        marginBottom: theme.space.s16,
     },
     listFooter: {
-        marginTop: theme.margins.lg,
+        marginTop: theme.space.s16,
     },
     row: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
-        paddingVertical: theme.margins.sm,
+        gap: theme.space.s8,
+        paddingVertical: theme.space.s8,
         minHeight: MINIMUM_TARGET_SIZE,
         borderWidth: 1,
         borderColor: 'transparent',
@@ -95,10 +95,10 @@ const styles = StyleSheet.create((theme) => ({
         marginLeft: 'auto',
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     footer: {
-        paddingVertical: theme.margins.md,
+        paddingVertical: theme.space.s12,
         alignItems: 'center',
     },
     footerTarget: {
@@ -109,7 +109,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     footerError: {
         alignItems: 'center',
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
     },
     footerAction: {
         ...Typography.default('semiBold'),
@@ -122,7 +122,7 @@ const styles = StyleSheet.create((theme) => ({
     empty: {
         ...Typography.default('regular'),
         color: theme.colors.text.secondary,
-        paddingVertical: theme.margins.md,
+        paddingVertical: theme.space.s12,
     },
 }));
 

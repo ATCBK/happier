@@ -159,14 +159,10 @@ const stylesheet = StyleSheet.create(() => ({
         gap: 10,
     },
     label: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
     },
     action: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         textDecorationLine: 'underline',
     },
     iconButton: {

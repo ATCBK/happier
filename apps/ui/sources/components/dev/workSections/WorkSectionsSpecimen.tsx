@@ -1,4 +1,4 @@
-import { HappierPageSheetGroup, HAPPIER_WORK_PANE_METRICS } from '@happier-dev/plugin-ui/presentation';
+import { HappierPageSheetGroup, HAPPIER_WORK_PANE_METRICS, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -20,7 +20,7 @@ import { Typography } from '@/constants/Typography';
  */
 const styles = StyleSheet.create((theme) => ({
     root: { flex: 1, backgroundColor: theme.colors.surface.inset },
-    content: { padding: 24, gap: 24, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' },
+    content: { padding: theme.space.s24, gap: theme.space.s24, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' },
     pane: {
         width: 360,
         backgroundColor: theme.colors.surface.base,
@@ -32,11 +32,13 @@ const styles = StyleSheet.create((theme) => ({
     paneWide: { width: 500 },
     paneBody: {
         paddingHorizontal: HAPPIER_WORK_PANE_METRICS.contentInsetPx,
-        paddingTop: 8,
-        paddingBottom: 16,
+        paddingTop: theme.space.s8,
+        paddingBottom: theme.space.s16,
         gap: 18,
     },
     failed: { color: theme.colors.state.danger.foreground },
+    subtitleLine: { ...happierPageTextMetrics('rowDescription'), color: theme.colors.text.tertiary },
+    roleName: { ...Typography.variant('label'), color: theme.colors.text.primary },
     notes: {
         ...Typography.default(),
         fontSize: 14,
@@ -45,15 +47,13 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
     },
     more: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
         paddingHorizontal: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
-        paddingTop: 4,
+        paddingTop: theme.space.s4,
     },
-    marker: { ...Typography.default(), fontSize: 13, color: theme.colors.text.tertiary },
-    roleTitle: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
+    marker: {  ...Typography.variant('body'), color: theme.colors.text.tertiary },
+    roleTitle: { flexDirection: 'row', alignItems: 'baseline', gap: theme.space.s8 },
 }));
 
 const noop = () => {};
@@ -133,7 +133,7 @@ function SpecimenSections() {
                                 key={trigger.id}
                                 title={trigger.title}
                                 subtitle={trigger.failed
-                                    ? <Text>{trigger.line}<Text style={styles.failed}>{trigger.failed}</Text></Text>
+                                    ? <Text style={styles.subtitleLine}>{trigger.line}<Text style={styles.failed}>{trigger.failed}</Text></Text>
                                     : trigger.line}
                                 disabled={trigger.off}
                                 onPress={noop}
@@ -161,7 +161,7 @@ function SpecimenSections() {
                 {ROLES.map((role) => (
                     <Item
                         key={role.id}
-                        title={<View style={styles.roleTitle}><Text>{role.name}</Text><Text style={styles.marker}>{role.marker}</Text></View>}
+                        title={<View style={styles.roleTitle}><Text style={styles.roleName}>{role.name}</Text><Text style={styles.marker}>{role.marker}</Text></View>}
                         detail={role.engine}
                         onPress={noop}
                         showChevron={false}

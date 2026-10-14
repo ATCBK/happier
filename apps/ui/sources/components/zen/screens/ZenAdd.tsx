@@ -63,15 +63,13 @@ const styles = StyleSheet.create((theme) => ({
     },
     content: {
         flex: 1,
-        paddingHorizontal: 20,
-        paddingTop: 20,
+        paddingHorizontal: theme.space.s20,
+        paddingTop: theme.space.s20,
     },
     input: {
-        fontSize: 18,
-        lineHeight: 24,
+        ...Typography.variant('heading', 'regular'),
         borderBottomWidth: 1,
-        paddingVertical: 12,
-        paddingHorizontal: 4,
-        ...Typography.default(),
+        paddingVertical: theme.space.s12,
+        paddingHorizontal: theme.space.s4,
     },
 }));

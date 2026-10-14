@@ -140,13 +140,13 @@ export function VoiceDiagnosticsIndicator(props: Readonly<{
         flexDirection: 'row',
         alignItems: 'flex-start',
         flexWrap: 'wrap',
-        gap: 6,
+        gap: theme.space.s6,
         minHeight: 24,
-        paddingHorizontal: 16,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s8,
       }}
     >
-      <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'flex-start', gap: 6 }}>
+      <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s6 }}>
         <View
           accessibilityElementsHidden
           style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: theme.colors.status.error }}
@@ -170,7 +170,7 @@ export function VoiceDiagnosticsIndicator(props: Readonly<{
             alignSelf: 'flex-start',
             maxWidth: '100%',
             justifyContent: 'center',
-            paddingHorizontal: 6,
+            paddingHorizontal: theme.space.s6,
           }}
           onPress={() => {
               if (actionInFlightRef.current) return;

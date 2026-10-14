@@ -36,8 +36,16 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
         && supportsPierreRuntime();
 
     if (pierreAllowed) {
+        // An inline diff (a hunk card, a tool result) shows its code at once with the canonical line
+        // renderer while the Pierre chunk and its worker load, so the reserved body is never an empty
+        // card. A virtualized list diff can be very large, so it keeps the pane's loading state.
+        const loading = props.virtualized === true
+            ? <PaneLoadingFallback testID="pierre-diff-loading" />
+            : props.mode === 'unified'
+                ? <HappierUnifiedDiffViewer {...props} wrapLines={wrapLines} />
+                : <HappierTextDiffViewer {...props} wrapLines={wrapLines} />;
         const viewer = (
-            <React.Suspense fallback={<PaneLoadingFallback testID="pierre-diff-loading" />}>
+            <React.Suspense fallback={loading}>
                 <PierreDiffViewer {...props} wrapLines={wrapLines} />
             </React.Suspense>
         );

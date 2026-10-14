@@ -39,11 +39,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     title: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     facts: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.tabular(),
         color: theme.colors.text.secondary,
     },

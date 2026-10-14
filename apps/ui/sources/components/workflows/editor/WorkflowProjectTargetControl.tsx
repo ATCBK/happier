@@ -58,7 +58,7 @@ const styles = StyleSheet.create((theme) => ({
     row: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         flexWrap: 'wrap',
     },
     value: {
@@ -73,14 +73,14 @@ const styles = StyleSheet.create((theme) => ({
     },
     popover: {
         minWidth: 320,
-        gap: theme.margins.xs,
-        paddingVertical: theme.margins.xs,
-        paddingHorizontal: theme.margins.sm,
+        gap: theme.space.s4,
+        paddingVertical: theme.space.s4,
+        paddingHorizontal: theme.space.s8,
     },
     control: {
         minWidth: 0,
         flexShrink: 1,
-        paddingHorizontal: theme.margins.sm,
+        paddingHorizontal: theme.space.s8,
         borderRadius: theme.borderRadius.md,
     },
 }));

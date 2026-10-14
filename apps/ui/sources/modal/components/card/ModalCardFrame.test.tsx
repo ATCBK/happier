@@ -493,7 +493,7 @@ describe('ModalCardFrame', () => {
         expect(bodyScrollView.type).toBe('ScrollView');
     });
 
-    it('keeps card footers divider-free and scopes their buttons to the compact size', async () => {
+    it('keeps card footers divider-free and gives their buttons the dialog action tier (label words, as alerts)', async () => {
         const { renderScreen } = await import('@/dev/testkit');
         const { RoundButton } = await import('@/components/ui/buttons/RoundButton');
         const { ModalCardFrame } = await import('./ModalCardFrame');
@@ -504,6 +504,8 @@ describe('ModalCardFrame', () => {
 
         expect(flattenStyle(screen.findByTestId('modal-card-footer')?.props.style).borderTopWidth).toBeUndefined();
         const saveLabel = screen.findAllByType('Text').find((node) => node.props.children === 'Save');
-        expect(flattenStyle(saveLabel?.props.style).fontSize).toBe(13);
+        const { resolveHappierTypeScale } = await import('@happier-dev/plugin-ui/presentation');
+        const { Platform } = await import('react-native');
+        expect(flattenStyle(saveLabel?.props.style).fontSize).toBe(resolveHappierTypeScale('label', Platform.OS).fontSize);
     });
 });

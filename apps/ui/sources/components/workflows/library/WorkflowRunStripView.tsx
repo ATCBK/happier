@@ -38,7 +38,7 @@ const styles = StyleSheet.create((theme) => ({
     strip: {
         flexDirection: 'row',
         alignItems: 'flex-end',
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
         height: BAR_HEIGHT,
     },
     slot: {

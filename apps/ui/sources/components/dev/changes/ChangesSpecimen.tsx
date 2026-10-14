@@ -247,13 +247,13 @@ export function ChangesSpecimen(props: Readonly<{ only: string | null; phone: bo
 
 const styles = StyleSheet.create((theme) => ({
     root: { flex: 1, backgroundColor: theme.colors.surface.base },
-    content: { padding: 16, gap: 24 },
+    content: { padding: theme.space.s16, gap: theme.space.s24 },
     contentFlush: { flex: 1, padding: 0 },
-    grid: { flex: 1, gap: 24 },
-    caption: { ...Typography.default('semiBold'), fontSize: 12, color: theme.colors.text.secondary, paddingVertical: 8 },
+    grid: { flex: 1, gap: theme.space.s24 },
+    caption: {  ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.secondary, paddingVertical: theme.space.s8 },
     // The transcript column the lab draws the card in (about 640 px of a 1440 desktop).
-    cardFrame: { width: 666, alignSelf: 'center', paddingVertical: 12 },
-    cardFramePhone: { width: '100%', paddingHorizontal: 16, paddingVertical: 12 },
+    cardFrame: { width: 666, alignSelf: 'center', paddingVertical: theme.space.s12 },
+    cardFramePhone: { width: '100%', paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12 },
     filesFrame: { flex: 1, minHeight: 0, backgroundColor: theme.colors.surface.base },
     filesFramePhone: { flex: 1, minHeight: 0, backgroundColor: theme.colors.surface.base },
     walkthroughFramePhone: { flex: 1, minHeight: 0, backgroundColor: theme.colors.surface.base },

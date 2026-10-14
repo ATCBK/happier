@@ -252,10 +252,10 @@ const styles = StyleSheet.create((theme) => ({
         rowGap: theme.space.s2,
     },
     location: {
+        ...Typography.variant('meta'),
         ...Typography.mono(),
         flexShrink: 1,
         color: theme.colors.text.secondary,
-        fontSize: 12.5,
     },
     attribution: {
         flexDirection: 'row',

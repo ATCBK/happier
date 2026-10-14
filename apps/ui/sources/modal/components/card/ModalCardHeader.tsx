@@ -31,12 +31,12 @@ const TITLE_BAND_MIN_HEIGHT = 52;
 const stylesheet = StyleSheet.create((theme) => ({
     header: {
         minHeight: TITLE_BAND_MIN_HEIGHT,
-        paddingHorizontal: 16,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s10,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 12,
+        gap: theme.space.s12,
     },
     headerWithSubtitle: {
         alignItems: 'flex-start',
@@ -47,46 +47,42 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         flex: 1,
         minWidth: 0,
-        gap: 10,
+        gap: theme.space.s10,
     },
     titleWrap: {
         flex: 1,
         minWidth: 0,
-        gap: 2,
+        gap: theme.space.s2,
     },
     title: {
-        fontSize: 15,
-        lineHeight: 20,
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
     },
     subtitle: {
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
-        ...Typography.default(),
     },
     actionsWrap: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     stacked: {
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingTop: 14,
-        paddingBottom: 10,
-        gap: 8,
+        paddingBottom: theme.space.s10,
+        gap: theme.space.s8,
     },
     stackedTop: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 12,
+        gap: theme.space.s12,
     },
     stackedActions: {
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
 }));
 

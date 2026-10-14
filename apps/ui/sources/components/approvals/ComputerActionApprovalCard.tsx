@@ -202,27 +202,27 @@ export const ComputerActionApprovalCard = React.memo(function ComputerActionAppr
 
 const styles = StyleSheet.create((theme) => ({
     card: {
-        gap: 10,
+        gap: theme.space.s10,
     },
     what: {
-        gap: 2,
+        gap: theme.space.s2,
     },
     act: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     where: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     choose: {
         flexDirection: 'row',
     },
     sent: {
-        gap: 4,
+        gap: theme.space.s4,
     },
     label: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     sentValue: {
@@ -230,7 +230,7 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     consequence: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

@@ -422,8 +422,8 @@ const styles = StyleSheet.create((theme) => ({
     skeletonRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
-        paddingHorizontal: theme.margins.lg,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s16,
     },
     // The widget's last line sits inside the table's card: it takes the strip's inset so its facts
     // line up with the commit strip and the names above, not with the card's edge.
@@ -438,7 +438,7 @@ const styles = StyleSheet.create((theme) => ({
         borderTopColor: theme.colors.border.subtle,
     },
     footerFacts: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.tabular(),
         color: theme.colors.text.secondary,
         flex: 1,
@@ -453,7 +453,7 @@ const styles = StyleSheet.create((theme) => ({
         borderRadius: 6,
     },
     footerLinkLabel: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
     },

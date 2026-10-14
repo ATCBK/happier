@@ -24,6 +24,6 @@ export function ConversationHitSummary(props: Readonly<{
         <Text testID={props.testID} numberOfLines={2} style={[Typography.default(), ITEM_SUBTITLE_TEXT_METRICS[density], { color: theme.colors.text.secondary }]}>
             <FindHighlightedText text={props.snippet} ranges={queryRanges(props.snippet, props.query ?? '')} />
         </Text>
-        {meta ? <Text numberOfLines={1} style={[Typography.rowMeta(), Typography.tabular(), { color: theme.colors.text.tertiary }]}>{meta}</Text> : null}
+        {meta ? <Text numberOfLines={1} style={[Typography.variant('meta'), Typography.tabular(), { color: theme.colors.text.tertiary }]}>{meta}</Text> : null}
     </View>;
 }

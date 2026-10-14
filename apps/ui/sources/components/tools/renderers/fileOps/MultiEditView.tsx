@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -104,30 +105,28 @@ const styles = StyleSheet.create((theme) => ({
     editHeader: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 8,
+        marginBottom: theme.space.s8,
     },
     editNumber: {
-        fontSize: 14,
-        fontWeight: '600',
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.accent.indigo,
     },
     replaceAllBadge: {
         backgroundColor: theme.colors.accent.indigo,
-        paddingHorizontal: 8,
-        paddingVertical: 4,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s4,
         borderRadius: 12,
-        marginLeft: 8,
+        marginLeft: theme.space.s8,
     },
     replaceAllText: {
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.button.primary.tint,
-        fontWeight: '600',
     },
     separator: {
         height: 8,
     },
     more: {
-        marginTop: 8,
+        marginTop: theme.space.s8,
         fontSize: 12,
         color: theme.colors.text.secondary,
         fontFamily: 'Menlo',

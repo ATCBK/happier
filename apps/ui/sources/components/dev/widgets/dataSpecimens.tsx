@@ -83,9 +83,9 @@ function DataColumns(props: Readonly<{ phone: boolean }>) {
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
-    columns: { width: 1380, flexDirection: 'row', gap: 24, alignItems: 'flex-start' },
-    column: { flex: 1, gap: 16 },
-    phone: { width: 390, gap: 12, paddingHorizontal: 16 },
+    columns: { width: 1380, flexDirection: 'row', gap: theme.space.s24, alignItems: 'flex-start' },
+    column: { flex: 1, gap: theme.space.s16 },
+    phone: { width: 390, gap: theme.space.s12, paddingHorizontal: theme.space.s16 },
     meta: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary },
 }));
 

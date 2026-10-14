@@ -515,11 +515,11 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 12,
-    padding: 24,
+    gap: theme.space.s12,
+    padding: theme.space.s24,
   },
   listContent: {
-    paddingBottom: 32,
+    paddingBottom: theme.space.s32,
   },
   header: {
     width: '100%',
@@ -529,28 +529,28 @@ const styles = StyleSheet.create((theme) => ({
     minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 16,
+    gap: theme.space.s10,
+    paddingHorizontal: theme.space.s16,
   },
   searchField: {
     flex: 1,
     color: theme.colors.text.primary,
-    paddingVertical: 12,
+    paddingVertical: theme.space.s12,
   },
   actionMessage: {
     color: theme.colors.text.secondary,
     textAlign: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 8,
+    paddingHorizontal: theme.space.s24,
+    paddingVertical: theme.space.s8,
   },
   rowOuter: {
     width: '100%',
     alignSelf: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 10,
+    paddingHorizontal: theme.space.s16,
+    paddingTop: theme.space.s10,
   },
   row: {
-    paddingHorizontal: 16,
+    paddingHorizontal: theme.space.s16,
     paddingVertical: 14,
     borderRadius: 14,
     // Transcript entries sit on the page like its sheets do.
@@ -562,7 +562,7 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
+    gap: theme.space.s12,
   },
   rowProvider: {
     ...Typography.default('semiBold'),
@@ -574,11 +574,11 @@ const styles = StyleSheet.create((theme) => ({
   },
   rowRole: {
     color: theme.colors.text.secondary,
-    marginTop: 4,
+    marginTop: theme.space.s4,
   },
   rowText: {
     color: theme.colors.text.primary,
-    marginTop: 8,
+    marginTop: theme.space.s8,
     lineHeight: 21,
   },
   stateOuter: {
@@ -589,7 +589,7 @@ const styles = StyleSheet.create((theme) => ({
   stateBody: {
     color: theme.colors.text.secondary,
     textAlign: 'center',
-    marginTop: 6,
+    marginTop: theme.space.s6,
     lineHeight: 20,
   },
 }));

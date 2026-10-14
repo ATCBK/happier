@@ -73,10 +73,10 @@ export const DeleteView = React.memo<ToolViewProps>(({ tool, detailLevel, messag
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        padding: 12,
+        padding: theme.space.s12,
         borderRadius: 8,
         backgroundColor: theme.colors.surface.inset,
-        gap: 6,
+        gap: theme.space.s6,
     },
     entry: {
         fontSize: 13,

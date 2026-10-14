@@ -284,12 +284,12 @@ export function PluginPageAnatomySample() {
 const styles = StyleSheet.create((theme) => ({
     paper: {
         backgroundColor: theme.colors.surface.base,
-        paddingBottom: 24,
+        paddingBottom: theme.space.s24,
     },
     preview: {
         width: 120,
-        gap: 6,
-        padding: 10,
+        gap: theme.space.s6,
+        padding: theme.space.s10,
     },
     previewLine: {
         height: 6,

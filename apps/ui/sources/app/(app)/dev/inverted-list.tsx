@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import React, { useState } from 'react';
 import { View, Text, FlatList, TextInput, TouchableOpacity, ScrollView } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -198,8 +199,7 @@ const styles = StyleSheet.create(() => ({
         gap: 8,
     },
     controlLabel: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
         marginBottom: 4,
     },
     buttonRow: {

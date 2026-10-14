@@ -2,7 +2,7 @@ import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
 
-import { Icon } from '@/components/ui/icons/Icon';
+import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 
 import { collectionListStyles } from './CollectionList';
@@ -18,6 +18,8 @@ export const CollectionIndexRow = React.memo(function CollectionIndexRow(props: 
     title: string;
     /** A quiet fact at the row's end (what needs a look). */
     detail?: string;
+    /** A pinned destination beside the index (Skills: Found on your machines) draws its own glyph. */
+    icon?: IconName;
     selected: boolean;
     onPress: () => void;
 }>) {
@@ -29,7 +31,7 @@ export const CollectionIndexRow = React.memo(function CollectionIndexRow(props: 
             detail={props.detail}
             icon={(
                 <HappierCollectionListMark>
-                    <Icon name="squares-four" size={20} color={theme.colors.text.secondary} />
+                    <Icon name={props.icon ?? 'squares-four'} size={20} color={theme.colors.text.secondary} />
                 </HappierCollectionListMark>
             )}
             selected={props.selected}

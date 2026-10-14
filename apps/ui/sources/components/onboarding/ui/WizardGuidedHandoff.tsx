@@ -37,7 +37,7 @@ export type WizardGuidedHandoffDividerProps = Readonly<{
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
         width: '100%',
-        gap: 8,
+        gap: theme.space.s8,
         alignItems: 'flex-start',
     },
     divider: {
@@ -52,7 +52,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     noteBlock: {
         width: '100%',
-        gap: 8,
+        gap: theme.space.s8,
         alignItems: 'flex-start',
     },
     noteTitle: {

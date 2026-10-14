@@ -86,7 +86,7 @@ export const instrumentStripStyles = StyleSheet.create((theme) => ({
     },
     /** The opt-in name beside a gauge ("Context", "5-hour"): smaller than the values. */
     instrumentLabelText: {
-        ...Typography.pillLabel(),
+        ...Typography.variant('micro', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     instrumentValueText: {

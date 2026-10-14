@@ -124,11 +124,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     previewTitle: {
         color: theme.colors.text.primary,
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
     },
     previewBody: {
         marginTop: 3,
         color: theme.colors.text.secondary,
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
     },
 }));

@@ -77,7 +77,7 @@ export default React.memo(function PreviewMachinePickerScreen() {
         <Pressable
             onPress={() => safeRouterBack({ router, navigation, fallbackHref: pickerFallbackHref })}
             hitSlop={10}
-            style={({ pressed }) => ({ padding: 2, opacity: pressed ? motionTokens.press.opacity : 1 })}
+            style={({ pressed }) => ({ padding: theme.space.s2, opacity: pressed ? motionTokens.press.opacity : 1 })}
             accessibilityRole="button"
             accessibilityLabel={t('common.back')}
         >

@@ -51,7 +51,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     rowRight: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     runNowButton: {
         width: minimumInteractiveTargetSize,

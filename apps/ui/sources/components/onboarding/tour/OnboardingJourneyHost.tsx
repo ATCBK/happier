@@ -823,8 +823,8 @@ const hostStylesheet = StyleSheet.create((theme) => ({
     bypassControl: {
         alignItems: 'center',
         justifyContent: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s8,
         borderWidth: 1,
         borderRadius: 999,
         borderCurve: 'continuous',
@@ -839,10 +839,8 @@ const hostStylesheet = StyleSheet.create((theme) => ({
         transform: [{ translateY: 0 }],
     },
     bypassControlLabel: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 14,
-        lineHeight: 20,
+        ...Typography.variant('label', 'semiBold'),
     },
     mainContent: {
         flex: 1,
@@ -850,6 +848,6 @@ const hostStylesheet = StyleSheet.create((theme) => ({
     },
     preAuthFooter: {
         width: '100%',
-        gap: 10,
+        gap: theme.space.s10,
     },
 }));

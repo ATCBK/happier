@@ -192,7 +192,7 @@ export function VitalsMeta(
 
 export const vitalsSheetStyles = StyleSheet.create((theme) => ({
   caption: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.tabular(),
     color: theme.colors.text.tertiary,
   },
@@ -228,7 +228,7 @@ const styles = StyleSheet.create((theme) => ({
     minHeight: 18,
   },
   label: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.default('medium'),
     color: theme.colors.text.secondary,
     flexShrink: 0,
@@ -249,7 +249,7 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
   },
   metaText: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.tabular(),
     color: theme.colors.text.tertiary,
     flexShrink: 1,
@@ -271,12 +271,12 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.text.primary,
   },
   unit: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.default('medium'),
     color: theme.colors.text.secondary,
   },
   phrase: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
     marginLeft: theme.space.s6,
     flexShrink: 1,
@@ -286,7 +286,7 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
   },
   subText: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.tabular(),
     color: theme.colors.text.secondary,
   },

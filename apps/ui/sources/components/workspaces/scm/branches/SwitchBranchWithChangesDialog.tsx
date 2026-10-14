@@ -9,6 +9,7 @@ import { createDeferredOnce } from '@/modal/async/createDeferredOnce';
 import type { CustomModalInjectedProps } from '@/modal';
 import { t } from '@/text';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 export type SwitchBranchWithChangesDialogResolution = 'stash_on_current_branch' | 'bring_changes' | 'cancel';
 
@@ -22,13 +23,13 @@ const stylesheet = StyleSheet.create((theme) => ({
     body: {
         flex: 1,
         minHeight: 0,
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingTop: 14,
-        paddingBottom: 12,
-        gap: 10,
+        paddingBottom: theme.space.s12,
+        gap: theme.space.s10,
     },
     button: {
-        paddingVertical: 12,
+        paddingVertical: theme.space.s12,
         paddingHorizontal: 14,
         borderRadius: 12,
         backgroundColor: theme.colors.surface.inset,
@@ -36,24 +37,21 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
     },
     buttonTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     buttonSubtitle: {
-        marginTop: 4,
-        ...Typography.default(),
-        fontSize: 12,
+        marginTop: theme.space.s4,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     cancelButton: {
-        paddingVertical: 10,
+        paddingVertical: theme.space.s10,
         paddingHorizontal: 14,
         borderRadius: 12,
     },
     cancelText: {
-        ...Typography.default('semiBold'),
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.link,
     },
 }));
@@ -124,7 +122,7 @@ export async function showSwitchBranchWithChangesDialog(params: Readonly<{
             subtitle: t('files.branchSwitchDialog.body'),
             testID: 'switch-branch-with-changes-dialog',
             bodyScroll: 'auto',
-            dimensions: { width: 520, maxHeightRatio: 0.85, size: 'md' },
+            dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.85, size: 'md' },
         },
         closeOnBackdrop: true,
     });

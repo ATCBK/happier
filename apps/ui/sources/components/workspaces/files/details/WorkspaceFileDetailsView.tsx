@@ -1042,7 +1042,7 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
     const canFindText = !isBinaryFile && !useRichMarkdownEditor
         && (displayMode === 'diff' ? typeof diffContent === 'string' : typeof fileContent?.content === 'string');
     const fileHeaderRightElement = canFindText || showDownloadAction || showDiscardAction || props.onRevealInFilesTree || props.onOpenChanges ? (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 20 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s20 }}>
             {canFindText ? <FileBrowserToolbarIconButton testID="file-header-find" accessibilityRole="button" accessibilityLabel={t('find.open')} onPress={() => findRuntime.open(findSurfaceId)}>
                 <Icon name="magnifying-glass" size={16} color={theme.colors.text.secondary} />
             </FileBrowserToolbarIconButton> : null}

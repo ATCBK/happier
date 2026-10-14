@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { flattenTestStyle } from '@/dev/testkit';
-import { HappierMaterialRoleProvider } from '@happier-dev/plugin-ui/presentation';
+import { HappierMaterialRoleProvider, resolveHappierTypeScale } from '@happier-dev/plugin-ui/presentation';
+import { Platform } from 'react-native';
 import { lightTheme } from '@/theme';
 import Color from 'color';
 import { useGlassMaterialColorResolver } from '@/components/ui/glass/useGlassSurfaceColor';
@@ -247,11 +248,17 @@ describe('RoundButton', () => {
         const flatten = (style: unknown): Record<string, unknown> => Array.isArray(style)
             ? style.reduce((result, entry) => ({ ...result, ...flatten(entry) }), {})
             : ((style as Record<string, unknown> | null | undefined) ?? {});
-        const fontSizeFor = (title: string) => flatten(
-            screen.tree.root.find((node) => node.props?.children === title).props.style,
-        ).fontSize;
-        expect(fontSizeFor('Global')).toBe(21);
-        expect(fontSizeFor('Footer')).toBe(16);
-        expect(fontSizeFor('Explicit')).toBe(13);
+        const metricsFor = (title: string) => {
+            const style = flatten(screen.tree.root.find((node) => node.props?.children === title).props.style);
+            return { fontSize: style.fontSize, lineHeight: style.lineHeight };
+        };
+        // Each tier is a role of the one type scale: large reads heading, normal label, small body.
+        const role = (name: 'heading' | 'label' | 'body') => {
+            const { fontSize, lineHeight } = resolveHappierTypeScale(name, Platform.OS);
+            return { fontSize, lineHeight };
+        };
+        expect(metricsFor('Global')).toEqual(role('heading'));
+        expect(metricsFor('Footer')).toEqual(role('label'));
+        expect(metricsFor('Explicit')).toEqual(role('body'));
     });
 });

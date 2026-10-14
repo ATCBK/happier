@@ -320,7 +320,7 @@ export const MachineMoreFrom = React.memo(function MachineMoreFrom(
 
 const styles = StyleSheet.create((theme) => ({
   titleNote: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
   },
   cells: {
@@ -355,23 +355,23 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.space.s2,
   },
   label: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.default('medium'),
     color: theme.colors.text.secondary,
   },
   value: {
-    ...Typography.rowTitle(),
+    ...Typography.variant('label', 'semiBold'),
     ...Typography.tabular(),
     color: theme.colors.text.primary,
   },
   phoneValue: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.default('medium'),
     ...Typography.tabular(),
     color: theme.colors.text.primary,
   },
   detail: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
   },
   limits: {
@@ -380,7 +380,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingVertical: PAGE_LIST_METRICS.rowPaddingVerticalPx,
   },
   limitsText: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.tabular(),
     color: theme.colors.text.secondary,
   },

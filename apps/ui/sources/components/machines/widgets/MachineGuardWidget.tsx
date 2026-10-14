@@ -775,22 +775,22 @@ const styles = StyleSheet.create((theme) => ({
   },
   sentence: {
     ...Typography.default(),
-    ...Typography.rowTitle(),
+    ...Typography.variant('label', 'semiBold'),
     color: theme.colors.text.primary,
   },
   sentenceStrong: {
-    ...Typography.rowTitle(),
+    ...Typography.variant('label', 'semiBold'),
     ...Typography.default('semiBold'),
     color: theme.colors.text.primary,
   },
   countdown: {
-    ...Typography.rowTitle(),
+    ...Typography.variant('label', 'semiBold'),
     ...Typography.default(),
     color: theme.colors.text.primary,
     fontVariant: ['tabular-nums'],
   },
   detail: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
   },
   actions: {
@@ -800,13 +800,13 @@ const styles = StyleSheet.create((theme) => ({
     marginTop: theme.space.s4,
   },
   ordinal: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.tabular(),
     width: 14,
     textAlign: 'center',
   },
   qualifier: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
   },
 }));

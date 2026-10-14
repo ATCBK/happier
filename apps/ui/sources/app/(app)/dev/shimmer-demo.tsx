@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import React from 'react';
 import { View, Text, ScrollView } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -139,8 +140,7 @@ const styles = StyleSheet.create(() => ({
         paddingBottom: 40,
     },
     pageTitle: {
-        fontSize: 28,
-        fontWeight: 'bold',
+        ...Typography.variant('display'),
         marginTop: 20,
         marginBottom: 8,
         paddingHorizontal: 16,
@@ -163,8 +163,7 @@ const styles = StyleSheet.create(() => ({
         color: '#333',
     },
     titleText: {
-        fontSize: 28,
-        fontWeight: 'bold',
+        ...Typography.variant('display'),
         color: '#000',
         marginBottom: 8,
     },

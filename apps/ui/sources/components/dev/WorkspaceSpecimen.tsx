@@ -136,8 +136,8 @@ const styles = StyleSheet.create((theme) => ({
     strip: { height: 44, backgroundColor: theme.colors.surface.inset },
     panes: { flex: 1, flexDirection: 'row' },
     pane: { flex: 1, minWidth: 0, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: theme.colors.border.subtle },
-    body: { padding: 24, gap: 16 },
+    body: { padding: theme.space.s24, gap: theme.space.s16 },
     copy: { fontSize: 15, lineHeight: 23, color: theme.colors.text.primary, ...Typography.default() },
-    tools: { flexDirection: 'row', alignItems: 'center', gap: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border.subtle },
-    diagnostic: { fontSize: 11, color: theme.colors.text.secondary, ...Typography.default() },
+    tools: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border.subtle },
+    diagnostic: { ...Typography.variant('micro'), color: theme.colors.text.secondary,  },
 }));

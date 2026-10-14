@@ -14,17 +14,16 @@ export function ChangedFilesSectionHeader(props: {
         <View
             style={{
                 backgroundColor: theme.colors.surface.inset,
-                paddingHorizontal: 16,
-                paddingVertical: 12,
+                paddingHorizontal: theme.space.s16,
+                paddingVertical: theme.space.s12,
                 borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
                 borderBottomColor: theme.colors.border.default,
             }}
         >
             <Text
                 style={{
-                    fontSize: 14,
+                    ...Typography.variant('label', 'semiBold'),
                     color,
-                    ...Typography.default('semiBold'),
                 }}
             >
                 {children}

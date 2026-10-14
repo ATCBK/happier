@@ -17,7 +17,6 @@ vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock({
         theme: {
-            margins: { sm: 4, lg: 16 },
             colors: {
                 textSecondary: '#666',
             },

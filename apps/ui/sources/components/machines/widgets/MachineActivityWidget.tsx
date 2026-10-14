@@ -425,7 +425,7 @@ const ActivityEntryRow = React.memo(function ActivityEntryRow(
 
 const styles = StyleSheet.create((theme) => ({
   caption: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
     marginTop: 'auto',
   },

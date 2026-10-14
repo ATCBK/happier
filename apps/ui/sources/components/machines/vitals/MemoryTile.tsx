@@ -407,7 +407,7 @@ function formatHeld(ms: number): string {
 
 const styles = StyleSheet.create((theme) => ({
   note: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
   },
 }));

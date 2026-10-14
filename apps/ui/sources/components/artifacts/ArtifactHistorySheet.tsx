@@ -303,7 +303,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     root: {
         flex: 1,
         minHeight: 0,
-        paddingBottom: 16,
+        paddingBottom: theme.space.s16,
     },
     columns: {
         flex: 1,
@@ -318,14 +318,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         flex: 1,
         minHeight: 0,
         minWidth: 0,
-        gap: 6,
-        paddingHorizontal: 24,
+        gap: theme.space.s6,
+        paddingHorizontal: theme.space.s24,
     },
     previewStacked: {
         flex: 1,
         minHeight: 0,
-        gap: 10,
-        paddingHorizontal: 16,
+        gap: theme.space.s10,
+        paddingHorizontal: theme.space.s16,
     },
     backToVersions: {
         alignSelf: 'flex-start',
@@ -342,8 +342,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 12,
-        paddingHorizontal: 16,
+        gap: theme.space.s12,
+        paddingHorizontal: theme.space.s16,
         paddingTop: 14,
         marginTop: 14,
         borderTopWidth: 1,

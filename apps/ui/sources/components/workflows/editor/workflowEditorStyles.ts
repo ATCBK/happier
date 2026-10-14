@@ -5,6 +5,7 @@ import { resolveAgentInputPanelLayoutStyle } from '@/components/sessions/agentIn
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
 import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { Typography } from '@/constants/Typography';
+import type { ThemeStyleScales } from '@/theme/themeStyleScales';
 
 /**
  * Text-labelled authoring controls cannot declare a square the way
@@ -32,7 +33,7 @@ export const WORKFLOW_EDITOR_TOUCH_POINTER = TOUCH_TARGET_FLOOR !== undefined;
 const ORDINAL_SIZE = ICON_SIZE.lg;
 
 /** A lane caption's line: the caption's own type (`rowMeta`), which its tick and caret hang on. */
-const LANE_LINE = Number(Typography.rowMeta().lineHeight);
+const LANE_LINE = Number(Typography.variant('meta').lineHeight);
 
 /** A heading's first line: the touch floor under a finger, else the ordinal ring's own height. */
 const HEADING_LINE = TOUCH_TARGET_FLOOR ?? ORDINAL_SIZE;
@@ -49,7 +50,7 @@ const ordinalColumn = (gap: number) => ORDINAL_SIZE + gap;
  * The document's gutter: from a list's edge to its name column (the ordinal and the gap after it).
  * A page that lines its steps' names up under its title subtracts this from the title's edge.
  */
-export const resolveWorkflowDocumentGutterPx = (theme: Readonly<{ margins: Readonly<{ md: number }> }>): number => ordinalColumn(theme.margins.md);
+export const resolveWorkflowDocumentGutterPx = (theme: Pick<ThemeStyleScales, 'space'>): number => ordinalColumn(theme.space.s12);
 
 /**
  * Shared editor rhythm.
@@ -81,12 +82,12 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     },
     /** A reading document's note above its first block, on the name column its blocks' words share. */
     listNote: {
-        marginBottom: theme.margins.lg,
-        paddingLeft: ordinalColumn(theme.margins.md),
+        marginBottom: theme.space.s16,
+        paddingLeft: ordinalColumn(theme.space.s12),
     },
     /** The root's end row (Add · Start from an example), one gap below the last block. */
     listEnd: {
-        paddingTop: theme.margins.xl,
+        paddingTop: theme.space.s20,
     },
     /**
      * The one gap between two blocks (lab `editor-P1`, `editor-E1`): a fixed row on the name column
@@ -97,13 +98,13 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     blockGap: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
-        height: theme.margins.xl + theme.margins.sm,
-        paddingLeft: ordinalColumn(theme.margins.md),
+        gap: theme.space.s8,
+        height: theme.space.s20 + theme.space.s8,
+        paddingLeft: ordinalColumn(theme.space.s12),
     },
     /** A non-default run-when ("If it fails", "Either way"): a quiet word on the name column, as the lab's lane captions read. */
     blockGapCaption: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.default('semiBold'),
         color: theme.colors.text.tertiary,
     },
@@ -114,7 +115,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     },
     /** A condition's nested arms. */
     nestedList: {
-        gap: theme.margins.md,
+        gap: theme.space.s12,
     },
     /**
      * A container's body (lab `.uwe-cb`): its lists start one ordinal column in, beside a rail that
@@ -126,9 +127,9 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     },
     containerRail: {
         position: 'absolute',
-        left: -(ordinalColumn(theme.margins.md) - ORDINAL_SIZE / 2),
+        left: -(ordinalColumn(theme.space.s12) - ORDINAL_SIZE / 2),
         top: 0,
-        bottom: theme.margins.sm,
+        bottom: theme.space.s8,
         borderLeftWidth: 1,
         borderColor: theme.colors.border.default,
     },
@@ -144,14 +145,14 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     laneLabelRow: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: theme.margins.sm,
-        paddingTop: theme.margins.sm,
+        gap: theme.space.s8,
+        paddingTop: theme.space.s8,
     },
     laneTick: {
         position: 'absolute',
-        top: theme.margins.sm + LANE_LINE / 2,
-        left: -(ordinalColumn(theme.margins.md) - ORDINAL_SIZE / 2),
-        width: ordinalColumn(theme.margins.md) - ORDINAL_SIZE / 2 - theme.margins.xs,
+        top: theme.space.s8 + LANE_LINE / 2,
+        left: -(ordinalColumn(theme.space.s12) - ORDINAL_SIZE / 2),
+        width: ordinalColumn(theme.space.s12) - ORDINAL_SIZE / 2 - theme.space.s4,
         borderTopWidth: 1,
         borderColor: theme.colors.border.default,
     },
@@ -165,7 +166,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     laneCaret: {
         height: LANE_LINE,
         justifyContent: 'center',
-        marginLeft: -theme.margins.sm,
+        marginLeft: -theme.space.s8,
     },
     /**
      * A heading's trailing consequence select: quiet words and a caret (lab `.uwe-cm`). Its press frame
@@ -175,16 +176,16 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     trailingControl: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.xs,
-        paddingHorizontal: theme.margins.sm,
-        marginLeft: -theme.margins.sm,
+        gap: theme.space.s4,
+        paddingHorizontal: theme.space.s8,
+        marginLeft: -theme.space.s8,
         minWidth: TOUCH_TARGET_FLOOR,
         borderRadius: theme.borderRadius.md,
         flexShrink: 1,
     },
     /** A lane's editable name: the caption's own type, sized to its words. */
     laneLabelInput: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.default('semiBold'),
         color: theme.colors.text.tertiary,
         flexShrink: 1,
@@ -192,7 +193,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         paddingVertical: 0,
     },
     laneLabel: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.default('semiBold'),
         color: theme.colors.text.tertiary,
         flexShrink: 1,
@@ -204,11 +205,11 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
      */
     selectedPlate: {
         position: 'absolute',
-        top: -theme.margins.sm,
-        bottom: -theme.margins.sm,
-        left: -theme.margins.sm,
-        right: -theme.margins.sm,
-        borderRadius: theme.parts.composer.radius + theme.margins.sm,
+        top: -theme.space.s8,
+        bottom: -theme.space.s8,
+        left: -theme.space.s8,
+        right: -theme.space.s8,
+        borderRadius: theme.parts.composer.radius + theme.space.s8,
         backgroundColor: theme.colors.surface.selected,
     },
     /** A list item's content on the name column (its ordinal hangs in the gutter): the block, then its "Only when" line. */
@@ -216,12 +217,12 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         flexGrow: 1,
         flexShrink: 1,
         minWidth: 0,
-        gap: theme.margins.xs,
-        paddingLeft: ordinalColumn(theme.margins.md),
+        gap: theme.space.s4,
+        paddingLeft: ordinalColumn(theme.space.s12),
     },
     blockBody: {
         flex: 1,
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     /**
      * A block heading (lab `.uwe-sh`, `.uwe-ch`): ordinal, then the name line, then `⋯`, each on the
@@ -231,9 +232,9 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     heading: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: theme.margins.md,
+        gap: theme.space.s12,
         // The ordinal hangs in the gutter, so the name starts on the column the card and its lines share.
-        marginLeft: -ordinalColumn(theme.margins.md),
+        marginLeft: -ordinalColumn(theme.space.s12),
     },
     /** The ordinal and `⋯` columns, centred on the heading's first line. */
     headingLine: {
@@ -248,7 +249,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         flexWrap: 'wrap',
         alignItems: 'center',
         justifyContent: 'space-between',
-        columnGap: theme.margins.sm,
+        columnGap: theme.space.s8,
     },
     /** The invisible copy that sizes an editable name to its text, so its meta follows it (E1). */
     headingNameMeasure: {
@@ -264,7 +265,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         borderRadius: ORDINAL_SIZE / 2,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.strong,
-        paddingHorizontal: theme.margins.xs,
+        paddingHorizontal: theme.space.s4,
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -281,7 +282,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         borderColor: theme.colors.text.primary,
     },
     ordinalText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.default('semiBold'),
         ...Typography.tabular(),
         color: theme.colors.text.secondary,
@@ -311,7 +312,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         // A narrow line puts the meta beneath the name before either truncates (DESIGN-6 N1 residual).
         flexWrap: 'wrap',
         justifyContent: 'flex-start',
-        columnGap: theme.margins.sm,
+        columnGap: theme.space.s8,
         flexShrink: 1,
         minWidth: 0,
         maxWidth: '100%',
@@ -320,9 +321,9 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         // A wrapping row packs its lines at the top unless told otherwise; the name line centres on
         // the heading's first line so it reads level with the ordinal and `⋯` (DESIGN-7 N28).
         alignContent: 'center',
-        paddingHorizontal: theme.margins.xs,
+        paddingHorizontal: theme.space.s4,
         // The press frame keeps its inset; the words start on the name column.
-        marginLeft: -theme.margins.xs,
+        marginLeft: -theme.space.s4,
         borderRadius: theme.borderRadius.md,
     },
     /** A leaf's name (no meta, no consequence) takes the whole line, as a field does. */
@@ -335,12 +336,12 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
         flexShrink: 1,
         minWidth: 0,
-        paddingVertical: theme.margins.xs,
+        paddingVertical: theme.space.s4,
     },
     headingActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
         marginLeft: 'auto',
     },
     // The canonical composer owns the prompt field's own chrome and focus
@@ -352,7 +353,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     metaText: {
         ...Typography.default('regular'),
@@ -372,8 +373,8 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
      * (DESIGN-9 N48); with it, the caption sits as clear of the text as of a card's border.
      */
     stepIssues: {
-        gap: theme.margins.xs,
-        paddingBottom: theme.margins.xs,
+        gap: theme.space.s4,
+        paddingBottom: theme.space.s4,
     },
     groupSummary: {
         ...Typography.default('regular'),
@@ -401,15 +402,15 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     addRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     /** The quiet bordered "+ Add" control at the end of a block list (lab `S1`). */
     addTrigger: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.xs,
-        paddingHorizontal: theme.margins.md,
-        paddingVertical: theme.margins.xs,
+        gap: theme.space.s4,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s4,
         borderRadius: theme.borderRadius.md,
         borderColor: theme.colors.border.strong,
     },
@@ -422,8 +423,8 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     inserter: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.xs,
-        minHeight: TOUCH_TARGET_FLOOR ?? theme.margins.xl,
+        gap: theme.space.s4,
+        minHeight: TOUCH_TARGET_FLOOR ?? theme.space.s20,
         borderWidth: 1,
         borderColor: 'transparent',
     },
@@ -433,7 +434,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
      * and lab P1 (DESIGN-6 M2) instead of stacking the target as empty space.
      */
     inserterSlot: {
-        marginVertical: TOUCH_TARGET_FLOOR === undefined ? 0 : -(TOUCH_TARGET_FLOOR - theme.margins.xl) / 2,
+        marginVertical: TOUCH_TARGET_FLOOR === undefined ? 0 : -(TOUCH_TARGET_FLOOR - theme.space.s20) / 2,
         zIndex: 1,
     },
     inserterHidden: {
@@ -464,38 +465,38 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     kindCardHeader: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
-        minHeight: TOUCH_TARGET_FLOOR ?? theme.margins.xxl + theme.margins.lg,
-        paddingHorizontal: theme.margins.md,
+        gap: theme.space.s8,
+        minHeight: TOUCH_TARGET_FLOOR ?? theme.space.s24 + theme.space.s16,
+        paddingHorizontal: theme.space.s12,
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: theme.colors.border.default,
     },
     kindCardSource: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
         flexShrink: 1,
     },
     /** Its label/value rows (lab `.uwe-kb`). */
     kindCardBody: {
-        paddingHorizontal: theme.margins.md,
-        paddingVertical: theme.margins.xs,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s4,
         // Pairs breathe apart while a label and its value stay together (DESIGN-6 N5).
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         minWidth: 0,
     },
     kindCardFoot: {
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         justifyContent: 'space-between',
-        paddingLeft: theme.margins.md,
-        paddingRight: theme.margins.sm,
+        paddingLeft: theme.space.s12,
+        paddingRight: theme.space.s8,
         // The foot's words sit as far from the bottom border as from the side (lab S6, DESIGN-7 N30).
-        paddingBottom: theme.margins.md,
+        paddingBottom: theme.space.s12,
     },
     kindCardNote: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
         flexShrink: 1,
     },
@@ -510,9 +511,9 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         flexWrap: 'wrap',
         // A label reads level with its value, not above or below it (lab S6).
         alignItems: 'center',
-        columnGap: theme.margins.md,
+        columnGap: theme.space.s12,
         rowGap: 0,
-        paddingVertical: theme.margins.xs,
+        paddingVertical: theme.space.s4,
         minWidth: 0,
         // Reserved so a pair that is a press target paints the shared focus ring without moving.
         borderWidth: 1,
@@ -528,7 +529,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'baseline',
-        columnGap: theme.margins.xs,
+        columnGap: theme.space.s4,
         minWidth: 120,
         maxWidth: '45%',
         flexShrink: 0,
@@ -546,7 +547,7 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     },
     /** "Required" on an unset field: a quiet marker on the label's line, not a second label. */
     actionFieldMarker: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
     },
     /** A bound literal as the document reads it. */
@@ -562,8 +563,8 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: theme.margins.sm,
-        paddingVertical: theme.margins.xs,
+        gap: theme.space.s8,
+        paddingVertical: theme.space.s4,
         minWidth: 0,
         maxWidth: '100%',
     },
@@ -593,8 +594,8 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         borderRadius: theme.borderRadius.md,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.surface,
-        paddingHorizontal: theme.margins.sm,
-        paddingVertical: theme.margins.xs,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s4,
         minWidth: 72,
         flexGrow: 1,
         flexBasis: 160,

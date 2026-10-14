@@ -262,7 +262,7 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
         flex: 1,
         minWidth: 0,
         color: theme.colors.text.tertiary,
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
     },
     searchChromeStatusRetry: {
         alignItems: 'center' as const,

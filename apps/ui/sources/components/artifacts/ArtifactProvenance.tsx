@@ -90,15 +90,15 @@ const stylesheet = StyleSheet.create((theme) => ({
     row: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 5,
+        gap: theme.space.s4,
         minWidth: 0,
         flexShrink: 1,
     },
     chip: {
         alignSelf: 'flex-start',
         height: 26,
-        paddingLeft: 8,
-        paddingRight: 9,
+        paddingLeft: theme.space.s8,
+        paddingRight: theme.space.s8,
         borderRadius: 13,
         backgroundColor: theme.colors.surface.elevated,
     },

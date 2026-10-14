@@ -70,8 +70,8 @@ const styles = StyleSheet.create((theme) => ({
     footChip: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.xs,
-        paddingHorizontal: theme.margins.sm,
+        gap: theme.space.s4,
+        paddingHorizontal: theme.space.s8,
         borderRadius: theme.borderRadius.md,
     },
 }));

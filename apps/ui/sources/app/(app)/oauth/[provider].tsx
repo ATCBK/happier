@@ -1713,12 +1713,12 @@ function OAuthProviderReturnBody() {
                 : t('setupOnboarding.resumeIntentBody');
 
     const body = provisioningChoiceOpen ? (
-        <View style={{ width: '100%', maxWidth: 420, alignSelf: 'center', gap: 12 }}>
+        <View style={{ width: '100%', maxWidth: 420, alignSelf: 'center', gap: theme.space.s12 }}>
             <Pressable
                 testID="oauth-provisioning-choice-e2ee"
                 onPress={() => chooseProvisioningMode('e2ee')}
                 style={{
-                    paddingVertical: 10,
+                    paddingVertical: theme.space.s10,
                     borderRadius: 8,
                     backgroundColor: theme.colors.button.primary.background,
                     alignItems: 'center',
@@ -1734,7 +1734,7 @@ function OAuthProviderReturnBody() {
                 testID="oauth-provisioning-choice-plain"
                 onPress={() => chooseProvisioningMode('plain')}
                 style={{
-                    paddingVertical: 10,
+                    paddingVertical: theme.space.s10,
                     borderRadius: 8,
                     borderWidth: 1,
                     borderColor: theme.colors.border.default,
@@ -1750,7 +1750,7 @@ function OAuthProviderReturnBody() {
             {busy ? <ActivitySpinner size="small" /> : null}
         </View>
     ) : usernameHint != null ? (
-        <View style={{ width: '100%', maxWidth: 420, alignSelf: 'center', gap: 12 }}>
+        <View style={{ width: '100%', maxWidth: 420, alignSelf: 'center', gap: theme.space.s12 }}>
             <TextInput
                 testID="oauth-username-input"
                 value={usernameValue}
@@ -1763,19 +1763,19 @@ function OAuthProviderReturnBody() {
                     borderWidth: 1,
                     borderColor: theme.colors.border.default,
                     borderRadius: 8,
-                    paddingHorizontal: 12,
-                    paddingVertical: 10,
+                    paddingHorizontal: theme.space.s12,
+                    paddingVertical: theme.space.s10,
                     backgroundColor: theme.colors.input.background,
                     color: theme.colors.input.text,
                 }}
             />
-            <View style={{ flexDirection: 'row', gap: 12 }}>
+            <View style={{ flexDirection: 'row', gap: theme.space.s12 }}>
                 <Pressable
                     testID="oauth-username-cancel"
                     onPress={cancelUsername}
                     style={{
                         flex: 1,
-                        paddingVertical: 10,
+                        paddingVertical: theme.space.s10,
                         borderRadius: 8,
                         borderWidth: 1,
                         borderColor: theme.colors.border.default,
@@ -1790,7 +1790,7 @@ function OAuthProviderReturnBody() {
                     onPress={submitUsername}
                     style={{
                         flex: 1,
-                        paddingVertical: 10,
+                        paddingVertical: theme.space.s10,
                         borderRadius: 8,
                         backgroundColor: theme.colors.button.primary.background,
                         alignItems: 'center',

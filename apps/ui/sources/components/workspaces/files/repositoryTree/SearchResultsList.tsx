@@ -93,18 +93,16 @@ export const SearchResultsList = React.memo(({
             <View
                 style={{
                     backgroundColor: theme.colors.surface.inset,
-                    paddingHorizontal: 16,
-                    paddingVertical: 12,
+                    paddingHorizontal: theme.space.s16,
+                    paddingVertical: theme.space.s12,
                     borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
                     borderBottomColor: theme.colors.border.default,
                 }}
             >
                 <Text
                     style={{
-                        fontSize: 14,
-                        fontWeight: '600',
+                        ...Typography.variant('label', 'semiBold'),
                         color: theme.colors.text.link,
-                        ...Typography.default(),
                     }}
                 >
                     {showsPreviousResults ? t('files.previousSearchResults') : t('files.searchResults', { count: searchResults.length })}
@@ -159,14 +157,12 @@ export const SearchResultsList = React.memo(({
                     nameSuffix={file.fileType === 'folder' ? '/' : undefined}
                     nameMaxWidth={220}
                     pathTextStyle={{
-                        fontSize: 13,
+                        ...Typography.variant('body'),
                         color: theme.colors.text.secondary,
-                        ...Typography.default(),
                     }}
                     nameTextStyle={{
-                        fontSize: 13,
+                        ...Typography.variant('body', 'semiBold'),
                         color: theme.colors.text.primary,
-                        ...Typography.default('semiBold'),
                     }}
                 />
             )}
@@ -182,7 +178,7 @@ export const SearchResultsList = React.memo(({
             showChevron={false}
             showDivider={index < searchResults.length - 1}
             style={{
-                paddingHorizontal: 12,
+                paddingHorizontal: theme.space.s12,
             }}
         />
         </WorkspaceDestinationRow>

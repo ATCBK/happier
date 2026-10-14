@@ -223,7 +223,7 @@ const SessionHitRow = React.memo(function SessionHitRow(props: Readonly<{
 const stylesheet = StyleSheet.create((theme) => ({
     field: {
         paddingHorizontal: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
-        paddingBottom: 6,
+        paddingBottom: theme.space.s6,
     },
     count: {
         ...Typography.default(),
@@ -232,11 +232,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontVariant: ['tabular-nums'],
     },
     hitTitle: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     hitExcerpt: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     hint: {
@@ -244,7 +244,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...happierPageTextMetrics('meta'),
         color: theme.colors.text.tertiary,
         paddingHorizontal: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
-        paddingTop: 8,
+        paddingTop: theme.space.s8,
     },
     retired: {
         color: theme.colors.text.tertiary,

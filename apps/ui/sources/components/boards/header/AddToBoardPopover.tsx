@@ -363,17 +363,17 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     failures: {
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        gap: 8,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
+        gap: theme.space.s8,
     },
     onBoard: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
     },
     onBoardText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
     },
 }));

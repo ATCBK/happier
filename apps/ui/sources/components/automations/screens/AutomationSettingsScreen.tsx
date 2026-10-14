@@ -159,7 +159,7 @@ export function AutomationSettingsScreen(): React.ReactElement {
         return (
             <ItemList>
                 {header}
-                <View style={{ alignItems: 'center', paddingVertical: 32 }}>
+                <View style={{ alignItems: 'center', paddingVertical: theme.space.s32 }}>
                     <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                 </View>
             </ItemList>

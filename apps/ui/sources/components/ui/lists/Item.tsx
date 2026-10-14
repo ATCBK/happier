@@ -426,7 +426,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         alignItems: 'flex-end',
     },
     titleQualifier: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         flexShrink: 0,
         // A short qualifier (a machine's telling suffix, a Team) stays whole; a long one (a folded Machine's full
@@ -859,6 +859,7 @@ export const Item = React.memo<ItemProps>((props) => {
     const isCozy = resolvedDensity === 'cozy';
     const isCompact = resolvedDensity === 'compact';
     const isTight = resolvedDensity === 'tight';
+    const resolvedIconDensity = isTight ? 'tight' : isCompact ? 'compact' : isCozy ? 'cozy' : 'comfortable';
     const hasSubtitleContent = Boolean(subtitle || subtitleAccessory);
     const isMenuRow = rowRole === 'menu';
     const listPresentation = useListPresentation();
@@ -906,14 +907,42 @@ export const Item = React.memo<ItemProps>((props) => {
     // label keeps its column, and moves beneath the title (unclamped, where a description sits) once
     // its natural width would squeeze the label below that column. Only a narrow row measures it: on
     // a wider row the label always keeps its column beside a detail held to half the row.
+    // The label's column is the smaller of the shared column and what a short text label really
+    // needs (its natural width plus the trailing chevron), so "Role · Orchestrator" stays on one line
+    // in a narrow pane instead of stacking beside 160px of empty label column.
     const [detailWidthPx, setDetailWidthPx] = React.useState<number | null>(null);
+    const [titleNaturalWidthPx, setTitleNaturalWidthPx] = React.useState<number | null>(null);
     const measuresDetail = isPageRow && Boolean(detail) && isNarrowRow;
+    const measuresTitle = measuresDetail && (typeof title === 'string' || typeof title === 'number');
+    const detailTrailingPx = theme.space.s8 + (rightElement != null || showAccessory ? 8 : 0)
+        + (showAccessory ? ITEM_CHEVRON_SIZE[resolvedIconDensity] + theme.space.s4 : 0);
+    // A page section reserves the leading column for all its rows when any row has an icon or mark.
+    const reservesLeadingColumn = useSectionLeadingColumn(isPageRow && (icon != null || leftElement != null));
+    // The row's own padding and leading mark take width from the line too: a short label's column is its
+    // natural width plus them, or a wide value squeezes the label into wrapping ("Advance/d" at 390).
+    const rowChromePx = 2 * (pageRowInsetPx ?? PAGE_LIST_METRICS.rowPaddingHorizontalPx)
+        + (reservesLeadingColumn || (isPageRow && (icon != null || leftElement != null))
+            ? (iconBoxSize ?? PAGE_LIST_METRICS.rowLeadingColumnPx) + PAGE_LIST_METRICS.rowLeadingGapPx
+            : 0);
+    const labelColumnPx = measuresTitle && titleNaturalWidthPx !== null
+        ? Math.min(PAGE_LIST_METRICS.sectionTextMinWidthPx, titleNaturalWidthPx + detailTrailingPx + rowChromePx)
+        : PAGE_LIST_METRICS.sectionTextMinWidthPx;
     const detailBeneath = measuresDetail && rowWidthPx !== null && detailWidthPx !== null
-        && rowWidthPx - detailWidthPx - PAGE_LIST_METRICS.rowLeadingGapPx < PAGE_LIST_METRICS.sectionTextMinWidthPx;
+        && rowWidthPx - detailWidthPx - PAGE_LIST_METRICS.rowLeadingGapPx < labelColumnPx;
+    // A short label leaves the value more than the half-row share it gets on a wide row.
+    const detailInlineMaxWidthPx = measuresDetail && !detailBeneath && rowWidthPx !== null
+        && labelColumnPx < PAGE_LIST_METRICS.sectionTextMinWidthPx
+        ? rowWidthPx - (labelColumnPx - detailTrailingPx) - PAGE_LIST_METRICS.rowLeadingGapPx - theme.space.s8
+        : null;
     const handleDetailLayout = React.useCallback((event: LayoutChangeEvent) => {
         const widthPx = event.nativeEvent.layout.width;
         if (!Number.isFinite(widthPx) || widthPx <= 0) return;
         setDetailWidthPx((current) => (current === widthPx ? current : widthPx));
+    }, []);
+    const handleTitleMeasureLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const widthPx = event.nativeEvent.layout.width;
+        if (!Number.isFinite(widthPx) || widthPx <= 0) return;
+        setTitleNaturalWidthPx((current) => (current === widthPx ? current : widthPx));
     }, []);
     const stackAccessory = rightElement != null
         // A field held beside its label at its content width is capped below half the row, so neither
@@ -960,7 +989,6 @@ export const Item = React.memo<ItemProps>((props) => {
     const iconBoxSizeOverride = iconBoxSize != null
         ? { width: iconBoxSize, height: iconBoxSize }
         : null;
-    const resolvedIconDensity = isTight ? 'tight' : isCompact ? 'compact' : isCozy ? 'cozy' : 'comfortable';
     const chevronSize = ITEM_CHEVRON_SIZE[resolvedIconDensity];
     // One glyph size for every row in a list, whether or not that row happens to carry a subtitle.
     // Branching on the subtitle is tempting — it is what makes the icon span exactly two lines — but
@@ -1038,8 +1066,6 @@ export const Item = React.memo<ItemProps>((props) => {
         if (disabled || loading) setIsHovered(false);
     }, [disabled, loading]);
 
-    // A page section reserves the leading column for all its rows when any row has an icon or mark.
-    const reservesLeadingColumn = useSectionLeadingColumn(isPageRow && (icon != null || leftElement != null));
     const leftAccessory = React.useMemo(() => {
         const candidate = (isHovered ? leftElementWhenHovered : null) ?? leftElement ?? sizedIcon ?? null;
         return normalizeNodeForView(candidate);
@@ -1327,7 +1353,8 @@ export const Item = React.memo<ItemProps>((props) => {
                 // narrow-row and half-row rules decided that), so the box is not held to half the
                 // content width as well: that second cap clipped a 240px field in a ~490px dialog row
                 // past the sheet's trailing inset.
-                !stackContentAccessory && (adaptiveAccessory || fieldMaxWidthPx !== null) ? styles.rightSectionField : null]}>
+                !stackContentAccessory && (adaptiveAccessory || fieldMaxWidthPx !== null) ? styles.rightSectionField : null,
+                detailInlineMaxWidthPx !== null ? { maxWidth: detailInlineMaxWidthPx } : null]}>
                 {copyFeedback.isCopied() ? (
                     <CopiedPill visible testID="item-copy-feedback" />
                 ) : detail && !detailBeneath ? (
@@ -1361,13 +1388,20 @@ export const Item = React.memo<ItemProps>((props) => {
                 <Text style={[styles.detail, detailSizeStyle, styles.detailMeasure]} numberOfLines={1} onLayout={handleDetailLayout}
                     aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">{detail}</Text>
             ) : null}
+            {measuresTitle ? (
+                <Text style={[styles.title, titleSizeStyle, titleStyle, styles.detailMeasure]} numberOfLines={1} onLayout={handleTitleMeasureLayout}
+                    aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">{title as string | number}</Text>
+            ) : null}
         </>
     );
     }, [
         chevronAccessory,
         detailBeneath,
         measuresDetail,
+        measuresTitle,
+        detailInlineMaxWidthPx,
         handleDetailLayout,
+        handleTitleMeasureLayout,
         styles.detailMeasure,
         copyFeedback,
         adaptiveAccessory,

@@ -307,16 +307,16 @@ const styles = StyleSheet.create((theme) => ({
     trailing: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     count: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.tabular(),
         color: theme.colors.text.tertiary,
     },
     hidden: {
-        marginTop: 12,
-        paddingTop: 8,
+        marginTop: theme.space.s12,
+        paddingTop: theme.space.s8,
         borderTopWidth: StyleSheet.hairlineWidth || 1,
     },
 }));

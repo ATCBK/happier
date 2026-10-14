@@ -274,7 +274,7 @@ const styles = StyleSheet.create((theme) => ({
         paddingTop: theme.space.s8,
     },
     sentenceText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

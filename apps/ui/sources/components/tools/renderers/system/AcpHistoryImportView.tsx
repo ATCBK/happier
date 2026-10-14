@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View, TouchableOpacity } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -175,12 +176,11 @@ export const AcpHistoryImportView = React.memo<ToolViewProps>(({ tool, sessionId
 
 const styles = StyleSheet.create((theme) => ({
   container: {
-    gap: 10,
-    paddingVertical: 4,
+    gap: theme.space.s10,
+    paddingVertical: theme.space.s4,
   },
   title: {
-    fontSize: 15,
-    fontWeight: '700',
+    ...Typography.variant('heading'),
     color: theme.colors.text.primary,
   },
   subtitle: {
@@ -194,24 +194,23 @@ const styles = StyleSheet.create((theme) => ({
   },
   countRow: {
     flexDirection: 'row',
-    gap: 12,
+    gap: theme.space.s12,
   },
   countText: {
     fontSize: 12,
     color: theme.colors.text.secondary,
   },
   previewContainer: {
-    gap: 10,
+    gap: theme.space.s10,
   },
   previewBlock: {
-    gap: 6,
-    padding: 10,
+    gap: theme.space.s6,
+    padding: theme.space.s10,
     borderRadius: 8,
     backgroundColor: theme.colors.surface.elevated,
   },
   previewHeader: {
-    fontSize: 12,
-    fontWeight: '600',
+    ...Typography.variant('meta', 'semiBold'),
     color: theme.colors.text.secondary,
     textTransform: 'uppercase',
   },
@@ -221,12 +220,12 @@ const styles = StyleSheet.create((theme) => ({
   },
   actions: {
     flexDirection: 'row',
-    gap: 10,
-    marginTop: 6,
+    gap: theme.space.s10,
+    marginTop: theme.space.s6,
   },
   button: {
     flex: 1,
-    paddingVertical: 12,
+    paddingVertical: theme.space.s12,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
@@ -237,8 +236,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   primaryText: {
     color: theme.colors.button.primary.tint,
-    fontSize: 14,
-    fontWeight: '600',
+    ...Typography.variant('label', 'semiBold'),
   },
   secondaryButton: {
     backgroundColor: theme.colors.surface.inset,
@@ -247,8 +245,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   secondaryText: {
     color: theme.colors.text.primary,
-    fontSize: 14,
-    fontWeight: '600',
+    ...Typography.variant('label', 'semiBold'),
   },
   disabled: {
     opacity: 0.5,

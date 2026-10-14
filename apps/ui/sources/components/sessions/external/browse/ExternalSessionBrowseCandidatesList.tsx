@@ -88,7 +88,7 @@ const styles = StyleSheet.create((theme: AppTheme) => ({
         width: '100%',
     },
     noMatchesClear: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.default('medium'),
         color: theme.colors.text.link,
         textDecorationLine: 'underline',

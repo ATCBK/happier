@@ -54,18 +54,18 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         minHeight: 28,
-        paddingTop: theme.margins.sm,
-        paddingBottom: theme.margins.xs,
+        paddingTop: theme.space.s8,
+        paddingBottom: theme.space.s4,
     },
     title: {
         flexShrink: 1,
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     rollup: {
-        ...Typography.timestamp(),
+        ...({ ...Typography.variant('micro', 'regular'), ...Typography.tabular() }),
         color: theme.colors.text.secondary,
     },
 }));

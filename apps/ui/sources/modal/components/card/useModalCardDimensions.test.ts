@@ -3,6 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { resolveModalCardDimensions } from './useModalCardDimensions';
 
 describe('resolveModalCardDimensions', () => {
+    it('uses the standard dialog width by default and preserves explicit narrow and wide presets', () => {
+        const viewport = { width: 1440, height: 1000 };
+        expect(resolveModalCardDimensions(viewport).width).toBe(464);
+        expect(resolveModalCardDimensions(viewport, { size: 'dialog' }).width).toBe(360);
+        expect(resolveModalCardDimensions(viewport, { size: 'md' }).width).toBe(560);
+        expect(resolveModalCardDimensions(viewport, { size: 'lg' }).width).toBe(840);
+    });
+
     it('falls back to a non-zero width when window dimensions are not yet available', () => {
         const dimensions = resolveModalCardDimensions(
             { width: 0, height: 0 },

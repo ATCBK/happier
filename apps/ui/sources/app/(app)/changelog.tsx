@@ -23,34 +23,32 @@ const styles = StyleSheet.create((theme, runtime) => ({
         backgroundColor: theme.colors.surface.base,
     },
     content: {
-        paddingHorizontal: 16,
-        paddingTop: 16,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s16,
     },
     entryContainer: {
-        marginBottom: 32,
+        marginBottom: theme.space.s32,
     },
     versionHeader: {
-        ...Typography.default('semiBold'),
-        fontSize: 20,
-        lineHeight: 28,
+        ...Typography.variant('title'),
         color: theme.colors.text.primary,
-        marginBottom: 8,
+        marginBottom: theme.space.s8,
     },
     dateText: {
         ...Typography.default('regular'),
         fontSize: 14,
         lineHeight: 20,
         color: theme.colors.text.secondary,
-        marginBottom: 12,
+        marginBottom: theme.space.s12,
     },
     askHappier: {
         alignSelf: 'flex-start',
-        marginBottom: 12,
+        marginBottom: theme.space.s12,
     },
     entryBodyContainer: {
         backgroundColor: theme.colors.surface.inset,
         borderRadius: 12,
-        padding: 16,
+        padding: theme.space.s16,
     },
     markdownText: {
         ...Typography.default('regular'),
@@ -62,7 +60,7 @@ const styles = StyleSheet.create((theme, runtime) => ({
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 40,
+        padding: theme.space.s40,
     },
     emptyText: {
         ...Typography.default('regular'),

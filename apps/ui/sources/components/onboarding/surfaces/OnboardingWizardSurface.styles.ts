@@ -6,7 +6,7 @@ import { Typography } from '@/constants/Typography';
 export const onboardingWizardSurfaceStylesheet = StyleSheet.create((theme) => ({
     urlBlock: {
         width: '100%',
-        gap: 12,
+        gap: theme.space.s12,
     },
     urlInput: {
         width: '100%',
@@ -14,7 +14,7 @@ export const onboardingWizardSurfaceStylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
         borderRadius: 14,
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingVertical: 14,
         color: theme.colors.text.primary,
         fontSize: 16,
@@ -32,7 +32,7 @@ export const onboardingWizardSurfaceStylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.state.warning.border,
         backgroundColor: theme.colors.state.warning.background,
         borderRadius: 14,
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingVertical: 14,
     },
     confirmRelayLockText: {
@@ -42,12 +42,10 @@ export const onboardingWizardSurfaceStylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.state.warning.foreground,
     },
     relayGroupTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
         textAlign: 'left',
-        marginBottom: 6,
+        marginBottom: theme.space.s6,
     },
     scanCtaBlock: {
         width: '100%',

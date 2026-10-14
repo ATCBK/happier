@@ -229,22 +229,22 @@ export const WorkspaceSourceControlView = React.memo((props: WorkspaceSourceCont
                                     flexDirection: 'row',
                                     alignItems: 'center',
                                     justifyContent: 'space-between',
-                                    gap: 10,
-                                    paddingHorizontal: 12,
-                                    paddingVertical: 10,
+                                    gap: theme.space.s10,
+                                    paddingHorizontal: theme.space.s12,
+                                    paddingVertical: theme.space.s10,
                                     borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
                                     borderBottomColor: theme.colors.border.default,
                                     backgroundColor: theme.colors.surface.base,
                                     opacity: pressed ? motionTokens.press.opacitySubtle : 1,
                                 })}
                             >
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, minWidth: 0, flex: 1 }}>
                                     <Icon name="archive" size={14} color={theme.colors.text.secondary} />
-                                    <Text numberOfLines={1} style={{ fontSize: 12, color: theme.colors.text.primary, ...Typography.default('semiBold') }}>
+                                    <Text numberOfLines={1} style={{ ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.primary,  }}>
                                         {t('files.stash.summaryTitle')}
                                     </Text>
                                 </View>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, flexShrink: 0 }}>
                                     <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.mono('semiBold') }}>
                                         {String(stashCount)}
                                     </Text>
@@ -274,20 +274,20 @@ export const WorkspaceSourceControlView = React.memo((props: WorkspaceSourceCont
                                 )}
                             />
                         ) : null}
-                        <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
+                        <View style={{ paddingHorizontal: theme.space.s16, paddingTop: theme.space.s16 }}>
                             <View
                                 style={{
                                     flexDirection: 'row',
                                     alignItems: 'center',
                                     backgroundColor: theme.colors.input.background,
                                     borderRadius: 10,
-                                    paddingHorizontal: 12,
-                                    paddingVertical: 8,
+                                    paddingHorizontal: theme.space.s12,
+                                    paddingVertical: theme.space.s8,
                                     borderWidth: 1,
                                     borderColor: theme.colors.border.default,
                                 }}
                             >
-                                <Icon name="magnifying-glass" size={16} color={theme.colors.text.secondary} style={{ marginRight: 8 }} />
+                                <Icon name="magnifying-glass" size={16} color={theme.colors.text.secondary} style={{ marginRight: theme.space.s8 }} />
                                 <TextInput
                                     value={searchQuery}
                                     onChangeText={setSearchQuery}
@@ -304,9 +304,9 @@ export const WorkspaceSourceControlView = React.memo((props: WorkspaceSourceCont
                             </View>
                         </View>
 
-                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, gap: 10, paddingHorizontal: 16, paddingBottom: 12 }}>
-                            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, minWidth: 0, flex: 1 }}>
-                                <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default('semiBold') }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: theme.space.s10, gap: theme.space.s10, paddingHorizontal: theme.space.s16, paddingBottom: theme.space.s12 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: theme.space.s8, minWidth: 0, flex: 1 }}>
+                                <Text style={{ ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.secondary,  }}>
                                     {t('files.toolbar.changedFiles')}
                                 </Text>
                                 <Text style={{ fontSize: 11, color: theme.colors.text.secondary, ...Typography.mono('semiBold') }}>
@@ -329,18 +329,18 @@ export const WorkspaceSourceControlView = React.memo((props: WorkspaceSourceCont
                                         flexDirection: 'row',
                                         alignItems: 'center',
                                         justifyContent: 'center',
-                                        paddingHorizontal: 10,
+                                        paddingHorizontal: theme.space.s10,
                                         height: 30,
                                         borderRadius: 10,
                                         borderWidth: 1,
                                         borderColor: theme.colors.border.default,
                                         backgroundColor: theme.colors.surface.base,
                                         opacity: pressed ? motionTokens.press.opacity : 1,
-                                        gap: 6,
+                                        gap: theme.space.s6,
                                     })}
                                 >
                                     <Icon name="git-diff" size={14} color={theme.colors.text.secondary} />
-                                    <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default('semiBold') }}>
+                                    <Text style={{ ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.secondary,  }}>
                                         {t('files.toolbar.review')}
                                     </Text>
                                 </Pressable>
@@ -406,7 +406,7 @@ export const WorkspaceSourceControlView = React.memo((props: WorkspaceSourceCont
                                 });
                             }}
                             trailingElement={(
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
                                     <CopiedPill
                                         visible={copyFeedback.isCopied(file.fullPath)}
                                         testID={`workspace-scm-change-copy-feedback:${file.fullPath}`}
@@ -436,15 +436,15 @@ export const WorkspaceSourceControlView = React.memo((props: WorkspaceSourceCont
                         />
                     );
                 }}
-                contentContainerStyle={{ paddingBottom: 12 }}
+                contentContainerStyle={{ paddingBottom: theme.space.s12 }}
                 ListFooterComponent={props.listFooter ?? null}
                 initialNumToRender={Math.min(WORKSPACE_CHANGED_FILES_INITIAL_RENDER_COUNT, filteredChangedFiles.length)}
                 maxToRenderPerBatch={WORKSPACE_CHANGED_FILES_BATCH_RENDER_COUNT}
                 windowSize={WORKSPACE_CHANGED_FILES_WINDOW_SIZE}
                 removeClippedSubviews={Platform.OS !== 'web'}
                 ListEmptyComponent={(
-                    <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
-                        <Text style={{ color: theme.colors.text.secondary, fontSize: 12, ...Typography.default() }}>
+                    <View style={{ paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12 }}>
+                        <Text style={{ color: theme.colors.text.secondary, ...Typography.variant('meta'),  }}>
                             {t('files.noChanges')}
                         </Text>
                     </View>

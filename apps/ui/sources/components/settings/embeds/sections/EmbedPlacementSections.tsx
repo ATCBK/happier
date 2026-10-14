@@ -270,7 +270,7 @@ export const EmbedSessionsSection = React.memo(function EmbedSessionsSection(pro
                         mode="info"
                         density="compact"
                         showChevron={false}
-                        titleStyle={{ ...Typography.rowMeta(), color: theme.colors.text.secondary }}
+                        titleStyle={{ ...Typography.variant('meta'), color: theme.colors.text.secondary }}
                     />
                     <SettingRow
                         setting={EMBED_SETTINGS.settings.newChat}

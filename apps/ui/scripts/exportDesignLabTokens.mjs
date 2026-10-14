@@ -11,7 +11,7 @@ export async function renderProductTokensCss() {
     stdin: {
       contents: `
         export { lightTheme, darkTheme } from './sources/theme/index.ts';
-        export { FontFamilies, FontWeights, Typography } from './sources/constants/Typography.ts';
+        export { FontFamilies, FontWeights, Typography, EYEBROW_TYPOGRAPHY } from './sources/constants/Typography.ts';
         export { HAPPIER_TYPE_SCALE, HAPPIER_TYPE_WEIGHT } from '../../packages/plugin-ui/src/presentation/text/typeScale.ts';
         export { HAPPIER_PAGE_METRICS } from '../../packages/plugin-ui/src/presentation/layout/pageMetrics.ts';
       `,
@@ -34,12 +34,12 @@ export async function renderProductTokensCss() {
       },
     }],
   });
-  const { lightTheme, darkTheme, FontFamilies, FontWeights, Typography, HAPPIER_TYPE_SCALE, HAPPIER_TYPE_WEIGHT, HAPPIER_PAGE_METRICS } = await import(
+  const { lightTheme, darkTheme, FontFamilies, FontWeights, Typography, EYEBROW_TYPOGRAPHY, HAPPIER_TYPE_SCALE, HAPPIER_TYPE_WEIGHT, HAPPIER_PAGE_METRICS } = await import(
     `data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`
   );
-  const typography = Object.fromEntries(Object.entries(Typography)
+  const typography = { eyebrow: EYEBROW_TYPOGRAPHY, ...Object.fromEntries(Object.entries(Typography)
     .filter(([name, value]) => name !== 'variant' && typeof value === 'function')
-    .map(([name, style]) => [name, style()]));
+    .map(([name, style]) => [name, style()])) };
   const type = Object.fromEntries(Object.entries(HAPPIER_TYPE_SCALE).map(([role, step]) => [role, {
     size: `${step.fontSize}px`, line: `${step.lineHeight}px`, weight: HAPPIER_TYPE_WEIGHT[step.weight], tracking: `${step.letterSpacing}px`,
     family: Typography.variant(role).fontFamily,
@@ -56,7 +56,7 @@ export async function renderProductTokensCss() {
     const key = path.at(-1);
     // RN dimensions are CSS pixels; opacity, elevation and gradient coordinates remain unitless.
     if (typeof value === 'number' && (
-      ['margins', 'space', 'borderRadius', 'iconSize'].includes(path[0]) ||
+      ['space', 'borderRadius', 'iconSize'].includes(path[0]) ||
       ['radius', 'width', 'height', 'shadowRadius', 'fontSize', 'lineHeight', 'letterSpacing', 'messageGap'].includes(key)
     )) value = `${value}px`;
     if (typeof value === 'string' && (path[0] === 'fontFamilies' || key === 'fontFamily') && !value.startsWith('var(')) {

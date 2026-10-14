@@ -88,6 +88,9 @@ function areFileContentPanelThemesEqual(a: any, b: any): boolean {
         ['colors', 'surface', 'base'],
         ['colors', 'surface', 'elevated'],
         ['colors', 'surfaceElevated'],
+        ['space', 's6'],
+        ['space', 's8'],
+        ['space', 's16'],
     ] as const;
 
     return tokenPaths.every((path) => Object.is(readThemeToken(a, path), readThemeToken(b, path)));
@@ -357,7 +360,7 @@ function FileContentPanelInner({
             : null;
 
         return (
-            <View style={{ marginTop: 6, marginBottom: 8, gap: 6 }}>
+            <View style={{ marginTop: theme.space.s6, marginBottom: theme.space.s8, gap: theme.space.s6 }}>
                 {drafts.length > 0 && !isActive ? (
                     <ReviewCommentSavedDrafts
                         drafts={drafts}
@@ -624,7 +627,7 @@ function FileContentPanelInner({
                             fontSize: 16,
                             color: theme.colors.text.secondary,
                             fontStyle: 'italic',
-                            padding: 16,
+                            padding: theme.space.s16,
                             ...Typography.default(),
                         }}
                     >
@@ -640,7 +643,7 @@ function FileContentPanelInner({
                             fontSize: 16,
                             color: theme.colors.text.secondary,
                             fontStyle: 'italic',
-                            padding: 16,
+                            padding: theme.space.s16,
                             ...Typography.default(),
                         }}
                     >
@@ -653,7 +656,7 @@ function FileContentPanelInner({
                         fontSize: 16,
                         color: theme.colors.text.secondary,
                         fontStyle: 'italic',
-                        padding: 16,
+                        padding: theme.space.s16,
                         ...Typography.default(),
                     }}
                 >

@@ -143,6 +143,6 @@ export function useWorkflowTestRunPresentation(input: Readonly<{ runId: string |
 }
 
 const styles = StyleSheet.create((theme) => ({
-    output: { gap: theme.margins.sm, flex: 1, minWidth: 0 },
+    output: { gap: theme.space.s8, flex: 1, minWidth: 0 },
     detail: { ...Typography.default(), color: theme.colors.text.secondary },
 }));

@@ -297,7 +297,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingTop: theme.space.s8,
     },
     armedNote: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

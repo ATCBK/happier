@@ -185,7 +185,7 @@ export const PermissionPromptCard = React.memo(function PermissionPromptCard(pro
 
 const styles = StyleSheet.create((theme) => ({
     viewButton: {
-        padding: 6,
+        padding: theme.space.s6,
         borderRadius: 8,
         alignItems: 'center',
         justifyContent: 'center',
@@ -196,6 +196,6 @@ const styles = StyleSheet.create((theme) => ({
     headerActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
 }));

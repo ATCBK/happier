@@ -18,7 +18,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: theme.space.s12,
     },
     steps: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     stepList: {

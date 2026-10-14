@@ -37,7 +37,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.elevated,
         padding: 18,
-        gap: 16,
+        gap: theme.space.s16,
     },
     row: {
         flexDirection: 'row',
@@ -56,14 +56,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     header: {
-        gap: 8,
+        gap: theme.space.s8,
         alignItems: 'flex-start',
     },
     title: {
-        ...Typography.default('semiBold'),
         color: theme.colors.text.primary,
-        fontSize: 20,
-        lineHeight: 26,
+        ...Typography.variant('title'),
     },
     body: {
         color: theme.colors.text.secondary,
@@ -71,7 +69,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         lineHeight: 20,
     },
     liveStatus: {
-        gap: 8,
+        gap: theme.space.s8,
         alignItems: 'flex-start',
     },
     detailsToggle: {

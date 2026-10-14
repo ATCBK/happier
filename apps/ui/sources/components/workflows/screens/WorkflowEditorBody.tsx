@@ -171,7 +171,7 @@ const styles = StyleSheet.create((theme) => ({
     pageContent: {
         alignSelf: 'center',
         width: '100%',
-        paddingBottom: theme.margins.xl,
+        paddingBottom: theme.space.s20,
     },
     bodyColumn: {
         alignSelf: 'center',
@@ -180,10 +180,10 @@ const styles = StyleSheet.create((theme) => ({
     headerActionRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
     },
     keyHint: {
-        ...Typography.keyHint(),
+        ...({ ...Typography.variant('micro', 'regular'), ...Typography.mono(), ...Typography.tabular() }),
         color: theme.colors.button.primary.tint,
         opacity: 0.7,
     },
@@ -196,12 +196,12 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         // On the title's edge (lab `editor-E1`): the chips, the title and every step name share one
         // left edge, while the header's mark and the steps' ordinals hang in the gutter beside it.
         paddingLeft: WORKFLOW_PAGE_TITLE_EDGE_PX,
         paddingRight: HAPPIER_PAGE_METRICS.pageTextInsetPx,
-        paddingBottom: theme.margins.md,
+        paddingBottom: theme.space.s12,
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: theme.colors.border.default,
     },
@@ -222,8 +222,8 @@ const styles = StyleSheet.create((theme) => ({
         width: '100%',
         maxWidth: PAGE_COLUMN_MAX_WIDTH_PX.reading,
         paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx,
-        paddingTop: theme.margins.lg,
-        gap: theme.margins.lg,
+        paddingTop: theme.space.s16,
+        gap: theme.space.s16,
     },
     /** Wide: the root list's name column on the title's edge, so its ordinals hang under the mark's gutter. */
     documentUnderTitle: {
@@ -232,15 +232,15 @@ const styles = StyleSheet.create((theme) => ({
     undoRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         flexWrap: 'wrap',
     },
     reason: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     action: {
-        paddingHorizontal: theme.margins.xs,
+        paddingHorizontal: theme.space.s4,
         borderRadius: theme.borderRadius.sm,
         borderWidth: 1,
         borderColor: 'transparent',
@@ -250,15 +250,15 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     phoneViewSwitch: {
-        paddingHorizontal: theme.margins.lg,
-        paddingTop: theme.margins.md,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s12,
     },
     phoneBar: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
-        paddingHorizontal: theme.margins.lg,
-        paddingVertical: theme.margins.sm,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s8,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
         backgroundColor: glassSurfaceBackgroundColor(theme.colors.surface.base, 'content', true),
@@ -272,25 +272,25 @@ const styles = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     flowBody: {
-        padding: theme.margins.md,
+        padding: theme.space.s12,
     },
     /** Settings | Agent, with the open-in-Sessions control beside it while a Session exists. */
     detailsTabs: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
-        paddingHorizontal: theme.margins.md,
-        paddingBottom: theme.margins.sm,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s12,
+        paddingBottom: theme.space.s8,
     },
     /** The seeded composer at the foot of the Agent tab, where the Session's own composer will sit. */
     agentDraft: {
         flex: 1,
         justifyContent: 'flex-end',
-        padding: theme.margins.md,
+        padding: theme.space.s12,
     },
     statusLine: {
-        paddingHorizontal: theme.margins.lg,
-        paddingBottom: theme.margins.sm,
+        paddingHorizontal: theme.space.s16,
+        paddingBottom: theme.space.s8,
         alignItems: 'flex-start',
     },
 }));
@@ -893,7 +893,7 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
                 title: t('workflows.page.inspector.stepOptions'),
                 testID: `${testIDPrefix}-inspector-modal`,
                 bodyScroll: 'auto',
-                dimensions: { width: 520, maxHeightRatio: 0.92, size: 'md' },
+                dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92, size: 'md' },
             },
         });
         stepOptionsModalRef.current = { id, blockId };
@@ -947,7 +947,7 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
                     phonePresentation: 'sheet',
                     material: 'solid',
                     bodyScroll: 'auto',
-                    dimensions: { width: 560, maxHeightRatio: 0.92, size: 'md' },
+                    dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92, size: 'md' },
                 },
             });
             return;
@@ -1256,7 +1256,7 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
     // identity, the settings and the document without a page or panes.
     if (!hasPageCommands) {
         return (
-            <View testID={testIDPrefix} style={{ gap: theme.margins.lg }}>
+            <View testID={testIDPrefix} style={{ gap: theme.space.s16 }}>
                 {props.showNameField === false && props.onBackToRun === undefined ? null : identity}
                 <ItemList scrollEnabled={false}>
                     {!canOpenSettings ? null : <WorkflowInspector {...inspectorProps} />}

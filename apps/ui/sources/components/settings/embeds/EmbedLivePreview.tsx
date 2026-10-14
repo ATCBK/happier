@@ -40,7 +40,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: theme.space.s8,
     },
     caption: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         flex: 1,
         color: theme.colors.text.secondary,
     },
@@ -73,7 +73,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         justifyContent: 'center',
     },
     unavailableText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     footer: {
@@ -82,7 +82,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: theme.space.s8,
     },
     note: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
     },
 }));

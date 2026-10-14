@@ -135,10 +135,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexShrink: 0,
     },
     when: {
-        ...Typography.default(),
         width: WHEN_COLUMN_WIDTH_PX,
-        fontSize: 11,
-        lineHeight: 16,
+        ...Typography.variant('micro'),
         textAlign: 'right',
         color: theme.colors.text.secondary,
         fontVariant: ['tabular-nums'],

@@ -116,7 +116,7 @@ const styles = StyleSheet.create(() => ({
     },
     // The composer's own status line type (row meta), not the 11pt chrome phrase a status fact uses.
     label: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.default('semiBold'),
     },
 }));

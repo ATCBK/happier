@@ -22,7 +22,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     overlay: {
         ...StyleSheet.absoluteFillObject,
-        paddingHorizontal: 20,
+        paddingHorizontal: theme.space.s20,
         paddingTop: 18,
         paddingBottom: 18,
         justifyContent: 'space-between',
@@ -42,7 +42,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     titleBlock: {
         flex: 1,
-        paddingHorizontal: 12,
+        paddingHorizontal: theme.space.s12,
     },
     title: {
         ...Typography.default('semiBold'),
@@ -51,12 +51,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         textAlign: 'center',
     },
     subtitle: {
-        ...Typography.default(),
-        marginTop: 6,
-        fontSize: 13,
+        marginTop: theme.space.s6,
+        ...Typography.variant('body'),
         color: theme.colors.overlay.secondaryForeground,
         textAlign: 'center',
-        lineHeight: 18,
     },
     spacer: {
         width: 40,
@@ -65,7 +63,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     footer: {
         width: '100%',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     footerButton: {
         width: '100%',
@@ -75,7 +73,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        paddingHorizontal: 24,
+        paddingHorizontal: theme.space.s24,
         gap: 14,
     },
     permissionsTitle: {

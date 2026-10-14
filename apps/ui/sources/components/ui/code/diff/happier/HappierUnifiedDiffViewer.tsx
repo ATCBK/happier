@@ -101,7 +101,7 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
         // where the fold toggle sits, and the way back at the row's end.
         if (findOpenedRegion?.afterLineId === line.id) return <View style={{ paddingLeft: 46, paddingRight: 12, paddingVertical: 4, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: openedBandColor }}>
             <Icon name="arrows-down-up" size={ICON_SIZE.xs} color={theme.colors.text.tertiary} />
-            <Text style={{ flex: 1, color: theme.colors.text.tertiary, ...Typography.rowMeta() }} numberOfLines={1}>{t('find.openedForMatch')}</Text>
+            <Text style={{ flex: 1, color: theme.colors.text.tertiary, ...Typography.variant('meta') }} numberOfLines={1}>{t('find.openedForMatch')}</Text>
             <TextLinkButton testID="diff-find-fold-again" label={t('find.foldAgain')}
                 onPress={() => setRefoldedFindLine(props.scrollToLineId ?? null)} />
         </View>;

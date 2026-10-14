@@ -70,8 +70,8 @@ const stylesheet = StyleSheet.create((theme, _runtime) => ({
     container: {
         alignItems: 'center',
         justifyContent: 'center',
-        paddingHorizontal: 20,
-        paddingVertical: 16,
+        paddingHorizontal: theme.space.s20,
+        paddingVertical: theme.space.s16,
         flexGrow: 1,
     },
     containerFullscreen: {
@@ -84,8 +84,8 @@ const stylesheet = StyleSheet.create((theme, _runtime) => ({
     outerScrollContainer: {
         alignItems: 'center',
         justifyContent: 'center',
-        paddingHorizontal: 20,
-        paddingVertical: 16,
+        paddingHorizontal: theme.space.s20,
+        paddingVertical: theme.space.s16,
     },
     outerScrollContainerFullscreen: {
         alignItems: 'stretch',

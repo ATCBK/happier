@@ -220,13 +220,13 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
   },
   author: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.default('semiBold'),
     color: theme.colors.text.primary,
     flexShrink: 0,
   },
   subject: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
   },
   subjectPhone: {
@@ -238,12 +238,12 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.text.tertiary,
   },
   when: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.tabular(),
     color: theme.colors.text.tertiary,
   },
   quiet: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
     flex: 1,
     minWidth: 0,
@@ -257,7 +257,7 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: 7,
   },
   historyLabel: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.default('semiBold'),
     color: theme.colors.text.primary,
   },

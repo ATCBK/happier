@@ -84,9 +84,9 @@ export function SaveMessageAsPrompt(props: SaveProps & Readonly<{ anchorRef: Rea
 const styles = StyleSheet.create((theme) => ({
     form: { padding: theme.space.s16, gap: theme.space.s10 },
     popoverBody: { width: POPOVER_WIDTH, maxWidth: '100%' },
-    heading: { ...Typography.rowTitle(), color: theme.colors.text.primary, marginBottom: theme.space.s2 },
-    hint: { ...Typography.rowMeta(), color: theme.colors.text.secondary, marginTop: -4 },
+    heading: { ...Typography.variant('label', 'semiBold'), color: theme.colors.text.primary, marginBottom: theme.space.s2 },
+    hint: { ...Typography.variant('meta'), color: theme.colors.text.secondary, marginTop: -4 },
     shortcutToggle: { alignSelf: 'flex-start' },
     buttons: { flexDirection: 'row', justifyContent: 'flex-end', gap: theme.space.s8, marginTop: theme.space.s4 },
-    error: { ...Typography.rowMeta(), color: theme.colors.state.danger.foreground },
+    error: { ...Typography.variant('meta'), color: theme.colors.state.danger.foreground },
 }));

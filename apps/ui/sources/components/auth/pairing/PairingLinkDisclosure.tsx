@@ -14,12 +14,12 @@ import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 const stylesheet = StyleSheet.create((theme) => ({
     disclosure: {
         width: '100%',
-        marginTop: 8,
+        marginTop: theme.space.s8,
     },
     header: {
         minHeight: 44,
-        paddingHorizontal: 16,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s10,
         justifyContent: 'center',
         borderRadius: 10,
     },
@@ -30,12 +30,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     headerSubtitle: {
-        marginTop: 2,
+        marginTop: theme.space.s2,
         color: theme.colors.text.secondary,
     },
     body: {
         width: '100%',
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingBottom: 14,
     },
     warning: {
@@ -43,14 +43,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         lineHeight: 18,
     },
     link: {
-        marginTop: 10,
+        marginTop: theme.space.s10,
         color: theme.colors.text.secondary,
         lineHeight: 18,
     },
     actions: {
-        marginTop: 12,
+        marginTop: theme.space.s12,
         alignItems: 'flex-start',
-        gap: 8,
+        gap: theme.space.s8,
     },
 }));
 

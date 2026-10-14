@@ -50,7 +50,7 @@ export const MachineListRowSummary = React.memo(function MachineListRowSummary(p
 
 const stylesheet = StyleSheet.create((theme) => ({
     quiet: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
     },
 }));

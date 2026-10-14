@@ -102,19 +102,12 @@ export function ModalProvider({ active = true, children }: ModalProviderProps) {
 
     const hideModal = useCallback((id: string) => {
         const target = stateRef.current.modals.find(modal => modal.id === id);
-        const shouldDelayRemoval = target?.type === 'custom' && target.visible;
+        // Every dialog kind leaves through the same exit as a custom modal; the host removes it once that has played.
+        const shouldDelayRemoval = target?.visible === true;
 
         setState(prev => {
             const currentTarget = prev.modals.find(modal => modal.id === id);
             if (!currentTarget) return prev;
-            if (currentTarget.type !== 'custom') {
-                const nextState = {
-                    modals: prev.modals.filter(modal => modal.id !== id),
-                };
-                stateRef.current = nextState;
-                return nextState;
-            }
-
             const nextState = {
                 modals: prev.modals.map((modal) => (
                     modal.id === id
@@ -237,7 +230,8 @@ export function ModalProvider({ active = true, children }: ModalProviderProps) {
                     {children}
                     <OverlayPortalHost zIndex={screenOverlayPortalZIndex} />
                     {state.modals.map((modal, index) => {
-                    const showBackdrop = index === topVisibleIndex;
+                    // A topmost modal that is leaving keeps its scrim, which fades with it, instead of dropping it at once.
+                    const showBackdrop = index === topVisibleIndex || (!modal.visible && index === state.modals.length - 1);
                     const modalZIndexBase = zIndexBase + index * zIndexStep;
 
                     if (modal.type === 'alert') {
@@ -250,6 +244,7 @@ export function ModalProvider({ active = true, children }: ModalProviderProps) {
                                     hideModal(modal.id);
                                 }}
                                 showBackdrop={showBackdrop}
+                                visible={modal.visible}
                                 zIndexBase={modalZIndexBase}
                             />
                         );
@@ -269,6 +264,7 @@ export function ModalProvider({ active = true, children }: ModalProviderProps) {
                                     hideModal(modal.id);
                                 }}
                                 showBackdrop={showBackdrop}
+                                visible={modal.visible}
                                 zIndexBase={modalZIndexBase}
                             />
                         );
@@ -288,6 +284,7 @@ export function ModalProvider({ active = true, children }: ModalProviderProps) {
                                     hideModal(modal.id);
                                 }}
                                 showBackdrop={showBackdrop}
+                                visible={modal.visible}
                                 zIndexBase={modalZIndexBase}
                             />
                         );

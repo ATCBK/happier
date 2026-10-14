@@ -65,29 +65,29 @@ const styles = StyleSheet.create((theme) => ({
     // The map owns where a state sits: trailing on a full-width card, under the name in a narrow lane
     // (lab `run-A` lane cards), so these never push themselves to an edge.
     meta: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
     },
     metaTabular: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.tabular(),
         color: theme.colors.text.tertiary,
     },
     statusRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         // A sentence-long state wraps inside the card's status slot rather than overflowing it.
         flexShrink: 1,
         minWidth: 0,
     },
     loopProgress: {
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
         minWidth: 0,
     },
     occurrenceList: {
-        gap: theme.margins.xs,
-        marginLeft: theme.margins.lg,
+        gap: theme.space.s4,
+        marginLeft: theme.space.s16,
     },
     // An item reads as a compact map row: its name leading, its state's mark on the trailing edge in
     // the same status presenter (and tone) the map's cards use, so a held item is amber like its card.
@@ -97,12 +97,12 @@ const styles = StyleSheet.create((theme) => ({
         minHeight: MINIMUM_TARGET_SIZE,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
-        paddingHorizontal: theme.margins.sm,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s8,
         borderRadius: theme.borderRadius.md,
     },
     occurrenceLabel: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         flexShrink: 1,
         minWidth: 0,
@@ -112,7 +112,7 @@ const styles = StyleSheet.create((theme) => ({
         flexShrink: 0,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
     },
     occurrenceSelected: {
         backgroundColor: theme.colors.surface.selected,
@@ -131,25 +131,25 @@ const styles = StyleSheet.create((theme) => ({
     },
     /** The node's one quiet line: what it returns, or that it is the final output. */
     subtitle: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     leadingRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     /** The step's ordinal numbers the block as the editor does, set before its mark. */
     ordinal: {
-        minWidth: theme.margins.lg,
-        paddingHorizontal: theme.margins.xs,
+        minWidth: theme.space.s16,
+        paddingHorizontal: theme.space.s4,
         borderRadius: theme.borderRadius.md,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,
         alignItems: 'center',
     },
     ordinalText: {
-        ...Typography.pillLabel(),
+        ...Typography.variant('micro', 'semiBold'),
         ...Typography.tabular(),
         color: theme.colors.text.secondary,
     },

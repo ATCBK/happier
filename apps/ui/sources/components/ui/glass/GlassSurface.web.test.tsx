@@ -106,7 +106,7 @@ describe('web glass material', () => {
         const screen = await renderScreen(scene('wallpaper'));
         expect(screen.findAll(hasBackdrop)).toHaveLength(1);
         const cardPaint = screen.findAll(hasBackdrop)[0]!;
-        expect(flattenTestStyle(cardPaint.props.style).backgroundColor).toContain('--happier-glass-card-background-color');
+        expect(flattenTestStyle(cardPaint.props.style).backgroundColor).toContain('color-mix(in srgb,');
         expect(screen.findAll(node => typeof node.type === 'string' && typeof flattenTestStyle(node.props.style)?.backgroundImage === 'string')).toHaveLength(1);
         await act(async () => { screen.changeTextByTestId('draft', 'keep the web card draft'); });
         await screen.update(scene('none'));
@@ -128,8 +128,8 @@ describe('web glass material', () => {
                 </GlassSurface>
             </GlassRuntimeEnvironmentProvider>
         </GlassMaterialSettingsProvider>;
-        const cardBackdrops = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.findAll(node => hasBackdrop(node)
-            && String(flattenTestStyle(node.props.style).backgroundColor).includes('--happier-glass-card-background-color'));
+        const cardBackdrops = (screen: Awaited<ReturnType<typeof renderScreen>>) => ['sidebar-group', 'home-card']
+            .flatMap(testID => screen.findHostByTestId(testID)!.findAll(hasBackdrop));
         const screen = await renderScreen(scene('band'));
         // The Home card has the band behind it; the sidebar group sits on the sidebar plane, which the band never reaches.
         expect(cardBackdrops(screen)).toHaveLength(1);
@@ -185,7 +185,12 @@ describe('web glass material', () => {
                 const style = flattenTestStyle(screen.findAll(hasBackdrop)[0]!.props.style) as Record<string, string>;
                 const coat = /color-mix\(in srgb, (rgba?\([^)]*\)|#[0-9a-f]+) /i.exec(style.backgroundColor!)?.[1];
                 expect(coat).toBeTruthy();
-                const { opacity } = resolveGlassSurfaceMaterial(settings, group, { atmosphereBehind }).material;
+                // Feasibility can raise the rendered coat above its stored alpha. Read the actual
+                // paint at the browser boundary rather than evaluating a coat the renderer never uses.
+                const paintedPercent = /color-mix\(in srgb, (?:rgba?\([^)]*\)|#[0-9a-f]+) ([\d.]+)%/i.exec(style.backgroundColor!)?.[1];
+                const opacity = paintedPercent === undefined
+                    ? resolveGlassSurfaceMaterial(settings, group, { atmosphereBehind }).material.opacity
+                    : Number(paintedPercent) / 100;
                 const rgb = (value: string) => Color(value).rgb().array().slice(0, 3) as unknown as [number, number, number];
                 const over = (backdrop: [number, number, number]) => renderGlassOver({ filter: style.backdropFilter!, coat: rgb(coat!), opacity, backdrop });
                 over(rgb(theme.colors.surface.base)).forEach((value, channel) => expect(Math.abs(value - rgb(solid)[channel]!)).toBeLessThanOrEqual(1));
@@ -470,7 +475,7 @@ describe('web glass material', () => {
         for (const paint of paints) expect(flattenTestStyle(paint.props.style)?.backgroundColor).toContain('var(--happier-glass-floating-background-color');
         expect(screen.findHostByTestId('dock')?.findAll(node => node.props.children === 'Cancel')).not.toHaveLength(0);
     });
-    it('keeps the independent selection rail glassy using its authored inverse fill and its own floating finish', async () => {
+    it('keeps the independent selection rail on its authored inverse fill with one floating finish', async () => {
         const { SelectionActionBar } = await import('@/components/ui/selection/SelectionActionBar');
         const { GlassRuntimeEnvironmentProvider } = await import('./glassRuntimeEnvironment');
         const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
@@ -484,7 +489,7 @@ describe('web glass material', () => {
         const paints = screen.findAll(node => typeof node.type === 'string' && typeof flattenTestStyle(node.props.style)?.backgroundImage === 'string');
         expect(paints).toHaveLength(1);
         const background = String(flattenTestStyle(paints[0]!.props.style)?.backgroundColor);
-        expect(background).toContain('var(--happier-glass-floating-background-color');
+        expect(background).toContain('color-mix(in srgb,');
         expect(background).toContain(lightTheme.colors.button.primary.background);
     });
     it('gives the browser marking tray one floating coat and retains an edited comment through material tier changes', async () => {

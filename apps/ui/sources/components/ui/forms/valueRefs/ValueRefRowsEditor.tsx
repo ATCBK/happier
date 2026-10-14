@@ -94,7 +94,13 @@ export const ValueRefRowsEditor = React.memo(function ValueRefRowsEditor(
     onChangeEntries: (next: Record<string, ValueRefV1>) => void;
     secrets: SavedSecret[];
     scope?: AccountSettingsScope | null;
-    addLabel: string;
+    /** The add-a-row button's label; absent when `declaredNames` fixes the rows. */
+    addLabel?: string;
+    /**
+     * The names are declared elsewhere (a registry server's inputs, a pasted config's keys): they read as fixed text,
+     * rows can't be removed or renamed, and no row is added. Only the values and their types are edited.
+     */
+    declaredNames?: boolean;
     /** Test ids: `<prefix>.row.<i>.{name,value,type,more}` and `<prefix>.add`. */
     testIdPrefix: string;
     /** Names whose value is missing (the banner's "Add key" lands here): drawn as the attention field. */
@@ -135,11 +141,12 @@ export const ValueRefRowsEditor = React.memo(function ValueRefRowsEditor(
         props: {
           kind: props.kind,
           initialKey: key ?? '',
+          lockKey: props.declaredNames === true,
           initialValueRef: valueRef,
           secrets: props.secrets,
           ...(props.scope === undefined ? {} : { scope: props.scope }),
           onDelete:
-            key === null
+            key === null || props.declaredNames === true
               ? null
               : () => {
                   editor.removeEntry(key);
@@ -165,6 +172,7 @@ export const ValueRefRowsEditor = React.memo(function ValueRefRowsEditor(
     [
       editor.removeEntry,
       editor.submitEntry,
+      props.declaredNames,
       props.kind,
       props.scope,
       props.secrets,
@@ -204,6 +212,7 @@ export const ValueRefRowsEditor = React.memo(function ValueRefRowsEditor(
                 : null
             }
             scope={props.scope}
+            declaredName={props.declaredNames === true}
             onSubmit={(key, valueRef) =>
               editor.submitEntry(row.key, key, valueRef)
             }
@@ -263,6 +272,7 @@ export const ValueRefRowsEditor = React.memo(function ValueRefRowsEditor(
           }}
         />
       ) : null}
+      {props.declaredNames === true || props.addLabel === undefined ? null : (
       <View style={styles.addRow}>
         <RoundButton
           testID={`${props.testIdPrefix}.add`}
@@ -279,6 +289,7 @@ export const ValueRefRowsEditor = React.memo(function ValueRefRowsEditor(
           }
         />
       </View>
+      )}
     </View>
   );
 });
@@ -298,6 +309,8 @@ const ValueRefInlineRow = React.memo(function ValueRefInlineRow(
     secretName: string | null;
     scope?: AccountSettingsScope | null;
     autoFocus?: boolean;
+    /** The name is fixed text: no rename, no remove. */
+    declaredName?: boolean;
     onSubmit: (key: string, valueRef: ValueRefV1) => SubmitResult;
     onRemove: () => void;
     onEditInModal: () => void;
@@ -465,13 +478,17 @@ const ValueRefInlineRow = React.memo(function ValueRefInlineRow(
   const moreItems = React.useMemo(
     (): DropdownMenuItem[] => [
       { id: 'edit', title: t('capabilities.valueRows.edit') },
-      {
-        id: 'remove',
-        title: t('capabilities.valueRows.remove'),
-        destructive: true,
-      },
+      ...(props.declaredName === true
+        ? []
+        : [
+            {
+              id: 'remove',
+              title: t('capabilities.valueRows.remove'),
+              destructive: true,
+            },
+          ]),
     ],
-    [],
+    [props.declaredName],
   );
 
   const fieldColors = resolveFieldBoxColors(theme);
@@ -498,6 +515,7 @@ const ValueRefInlineRow = React.memo(function ValueRefInlineRow(
           autoCapitalize={props.kind === 'env' ? 'characters' : 'none'}
           autoFocus={props.autoFocus}
           invalid={Boolean(error)}
+          editable={props.declaredName !== true}
           monospace
           style={styles.name}
         />

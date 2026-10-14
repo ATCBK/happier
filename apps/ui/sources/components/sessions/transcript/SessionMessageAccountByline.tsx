@@ -67,7 +67,7 @@ const styles = StyleSheet.create((theme) => ({
         gap: theme.space.s6,
     },
     name: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         flexShrink: 1,
         color: theme.colors.text.secondary,
     },

@@ -47,7 +47,7 @@ import { workflowEditorStyles } from './workflowEditorStyles';
 
 const styles = StyleSheet.create((theme) => ({
     root: {
-        gap: theme.margins.md,
+        gap: theme.space.s12,
     },
     scopeLabel: {
         ...Typography.default('semiBold'),
@@ -61,9 +61,9 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        columnGap: theme.margins.sm,
+        columnGap: theme.space.s8,
         rowGap: 0,
-        paddingVertical: theme.margins.xs,
+        paddingVertical: theme.space.s4,
     },
     fieldName: {
         ...Typography.default('regular'),
@@ -85,7 +85,7 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.button.secondary.tint,
     },
     control: {
-        paddingBottom: theme.margins.sm,
+        paddingBottom: theme.space.s8,
     },
 }));
 

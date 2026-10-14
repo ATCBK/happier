@@ -843,7 +843,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.text.secondary,
   },
   topicField: {
-    marginTop: 8,
+    marginTop: theme.space.s8,
   },
   arrival: {
     position: 'absolute',

@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import { type ViewStyle } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
@@ -104,9 +105,8 @@ export const styles = StyleSheet.create({
         zIndex: 1,
     },
     title: {
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
         lineHeight: 17,
-        fontWeight: '600',
     },
     subtitle: {
         fontSize: 12,
@@ -125,8 +125,7 @@ export const styles = StyleSheet.create({
         zIndex: 2,
     },
     replyActionText: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
     },
     replyRow: {
         flexDirection: 'row',

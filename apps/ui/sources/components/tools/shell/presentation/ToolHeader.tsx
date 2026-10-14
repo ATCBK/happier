@@ -45,7 +45,7 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         flexGrow: 1,
         flexBasis: 0,
-        paddingHorizontal: 4,
+        paddingHorizontal: theme.space.s4,
     },
     titleContainer: {
         flexDirection: 'column',
@@ -56,11 +56,10 @@ const styles = StyleSheet.create((theme) => ({
     titleRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     title: {
-        fontSize: 13,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
         textAlign: 'center',
     },
@@ -68,6 +67,6 @@ const styles = StyleSheet.create((theme) => ({
         fontSize: 12,
         color: theme.colors.text.secondary,
         textAlign: 'center',
-        marginTop: 2,
+        marginTop: theme.space.s2,
     },
 }));

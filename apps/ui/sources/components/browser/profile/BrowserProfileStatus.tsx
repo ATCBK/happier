@@ -22,7 +22,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         minHeight: 34,
         minWidth: 0,
         maxWidth: BROWSER_CHROME_WIDTH.panel,
@@ -30,7 +30,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.inset,
-        paddingHorizontal: 10,
+        paddingHorizontal: theme.space.s10,
     },
     segment: {
         minWidth: 0,
@@ -45,7 +45,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         minWidth: 0,
     },
     separator: {

@@ -184,7 +184,7 @@ export function HomeHubSpecimen(props: Readonly<{ machines: boolean; firstRun?: 
                 alwaysShowTitle
                 details={<HubStatusLineView working={2} needsYou={1} home={renderHomeLine} />}
                 actions={(
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
                         {props.brief || phone ? null : <VoiceBriefButtonView onOpen={NEVER_OPENS} />}
                         <HubCustomizeButton open={false} onOpenChange={NEVER_OPENS} />
                     </View>
@@ -235,7 +235,7 @@ export function HomeHubSpecimen(props: Readonly<{ machines: boolean; firstRun?: 
                                         mark={section.widget.icon}
                                         title={section.widget.title}
                                         source={section.widget.pluginName}
-                                        meta={<Text style={{ ...Typography.default('semiBold'), fontSize: 12, color: theme.colors.text.link }}>4 new</Text>}
+                                        meta={<Text style={{  ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.link }}>4 new</Text>}
                                         body={{ kind: 'content', children: <LabRows rows={[
                                             ['git-pull-request', '#2493 Retry relay handshake on 503', 'Review requested · 12m'],
                                             ['git-pull-request', '#2491 Settings search ranking', 'Your PR · checks passed'],

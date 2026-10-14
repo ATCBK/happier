@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -120,17 +121,16 @@ export const HandoffTargetConsequencesCard = React.memo(function HandoffTargetCo
 const styles = StyleSheet.create((theme) => ({
     // Sheet content of the approval page section titled "What happens at the destination".
     card: {
-        gap: 12,
+        gap: theme.space.s12,
     },
     rows: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     endpoint: {
-        gap: 6,
+        gap: theme.space.s6,
     },
     endpointLabel: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     value: {

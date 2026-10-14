@@ -38,9 +38,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     // Session-tabs lab H1: sub-views are a 32 px segmented row directly under the pane header, on the
     // pane's own surface — not a second inset band that reads as another header.
     container: {
-        paddingHorizontal: 12,
-        paddingTop: 4,
-        paddingBottom: 8,
+        paddingHorizontal: theme.space.s12,
+        paddingTop: theme.space.s4,
+        paddingBottom: theme.space.s8,
         backgroundColor: theme.colors.surface.base,
     },
 }));

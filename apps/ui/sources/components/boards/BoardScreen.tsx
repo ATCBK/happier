@@ -425,31 +425,31 @@ const styles = StyleSheet.create((theme) => ({
     actions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     failure: {
-        paddingHorizontal: 24,
-        paddingBottom: 8,
+        paddingHorizontal: theme.space.s24,
+        paddingBottom: theme.space.s8,
     },
     line: {
-        paddingHorizontal: 24,
-        paddingBottom: 8,
+        paddingHorizontal: theme.space.s24,
+        paddingBottom: theme.space.s8,
     },
     sourceLine: {
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 6,
+        gap: theme.space.s6,
     },
     sourceChip: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
         minWidth: 0,
         flexShrink: 1,
     },
     meta: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

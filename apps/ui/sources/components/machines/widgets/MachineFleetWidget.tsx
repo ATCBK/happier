@@ -527,7 +527,7 @@ const FleetMachineCard = React.memo(function FleetMachineCard(
 
 const styles = StyleSheet.create((theme) => ({
   word: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.default('semiBold'),
   },
   // The block reads under the name: its left edge is the rows' title column.
@@ -537,7 +537,7 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.space.s2,
   },
   doing: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
   },
   needAction: {
@@ -545,11 +545,11 @@ const styles = StyleSheet.create((theme) => ({
     marginTop: theme.space.s6,
   },
   rest: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
   },
   label: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.default('semiBold'),
     color: theme.colors.text.secondary,
     marginTop: theme.space.s4,
@@ -567,7 +567,7 @@ const styles = StyleSheet.create((theme) => ({
     bottom: 12,
   },
   cardQuiet: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
     paddingHorizontal: theme.space.s16,
   },

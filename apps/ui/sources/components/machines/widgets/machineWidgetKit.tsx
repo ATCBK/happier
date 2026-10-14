@@ -334,7 +334,7 @@ export function MachineWidgetTwoColumns(
 
 const styles = StyleSheet.create((theme) => ({
   meta: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
   },
   offlineMeta: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, flexShrink: 1, minWidth: 0 },
@@ -387,13 +387,13 @@ const sectionLabelStyles = StyleSheet.create((theme) => ({
         gap: theme.space.s12,
     },
     label: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.default('medium'),
         color: theme.colors.text.secondary,
         flexShrink: 1,
     },
     meta: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
         flexShrink: 0,
     },

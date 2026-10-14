@@ -140,7 +140,7 @@ export default React.memo(function SecretPickerScreen() {
             <Pressable
                 onPress={handleBackPress}
                 hitSlop={10}
-                style={({ pressed }) => ({ marginLeft: 10, padding: 4, opacity: pressed ? motionTokens.press.opacity : 1 })}
+                style={({ pressed }) => ({ marginLeft: theme.space.s10, padding: theme.space.s4, opacity: pressed ? motionTokens.press.opacity : 1 })}
                 accessibilityRole="button"
                 accessibilityLabel={t('common.back')}
             >

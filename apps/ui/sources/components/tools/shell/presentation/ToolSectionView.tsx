@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -60,11 +61,10 @@ const styles = StyleSheet.create((theme) => ({
         // No negative margins needed since we're moving the whole section
     },
     sectionTitle: {
-        fontSize: 13,
-        fontWeight: '600',
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
-        marginBottom: 6,
-        marginHorizontal: 12, // Add padding back for title when full width
+        marginBottom: theme.space.s6,
+        marginHorizontal: theme.space.s12, // Add padding back for title when full width
         textTransform: 'uppercase',
     },
 }));

@@ -87,8 +87,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     // Card chrome owns the edge inset; consumers arrange actions, not the card's padding.
     footer: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
     },
     bodyScrollView: {
         flexGrow: 1,
@@ -98,6 +98,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     bodyScrollContent: {
         flexGrow: 1,
         minHeight: 0,
+    },
+    bodyBounded: {
+        flexGrow: 1,
+        flexShrink: 1,
+        minHeight: 0,
+        overflow: 'hidden',
     },
     bodyUnscrolled: {
         flexGrow: 0,
@@ -196,8 +202,12 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                     {/* One body parent: chrome and scroll changes must not retire pending input custody. */}
                     <ScrollView
                         testID={bodyScroll === 'auto' ? 'modal-card-body-scroll' : undefined}
-                        style={bodyScroll === 'auto' ? styles.bodyScrollView : styles.bodyUnscrolled}
-                        contentContainerStyle={bodyScroll === 'auto' ? styles.bodyScrollContent : undefined}
+                        style={bodyScroll === 'auto' ? styles.bodyScrollView
+                            // A fixed-height card whose content owns its scrolling (a catalog list beside its
+                            // details): the body takes the card's height and never grows past it.
+                            : framed && (scrollHost === 'body' || fullscreen) ? styles.bodyBounded : styles.bodyUnscrolled}
+                        contentContainerStyle={bodyScroll === 'auto' ? styles.bodyScrollContent
+                            : framed && (scrollHost === 'body' || fullscreen) ? styles.bodyBounded : undefined}
                         scrollEnabled={bodyScroll === 'auto'}
                         keyboardShouldPersistTaps="handled"
                         nestedScrollEnabled={bodyScroll === 'auto'}
@@ -210,7 +220,8 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
 
                 {framed && props.footer != null ? (
                     <View testID="modal-card-footer" style={[styles.footer, props.footerStyle]}>
-                        <RoundButtonSizeScope size="small">{props.footer}</RoundButtonSizeScope>
+                        {/* Dialog actions are the `normal` tier: the same `label` words a WebAlert action uses. */}
+                        <RoundButtonSizeScope size="normal">{props.footer}</RoundButtonSizeScope>
                     </View>
                 ) : null}
                 {framed && !fullscreen ? <SurfaceRim role="floating" radius={theme.borderRadius.modalCard} border="modal" /> : null}

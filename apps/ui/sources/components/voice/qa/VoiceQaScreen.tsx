@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import * as React from 'react';
@@ -860,8 +861,7 @@ const styles = StyleSheet.create(() => ({
     gap: 6,
   },
   fieldLabel: {
-    fontSize: 13,
-    fontWeight: '600',
+    ...Typography.variant('body', 'semiBold'),
   },
   input: {
     borderWidth: 1,
@@ -889,8 +889,7 @@ const styles = StyleSheet.create(() => ({
     gap: 6,
   },
   entryKind: {
-    fontSize: 12,
-    fontWeight: '700',
+    ...Typography.variant('meta', 'semiBold'),
     textTransform: 'uppercase',
   },
   entryText: {

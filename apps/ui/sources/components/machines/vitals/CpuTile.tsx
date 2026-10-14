@@ -304,7 +304,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingRight: theme.space.s8,
   },
   disclosureLabel: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.default('medium'),
     color: theme.colors.text.primary,
   },
@@ -314,7 +314,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingBottom: theme.space.s2,
   },
   fact: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.tabular(),
     color: theme.colors.text.tertiary,
   },

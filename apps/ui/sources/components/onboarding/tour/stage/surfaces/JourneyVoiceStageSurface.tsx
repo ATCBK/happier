@@ -98,7 +98,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flex: 1,
         minHeight: 0,
         minWidth: 0,
-        padding: 24,
+        padding: theme.space.s24,
     },
     panel: {
         flex: 1,

@@ -324,7 +324,7 @@ export function LocalNeuralTtsSettings(props: {
           title: v.title,
           subtitle: v.subtitle,
           rightElement: usesDaemonExecution ? undefined : (
-            <View style={{ paddingRight: 4 }}>
+            <View style={{ paddingRight: theme.space.s4 }}>
               <IconButton
                 accessibilityLabel={t('settingsVoice.realtimeProviders.catalog.preview', { voice: v.title })}
                 variant="plain"

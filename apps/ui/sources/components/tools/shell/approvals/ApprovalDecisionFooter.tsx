@@ -53,13 +53,13 @@ export const ApprovalDecisionFooter = React.memo(function ApprovalDecisionFooter
 
 const styles = StyleSheet.create((theme) => ({
     disabledNotice: {
-        marginTop: 4,
+        marginTop: theme.space.s4,
         borderRadius: 10,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
-        padding: 12,
-        gap: 6,
+        padding: theme.space.s12,
+        gap: theme.space.s6,
     },
     disabledTitle: {
         color: theme.colors.text.primary,

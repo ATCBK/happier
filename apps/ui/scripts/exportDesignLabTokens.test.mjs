@@ -9,7 +9,7 @@ test('current web tokens produce usable opt-in light/dark CSS and real font face
   const { warnings } = await transform(css, { loader: 'css' });
   assert.deepEqual(warnings, []);
   const [light, dark] = css.split('[data-theme="dark"]');
-  assert.match(light, /--product-margins-sm: [\d.]+px;/);
+  assert.match(light, /--product-space-s8: [\d.]+px;/);
   for (const role of [
     'display',
     'title',
@@ -46,7 +46,7 @@ test('current web tokens produce usable opt-in light/dark CSS and real font face
       new RegExp(`--product-page-column-${column}: [\\d.]+px;`),
     );
   assert.match(light, /--product-border-radius-md: [\d.]+px;/);
-  assert.match(light, /--product-typography-row-title-font-size: [\d.]+px;/);
+  assert.match(light, /--product-type-label-size: [\d.]+px;/);
   assert.match(
     light,
     /--product-colors-shadow-levels-1-shadow-opacity: [\d.]+;/,

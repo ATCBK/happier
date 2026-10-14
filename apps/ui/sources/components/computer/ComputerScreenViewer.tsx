@@ -19,6 +19,7 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateSize';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { resolveComputerRecovery } from '@/sync/domains/computer/targets';
 import { Text } from '@/components/ui/text/Text';
@@ -42,10 +43,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     bar: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
         minHeight: 44,
         paddingLeft: 14,
-        paddingRight: 6,
+        paddingRight: theme.space.s6,
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: theme.colors.border.subtle,
     },
@@ -55,15 +56,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         // One line, like the lab: the window, then where it is (lab `computer` LV viewer bar).
         flexDirection: 'row',
         alignItems: 'baseline',
-        gap: 8,
+        gap: theme.space.s8,
     },
     barTitle: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         flexShrink: 1,
         color: theme.colors.text.primary,
     },
     barMeta: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         flexShrink: 2,
         color: theme.colors.text.secondary,
     },
@@ -258,13 +259,14 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
         : recovery?.cause === 'source_lost' ? t('computerUse.viewer.endedBody', { agent: agentName })
         : recoveryTitle;
     const recoveryPermission = recovery?.permission;
+    const checkAgain = (onPress: () => void) => ({ label: t('computerUse.permission.checkAgain'), onPress, busy: props.checking, disabled: props.checking });
     const recoveryAction = needsDriverRepair
         ? props.onRepairDriver ? { label: t('computerUse.viewer.repairDriver'), onPress: props.onRepairDriver, busy: props.repairingDriver, disabled: props.repairingDriver } : undefined
         : recovery?.action === 'choose_source' ? { label: t('computerUse.request.choose'), onPress: props.onChooseWindow }
         : recovery?.action === 'open_settings' ? props.onOpenSettings && recoveryPermission
             ? { label: t('computerUse.permission.openPrivacy', { machine }), onPress: () => props.onOpenSettings?.(recoveryPermission) } : undefined
         : recovery?.action === 'capture' || recovery?.action === 'refresh' || recovery?.action === 'reconnect'
-            ? { label: t('computerUse.permission.checkAgain'), onPress: recovery.action === 'capture' ? props.onCheckAgain : props.onRefresh ?? props.onCheckAgain, busy: props.checking, disabled: props.checking }
+            ? checkAgain(recovery.action === 'capture' ? props.onCheckAgain : props.onRefresh ?? props.onCheckAgain)
             : undefined;
     const inputOpen = surfaceState === 'live' && !hasRecovery
         && props.presence.kind !== 'unconfirmed' && props.presence.kind !== 'stopping';
@@ -298,8 +300,19 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                     : recovery?.action === null || recovery?.cause === 'offline' ? 'unavailable' : 'error'}
                 title={recoveryTitle}
                 reason={recoveryTitle !== recoveryReason ? recoveryReason : undefined}
-                diagnosticCode={failure}
+                // A machine that isn't answering is not a fault: its title says it and the code adds nothing to look up.
+                diagnosticCode={recovery?.cause === 'offline' ? undefined : failure}
                 action={recoveryAction}
+            />
+        </View>
+    ) : props.machineOnline === false && !pictureUp ? (
+        // Watching is passive: it never wakes the machine, so the way back is the machine's own.
+        <View style={stylesheet.centered} testID={`${testID}-offline`}>
+            <SurfaceStateCard
+                kind="unavailable"
+                title={t('computerUse.viewer.offlineTitle', { machine })}
+                reason={t('computerUse.viewer.offlineBody')}
+                action={checkAgain(props.onRefresh ?? props.onCheckAgain)}
             />
         </View>
     ) : !props.shared ? (
@@ -310,16 +323,6 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                 title={t('computerUse.viewer.notSharedTitle')}
                 reason={t('computerUse.viewer.notSharedBody', { agent: agentName })}
                 action={{ label: t('computerUse.request.choose'), onPress: props.onChooseWindow }}
-            />
-        </View>
-    ) : props.machineOnline === false && !pictureUp ? (
-        // Watching is passive: it never wakes the machine, so the way back is the machine's own.
-        <View style={stylesheet.centered} testID={`${testID}-offline`}>
-            <SurfaceStateCard
-                kind="unavailable"
-                iconName="moon"
-                title={t('computerUse.viewer.offlineTitle', { machine })}
-                reason={t('computerUse.viewer.offlineBody')}
             />
         </View>
     ) : surfaceState === 'connecting' || (props.stream?.connecting && surfaceState === 'unavailable') ? (
@@ -426,7 +429,8 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                     busy={needsDriverRepair ? props.repairingDriver : props.checking} tone="warning" action={recoveryAction} />
             ) : null}
             <View style={stylesheet.stage} onLayout={onLayout}>
-                {stage}
+                {/* The viewer's frame is a small floating window: its states take the pane step, not the unsized page-width column. */}
+                {props.chrome === 'none' ? <SurfaceStateSizeProvider size="pane">{stage}</SurfaceStateSizeProvider> : stage}
                 {pictureUp && props.presence.kind === 'agent' ? (
                     <BrowserAgentCursor
                         target={props.presence.target}

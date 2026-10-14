@@ -17,7 +17,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         minHeight: 20,
     },
     dot: {

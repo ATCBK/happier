@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -313,8 +314,8 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
     },
     headerTitle: {
         color: theme.colors.text.primary,
@@ -322,34 +323,33 @@ const styles = StyleSheet.create((theme) => ({
         fontWeight: '600',
     },
     closeButton: {
-        padding: 8,
+        padding: theme.space.s8,
     },
     bodyScroll: {
         flex: 1,
     },
     body: {
-        gap: 24,
-        padding: 16,
+        gap: theme.space.s24,
+        padding: theme.space.s16,
     },
     variantBlock: {
-        gap: 12,
+        gap: theme.space.s12,
     },
     variantTitle: {
         color: theme.colors.text.primary,
-        fontSize: 14,
-        fontWeight: '600',
+        ...Typography.variant('label', 'semiBold'),
     },
     controlsRow: {
         flexDirection: 'row',
-        gap: 8,
+        gap: theme.space.s8,
         flexWrap: 'wrap',
     },
     toggleRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
+        gap: theme.space.s6,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s6,
         backgroundColor: theme.colors.surface.elevated,
         borderRadius: 999,
     },
@@ -359,8 +359,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     toggleValue: {
         color: theme.colors.text.primary,
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
     },
     frame: {
         height: 260,
@@ -370,8 +369,8 @@ const styles = StyleSheet.create((theme) => ({
     },
     panel: {
         flex: 1,
-        gap: 8,
-        padding: 16,
+        gap: theme.space.s8,
+        padding: theme.space.s16,
         backgroundColor: theme.colors.surface.base,
     },
     panelTitle: {
@@ -386,13 +385,12 @@ const styles = StyleSheet.create((theme) => ({
     },
     button: {
         paddingHorizontal: 14,
-        paddingVertical: 8,
+        paddingVertical: theme.space.s8,
         backgroundColor: theme.colors.button.primary.background,
         borderRadius: 8,
     },
     buttonText: {
         color: theme.colors.button.primary.tint,
-        fontSize: 13,
-        fontWeight: '600',
+        ...Typography.variant('body', 'semiBold'),
     },
 }));

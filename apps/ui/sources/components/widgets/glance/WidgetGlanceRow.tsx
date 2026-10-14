@@ -96,10 +96,10 @@ export const WidgetGlanceRow = React.memo(function WidgetGlanceRow(
 
 const styles = StyleSheet.create(() => ({
   title: {
-    ...Typography.rowTitle(),
+    ...Typography.variant('label', 'semiBold'),
   },
   meta: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
   },
   mono: {
     ...Typography.mono(),

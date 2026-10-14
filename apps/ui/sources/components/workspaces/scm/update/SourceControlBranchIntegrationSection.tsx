@@ -232,7 +232,7 @@ function BranchOperationBanner(props: Readonly<{
                 gap: 8,
             }}
         >
-            <Text style={{ fontSize: 12, color: props.theme.colors.text.primary, ...Typography.default('semiBold') }}>
+            <Text style={{ ...Typography.variant('meta', 'semiBold'), color: props.theme.colors.text.primary,  }}>
                 {t('files.sourceControlOperations.update.branchIntegration.operationInProgress', {
                     operation: props.operationState.kind,
                     source: props.operationState.sourceRef ?? t('status.unknown'),

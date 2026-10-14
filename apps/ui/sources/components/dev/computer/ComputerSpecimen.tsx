@@ -332,7 +332,7 @@ export function ComputerSpecimen(props: Readonly<{ only: string | null; phone: b
 }
 
 const styles = StyleSheet.create((theme) => ({
-    root: { flex: 1, padding: 16, backgroundColor: theme.colors.surface.inset },
+    root: { flex: 1, padding: theme.space.s16, backgroundColor: theme.colors.surface.inset },
     frame: {
         // The lab's Details body is 600 wide inside its hairlines; the frame's border sits outside it.
         width: 602,
@@ -348,14 +348,14 @@ const styles = StyleSheet.create((theme) => ({
         overflow: 'hidden',
         backgroundColor: theme.colors.surface.base,
     },
-    cards: { padding: 16, gap: 16 },
-    watch: { alignSelf: 'flex-start', padding: 24, backgroundColor: theme.colors.surface.base },
+    cards: { padding: theme.space.s16, gap: theme.space.s16 },
+    watch: { alignSelf: 'flex-start', padding: theme.space.s24, backgroundColor: theme.colors.surface.base },
     chat: { flex: 1 },
-    stripFrame: { padding: 12 },
+    stripFrame: { padding: theme.space.s12 },
     grow: { flex: 1 },
     composer: {
         height: 96,
-        margin: 12,
+        margin: theme.space.s12,
         borderRadius: 18,
         backgroundColor: theme.colors.surface.elevated,
         borderWidth: StyleSheet.hairlineWidth,

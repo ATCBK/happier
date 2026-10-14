@@ -359,7 +359,7 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.space.s8,
   },
   quiet: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
   },
   actions: {

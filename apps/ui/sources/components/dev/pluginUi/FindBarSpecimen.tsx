@@ -239,18 +239,17 @@ const styles = StyleSheet.create((theme) => ({
         flexBasis: 420,
         minWidth: 0,
         maxWidth: 680,
-        gap: 4,
+        gap: theme.space.s4,
     },
     cellTitle: {
-        fontSize: 13,
-        fontWeight: '600',
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
     },
     cellDescription: {
         fontSize: 12.5,
         lineHeight: 17,
         color: theme.colors.text.secondary,
-        marginBottom: 6,
+        marginBottom: theme.space.s6,
     },
     panel: {
         position: 'relative',
@@ -263,7 +262,7 @@ const styles = StyleSheet.create((theme) => ({
     sampleBody: {
         paddingTop: 62,
         paddingHorizontal: 18,
-        gap: 10,
+        gap: theme.space.s10,
     },
     line: {
         fontSize: 14,

@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import {
     Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
@@ -142,7 +143,6 @@ const styles = StyleSheet.create({
         paddingHorizontal: 0,
     },
     countText: {
-        fontSize: 11,
-        fontWeight: '700',
+        ...Typography.variant('micro', 'semiBold'),
     },
 });

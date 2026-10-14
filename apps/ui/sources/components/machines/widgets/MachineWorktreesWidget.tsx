@@ -345,7 +345,7 @@ const styles = StyleSheet.create((theme) => ({
     flexWrap: 'wrap',
   },
   caption: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
   },
 }));

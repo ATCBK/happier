@@ -356,12 +356,12 @@ function ProcessesTilesLoading(props: Readonly<{ compact: boolean }>) {
 
 const styles = StyleSheet.create((theme) => ({
   meta: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.tabular(),
     color: theme.colors.text.secondary,
   },
   note: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.tabular(),
     color: theme.colors.text.secondary,
     minHeight: 18,

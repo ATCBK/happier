@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { layoutHomeOrbitScene, type HomeOrbitBody } from './homeOrbitScene';
+import { layoutHomeOrbitRing, layoutHomeOrbitScene, type HomeOrbitBody } from './homeOrbitScene';
 
 const body = (
   key: string,
@@ -86,5 +86,26 @@ describe('Home orbit scene (lab at-widget.js scene())', () => {
       );
     expect(new Set(outer).size).toBe(3);
     expect(outer[0]).toBe(128);
+  });
+});
+
+describe('Home orbit ring (lab hm-A tetherMap)', () => {
+  it('spaces N marks evenly from the top and keeps every mark outside the planet glow', () => {
+    const marks = ['a', 'b', 'c', 'd'].map((key) => ({ key, tether: 'account' as const }));
+    const scene = layoutHomeOrbitRing(300, 268, marks, { pr: 36, r: 60 });
+    const ring = scene.ring!;
+    expect(ring.marks.map((mark) => mark.key)).toEqual(['a', 'b', 'c', 'd']);
+    // The top first, then a quarter turn each.
+    expect(ring.marks[0]!.x).toBeCloseTo(150, 6);
+    expect(ring.marks[0]!.y).toBeLessThan(134);
+    expect(ring.marks[1]!.x).toBeGreaterThan(150);
+    expect(ring.marks[1]!.y).toBeCloseTo(134, 6);
+    // r 60 would put marks inside the glow (2.1 × 36 = 75.6): the ring grows past it.
+    for (const mark of ring.marks) {
+      const distance = Math.hypot(mark.x - scene.px, mark.y - scene.py);
+      expect(distance - ring.markSize / 2).toBeGreaterThan(36 * 2.1);
+    }
+    expect(scene.moons).toEqual([]);
+    expect(scene.orbits).toEqual([{ r: ring.r, off: false }]);
   });
 });

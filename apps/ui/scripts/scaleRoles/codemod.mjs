@@ -107,7 +107,9 @@ export async function analyzeFile(path) {
   const file = relative(repoRoot, path).replaceAll('\\', '/');
   const sites = [], edits = [];
   if (file === 'packages/plugin-ui/src/presentation/text/typeScale.ts') return { path, text, sites, edits };
-  const special = domain.test(file);
+  // Embedded terminal panes own toolbar/banner/key chrome, not terminal text.
+  // Renderer metrics there remain computed; code-font styles retain D8 below.
+  const special = domain.test(file) && !/(?:^|\/)terminal\/embedded\//.test(file);
   const dev = /(?:app\/\(app\)\/dev|components\/dev)\//.test(file);
   const scale = await loadTypeScale();
   let needsTypography = false, needsPluginRole = false;

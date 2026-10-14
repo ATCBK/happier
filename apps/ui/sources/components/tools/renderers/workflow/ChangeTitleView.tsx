@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -51,10 +52,10 @@ function readNonEmptyTitle(value: unknown, depth = 0): string | null {
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        padding: 12,
+        padding: theme.space.s12,
         borderRadius: 8,
         backgroundColor: theme.colors.surface.inset,
-        gap: 6,
+        gap: theme.space.s6,
     },
     label: {
         fontSize: 12,
@@ -62,8 +63,7 @@ const styles = StyleSheet.create((theme) => ({
         fontFamily: 'Menlo',
     },
     title: {
-        fontSize: 14,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
-        fontWeight: '600',
     },
 }));

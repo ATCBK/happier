@@ -19,6 +19,19 @@ export function useEffectiveDiffWrapLines(preference: boolean | undefined): bool
  */
 export const DIFF_SPLIT_MIN_WIDTH_PX = 900;
 
+/**
+ * R5 prose sides: a document's two versions (a skill's Yours | Theirs) wrap as reading text, so they
+ * stay side by side far below the code split's minimum; under this width they stack.
+ */
+export const DIFF_PROSE_SPLIT_MIN_WIDTH_PX = 560;
+
+/** The `prose` presentation's layout at a measured width: two sides, or stacked below the prose minimum. */
+export function resolveProseDiffPresentation(availableWidthPx: number | null): DiffPresentationStyle {
+    return typeof availableWidthPx === 'number' && Number.isFinite(availableWidthPx) && availableWidthPx < DIFF_PROSE_SPLIT_MIN_WIDTH_PX
+        ? 'unified'
+        : 'split';
+}
+
 export type EffectiveDiffPresentation = Readonly<{
     /** What the viewer draws. */
     style: DiffPresentationStyle;

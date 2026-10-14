@@ -134,10 +134,8 @@ const styles = StyleSheet.create((theme) => ({
         flexShrink: 1,
     },
     elapsed: {
-        ...Typography.default(),
         ...Typography.tabular(),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
         flexShrink: 0,
     },

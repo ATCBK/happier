@@ -58,7 +58,7 @@ export function FileBinaryState({
     isActive?: boolean;
 }) {
     if (workspaceScope && videoMimeType) {
-        return <View style={{ padding: 20, alignItems: 'center' }}>
+        return <View style={{ padding: theme.space.s20, alignItems: 'center' }}>
             <FileVideoPreview workspaceScope={workspaceScope} filePath={filePath} mimeType={videoMimeType}
                 revision={binaryPreviewRevision} isActive={isActive} />
         </View>;
@@ -70,7 +70,7 @@ export function FileBinaryState({
                 backgroundColor: theme.colors.surface.base,
                 justifyContent: 'center',
                 alignItems: 'center',
-                padding: 20,
+                padding: theme.space.s20,
             }}
         >
             {typeof imagePreviewUri === 'string' && imagePreviewUri.trim().length > 0 ? (
@@ -99,7 +99,7 @@ export function FileBinaryState({
                 style={{
                     fontSize: 18,
                     color: theme.colors.text.secondary,
-                    marginBottom: 8,
+                    marginBottom: theme.space.s8,
                     ...Typography.default('semiBold'),
                 }}
             >
@@ -120,7 +120,7 @@ export function FileBinaryState({
                     fontSize: 14,
                     color: theme.colors.text.secondary,
                     textAlign: 'center',
-                    marginTop: 8,
+                    marginTop: theme.space.s8,
                     ...Typography.default(),
                 }}
             >

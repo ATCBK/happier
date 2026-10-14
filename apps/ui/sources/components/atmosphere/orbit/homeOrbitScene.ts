@@ -52,7 +52,100 @@ export type HomeOrbitScene = Readonly<{
   }>[];
   /** The planet canvas: a square of 4.2 planet radii centred on the planet. */
   canvas: Readonly<{ left: number; top: number; size: number }>;
+  /** A ring scene's marks and their tethers (`layoutHomeOrbitRing`); absent on an orbit scene. */
+  ring?: HomeOrbitRing;
 }>;
+
+/**
+ * How a mark on the ring reaches the Home: `account` held by the Home itself (a solid tether), `machine`
+ * run on the machines (dotted), `attention` waiting on the person (amber dashed, with a beacon), `none`
+ * not reaching anything (no tether, the mark faded).
+ */
+export type HomeOrbitTether = 'account' | 'machine' | 'attention' | 'none';
+
+export type HomeOrbitRingMark = Readonly<{
+  key: string;
+  tether: HomeOrbitTether;
+  /** Drawn faded; by default a mark with no tether is (a count mark like "+2" is not). */
+  faded?: boolean;
+}>;
+
+export type HomeOrbitRing = Readonly<{
+  r: number;
+  /** A mark's drawn box (its centre is on the ring). */
+  markSize: number;
+  marks: readonly Readonly<{
+    key: string;
+    tether: HomeOrbitTether;
+    faded: boolean;
+    x: number;
+    y: number;
+    /** The tether: from just outside the planet's glow to just inside the mark. */
+    from: Readonly<{ x: number; y: number }>;
+    to: Readonly<{ x: number; y: number }>;
+  }>[];
+}>;
+
+export type HomeOrbitRingOptions = Readonly<{
+  pr?: number;
+  px?: number;
+  py?: number;
+  /** The ring's radius; raised when needed so a mark never sits inside the planet's glow. */
+  r?: number;
+  /** The first mark's angle, in degrees (the top). */
+  startAngle?: number;
+  markSize?: number;
+}>;
+
+/**
+ * The ring scene (lab hm-A `tetherMap`): one dotted ring around the planet and N marks spaced evenly on
+ * it, the first at the top, each with its tether toward the planet. The glow is the planet canvas's
+ * half-size (2.1 planet radii); the ring keeps every mark wholly outside it.
+ */
+export function layoutHomeOrbitRing(
+  w: number,
+  h: number,
+  marks: readonly HomeOrbitRingMark[],
+  o: HomeOrbitRingOptions = {},
+): HomeOrbitScene {
+  const pr = Math.round(o.pr || Math.min(h, w) * 0.13);
+  const px = Math.round(o.px != null ? o.px : w / 2),
+    py = Math.round(o.py != null ? o.py : h / 2);
+  const markSize = o.markSize ?? 22;
+  const glow = pr * 2.1;
+  const r = Math.round(Math.max(o.r ?? pr * 2.9, glow + markSize / 2 + 2));
+  const a0 = o.startAngle ?? -90;
+  const at = (radius: number, deg: number) => {
+    const a = (deg * Math.PI) / 180;
+    return { x: px + Math.cos(a) * radius, y: py + Math.sin(a) * radius };
+  };
+  const placed = marks.map((mark, index) => {
+    const deg = a0 + (360 / Math.max(1, marks.length)) * index;
+    const centre = at(r, deg);
+    return {
+      key: mark.key,
+      tether: mark.tether,
+      faded: mark.faded ?? mark.tether === 'none',
+      x: centre.x,
+      y: centre.y,
+      from: at(pr + 13, deg),
+      to: at(r - markSize / 2 - 3, deg),
+    };
+  });
+  const size = pr * 4.2;
+  return {
+    width: w,
+    height: h,
+    px,
+    py,
+    pr,
+    orbits: [{ r, off: marks.length === 0 }],
+    moons: [],
+    dots: [],
+    canvas: { left: px - size / 2, top: py - size / 2, size },
+    ring: { r, markSize, marks: placed },
+  };
+}
 
 export function layoutHomeOrbitScene(
   w: number,

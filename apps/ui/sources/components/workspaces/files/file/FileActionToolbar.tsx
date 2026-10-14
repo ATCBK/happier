@@ -221,8 +221,8 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
 
     const chipStyle = (active: boolean) => ({
         minHeight: 32,
-        paddingVertical: 5,
-        paddingHorizontal: 10,
+        paddingVertical: theme.space.s4,
+        paddingHorizontal: theme.space.s10,
         borderRadius: 10,
         backgroundColor: paintColor(active ? theme.colors.surface.inset : theme.colors.surface.base),
         borderWidth: 1,
@@ -325,14 +325,12 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
             style={chipStyle(input.selected === true)}
             accessibilityRole="button"
         >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 }}>
                 {input.icon}
                 <Text
                     style={{
-                        fontSize: 13,
-                        fontWeight: '600',
+                        ...Typography.variant('body', 'semiBold'),
                         color: theme.colors.text.primary,
-                        ...Typography.default(),
                     }}
                     numberOfLines={1}
                 >
@@ -357,7 +355,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
     const isDiffDisplay = displayMode === 'diff';
 
     const viewActionsElement = (
-        <View testID="file-details-view-actions" style={{ flexDirection: 'row', flexWrap: 'wrap', flexShrink: 1, justifyContent: 'flex-end', alignItems: 'center', gap: 2 }}>
+        <View testID="file-details-view-actions" style={{ flexDirection: 'row', flexWrap: 'wrap', flexShrink: 1, justifyContent: 'flex-end', alignItems: 'center', gap: theme.space.s2 }}>
             {Platform.OS === 'web' && isDiffDisplay ? <DiffPresentationStyleToggleButton size={iconSize} /> : null}
             {reviewCommentsEnabled === true && onToggleCommentMode ? (
                 <IconButton
@@ -375,7 +373,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
             ) : null}
             {showWrapLinesToggle === true ? <WrapLinesToggleButton /> : null}
             {rightElement ? (
-                <View testID="file-details-right" style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+                <View testID="file-details-right" style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s2 }}>
                     {rightElement}
                 </View>
             ) : null}
@@ -436,7 +434,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
     }
 
     const controlsElement = (
-        <View testID="file-details-view-controls" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <View testID="file-details-view-controls" style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 }}>
             {isDiffDisplay && areaItems.length > 0 ? (
                 <ToolbarSelect
                     testID="file-details-diff-area-menu"
@@ -495,9 +493,9 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                 flexWrap: 'wrap',
                 alignItems: 'center',
                 gap: actionGap,
-                paddingLeft: 20,
+                paddingLeft: theme.space.s20,
                 paddingRight: 14,
-                paddingVertical: 6,
+                paddingVertical: theme.space.s6,
                 borderBottomWidth: StyleSheet.hairlineWidth,
                 borderBottomColor: theme.colors.border.subtle,
             }}
@@ -542,7 +540,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                 />
             ) : null}
             {scmWriteEnabled && canUseSelectionActions && diffMode === 'both' && !hasSelectedLines ? (
-                <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
+                <Text style={{ ...Typography.variant('meta'), color: theme.colors.text.secondary,  }}>
                     {t('files.fileActions.selectionHint')}
                 </Text>
             ) : null}

@@ -206,6 +206,10 @@ export function BaseModal({
             event.preventDefault();
         };
 
+        // Leaving, the scrim fades on the same curve as the surface's own fade, so the page clears with it.
+        const scrimTiming = visible
+            ? `${motionTokens.overlay.modal.enterMs}ms cubic-bezier(0.2, 0, 0, 1)`
+            : `${motionTokens.overlay.modal.exitMs}ms ${motionTokens.easingCss.exit}`;
         const overlayStyle: React.CSSProperties = {
             position: 'fixed',
             top: 0,
@@ -214,11 +218,11 @@ export function BaseModal({
             bottom: 0,
             zIndex: baseZ,
             transition: [
-                `background-color ${visible ? motionTokens.overlay.modal.enterMs : motionTokens.overlay.modal.exitMs}ms cubic-bezier(0.2, 0, 0, 1)`,
+                `background-color ${scrimTiming}`,
                 ...(materialBlurEnabled
                     ? [
-                        `backdrop-filter ${visible ? motionTokens.overlay.modal.enterMs : motionTokens.overlay.modal.exitMs}ms cubic-bezier(0.2, 0, 0, 1)`,
-                        `-webkit-backdrop-filter ${visible ? motionTokens.overlay.modal.enterMs : motionTokens.overlay.modal.exitMs}ms cubic-bezier(0.2, 0, 0, 1)`,
+                        `backdrop-filter ${scrimTiming}`,
+                        `-webkit-backdrop-filter ${scrimTiming}`,
                     ]
                     : []),
             ].join(', '),
@@ -251,7 +255,7 @@ export function BaseModal({
             overflow: 'visible',
         };
 
-        const topPlacementGap = theme.margins.xxl * 2;
+        const topPlacementGap = theme.space.s24 * 2;
         const autoPlacementContainerStyle = {
             // Auto-placement:
             // - content <= viewport ⇒ container height is 100% ⇒ centered

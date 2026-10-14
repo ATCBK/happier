@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import { extractShellCommand } from '@happier-dev/protocol/activity/shellCommand';
 import { formatPermissionRequestSummary } from '@happier-dev/protocol/activity/agentRequestSummary';
 import type { SessionPermissionDecisionActorV1 } from '@happier-dev/protocol/sessions/permissions/v1';
@@ -95,26 +96,26 @@ const BUTTON_HORIZONTAL_PADDING = 10;
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
         justifyContent: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     containerEmbedded: {
         paddingHorizontal: 0,
         paddingVertical: 0,
     },
     containerStandalone: {
-        paddingHorizontal: 12,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
     },
     buttonContainer: {
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     button: {
         justifyContent: 'center',
         paddingHorizontal: BUTTON_HORIZONTAL_PADDING,
-        paddingVertical: 6,
+        paddingVertical: theme.space.s6,
         borderRadius: 8,
         backgroundColor: 'transparent',
         borderLeftWidth: 3,
@@ -130,14 +131,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     // The press target keeps the platform floor; the drawn control inside it is the compact pill.
     buttonAllow: {
         justifyContent: 'center',
-        paddingHorizontal: 2,
+        paddingHorizontal: theme.space.s2,
     },
     buttonDeny: {
         backgroundColor: 'transparent',
     },
     buttonAllowAll: {
         justifyContent: 'center',
-        paddingHorizontal: 2,
+        paddingHorizontal: theme.space.s2,
     },
     buttonSelected: {
         backgroundColor: 'transparent',
@@ -149,16 +150,15 @@ const stylesheet = StyleSheet.create((theme) => ({
     buttonContent: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
         minHeight: 18,
         flexShrink: 1,
     },
     icon: {
-        marginRight: 2,
+        marginRight: theme.space.s2,
     },
     buttonText: {
-        fontSize: 13,
-        fontWeight: '400',
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
         flexShrink: 1,
     },
@@ -169,7 +169,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderRadius: 8,
         overflow: 'hidden',
         paddingHorizontal: BUTTON_HORIZONTAL_PADDING,
-        paddingVertical: 5,
+        paddingVertical: theme.space.s4,
     },
     buttonTextDeny: {
         color: theme.colors.text.secondary,
@@ -182,7 +182,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
         borderRadius: 8,
         paddingHorizontal: BUTTON_HORIZONTAL_PADDING - 1,
-        paddingVertical: 4,
+        paddingVertical: theme.space.s4,
     },
     buttonTextSelected: {
         color: theme.colors.permissionButton.selected.text,
@@ -190,7 +190,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     buttonForSession: {
         justifyContent: 'center',
-        paddingHorizontal: 2,
+        paddingHorizontal: theme.space.s2,
     },
     buttonTextForSession: {
         color: theme.colors.text.primary,
@@ -199,7 +199,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
         borderRadius: 8,
         paddingHorizontal: BUTTON_HORIZONTAL_PADDING - 1,
-        paddingVertical: 4,
+        paddingVertical: theme.space.s4,
     },
     buttonTextAllowRule: {
         color: theme.colors.text.primary,
@@ -208,7 +208,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
         borderRadius: 8,
         paddingHorizontal: BUTTON_HORIZONTAL_PADDING - 1,
-        paddingVertical: 4,
+        paddingVertical: theme.space.s4,
     },
     loadingIndicatorAllow: {
         color: theme.colors.button.primary.tint,
@@ -228,11 +228,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     actionError: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         alignSelf: 'flex-start',
         maxWidth: '100%',
-        paddingHorizontal: 10,
-        paddingVertical: 7,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s6,
         borderRadius: 8,
         borderWidth: 1,
         borderColor: theme.colors.state.danger.border,
@@ -401,14 +401,14 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
         const disabledMessage =
             resolvePermissionDisabledMessage(disabledReason);
         return (
-            <View style={{ marginTop: 8, paddingHorizontal: 12, paddingBottom: 12 }}>
+            <View style={{ marginTop: theme.space.s8, paddingHorizontal: theme.space.s12, paddingBottom: theme.space.s12 }}>
                 <View style={{
                     backgroundColor: theme.colors.surface.elevated,
                     borderRadius: 10,
                     borderWidth: 1,
                     borderColor: theme.colors.border.default,
-                    padding: 12,
-                    gap: 6,
+                    padding: theme.space.s12,
+                    gap: theme.space.s6,
                 }}>
                     <Text style={{ color: theme.colors.text.primary, fontWeight: '600' }}>
                         {t('session.sharing.permissionApprovalsDisabledTitle')}

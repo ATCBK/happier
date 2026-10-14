@@ -5,6 +5,36 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { analyzeFile, applyEdits, repoRoot } from './codemod.mjs';
 
+test('D8 migrates embedded terminal chrome while preserving renderer metrics and terminal engine scales', async () => {
+  const directory = await mkdtemp(join(repoRoot, 'apps/ui/sources/components/terminal/embedded/.codemod-test-'));
+  const path = join(directory, 'Chrome.tsx');
+  const engineDirectory = await mkdtemp(join(repoRoot, 'apps/ui/sources/components/terminal/xterm/.codemod-test-'));
+  const enginePath = join(engineDirectory, 'Engine.tsx');
+  try {
+    await writeFile(path, `function style(theme) { return {
+  toolbar: { fontSize: 13, ...Typography.default('semiBold'), padding: 12 },
+  key: { fontSize: 14, ...Typography.default('semiBold'), ...Typography.mono(), gap: 6 },
+  renderer: { fontSize: fontMetrics.fontSize, lineHeight: fontMetrics.lineHeight / fontMetrics.fontSize },
+  output: { fontFamily: resolveCodeMonoFontFamily(), fontSize: 14, lineHeight: 20, fontWeight: '600' },
+}; }\n`);
+    await writeFile(enginePath, `function engine(theme) { return { fontSize: 13, ...Typography.default(), padding: 8 }; }\n`);
+    const first = await analyzeFile(path);
+    const transformed = applyEdits(first.text, first.edits);
+    assert.match(transformed, /Typography\.variant\('body', 'semiBold'\)/);
+    assert.match(transformed, /Typography\.variant\('label', 'semiBold'\)/);
+    assert.match(transformed, /padding: theme\.space\.s12/);
+    assert.match(transformed, /gap: theme\.space\.s6/);
+    assert.match(transformed, /fontSize: fontMetrics\.fontSize, lineHeight: fontMetrics\.lineHeight \/ fontMetrics\.fontSize/);
+    assert.match(transformed, /output: \{ fontFamily: resolveCodeMonoFontFamily\(\), fontSize: 14, lineHeight: 20, fontWeight: '600' \}/);
+    assert.equal((await analyzeFile(enginePath)).edits.length, 0);
+    await writeFile(path, transformed);
+    assert.equal((await analyzeFile(path)).edits.length, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+    await rm(engineDirectory, { recursive: true, force: true });
+  }
+});
+
 test('D8 keeps code text metrics outside code folders while migrating surrounding chrome', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'scale-roles-u5-'));
   const path = join(directory, 'CommandView.tsx');

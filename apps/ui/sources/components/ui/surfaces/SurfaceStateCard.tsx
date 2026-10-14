@@ -338,8 +338,9 @@ function useSurfaceStateBindings(testID: string | undefined, animationEnabled: b
                 testID={buttonTestID}
                 disabled={action.disabled}
                 loading={action.busy}
-                // Pointer panes keep a compact action; phone controls keep their touch-sized anatomy.
-                size={compact ? 'mini' : 'small'}
+                // Pointer panes keep a compact action; phone controls keep their touch-sized anatomy,
+                // and a column-wide action is a form action, so it takes the form control's height.
+                size={compact ? 'mini' : fullWidth ? 'normal' : 'small'}
                 display={emphasis === 'secondary' ? 'inverted' : tone === 'filled' ? undefined : 'secondary'}
                 textStyle={emphasis === 'secondary' ? Typography.default() : undefined}
                 title={action.label}

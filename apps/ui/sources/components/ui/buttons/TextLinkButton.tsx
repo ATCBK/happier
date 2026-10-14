@@ -12,7 +12,7 @@ import { Typography } from '@/constants/Typography';
 
 /** Size and line of the existing row-meta step; the weight stays the link's own. */
 function resolveMetaMetrics() {
-  const { fontSize, lineHeight, letterSpacing } = Typography.rowMeta();
+  const { fontSize, lineHeight, letterSpacing } = Typography.variant('meta');
   return { fontSize, lineHeight, letterSpacing };
 }
 

@@ -63,9 +63,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     // The habit's own line (History · Run now · switch) belongs to the row above it: it tucks into that
     // row's bottom padding so the quiet line and its actions read as one block (lab `b-habit T`),
     // while the switch keeps its full touch target.
-    actions: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.margins.xs,
-        marginTop: -theme.margins.md,
-        paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.rowInset, paddingBottom: theme.margins.xs },
+    actions: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.space.s4,
+        marginTop: -theme.space.s12,
+        paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.rowInset, paddingBottom: theme.space.s4 },
 }));
 
 const triggerRowHost: HappierTriggerRowHost = {

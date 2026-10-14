@@ -15,13 +15,13 @@ const stylesheet = StyleSheet.create((theme) => ({
     chip: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         // `minHeight`, not `height`. Q2 measured that the app's `uiFontScale` GROWS the line box —
         // a fixed-height container is what actually clips scaled text, not a missing `lineHeight`.
         minHeight: 34,
         maxWidth: BROWSER_CHROME_WIDTH.chip,
         borderRadius: 8,
-        paddingHorizontal: 8,
+        paddingHorizontal: theme.space.s8,
     },
     // Quiet by default: the toolbar already had six bordered grey pills, and the one that carries
     // trust should not be visually interchangeable with them. It earns a fill only when the
@@ -30,11 +30,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.state.warning.background,
     },
     chipCompact: {
-        paddingHorizontal: 6,
+        paddingHorizontal: theme.space.s6,
         gap: 0,
     },
     text: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         flexShrink: 1,
     },

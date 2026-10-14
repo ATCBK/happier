@@ -197,7 +197,7 @@ function ColumnBuiltins(props: Readonly<{ selectedDefinitionId: string | null }>
 const styles = StyleSheet.create((theme) => ({
     column: { flex: 1, minHeight: 0 },
     views: { paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.rowInset, paddingBottom: HAPPIER_COLLECTION_LIST_METRICS.groupLabelFirstPaddingTop,
-        flexDirection: 'row', alignItems: 'center', gap: theme.margins.sm },
+        flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
     // As the destination's page (a phone), the switch sits on the page sheets' edge, not the column's row inset.
     viewsOnPage: { paddingHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx },
     viewTabs: { flex: 1, minWidth: 0 },

@@ -21,7 +21,7 @@ import { ToolFindText, useToolFindState } from '@/components/tools/renderers/cor
  */
 const MINIMUM_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
 // Six nominal body lines is a viewport, never a cutoff in the normalized value.
-const PREVIEW_HEIGHT = Typography.rowMeta().lineHeight! * RESULT_PREVIEW_MAX_LINES;
+const PREVIEW_HEIGHT = Typography.variant('meta').lineHeight! * RESULT_PREVIEW_MAX_LINES;
 
 export type WorkflowAgentDetailProps = Readonly<{
     text: string;
@@ -90,17 +90,17 @@ WorkflowAgentDetail.displayName = 'WorkflowAgentDetail';
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        marginLeft: 18 + theme.margins.sm,
-        paddingHorizontal: theme.margins.sm,
-        paddingVertical: theme.margins.sm,
+        marginLeft: 18 + theme.space.s8,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s8,
         borderRadius: theme.borderRadius.md,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
-        gap: theme.margins.xs,
+        gap: theme.space.s4,
     },
     text: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     preview: {
@@ -118,7 +118,7 @@ const styles = StyleSheet.create((theme) => ({
         borderColor: 'transparent',
     },
     toggleText: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.default('semiBold'),
         color: theme.colors.text.link,
     },

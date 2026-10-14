@@ -97,11 +97,11 @@ describe('plugin UI semantic theme projection (§3.3, UI-D12)', () => {
         const projected = projectPluginUiTheme(theme);
         expect(projected.version).toBe(1);
         expect(projected.spacing).toEqual({
-            xsmall: theme.margins.xs,
-            small: theme.margins.sm,
-            medium: theme.margins.md,
-            large: theme.margins.lg,
-            xlarge: theme.margins.xl,
+            xsmall: theme.space.s4,
+            small: theme.space.s8,
+            medium: theme.space.s12,
+            large: theme.space.s16,
+            xlarge: theme.space.s20,
         });
         expect(projected.radii.small).toBe(theme.borderRadius.sm);
         expect(projected.radii.control).toBe(theme.borderRadius.md);

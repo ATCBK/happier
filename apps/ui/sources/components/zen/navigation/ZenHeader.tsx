@@ -30,10 +30,8 @@ function HeaderTitleTablet() {
     const { theme } = useUnistyles();
     return (
         <Text style={{
-            fontSize: 17,
+            ...Typography.variant('heading'),
             color: theme.colors.chrome.header.foreground,
-            fontWeight: '600',
-            ...Typography.default('semiBold'),
         }}>
             {t('zen.title')}
         </Text>
@@ -47,10 +45,8 @@ function HeaderTitle() {
     return (
         <View style={{ flex: 1, alignItems: 'center' }}>
             <Text style={{
-                fontSize: 17,
+                ...Typography.variant('heading'),
                 color: theme.colors.chrome.header.foreground,
-                fontWeight: '600',
-                ...Typography.default('semiBold'),
             }}>
                 {t('zen.title')}
             </Text>
@@ -64,14 +60,11 @@ function HeaderTitle() {
                         color={connectionHealth.color}
                         isPulsing={connectionHealth.isPulsing}
                         size={6}
-                        style={{ marginRight: 4 }}
+                        style={{ marginRight: theme.space.s4 }}
                     />
                     <Text style={{
-                        fontSize: 12,
-                        fontWeight: '500',
-                        lineHeight: 16,
+                        ...Typography.variant('meta', 'medium'),
                         color: connectionHealth.color,
-                        ...Typography.default(),
                     }}>
                         {t(connectionHealth.statusLabelKey)}
                     </Text>
@@ -117,4 +110,4 @@ function HeaderRight() {
             <Icon name="plus" size={29} color={theme.colors.chrome.header.foreground} />
         </Pressable>
     );
-}   
+}

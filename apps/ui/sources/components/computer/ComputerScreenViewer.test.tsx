@@ -133,12 +133,29 @@ describe('ComputerScreenViewer', () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
+  it('names an unreachable machine with its one recovery and no fault code to look up', async () => {
+    const screen = await renderScreen(
+      <ComputerScreenViewer {...props({ shared: false, failure: 'machine_unreachable' })} />,
+    );
+    expect(screen.getTextContent()).toContain('computerUse.viewer.offlineTitle:{"machine":"mac-vm-1"}');
+    expect(screen.findByTestId('v-recovery-action')).toBeTruthy();
+    expect(screen.getTextContent()).not.toContain('common.details');
+  });
+
   it('says the machine isn’t answering instead of a generic failure, and shows the missing permission in the picture', async () => {
     const offline = await renderScreen(
       <ComputerScreenViewer {...props({ machineOnline: false })} />,
     );
     expect(offline.getTextContent()).toContain('computerUse.viewer.offlineTitle:{"machine":"mac-vm-1"}');
     expect(offline.getTextContent()).not.toContain('computerUse.viewer.unavailableTitle');
+
+    // Nothing to choose on a machine that cannot answer: no "No window is shared" before the failure arrives.
+    const unshared = await renderScreen(
+      <ComputerScreenViewer {...props({ shared: false, machineOnline: false })} />,
+    );
+    expect(unshared.getTextContent()).toContain('computerUse.viewer.offlineTitle:{"machine":"mac-vm-1"}');
+    expect(unshared.findByTestId('v-not-shared')).toBeNull();
+    expect(unshared.getTextContent()).toContain('computerUse.permission.checkAgain');
 
     const onOpenSettings = vi.fn();
     const denied = await renderScreen(

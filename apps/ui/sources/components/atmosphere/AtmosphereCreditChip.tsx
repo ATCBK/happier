@@ -266,7 +266,7 @@ const styles = StyleSheet.create((theme) => ({
     zIndex: 2,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: theme.space.s6,
   },
   chipFrame: {
     borderRadius: 14,
@@ -280,12 +280,12 @@ const styles = StyleSheet.create((theme) => ({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 7,
-    paddingHorizontal: 11,
+    gap: theme.space.s6,
+    paddingHorizontal: theme.space.s10,
     maxWidth: 240,
   },
   rowPhone: {
-    paddingHorizontal: 9,
+    paddingHorizontal: theme.space.s8,
   },
   version: {
     ...Typography.default('semiBold'),
@@ -306,14 +306,14 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
   },
   card: {
-    paddingTop: 12,
+    paddingTop: theme.space.s12,
     paddingHorizontal: CARD_INSET_PX,
-    paddingBottom: 4,
+    paddingBottom: theme.space.s4,
   },
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 7,
+    gap: theme.space.s6,
   },
   cardVersion: {
     ...Typography.default('semiBold'),
@@ -330,7 +330,7 @@ const styles = StyleSheet.create((theme) => ({
   credit: {
     ...Typography.default(),
     ...happierPageTextMetrics('meta'),
-    marginTop: 2,
+    marginTop: theme.space.s2,
     color: theme.colors.text.secondary,
   },
   creditHovered: {
@@ -339,14 +339,14 @@ const styles = StyleSheet.create((theme) => ({
   },
   divider: {
     height: StyleSheet.hairlineWidth,
-    marginTop: 12,
+    marginTop: theme.space.s12,
     backgroundColor: theme.colors.border.default,
   },
   actions: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
+    gap: theme.space.s12,
     minHeight: 40,
   },
   actionsEnd: {
@@ -355,7 +355,7 @@ const styles = StyleSheet.create((theme) => ({
   action: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: theme.space.s6,
     minHeight: MENU_ROW_METRICS.minHeightPx,
     borderRadius: 6,
   },

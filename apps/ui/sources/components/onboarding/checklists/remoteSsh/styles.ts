@@ -5,10 +5,10 @@ import { Typography } from '@/constants/Typography';
 export const remoteSshChecklistStyles = StyleSheet.create((theme) => ({
     root: {
         width: '100%',
-        gap: 16,
+        gap: theme.space.s16,
     },
     heading: {
-        gap: 6,
+        gap: theme.space.s6,
         alignItems: 'flex-start',
     },
     title: {
@@ -21,15 +21,15 @@ export const remoteSshChecklistStyles = StyleSheet.create((theme) => ({
     },
     sectionBlock: {
         width: '100%',
-        gap: 10,
+        gap: theme.space.s10,
     },
     promptCard: {
         width: '100%',
-        gap: 10,
+        gap: theme.space.s10,
         borderRadius: 14,
         borderWidth: 1,
         borderColor: theme.colors.border.modal,
-        padding: 20,
+        padding: theme.space.s20,
         backgroundColor: theme.colors.surface.base,
     },
     promptTitle: {
@@ -40,11 +40,11 @@ export const remoteSshChecklistStyles = StyleSheet.create((theme) => ({
     },
     toggleList: {
         width: '100%',
-        gap: 10,
+        gap: theme.space.s10,
     },
     toggleListItem: {
         width: '100%',
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingVertical: 14,
         borderRadius: 12,
         borderWidth: 1,
@@ -53,15 +53,13 @@ export const remoteSshChecklistStyles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 12,
+        gap: theme.space.s12,
     },
     toggleListItemTitle: {
         color: theme.colors.text.primary,
     },
     toggleListItemSubtitle: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -164,12 +165,11 @@ const styles = StyleSheet.create((theme) => ({
     terminalStatusContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         maxWidth: 220,
     },
     terminalStatusText: {
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.state.danger.foreground,
-        fontWeight: '600',
     },
 }));

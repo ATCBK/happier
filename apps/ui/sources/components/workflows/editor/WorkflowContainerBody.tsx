@@ -58,7 +58,7 @@ export function WorkflowContainerLane(props: Readonly<{
                     <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
                         style={workflowEditorStyles.headingNameMeasure}>
                         <Text testID={`${props.labelTestID}-measure`} style={workflowEditorStyles.laneLabel}
-                            onLayout={(event) => setNameWidth(Math.ceil(event.nativeEvent.layout.width) + theme.margins.xs)}>
+                            onLayout={(event) => setNameWidth(Math.ceil(event.nativeEvent.layout.width) + theme.space.s4)}>
                             {props.nameEditor.value.length > 0 ? props.nameEditor.value : props.nameEditor.placeholder}
                         </Text>
                     </View>

@@ -212,7 +212,7 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 12,
+        gap: theme.space.s12,
     },
     flowTitle: {
         ...Typography.default('semiBold'),
@@ -226,22 +226,22 @@ const styles = StyleSheet.create((theme) => ({
     },
     progress: {
         flexDirection: 'row',
-        gap: 6,
+        gap: theme.space.s6,
     },
     progressSegment: {
         flex: 1,
     },
     body: {
-        gap: 20,
+        gap: theme.space.s20,
         width: '100%',
     },
     styleStage: {
         flex: 1,
         justifyContent: 'center',
-        padding: 32,
+        padding: theme.space.s32,
     },
     heading: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     eyebrow: {
         ...Typography.default(),
@@ -262,15 +262,15 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         minHeight: 0,
         paddingHorizontal: PAGE_LIST_METRICS.sheetInsetPx,
-        paddingTop: 8,
-        paddingBottom: 16,
-        gap: 12,
+        paddingTop: theme.space.s8,
+        paddingBottom: theme.space.s16,
+        gap: theme.space.s12,
     },
     sheetHeader: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 12,
+        gap: theme.space.s12,
     },
     sheetTitle: {
         alignItems: 'center',

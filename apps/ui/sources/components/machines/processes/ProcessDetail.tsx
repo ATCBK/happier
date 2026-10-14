@@ -439,7 +439,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   command: {
     ...Typography.mono(),
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     fontFamily: Typography.mono().fontFamily,
     color: theme.colors.text.primary,
     backgroundColor: theme.colors.surface.inset,
@@ -455,7 +455,7 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.space.s6,
   },
   chainPart: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.primary,
   },
   chainSelf: {
@@ -478,12 +478,12 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.space.s8,
   },
   key: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.default('medium'),
     color: theme.colors.text.secondary,
   },
   value: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     ...Typography.tabular(),
     ...Typography.default('medium'),
     color: theme.colors.text.primary,
@@ -506,11 +506,11 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.text.secondary,
   },
   quiet: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
   },
   platform: {
-    ...Typography.rowMeta(),
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
     marginTop: theme.space.s4,
   },

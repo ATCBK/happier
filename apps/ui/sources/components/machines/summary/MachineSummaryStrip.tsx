@@ -311,12 +311,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         maxWidth: '100%',
     },
     ringNumber: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         ...Typography.default('semiBold'),
         ...Typography.tabular(),
     },
     ringUnit: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         flexShrink: 1,
     },
@@ -324,21 +324,21 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignSelf: 'stretch',
     },
     label: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     figure: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.tabular(),
     },
     figureSlot: {
         minWidth: 44,
     },
     tileFigure: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         ...Typography.tabular(),
     },
     fact: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
     },
 }));

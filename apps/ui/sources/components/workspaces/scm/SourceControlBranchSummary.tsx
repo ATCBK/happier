@@ -33,6 +33,12 @@ function areBranchSummaryThemeTokensEqual(previous: any, next: any): boolean {
         ['colors', 'surface', 'inset'],
         ['colors', 'text', 'primary'],
         ['colors', 'text', 'secondary'],
+        ['space', 's4'],
+        ['space', 's6'],
+        ['space', 's8'],
+        ['space', 's10'],
+        ['space', 's12'],
+        ['space', 's16'],
     ];
     return tokenPaths.every((path) => Object.is(readThemeToken(previous, path), readThemeToken(next, path)));
 }
@@ -80,9 +86,9 @@ function StatPill(props: Readonly<{
             style={{
                 flexDirection: 'row',
                 alignItems: 'center',
-                gap: 6,
-                paddingHorizontal: 10,
-                paddingVertical: 6,
+                gap: theme.space.s6,
+                paddingHorizontal: theme.space.s10,
+                paddingVertical: theme.space.s6,
                 borderRadius: 999,
                 borderWidth: 1,
                 borderColor: theme.colors.border.default,
@@ -90,7 +96,7 @@ function StatPill(props: Readonly<{
             }}
         >
             <Icon name={props.iconName as any} size={14} color={theme.colors.text.secondary} />
-            <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default('semiBold') }}>
+            <Text style={{ ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.secondary,  }}>
                 {props.label}
             </Text>
             <Text style={{ fontSize: 12, color: theme.colors.text.primary, ...Typography.mono('semiBold') }}>
@@ -112,7 +118,7 @@ function InlineStat(props: Readonly<{
             accessible
             accessibilityLabel={`${props.label}: ${props.value}`}
             {...(Platform.OS === 'web' ? { title: `${props.label}: ${props.value}` } : {})}
-            style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 }}
         >
             <Icon name={props.iconName as any} size={14} color={theme.colors.text.secondary} />
             <Text style={{ fontSize: 11, color: theme.colors.text.primary, ...Typography.mono('semiBold') }}>
@@ -144,21 +150,21 @@ function SourceControlBranchSummaryImpl({
         return (
             <View
                 style={{
-                    paddingHorizontal: 12,
-                    paddingTop: 6,
-                    paddingBottom: 6,
+                    paddingHorizontal: theme.space.s12,
+                    paddingTop: theme.space.s6,
+                    paddingBottom: theme.space.s6,
                     borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
                     borderBottomColor: theme.colors.border.default,
                     backgroundColor: theme.colors.surface.base,
-                    gap: 6,
+                    gap: theme.space.s6,
                 }}
             >
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
                     <View style={{ minWidth: 0, flex: 1 }}
                         accessibilityHint={scmStatusFiles.upstream ?? undefined}
                         {...(Platform.OS === 'web' ? { title: scmStatusFiles.upstream ? `${scmStatusFiles.branch ?? ''} · ${scmStatusFiles.upstream}` : scmStatusFiles.branch ?? undefined } : {})}
                     >
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, minWidth: 0 }}>
                             <Icon
                                 name="git-branch"
                                 size={14}
@@ -175,9 +181,8 @@ function SourceControlBranchSummaryImpl({
                                     style={{
                                         flexShrink: 1,
                                         minWidth: 0,
-                                        fontSize: 14,
+                                        ...Typography.variant('label', 'semiBold'),
                                         color: theme.colors.text.primary,
-                                        ...Typography.default('semiBold'),
                                     }}
                                 >
                                     {scmStatusFiles.branch || t('files.detachedHead')}
@@ -185,14 +190,14 @@ function SourceControlBranchSummaryImpl({
                             )}
                         {backendLabel ? (
                             <Text testID="scm-backend-label" accessibilityRole="text" numberOfLines={1}
-                                style={{ flexShrink: 1, minWidth: 0, fontSize: 11, color: theme.colors.text.secondary, ...Typography.default('semiBold') }}>
+                                style={{ flexShrink: 1, minWidth: 0, ...Typography.variant('micro', 'semiBold'), color: theme.colors.text.secondary,  }}>
                                 {backendLabel}
                             </Text>
                         ) : null}
                         </View>
                     </View>
 
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, flexShrink: 0 }}>
                         {actionSlot}
                         <InlineStat label={includedLabel} value={staged} iconName="plus-square" theme={theme} />
                         <InlineStat label={pendingLabel} value={unstaged} iconName="pencil-simple" theme={theme} />
@@ -208,7 +213,7 @@ function SourceControlBranchSummaryImpl({
     return (
         <View
             style={{
-                padding: 16,
+                padding: theme.space.s16,
                 borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
                 borderBottomColor: theme.colors.border.default,
             }}
@@ -217,15 +222,14 @@ function SourceControlBranchSummaryImpl({
                 style={{
                     flexDirection: 'row',
                     alignItems: 'center',
-                    marginBottom: 8,
+                    marginBottom: theme.space.s8,
                 }}
             >
-                <Icon name="git-branch" size={16} color={theme.colors.text.secondary} style={{ marginRight: 6 }} />
+                <Icon name="git-branch" size={16} color={theme.colors.text.secondary} style={{ marginRight: theme.space.s6 }} />
                 <Text
                     style={{
-                        fontSize: 16,
+                        ...Typography.variant('heading'),
                         color: theme.colors.text.primary,
-                        ...Typography.default('semiBold'),
                     }}
                 >
                     {scmStatusFiles.branch || t('files.detachedHead')}
@@ -236,17 +240,16 @@ function SourceControlBranchSummaryImpl({
                         accessibilityRole="text"
                         numberOfLines={1}
                         style={{
-                            marginLeft: 8,
-                            fontSize: 12,
+                            marginLeft: theme.space.s8,
+                            ...Typography.variant('meta', 'semiBold'),
                             color: theme.colors.text.secondary,
-                            ...Typography.default('semiBold'),
                         }}
                     >
                         {backendLabel}
                     </Text>
                 ) : null}
             </View>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s8 }}>
                 <StatPill label={includedLabel} value={staged} iconName="plus-square" theme={theme} />
                 <StatPill label={pendingLabel} value={unstaged} iconName="pencil-simple" theme={theme} />
                 {showTracking && (
@@ -260,10 +263,9 @@ function SourceControlBranchSummaryImpl({
             {showTracking && (
                 <Text
                     style={{
-                        marginTop: 4,
-                        fontSize: 12,
+                        marginTop: theme.space.s4,
+                        ...Typography.variant('meta'),
                         color: theme.colors.text.secondary,
-                        ...Typography.default(),
                     }}
                 >
                     {scmStatusFiles.upstream

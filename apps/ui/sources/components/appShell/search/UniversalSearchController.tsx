@@ -1027,7 +1027,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     } : undefined, [selectSource, source]);
     const activeFilters = terminalJump ? terminalScopeChrome.filters : combinedFilters;
     // Aa and .* read as the Find bar's toggles (lab G1s): quiet mono glyphs, no well at rest, the accent ink when on.
-    const optionGlyph = (glyph: string, on: boolean) => <Text style={[Typography.mono(), Typography.rowMeta(), { fontWeight: '600', color: on ? theme.colors.state.active.foreground : theme.colors.text.secondary }]}>{glyph}</Text>;
+    const optionGlyph = (glyph: string, on: boolean) => <Text style={[Typography.mono(), Typography.variant('meta'), { fontWeight: '600', color: on ? theme.colors.state.active.foreground : theme.colors.text.secondary }]}>{glyph}</Text>;
     const inputSuffix = source === 'fileContent' && !terminalJump ? <View style={{ flexDirection: 'row', gap: theme.space.s4 }}>
         <IconButton testID="universal-search:match-case" variant="plain" icon={optionGlyph('Aa', matchCase)} minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)} interactiveTargetGapPx={4} accessibilityRole="switch" accessibilityLabel={t('universalSearch.content.matchCase')} tooltip={t('universalSearch.content.matchCase')} checked={matchCase} onPress={() => setMatchCase((value) => !value)} />
         <IconButton testID="universal-search:regex" variant="plain" icon={optionGlyph('.*', regex)} minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)} interactiveTargetGapPx={4} accessibilityRole="switch" accessibilityLabel={t('universalSearch.content.regex')} tooltip={t('universalSearch.content.regex')} checked={regex} onPress={() => setRegex((value) => !value)} />

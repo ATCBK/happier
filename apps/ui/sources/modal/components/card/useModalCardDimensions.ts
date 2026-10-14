@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { useWindowDimensions } from 'react-native';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 export type ModalCardSizePreset = 'dialog' | 'md' | 'lg';
 
@@ -34,13 +35,13 @@ const MODAL_CARD_MIN_VERTICAL_VIEWPORT_MARGIN = DEFAULT_MODAL_CARD_VIEWPORT_MARG
 const MODAL_CARD_PRESETS: Record<ModalCardSizePreset, ModalCardDimensionPreset> = {
     dialog: {
         minWidth: 280,
-        maxWidth: 360,
+        maxWidth: HAPPIER_PAGE_METRICS.dialogWidthPx.narrow,
         minHeight: 180,
         heightRatio: 0.48,
     },
     md: {
         minWidth: 320,
-        maxWidth: 560,
+        maxWidth: HAPPIER_PAGE_METRICS.dialogWidthPx.wide,
         minHeight: 280,
         maxHeight: 760,
         heightRatio: 0.85,
@@ -62,7 +63,9 @@ export function resolveModalCardDimensions(
     windowDimensions: Readonly<{ width: number; height: number }>,
     options: ModalCardDimensionOptions = {},
 ): ModalCardDimensions {
-    const preset = MODAL_CARD_PRESETS[options.size ?? 'md'];
+    const preset = options.size
+        ? MODAL_CARD_PRESETS[options.size]
+        : { ...MODAL_CARD_PRESETS.md, maxWidth: HAPPIER_PAGE_METRICS.dialogWidthPx.default };
     const viewportMargin = (() => {
         if (typeof options.viewportMargin === 'number') {
             return {

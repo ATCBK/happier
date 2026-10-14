@@ -154,18 +154,17 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.background.canvas,
     },
     content: {
-        padding: 24,
+        padding: theme.space.s24,
         gap: 28,
         maxWidth: 1040,
         width: '100%',
         alignSelf: 'center',
     },
     block: {
-        gap: 10,
+        gap: theme.space.s10,
     },
     caption: {
-        ...Typography.default('semiBold'),
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.tertiary,
     },
     paper: {
@@ -176,17 +175,17 @@ const styles = StyleSheet.create((theme) => ({
         overflow: 'hidden',
     },
     pagePaper: {
-        padding: 24,
+        padding: theme.space.s24,
     },
     boards: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 16,
+        gap: theme.space.s16,
     },
     board: {
         flexGrow: 1,
         flexBasis: 300,
-        padding: 20,
+        padding: theme.space.s20,
         gap: 14,
     },
 }));

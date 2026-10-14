@@ -31,7 +31,7 @@ export const SourceControlOperationsHistoryLoadMoreButton = React.memo((props: S
             })}
         >
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Text style={{ color: props.theme.colors.text.secondary, fontSize: 12, ...Typography.default('medium') }}>
+                <Text style={{ color: props.theme.colors.text.secondary, ...Typography.variant('meta', 'medium'),  }}>
                     {props.historyLoading ? t('common.loading') : t('files.operationsHistory.loadMore')}
                 </Text>
                 <Icon name="caret-down" size={14} color={props.theme.colors.text.secondary} />

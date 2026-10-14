@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -73,20 +74,19 @@ export const StructuredToolCard = React.memo(function StructuredToolCard(props: 
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        padding: 12,
+        padding: theme.space.s12,
         borderRadius: 8,
         backgroundColor: theme.colors.surface.inset,
-        gap: 10,
+        gap: theme.space.s10,
     },
     section: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     factRow: {
-        gap: 4,
+        gap: theme.space.s4,
     },
     title: {
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     label: {

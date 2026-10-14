@@ -102,7 +102,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     page: {
         flex: 1,
         minHeight: 0,
-        paddingBottom: 10,
+        paddingBottom: theme.space.s10,
     },
     stageBand: {
         width: '100%',
@@ -152,7 +152,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: '100%',
         minHeight: 0,
         flexGrow: 0,
-        paddingTop: 10,
+        paddingTop: theme.space.s10,
         borderTopWidth: 1,
         borderTopColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,

@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import { useSessionTranscriptSource, useTranscriptVisualContext } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import { useTranscriptRowContentDemand } from '@/components/sessions/transcript/viewport/visibility/TranscriptRowContentDemand';
 import * as React from 'react';
@@ -561,26 +562,25 @@ const styles = StyleSheet.create((theme) => ({
         marginVertical: 0,
     },
     body: {
-        paddingLeft: 24,
-        paddingRight: 10,
-        paddingBottom: 12,
-        paddingTop: 2,
+        paddingLeft: theme.space.s24,
+        paddingRight: theme.space.s10,
+        paddingBottom: theme.space.s12,
+        paddingTop: theme.space.s2,
     },
     headerRightContent: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     headerTerminalStatus: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         minWidth: 0,
     },
     headerTerminalStatusText: {
         color: theme.colors.state.danger.foreground,
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
         maxWidth: 220,
     },
 }));

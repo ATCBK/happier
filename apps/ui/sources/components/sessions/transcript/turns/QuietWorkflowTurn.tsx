@@ -72,6 +72,6 @@ const styles = StyleSheet.create((theme) => ({
     provenance: { maxWidth: '55%', minWidth: 0, flexShrink: 1 },
     toggle: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8,
         minHeight: HAPPIER_DEFAULT_MINIMUM_INTERACTIVE_TARGET_SIZE, flexShrink: 1, minWidth: 0 },
-    summary: { ...Typography.rowMeta(), color: theme.colors.text.secondary, flexShrink: 1, minWidth: 0 },
-    time: { ...Typography.rowMeta(), color: theme.colors.text.tertiary, flexShrink: 0 },
+    summary: { ...Typography.variant('meta'), color: theme.colors.text.secondary, flexShrink: 1, minWidth: 0 },
+    time: { ...Typography.variant('meta'), color: theme.colors.text.tertiary, flexShrink: 0 },
 }));

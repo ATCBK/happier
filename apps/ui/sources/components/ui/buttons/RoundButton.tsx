@@ -1,8 +1,7 @@
-import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, HappierPressable, happierRaisedEdgeStyle, type HappierPressableProps } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, HAPPIER_TYPE_SCALE, HappierPressable, happierRaisedEdgeStyle, type HappierPressableProps, type HappierTypeRole } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import { Platform, StyleProp, TextStyle, View } from 'react-native';
 import Animated from 'react-native-reanimated';
-import { iOSUIKit } from 'react-native-typography';
 import { Typography } from '@/constants/Typography';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Text } from '@/components/ui/text/Text';
@@ -60,11 +59,22 @@ export function RoundButtonSizeScope(props: Readonly<{
     const value = React.useMemo(() => ({ size: props.size, presentation: props.presentation ?? 'contextual' }), [props.size, props.presentation]);
     return <RoundButtonDefaultSizeContext.Provider value={value}>{props.children}</RoundButtonDefaultSizeContext.Provider>;
 }
-const sizes: { [key in RoundButtonSize]: { fontSize: number, hitSlop: number, pad: number } } = {
-    large: { fontSize: 21, hitSlop: 0, pad: Platform.OS == 'ios' ? 0 : -1 },
-    normal: { fontSize: 16, hitSlop: 8, pad: Platform.OS == 'ios' ? 1 : -2 },
-    small: { fontSize: 13, hitSlop: 12, pad: Platform.OS == 'ios' ? -1 : -1 },
-    mini: { fontSize: 12, hitSlop: 8, pad: 0 },
+/**
+ * Each tier's words are a role of the one type scale; the tiers differ by role and by the pill's
+ * geometry. `large` (a hero call to action: onboarding, story decks) reads `heading` in a taller pill
+ * rather than a display-size label; `normal` is every dialog and form action and reads `label`, the
+ * role a WebAlert action also uses, so all dialog actions are one family. `pad` is the native lift
+ * measured against each platform's line box; web centres the role's line box as it is.
+ */
+const sizes: { [key in RoundButtonSize]: { role: HappierTypeRole, hitSlop: number, pad: number } } = {
+    large: { role: 'heading', hitSlop: 0, pad: Platform.select({ ios: 0, android: -1, default: 0 }) },
+    normal: { role: 'label', hitSlop: 8, pad: Platform.select({ ios: 1, android: -2, default: 0 }) },
+    small: { role: 'body', hitSlop: 12, pad: Platform.select({ ios: -1, android: -1, default: 0 }) },
+    mini: { role: 'meta', hitSlop: 8, pad: 0 },
+}
+/** A contextual inline action (bordered, beside a label) never reads larger than `body`. */
+function resolveRoundButtonTextRole(role: HappierTypeRole, compactInline: boolean): HappierTypeRole {
+    return compactInline && HAPPIER_TYPE_SCALE[role].fontSize > HAPPIER_TYPE_SCALE.body.fontSize ? 'body' : role;
 }
 
 /**
@@ -99,21 +109,26 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingVertical: theme.space.s8,
         borderRadius: 9999,
     },
-    // An inline row or header action: it sits beside a label, so it is shorter than a call to action.
+    // A hero call to action: the same `md` pill, taller, so it leads by presence rather than type size.
+    contentContainerLarge: {
+        paddingVertical: theme.space.s10,
+    },
+    // An inline row or header action: it sits beside a label, so it is shorter than a call to action
+    // (`body` words in the 32 control height).
     contentContainerSecondary: {
         paddingHorizontal: theme.space.s12,
-        paddingVertical: theme.space.s4,
+        paddingVertical: theme.space.s6,
     },
     contentContainerSmall: {
         paddingHorizontal: theme.space.s10,
         paddingVertical: 3,
     },
-    textSmall: {
-        lineHeight: 18,
-    },
-    // A capsule's inline action: it shares the capsule's height band instead of setting its own.
+    // The smallest inline action; inside a capsule it shares the capsule's height band instead.
     contentContainerMini: {
         paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s4,
+    },
+    contentContainerInCapsule: {
         paddingVertical: 0,
     },
     // Applied only when a mark is present, so a title-only button keeps the exact
@@ -139,8 +154,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         justifyContent: 'center',
     },
     text: {
-        ...Typography.default('semiBold'),
-
         includeFontPadding: false,
     },
 }));
@@ -281,6 +294,7 @@ export const RoundButton = React.memo((props: {
     // geometry regardless of fill; an explicit size still overrides the group's default size.
     const compactInlineDisplay = scopedSizing.presentation !== 'uniform'
         && (props.display === 'secondary' || props.display === 'destructive');
+    const textTypography = Typography.variant(resolveRoundButtonTextRole(size.role, compactInlineDisplay), 'semiBold');
     // Native floors belong to the shared Pressable. A phone browser needs the same physical target;
     // keep pointer density on desktop and reserve real space instead of overlapping hit slop.
     const webTouchFloor = Platform.OS === 'web' ? resolveTouchTargetFloorPx() : null;
@@ -368,9 +382,11 @@ export const RoundButton = React.memo((props: {
                         style={[
                             styles.contentContainer,
                             props.leading || props.trailing ? styles.contentContainerWithMark : null,
+                            resolvedSize === 'large' ? styles.contentContainerLarge : null,
                             compactInlineDisplay ? styles.contentContainerSecondary : null,
                             resolvedSize === 'small' ? styles.contentContainerSmall : null,
                             props.size === 'mini' ? styles.contentContainerMini : null,
+                            props.capsuleHeight !== undefined ? styles.contentContainerInCapsule : null,
                         ]}
                     >
                         {state.busy && (
@@ -385,15 +401,13 @@ export const RoundButton = React.memo((props: {
                         ) : null}
                         <Text
                             style={[
-                                iOSUIKit.title3,
+                                textTypography,
                                 styles.text,
                                 {
                                     marginTop: size.pad,
                                     opacity: state.busy ? 0 : 1,
                                     color: textColor,
-                                    fontSize: compactInlineDisplay ? Math.min(size.fontSize, 13) : size.fontSize,
                                 },
-                                resolvedSize === 'small' ? styles.textSmall : null,
                                 // A wrapped label is a paragraph inside a centred pill, so
                                 // its second line centres under the first rather than
                                 // hanging off the leading edge. Single-line buttons are

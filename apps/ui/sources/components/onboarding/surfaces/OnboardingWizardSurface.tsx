@@ -106,21 +106,18 @@ const bareStylesheet = StyleSheet.create((theme) => ({
         maxWidth: 560,
         alignSelf: 'center',
         justifyContent: 'flex-start',
-        gap: 24,
+        gap: theme.space.s24,
     },
     content: {
         width: '100%',
-        gap: 10,
+        gap: theme.space.s10,
     },
     header: {
         width: '100%',
-        gap: 10,
+        gap: theme.space.s10,
     },
     title: {
-        ...Typography.default('semiBold'),
-        fontSize: 30,
-        lineHeight: 36,
-        letterSpacing: -0.7,
+        ...Typography.variant('display'),
         color: theme.colors.text.primary,
     },
     subtitle: {
@@ -131,7 +128,7 @@ const bareStylesheet = StyleSheet.create((theme) => ({
     },
     body: {
         width: '100%',
-        gap: 24,
+        gap: theme.space.s24,
     },
     footer: {
         width: '100%',

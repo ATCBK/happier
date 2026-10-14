@@ -87,8 +87,8 @@ const BOARD_SESSION: WidgetSurfaceContext = {
 const stylesheet = StyleSheet.create((theme) => ({
     desktop: { width: 800 },
     phone: { width: 390 },
-    row: { ...Typography.default(), fontSize: 13, lineHeight: 18, color: theme.colors.text.primary },
-    sub: { ...Typography.default(), fontSize: 12, lineHeight: 16, color: theme.colors.text.secondary },
+    row: {  ...Typography.variant('body'),  color: theme.colors.text.primary },
+    sub: {  ...Typography.variant('meta'),  color: theme.colors.text.secondary },
 }));
 
 function StandInChecks(): React.ReactElement {
@@ -171,7 +171,7 @@ function StandInSignups(): React.ReactElement {
     const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
     const days = [['Thu', 142], ['Fri', 168], ['Sat', 151], ['Sun', 189], ['Mon', 214], ['Tue', 236], ['Wed', 183]] as const;
     return (
-        <View style={{ gap: 12 }}>
+        <View style={{ gap: theme.space.s12 }}>
             <HappierDataMetric label="Signups this week" value={1284} theme={presentationTheme}
                 comparison={{ value: '+18%', label: 'vs the week before', meaning: 'good' }} />
             <HappierDataChart label="Signups per day" style="bar" theme={presentationTheme} points={days.map(([x, y]) => ({ x, y }))} />

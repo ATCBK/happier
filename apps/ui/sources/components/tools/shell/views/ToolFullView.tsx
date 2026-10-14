@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View, ScrollView, useWindowDimensions } from 'react-native';
 import { ToolCall, Message } from "@happier-dev/session-core/messages";
@@ -204,7 +205,7 @@ function ToolFullViewContent({ tool, owningMessageId, sessionId, serverId, metad
                 <Icon name="code" size={20} color={theme.colors.accent.orange} />
                 <Text style={styles.sectionTitle}>{t('tools.fullView.debug')}</Text>
                 <Text
-                    style={[styles.toolId, { marginLeft: 8 }]}
+                    style={[styles.toolId, { marginLeft: theme.space.s8 }]}
                     onPress={() => setShowDebug((v) => !v)}
                 >
                     {showDebug ? t('tools.fullView.hide') : t('tools.fullView.show')}
@@ -397,7 +398,7 @@ const styles = StyleSheet.create((theme) => ({
     container: {
         flex: 1,
         backgroundColor: theme.colors.surface.base,
-        paddingTop: 12,
+        paddingTop: theme.space.s12,
     },
     contentWrapper: {
         alignSelf: 'center',
@@ -405,7 +406,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     section: {
         marginBottom: 28,
-        paddingHorizontal: 4,
+        paddingHorizontal: theme.space.s4,
     },
     sectionFullWidth: {
         marginBottom: 28,
@@ -419,12 +420,11 @@ const styles = StyleSheet.create((theme) => ({
     sectionHeader: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 12,
-        gap: 8,
+        marginBottom: theme.space.s12,
+        gap: theme.space.s8,
     },
     sectionTitle: {
-        fontSize: 17,
-        fontWeight: '600',
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
     },
     description: {
@@ -440,7 +440,7 @@ const styles = StyleSheet.create((theme) => ({
     errorContainer: {
         backgroundColor: theme.colors.state.danger.background,
         borderRadius: 8,
-        padding: 16,
+        padding: theme.space.s16,
         borderWidth: 1,
         borderColor: theme.colors.state.danger.border,
     },
@@ -451,12 +451,11 @@ const styles = StyleSheet.create((theme) => ({
     },
     emptyOutputContainer: {
         alignItems: 'center',
-        paddingVertical: 48,
-        gap: 12,
+        paddingVertical: theme.space.s48,
+        gap: theme.space.s12,
     },
     emptyOutputText: {
-        fontSize: 16,
-        fontWeight: '600',
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
     },
     emptyOutputSubtext: {

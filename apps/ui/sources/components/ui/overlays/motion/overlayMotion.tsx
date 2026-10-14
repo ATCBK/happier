@@ -155,7 +155,7 @@ export function useOverlayPresence(visible: boolean, exitMs: number): Readonly<{
 export function useOverlayMotionAnimation(params: Readonly<{
     visible: boolean;
     preset: OverlayMotionPreset;
-    /** Web frames animate as a whole; one holding material paint moves by transform and never fades. */
+    /** Web frames animate as a whole; one holding material paint moves by transform, and on exit fades its paint and content, never the frame. */
     elementRef?: React.RefObject<unknown>;
 }>): Readonly<{
     exitMs: number;
@@ -230,6 +230,24 @@ function webOverlayMotionTargets(element: HTMLElement): WebMotionTarget[] {
     return [{ element, paint: material }];
 }
 
+/**
+ * What a leaving material frame fades: every glass paint layer itself and every subtree beside the paint
+ * (content, the directional rim, a card's tinted ring), never an ancestor of a paint. The surface thins
+ * out as it travels, while each paint keeps sampling the page through its own blur.
+ */
+function webMaterialFadeLayers(frame: HTMLElement): Element[] {
+    if (frame.matches(GLASS_BACKDROP_SELECTOR)) return [frame];
+    const layers: Element[] = [];
+    const visit = (parent: Element) => {
+        for (const child of Array.from(parent.children)) {
+            if (child.matches(GLASS_BACKDROP_SELECTOR) || child.querySelector(GLASS_BACKDROP_SELECTOR) === null) layers.push(child);
+            else visit(child);
+        }
+    };
+    visit(frame);
+    return layers;
+}
+
 type WebContentMotionTarget = {
     animation: Animation | null;
     opacity: string;
@@ -244,6 +262,7 @@ function useWebOverlayContentMotion(params: Readonly<{
     elementRef?: React.RefObject<unknown>;
 }>, reducedMotion: boolean): void {
     const targetsRef = React.useRef(new Map<HTMLElement, WebContentMotionTarget>());
+    const fadesRef = React.useRef(new Map<Element, Animation>());
     const presetRef = React.useRef(params.preset);
     presetRef.current = params.preset;
     React.useLayoutEffect(() => {
@@ -290,8 +309,11 @@ function useWebOverlayContentMotion(params: Readonly<{
                 });
             }
         }
+        if (hasMaterial) fadeMaterialLayers(element, fadesRef.current, params.visible, duration);
     }, [params.elementRef, params.visible, reducedMotion]);
     React.useEffect(() => () => {
+        for (const fade of fadesRef.current.values()) fade.cancel();
+        fadesRef.current.clear();
         for (const [target, state] of targetsRef.current) {
             state.animation?.cancel();
             target.style.opacity = state.opacity;
@@ -299,6 +321,29 @@ function useWebOverlayContentMotion(params: Readonly<{
         }
         targetsRef.current.clear();
     }, []);
+}
+
+/**
+ * A material frame enters by transform alone (it is never see-through on the way in). On the way out its
+ * paint and content fade while it travels, so it does not end in a cut; the fade holds until the overlay
+ * unmounts. Opening again mid-way fades back from where each layer is.
+ */
+function fadeMaterialLayers(frame: HTMLElement, fades: Map<Element, Animation>, visible: boolean, duration: number): void {
+    const layers = visible ? Array.from(fades.keys()) : webMaterialFadeLayers(frame);
+    for (const layer of layers) {
+        const previous = fades.get(layer);
+        const current = previous?.playState === 'running' ? getComputedStyle(layer).opacity : null;
+        previous?.cancel();
+        fades.delete(layer);
+        if (duration <= 0 || typeof layer.animate !== 'function') continue;
+        if (visible) {
+            // A finished fade only needs cancelling; a running one turns around from its current opacity.
+            if (current !== null) fades.set(layer, layer.animate([{ opacity: current, offset: 0 }], { duration, easing: motionTokens.easingCss.standard }));
+            continue;
+        }
+        const leave: Keyframe[] = current === null ? [{ opacity: 0, offset: 1 }] : [{ opacity: current }, { opacity: 0 }];
+        fades.set(layer, layer.animate(leave, { duration, easing: motionTokens.easingCss.exit, fill: 'forwards' }));
+    }
 }
 
 type OverlayPanelMotionParams = Readonly<{

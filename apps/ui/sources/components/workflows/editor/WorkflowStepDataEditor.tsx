@@ -207,7 +207,7 @@ export function WorkflowValueReferenceToken(props: Readonly<{ draft: WorkflowEdi
     // A reference reads as the lab's tinted chip (`.uwe-ref`): the accent's own tint behind accent words,
     // inline in a sentence or on a step's footer line, never a bare link-coloured run of text.
     return <Text testID={props.testID} style={{ color: theme.colors.state.active.foreground, backgroundColor: theme.colors.state.active.background,
-        borderRadius: theme.borderRadius.sm, paddingHorizontal: theme.margins.xs }} selectable>{`↵ ${formatWorkflowValueReference(props.draft, props.reference)}`}</Text>;
+        borderRadius: theme.borderRadius.sm, paddingHorizontal: theme.space.s4 }} selectable>{`↵ ${formatWorkflowValueReference(props.draft, props.reference)}`}</Text>;
 }
 
 /** Keeps the localized sentence intact while its references use the same token owner. */

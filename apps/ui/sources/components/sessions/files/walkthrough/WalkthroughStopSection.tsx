@@ -146,7 +146,7 @@ export const WalkthroughStopSection = React.memo(function WalkthroughStopSection
         >
             <View style={styles.stopHeader}>
                 <View style={styles.numberSlot}><WalkthroughStopNumber number={stop.number} reviewed={stop.reviewed} current={props.current} /></View>
-                <Text accessibilityRole="header" style={[styles.stopTitle, phone ? styles.stopTitlePhone : null]}>{stop.title}</Text>
+                <Text accessibilityRole="header" style={styles.stopTitle}>{stop.title}</Text>
                 {importance ? <Text style={styles.importance}>{importance}</Text> : null}
             </View>
             {stop.provenance && (stop.provenance.titleEdited || stop.provenance.changedAtRevision !== undefined || stop.provenance.movedAtRevision !== undefined) ? (
@@ -247,14 +247,11 @@ const styles = StyleSheet.create((theme) => ({
     numberSlot: { paddingTop: theme.space.s2 },
     stopTitle: {
         flex: 1,
-        fontSize: 18,
-        lineHeight: 25,
-        letterSpacing: -0.25,
+        ...Typography.variant('title'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
     },
-    stopTitlePhone: { fontSize: 19, lineHeight: 25 },
-    importance: { ...Typography.variant('meta'), lineHeight: 25, color: theme.colors.text.tertiary,  },
+    // Sits on the stop title's first line.
+    importance: { ...Typography.variant('meta'), lineHeight: Typography.variant('title').lineHeight, color: theme.colors.text.tertiary },
     indent: { marginLeft: theme.space.s32, marginTop: theme.space.s6 },
     indentPhone: { marginLeft: 0 },
     prose: { fontSize: 15, lineHeight: 23, color: theme.colors.text.primary },

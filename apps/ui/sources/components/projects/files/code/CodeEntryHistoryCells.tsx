@@ -94,15 +94,15 @@ const styles = StyleSheet.create((theme) => ({
         justifyContent: 'center',
     },
     subject: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     none: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
     },
     time: {
-        ...Typography.rowMeta(),
+        ...Typography.variant('meta'),
         ...Typography.tabular(),
         color: theme.colors.text.tertiary,
         textAlign: 'right',

@@ -11,14 +11,14 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         backgroundColor: theme.colors.surface.base,
     },
     scrollContent: {
-        padding: 16,
-        paddingBottom: 32,
+        padding: theme.space.s16,
+        paddingBottom: theme.space.s32,
     },
     section: {
-        marginBottom: 24,
+        marginBottom: theme.space.s24,
         backgroundColor: theme.colors.surface.base,
         borderRadius: 12,
-        padding: 16,
+        padding: theme.space.s16,
         shadowColor: '#000',
         shadowOffset: {
             width: 0,
@@ -31,13 +31,13 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     sectionTitle: {
         fontSize: 20,
         fontWeight: 'bold',
-        marginBottom: 12,
+        marginBottom: theme.space.s12,
         color: '#333',
     },
     themeCard: {
-        padding: 16,
+        padding: theme.space.s16,
         borderRadius: 8,
-        marginBottom: 12,
+        marginBottom: theme.space.s12,
         backgroundColor: theme.colors.surface.base,
         borderWidth: 2,
         borderColor: theme.colors.surface.base,
@@ -49,8 +49,8 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         textAlign: 'center',
     },
     breakpointBox: {
-        padding: 12,
-        margin: 4,
+        padding: theme.space.s12,
+        margin: theme.space.s4,
         borderRadius: 8,
         backgroundColor: {
             xs: '#FF6B6B',
@@ -83,7 +83,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     responsiveBox: {
         flex: 1,
         backgroundColor: theme.colors.surface.base,  // TODO: change to primary
-        padding: 16,
+        padding: theme.space.s16,
         borderRadius: 8,
         minHeight: 80,
         justifyContent: 'center',
@@ -94,7 +94,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
             portrait: '#E74C3C',
             landscape: '#2ECC71',
         },
-        padding: 20,
+        padding: theme.space.s20,
         borderRadius: 8,
         alignItems: 'center',
         justifyContent: 'center',
@@ -107,9 +107,9 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     runtimeBox: {
         backgroundColor: '#9B59B6',
-        padding: 12,
+        padding: theme.space.s12,
         borderRadius: 8,
-        marginBottom: 8,
+        marginBottom: theme.space.s8,
     },
     runtimeText: {
         color: 'white',
@@ -118,9 +118,9 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     themeButton: {
         backgroundColor: theme.colors.surface.base,  // TODO: change to primary
-        padding: 12,
+        padding: theme.space.s12,
         borderRadius: 8,
-        marginHorizontal: 4,
+        marginHorizontal: theme.space.s4,
         minWidth: 80,
         alignItems: 'center',
     },
@@ -132,7 +132,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 12,
+        marginBottom: theme.space.s12,
     },
     adaptiveBox: {
         backgroundColor: theme.colors.surface.base,  // TODO: change to primary
@@ -150,7 +150,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
             lg: 10,
             xl: 12,
         },
-        marginBottom: 8,
+        marginBottom: theme.space.s8,
     },
     adaptiveText: {
         color: 'white',
@@ -194,7 +194,7 @@ export default function UnistylesDemo() {
                         </Text>
                     </View>
 
-                    <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 8 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'center', gap: theme.space.s8 }}>
                         <Pressable
                             style={styles.themeButton}
                             onPress={() => switchTheme('light')}
@@ -213,7 +213,7 @@ export default function UnistylesDemo() {
                 {/* Breakpoints Demo */}
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>📱 Responsive Breakpoints</Text>
-                    <Text style={{ marginBottom: 12, color: '#666' }}>
+                    <Text style={{ marginBottom: theme.space.s12, color: '#666' }}>
                         Current: {rt.breakpoint} ({screenWidth}px)
                     </Text>
 
@@ -254,7 +254,7 @@ export default function UnistylesDemo() {
                 {/* Adaptive Components */}
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>🎯 Adaptive Components</Text>
-                    <Text style={{ marginBottom: 12, color: '#666' }}>
+                    <Text style={{ marginBottom: theme.space.s12, color: '#666' }}>
                         Padding and border radius adapt to screen size
                     </Text>
 
@@ -326,7 +326,7 @@ export default function UnistylesDemo() {
                     )}
 
                     <Pressable
-                        style={[styles.themeButton, { marginTop: 12 }]}
+                        style={[styles.themeButton, { marginTop: theme.space.s12 }]}
                         onPress={toggleColorScheme}
                     >
                         <Text style={styles.themeButtonText}>
@@ -340,7 +340,7 @@ export default function UnistylesDemo() {
                     <Text style={styles.sectionTitle}>🌙 Color Scheme</Text>
                     <View style={{
                         backgroundColor: rt.colorScheme === 'dark' ? '#2C3E50' : '#ECF0F1',
-                        padding: 16,
+                        padding: theme.space.s16,
                         borderRadius: 8,
                     }}>
                         <Text style={{
@@ -355,7 +355,7 @@ export default function UnistylesDemo() {
                             color: rt.colorScheme === 'dark' ? '#BDC3C7' : '#7F8C8D',
                             textAlign: 'center',
                             fontSize: 14,
-                            marginTop: 4
+                            marginTop: theme.space.s4
                         }}>
                             This box adapts to system color scheme
                         </Text>

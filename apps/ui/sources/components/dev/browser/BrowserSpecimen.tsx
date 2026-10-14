@@ -328,9 +328,9 @@ export function BrowserSpecimen(props: Readonly<{ only: string | null; phone: bo
 
 const styles = StyleSheet.create((theme) => ({
     root: { flex: 1, backgroundColor: theme.colors.surface.inset },
-    content: { padding: 16, gap: 24 },
+    content: { padding: theme.space.s16, gap: theme.space.s24 },
     grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 22 },
-    caption: { ...Typography.default('semiBold'), fontSize: 12, color: theme.colors.text.secondary, padding: 8 },
+    caption: {  ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.secondary, padding: theme.space.s8 },
     frame: {
         // The lab's Details body is 600 wide inside its hairlines; the frame's border sits outside it.
         width: 602,
@@ -348,5 +348,5 @@ const styles = StyleSheet.create((theme) => ({
     },
     frameBody: { flex: 1, minHeight: 0 },
     motion: { flex: 1, minHeight: 0 },
-    motionControls: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, padding: 8 },
+    motionControls: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s6, padding: theme.space.s8 },
 }));
