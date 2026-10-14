@@ -60,6 +60,7 @@ export function LocalPreviewTarget(props: Readonly<{
         <BrowserViewFrame
             engine={{
                 kind: 'webIframe',
+                localPreview: true,
                 title: props.title,
                 url: props.url,
                 sandbox: resolveLocalPreviewIframeSandbox(props.url),

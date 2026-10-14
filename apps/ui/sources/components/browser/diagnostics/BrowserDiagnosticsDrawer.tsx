@@ -116,7 +116,11 @@ export function resetBrowserDiagnosticsDrawerStateForTests(): void {
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
+    // The handle row (grabber, title, Hide) and the section bar keep their own height: a squeezed
+    // root laid them out beneath the shell's bottom bar, sharing hit area with its overflow icon.
+    // Only the body below yields (`bodyClip`).
     root: {
+        flexShrink: 0,
         borderTopWidth: 1,
         borderTopColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
@@ -126,15 +130,15 @@ const stylesheet = StyleSheet.create((theme) => ({
     handleRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        paddingHorizontal: 12,
-        paddingTop: 4,
-        paddingBottom: 8,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s12,
+        paddingTop: theme.space.s4,
+        paddingBottom: theme.space.s8,
     },
     grabberSlot: {
         alignItems: 'center',
-        paddingTop: 6,
-        paddingBottom: 2,
+        paddingTop: theme.space.s6,
+        paddingBottom: theme.space.s2,
     },
     grabber: {
         width: 36,
@@ -148,10 +152,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     titleColumn: {
         flex: 1,
         minWidth: 0,
-        gap: 2,
+        gap: theme.space.s2,
     },
     title: {
-        ...Typography.rowTitle(),
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
     },
     sectionBar: {
@@ -159,10 +163,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderTopColor: theme.colors.border.default,
     },
     sectionBarContent: {
-        paddingHorizontal: 12,
-        paddingVertical: 6,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s6,
     },
     bodyClip: {
+        flexShrink: 1,
+        minHeight: 0,
         overflow: 'hidden',
     },
     bodyScroll: {
@@ -517,7 +523,7 @@ export function BrowserDiagnosticsDrawer(props: Readonly<{
             ) : null}
 
             {bodyVisible ? (
-                <Animated.View style={[stylesheet.bodyClip, bodyAnimatedStyle]}>
+                <Animated.View testID={`${testID}-body-clip`} style={[stylesheet.bodyClip, bodyAnimatedStyle]}>
                     <ScrollView style={stylesheet.bodyScroll} showsVerticalScrollIndicator={false}>
                         <BrowserDiagnosticsDrawerBody
                             diagnostics={bodyDiagnostics}

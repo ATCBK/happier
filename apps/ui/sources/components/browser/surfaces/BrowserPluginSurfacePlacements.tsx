@@ -21,14 +21,15 @@ import { selectRenderablePluginSurfacePlacementsForBinding } from '@/sync/domain
 import type { PluginSurfaceHostActionExecute } from '@/components/plugins/surfaces/pluginSurfaceActionDispatch';
 
 const stylesheet = StyleSheet.create(() => ({
-    // A sibling of the Browser shell, whose own box is `flex: 1; min-height: 0`. Unbounded, a tall
-    // plugin panel takes the whole column, the shell collapses to zero height and its toolbar and
-    // diagnostics drawer overflow underneath this later-painted region, which then catches every
-    // pointer press meant for them. A bounded region shares the column and scrolls inside itself.
+    // A sibling of the Browser shell. Unbounded, a tall plugin panel takes the whole column, the
+    // shell collapses and its chrome overflows underneath this later-painted region, which then
+    // catches every pointer press meant for the toolbar, page controls and diagnostics drawer. The
+    // panel sizes to its content, yields first, never exceeds its share, and scrolls inside itself.
     region: {
-        flexGrow: 1,
-        flexBasis: 0,
+        flexGrow: 0,
+        flexShrink: 1,
         minHeight: 0,
+        maxHeight: '40%',
         overflow: 'hidden',
     },
 }));

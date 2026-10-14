@@ -13,6 +13,7 @@ export function BrowserViewFrame(props: Readonly<{
         case 'webIframe':
             return (
                 <WebIframeEngine
+                    localPreview={props.engine.localPreview}
                     title={props.engine.title}
                     {...(props.engine.html === undefined
                         ? { url: props.engine.url }

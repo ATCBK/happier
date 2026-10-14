@@ -228,26 +228,34 @@ function BrowserHostDiagnosticsPanel(props: Readonly<{
     testID: string;
 }>): React.ReactElement {
     const unavailableFamilies = props.diagnostics.families.filter((family) => family.status === 'unavailable');
+    // Unavailable says so once, on the status line: an "Unavailable" fidelity badge beside it, a
+    // "0 diagnostic events" count and the injected-page tamper notice all describe a capture that
+    // is not happening.
+    const unavailable = props.diagnostics.status === 'unavailable';
 
     return (
         <>
             <View style={stylesheet.header}>
                 <View style={stylesheet.titleRow}>
                     <Text style={stylesheet.title}>{t('browserDiagnostics.host.title')}</Text>
-                    <BrowserDiagnosticsFidelityBadge
-                        fidelity={props.diagnostics.fidelity}
-                        testID={`${props.testID}-fidelity-${props.diagnostics.fidelity}`}
-                    />
+                    {unavailable ? null : (
+                        <BrowserDiagnosticsFidelityBadge
+                            fidelity={props.diagnostics.fidelity}
+                            testID={`${props.testID}-fidelity-${props.diagnostics.fidelity}`}
+                        />
+                    )}
                 </View>
                 <Text testID={`${props.testID}-status`} style={stylesheet.status}>
                     {statusLabel(props.diagnostics.status)}
                 </Text>
-                <Text testID={`${props.testID}-event-count`} style={stylesheet.subtitle}>
-                    {t('browserDiagnostics.host.eventCount', {
-                        count: formatNumber(props.diagnostics.eventCount),
-                    })}
-                </Text>
-                {!props.diagnostics.trusted ? (
+                {unavailable ? null : (
+                    <Text testID={`${props.testID}-event-count`} style={stylesheet.subtitle}>
+                        {t('browserDiagnostics.host.eventCount', {
+                            count: formatNumber(props.diagnostics.eventCount),
+                        })}
+                    </Text>
+                )}
+                {!unavailable && !props.diagnostics.trusted ? (
                     <Text testID={`${props.testID}-untrusted`} style={stylesheet.warning}>
                         {t('browserDiagnostics.host.untrustedNotice')}
                     </Text>

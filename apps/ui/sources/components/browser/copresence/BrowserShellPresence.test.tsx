@@ -51,7 +51,8 @@ function Surface({ currentView, enabled = true }: Readonly<{ currentView: Browse
         onCheckAgain={target => execute.execute('browser.automation.snapshot', {
             v: 1, ...target, navigationGeneration: currentView.navigationGeneration, automationRequestId: 'fresh',
             requestedBy: 'user', requesterRef: { kind: 'session', id: 'session_1' }, actionKind: 'snapshot', timeoutMs: 1000,
-        }, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, defaultMachineId: 'machine_1' })}
+        }, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+            externalActionTarget: { kind: 'machine', machineId: 'machine_1' } })}
         onCommand={command => execute.execute(browserControlActionId(command), command, {
             surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
         })} testID="p" />;
@@ -74,6 +75,7 @@ describe('BrowserShellPresence daemon takeover', () => {
         await screen.update(<Surface currentView={currentView} />);
         await screen.pressByTestIdAsync('p-check-again');
         expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ actionId: 'browser.automation.snapshot',
+            context: expect.objectContaining({ externalActionTarget: { kind: 'machine', machineId: 'machine_1' } }),
             input: expect.objectContaining({ browserSessionId: 'browser_1', viewId: 'view_1',
                 navigationGeneration: currentView.navigationGeneration, actionKind: 'snapshot' }) }));
         expect(screen.getTextContent()).toContain('browserPresence.lastActionMayHaveLanded');

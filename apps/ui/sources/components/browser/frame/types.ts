@@ -141,6 +141,7 @@ export type WebIframeSource =
 
 export type WebIframeEngineConfig = Readonly<{
     kind: 'webIframe';
+    localPreview?: boolean;
     title: string;
     sandbox: string;
     testID: string;

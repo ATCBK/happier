@@ -314,7 +314,7 @@ describe('BrowserPluginSurfacePlacements', () => {
                 // zero: the shell chrome then overflows underneath this later-painted region and
                 // every pointer press lands on the plugin instead of the toolbar/drawer controls.
                 const style = StyleSheet.flatten(region?.props.style) ?? {};
-                expect(style).toMatchObject({ flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden' });
+                expect(style).toMatchObject({ flexGrow: 0, flexShrink: 1, minHeight: 0, maxHeight: '40%', overflow: 'hidden' });
             },
         );
     });

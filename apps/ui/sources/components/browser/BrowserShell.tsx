@@ -103,6 +103,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     root: {
         flex: 1,
         minHeight: 0,
+        // The shell paints only inside its own box: when a sibling panel shares the column and
+        // squeezes it, chrome can never overflow beneath that panel and lose its hit area.
+        overflow: 'hidden',
         backgroundColor: theme.colors.surface.base,
     },
     // One quiet row that recedes (lab `browser` Q): plain navigation glyphs, the address capsule with
@@ -112,9 +115,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'nowrap',
-        gap: 4,
-        paddingHorizontal: 8,
-        paddingVertical: 6,
+        gap: theme.space.s4,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s6,
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
@@ -126,21 +129,27 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexShrink: 1,
         flexBasis: BROWSER_CHROME_WIDTH.addressFloor,
         minWidth: 0,
-        marginHorizontal: 4,
+        marginHorizontal: theme.space.s4,
     },
+    // The page and its in-page controls. It is the ONE region that yields when the pane is short:
+    // the toolbar, the drawer handle and the bottom bar keep their height, so no toolbar control is
+    // pushed outside the shell box (where a sibling panel would catch its pointer hits). It clips
+    // its own content, so a squeezed page can never paint over the drawer either.
     viewHost: {
         flex: 1,
+        flexShrink: 1,
         minHeight: 0,
+        overflow: 'hidden',
     },
     // Phone (lab `browser` Qp): the host capsule alone at the top, no rule under it — the page begins
     // where the capsule's breathing room ends.
     phoneTopBar: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        paddingHorizontal: 16,
-        paddingTop: 6,
-        paddingBottom: 8,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s6,
+        paddingBottom: theme.space.s8,
         backgroundColor: theme.colors.surface.base,
     },
     phoneAddressSlot: {
@@ -154,7 +163,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         minHeight: 48,
-        paddingHorizontal: 8,
+        paddingHorizontal: theme.space.s8,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
@@ -660,7 +669,7 @@ export function BrowserShell(props: Readonly<{
                     {overflowMenu}
                 </View>
             )}
-            <View style={stylesheet.viewHost}>
+            <View testID={`${testID}-page-region`} style={stylesheet.viewHost}>
                 <BrowserLoadProgressBar
                     testID={`${testID}-load-progress`}
                     progress={activeView?.loadingProgress ?? null}
