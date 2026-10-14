@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { copyFile, mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -10,12 +10,14 @@ import test from 'node:test';
 
 import {
   planRequiresRemoteCliWorkspacePreparation,
+  prepareStackDevTargetSourceReload,
   resolvePreservedDaemonTargetPlans,
   resolveDefaultRemoteServerPort,
   resolveRemoteServerReadyTimeoutMs,
   startStackDevTargets as startStackDevTargetsImpl,
   startStackDevTargetsInBackground,
 } from './supervisor.mjs';
+import { spawnProc } from '../proc/proc.mjs';
 import { resolveDevTargetMutagenRuntime } from './mutagen_runtime.mjs';
 import { prepareDevTargetOpenSsh, runDevTargetControlProcess } from './sync_project.mjs';
 import { renderMutagenProject, resolveMutagenSessionName } from './mutagen_project.mjs';
@@ -596,6 +598,66 @@ function readySyncResult(target) {
   return { code: 0, out: JSON.stringify([{ name: resolveMutagenSessionName(target.name), paused: false, status: 'watching', conflicts: [], excludedConflicts: 0,
     successfulCycles: 1, alpha: { connected: true, scanned: true }, beta: { connected: true, scanned: true } }]) };
 }
+
+test('remote source preparation refusal leaves the observed incumbent process and runtime record intact', async (t) => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-remote-reload-refusal-' });
+  const stackName = 'agent-qa';
+  const brokenRepoDir = join(root, 'broken-repo');
+  const target = { name: 'nl3', platform: 'posix', ssh: 'boundary-ssh', repoDir: brokenRepoDir,
+    cliHomeDir: join(root, 'remote-home') };
+  const producerStackBaseDir = join(root, 'producer');
+  const env = { ...process.env, HAPPIER_STACK_STORAGE_DIR: join(root, 'storage'),
+    HAPPIER_STACK_SERVER_COMPONENT: 'happier-server-light', HAPPIER_DB_PROVIDER: 'sqlite' };
+  const mutagen = resolveDevTargetMutagenRuntime({ stackBaseDir: producerStackBaseDir, sourceDir: repoDir, env });
+  await Promise.all([mkdir(brokenRepoDir, { recursive: true }), mkdir(dirname(mutagen.projectFile), { recursive: true })]);
+  await writeFile(mutagen.projectFile, renderMutagenProject({ sourceDir: repoDir, targets: [target], ownerId: 'producer' }));
+  const paths = resolveRemoteStackStatePaths(target, { stackName, runtimeMode: 'source-snapshot' });
+  await mkdir(paths.stackBaseDir, { recursive: true });
+  const incumbent = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  t.after(() => { try { incumbent.kill('SIGKILL'); } catch {} });
+  await new Promise((resolve, reject) => { incumbent.once('spawn', resolve); incumbent.once('error', reject); });
+  const runtimeStatePath = join(paths.stackBaseDir, 'stack.runtime.json');
+  const initial = await recordStackRuntimeStart(runtimeStatePath, {
+    stackName,
+    script: 'run.mjs',
+    ephemeral: true,
+    ownerPid: incumbent.pid,
+    processes: {},
+  });
+  const controller = new AbortController();
+  const workerScript = fileURLToPath(new URL('../../runtime/launch/prepareSourceRuntimeReload.mjs', import.meta.url));
+  await assert.rejects(prepareStackDevTargetSourceReload({
+    stackName,
+    stackBaseDir: join(root, 'consumer'),
+    repoDir,
+    placement: {
+      authority: { producerStackBaseDir },
+      config: { targets: [target] },
+      targetPlans: [{ target, services: { server: false, daemon: true, expo: false } }],
+    },
+    args: ['--no-server', '--server-url=http://fixture.invalid', '--no-ui'],
+    env,
+    signal: controller.signal,
+    serverRequested: false,
+    sourceStartRequestId: 'remote-refusal',
+  }, {
+    runProcess: async () => readySyncResult(target),
+    executorDependencies: {
+      runCaptureResult: async () => ({ ok: true, out: readySyncResult(target).out, err: '', exitCode: 0 }),
+      spawnProcess: input => spawnProc(input.label, process.execPath, [workerScript, '--worker', JSON.stringify({
+        stackName,
+        stackBaseDir: paths.stackBaseDir,
+        repoDir: brokenRepoDir,
+        args: ['--no-server', '--server-url=http://fixture.invalid', '--no-ui'],
+        sourceStartRequestId: 'remote-refusal',
+      })], input.env, { onLine: input.onLine, stdio: ['pipe', 'pipe', 'pipe'], ownedProcessGroup: true, silent: true }),
+    },
+  }), /preparation exited before readiness/);
+  assert.doesNotThrow(() => process.kill(incumbent.pid, 0));
+  const retained = await readStackRuntimeStateFile(runtimeStatePath);
+  assert.equal(retained?.ownerPid, initial.ownerPid);
+  assert.equal(retained?.startedAt, initial.startedAt);
+});
 
 test('source snapshot supervisor builds on each mirror without native transfer or dependency preparation and projects observed identities', { timeout: 10_000 }, async (t) => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-source-snapshot-supervisor-' });
