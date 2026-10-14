@@ -144,6 +144,7 @@ export async function applyReleasedUiV021SessionEnd(params: Readonly<{
             active: false,
             latestTurnStatus,
             lastRuntimeIssue: nextStoredRuntimeIssue,
+            ...(turn?.ok ? turn.pendingRequestProjection : {}),
         });
         return {
             status: "applied" as const,
@@ -154,6 +155,7 @@ export async function applyReleasedUiV021SessionEnd(params: Readonly<{
             activityChanged: activity.status === "applied",
             activityProjection: activity.projection,
             turnChanged: turnApplied,
+            pendingRequestProjection: turn?.ok ? turn.pendingRequestProjection : undefined,
             latestTurnId: turn?.ok ? turn.latestTurnId : session.latestTurnId,
             latestTurnStatus,
             latestTurnStatusObservedAt,
@@ -177,6 +179,7 @@ export async function applyReleasedUiV021SessionEnd(params: Readonly<{
                         latestTurnStatus: result.latestTurnStatus,
                         latestTurnStatusObservedAt: result.latestTurnStatusObservedAt,
                         lastRuntimeIssue: result.lastRuntimeIssue,
+                        ...result.pendingRequestProjection,
                     } : {}),
                 },
                 session,

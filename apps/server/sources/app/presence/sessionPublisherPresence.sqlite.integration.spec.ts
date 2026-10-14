@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Server, Socket } from "socket.io";
 import {
+    UpdateBodySchema,
     MACHINE_SESSION_TERMINAL_CAPTURE_EVENT_V1,
     MachineSessionTerminalCaptureResponseV1Schema,
 } from "@happier-dev/protocol";
@@ -9,6 +10,8 @@ import { machineUpdateHandler } from "@/app/api/socket/machineUpdateHandler";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { eventRouter } from "@/app/events/eventRouter";
+import { publishSessionPublisherClose } from "./publishSessionPublisherClose";
 import { db } from "@/storage/db";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
@@ -400,6 +403,14 @@ describe("session publisher presence on SQLite", () => {
             runtimeActivityActiveCount: 0,
         });
 
+        await db.session.update({
+            where: { id: seeded.binding.sessionId },
+            data: {
+                pendingPermissionRequestCount: 2,
+                pendingUserActionRequestCount: 1,
+                pendingRequestObservedAt: now,
+            },
+        });
         const closed = await presence.closePublisher({ socket: successor });
         expect(closed.status).toBe("closed");
         if (closed.status !== "closed") throw new Error("expected close");
@@ -407,7 +418,29 @@ describe("session publisher presence on SQLite", () => {
             latestTurnId: turnId,
             latestTurnStatus: "cancelled",
         });
-        expect(closed.badgeAttentionChanged).toBe(false);
+        expect(closed.badgeAttentionChanged).toBe(true);
+        // Only fanout is replaced; the real publisher close transaction feeds the real publisher.
+        const updates = vi.spyOn(eventRouter, "emitUpdate").mockImplementation(() => {});
+        try {
+            await publishSessionPublisherClose({
+                sessionId: seeded.binding.sessionId,
+                publisherAccountId: seeded.binding.accountId,
+                closed,
+            });
+            const terminalUpdates = updates.mock.calls.filter(([update]) =>
+                update.payload.body.t === "update-session" && update.payload.body.latestTurnStatus === "cancelled",
+            );
+            expect(terminalUpdates).toHaveLength(seeded.participantIds.length);
+            for (const [update] of terminalUpdates) {
+                expect(UpdateBodySchema.parse(update.payload.body)).toMatchObject({
+                    pendingPermissionRequestCount: 0,
+                    pendingUserActionRequestCount: 0,
+                    pendingRequestObservedAt: null,
+                });
+            }
+        } finally {
+            updates.mockRestore();
+        }
         await expect(db.sessionTurn.findUniqueOrThrow({
             where: {
                 sessionId_turnId: {

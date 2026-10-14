@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { buildSessionInputAdmissionReceipt, isSameSessionInputAdmissionIssuer } from "./messages/sessionInputAdmission";
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { assertSessionCapabilityInTx, assertSessionOwnerInTx, resolveSessionAccessForOperation, type EffectiveSessionAccess, type SessionCapability } from "@/app/session/access/sessionAccess";
@@ -2299,7 +2300,7 @@ export async function updateSessionAgentState(params: {
     const agentStateCiphertext =
         typeof params.agentStateCiphertext === "string" || params.agentStateCiphertext === null ? params.agentStateCiphertext : undefined;
     const parsedUserActionRequiredOccurrences =
-        SessionUserActionRequiredOccurrenceV1Schema.array().safeParse(
+        z.array(SessionUserActionRequiredOccurrenceV1Schema).safeParse(
             params.userActionRequiredOccurrences ?? [],
         );
 
@@ -2547,6 +2548,12 @@ export type ApplySessionTurnMutationNoOpReason =
     | "stale-in-progress"
     | "no-current-turn";
 
+export type TerminalTurnPendingRequestProjection = Readonly<{
+    pendingPermissionRequestCount: 0;
+    pendingUserActionRequestCount: 0;
+    pendingRequestObservedAt: null;
+}>;
+
 export type ApplySessionTurnMutationResult =
     | {
         ok: true;
@@ -2560,6 +2567,7 @@ export type ApplySessionTurnMutationResult =
         recipientCursors: RecipientCursor[];
         badgeAttentionChanged: boolean;
         rollbackEligibleTurnStarts?: number[];
+        pendingRequestProjection?: TerminalTurnPendingRequestProjection;
       }
     | {
         ok: false;
@@ -3045,6 +3053,7 @@ function createSessionTurnAppliedResult(params: {
     recipientCursors: RecipientCursor[];
     badgeAttentionChanged: boolean;
     rollbackEligibleTurnStarts?: number[];
+    pendingRequestProjection?: TerminalTurnPendingRequestProjection;
 }): Extract<ApplySessionTurnMutationResult, { ok: true }> {
     return {
         ok: true,
@@ -3058,6 +3067,9 @@ function createSessionTurnAppliedResult(params: {
         badgeAttentionChanged: params.badgeAttentionChanged,
         ...(params.rollbackEligibleTurnStarts !== undefined
             ? { rollbackEligibleTurnStarts: params.rollbackEligibleTurnStarts }
+            : {}),
+        ...(params.pendingRequestProjection
+            ? { pendingRequestProjection: params.pendingRequestProjection }
             : {}),
     };
 }
@@ -3590,13 +3602,13 @@ async function applySessionTurnMutationWithOwnerAccessInTx(params: {
         const nextLatestTurnId = params.turnMutation.action === "begin" ? targetTurnId : session.latestTurnId ?? targetTurnId;
         const shouldMaterialize = nextLatestTurnId === targetTurnId
             && (params.turnMutation.action === "begin" || params.turnMutation.action === "touch_active" || terminalStatus !== null);
-        const terminalPendingRequestProjection = terminalStatus !== null
+        const terminalPendingRequestProjection: TerminalTurnPendingRequestProjection | undefined = terminalStatus !== null
             ? {
                 pendingPermissionRequestCount: 0,
                 pendingUserActionRequestCount: 0,
                 pendingRequestObservedAt: null,
             }
-            : {};
+            : undefined;
         const nextActivityInputs = {
             ...toSessionActivityBadgeInputs(session),
             ...(shouldMaterialize ? { latestTurnStatus: appliedTurn.status } : {}),
@@ -3642,6 +3654,9 @@ async function applySessionTurnMutationWithOwnerAccessInTx(params: {
             turn: appliedTurn,
             receipt,
             ...(!shouldMaterialize ? { state: materializedSessionTurnState(session) } : {}),
+            ...(shouldMaterialize && terminalPendingRequestProjection
+                ? { pendingRequestProjection: terminalPendingRequestProjection }
+                : {}),
             recipientCursors,
             badgeAttentionChanged,
             ...(rollbackEligibleTurnStarts !== undefined ? { rollbackEligibleTurnStarts } : {}),
