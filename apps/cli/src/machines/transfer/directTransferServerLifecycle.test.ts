@@ -36,6 +36,7 @@ function createStubDirectTransferServer(
   return {
     port,
     stop,
+    requestPreparedTransfer: async () => ({ status: 404, body: '' }),
     issueImportOpenAuthorizationToken: vi.fn(() => ({
       authorizationToken: 'unused-import-open-token',
       expiresAt: 2_000,
@@ -186,6 +187,7 @@ describe('createDirectTransferServerLifecycle', () => {
     const startServer = vi.fn(async () => ({
       port: 46001,
       stop,
+      requestPreparedTransfer: async () => ({ status: 404, body: '' }),
       issueImportOpenAuthorizationToken: vi.fn(() => ({
         authorizationToken: 'unused-import-open-token',
         expiresAt: 2_000,
@@ -280,6 +282,7 @@ describe('createDirectTransferServerLifecycle', () => {
     const startServer = vi.fn(async () => ({
       port: 46001,
       stop,
+      requestPreparedTransfer: async () => ({ status: 404, body: '' }),
       issueImportOpenAuthorizationToken: vi.fn(() => ({
         authorizationToken: 'unused-import-open-token',
         expiresAt: 2_000,
@@ -331,6 +334,7 @@ describe('createDirectTransferServerLifecycle', () => {
     const startServer = vi.fn(async () => ({
       port: 46001,
       stop,
+      requestPreparedTransfer: async () => ({ status: 404, body: '' }),
       issueImportOpenAuthorizationToken: vi.fn(() => ({
         authorizationToken: 'unused-import-open-token',
         expiresAt: 2_000,
@@ -383,6 +387,7 @@ describe('createDirectTransferServerLifecycle', () => {
     const startServer = vi.fn(async () => ({
       port: 46001,
       stop: async () => {},
+      requestPreparedTransfer: async () => ({ status: 404, body: '' }),
       issueImportOpenAuthorizationToken: () => ({ authorizationToken: 'unused-token', expiresAt: 2_000 }),
       openTrustedImportSession: async () => ({
         success: true as const,
@@ -433,6 +438,7 @@ describe('createDirectTransferServerLifecycle', () => {
     const startServer = vi.fn(async () => ({
       port: 46001,
       stop,
+      requestPreparedTransfer: async () => ({ status: 404, body: '' }),
       issueImportOpenAuthorizationToken: vi.fn(() => ({
         authorizationToken: 'unused-import-open-token',
         expiresAt: 5_000,
@@ -495,6 +501,7 @@ describe('createDirectTransferServerLifecycle', () => {
       return {
         port: 46001,
         stop,
+        requestPreparedTransfer: async () => ({ status: 404, body: '' }),
         issueImportOpenAuthorizationToken: vi.fn(() => ({
           authorizationToken: 'unused-import-open-token',
           expiresAt: 5_000,
@@ -580,6 +587,7 @@ describe('createDirectTransferServerLifecycle', () => {
       return {
         port: 46001,
         stop,
+        requestPreparedTransfer: async () => ({ status: 404, body: '' }),
         issueImportOpenAuthorizationToken: (input) => manager!.issueImportOpenAuthorizationToken(input),
         openTrustedImportSession: async (input) => await manager!.openTrustedImportSession(input),
         waitForImportTransferSettlement: (uploadId, scope) => manager!.waitForImportTransferSettlement(uploadId, scope),
@@ -707,6 +715,7 @@ describe('createDirectTransferServerLifecycle', () => {
     const startServer = vi.fn(async () => ({
       port: 46001,
       stop: vi.fn(async () => {}),
+      requestPreparedTransfer: async () => ({ status: 404, body: '' }),
       issueImportOpenAuthorizationToken: vi.fn(() => ({
         authorizationToken: 'unused-import-open-token',
         expiresAt: 5_000,
@@ -751,6 +760,7 @@ describe('createDirectTransferServerLifecycle', () => {
     const startServer = vi.fn(async () => ({
       port: 46001,
       stop: vi.fn(async () => {}),
+      requestPreparedTransfer: async () => ({ status: 404, body: '' }),
       issueImportOpenAuthorizationToken: vi.fn(() => ({
         authorizationToken: 'unused-import-open-token',
         expiresAt: 5_000,
@@ -805,6 +815,7 @@ describe('createDirectTransferServerLifecycle', () => {
     const startServer = vi.fn(async () => ({
       port: 46001,
       stop,
+      requestPreparedTransfer: async () => ({ status: 404, body: '' }),
       issueImportOpenAuthorizationToken: vi.fn(() => ({
         authorizationToken: 'unused-import-open-token',
         expiresAt: 5_000,
@@ -858,6 +869,7 @@ describe('createDirectTransferServerLifecycle', () => {
     const startServer = vi.fn(async () => ({
       port: 46001,
       stop,
+      requestPreparedTransfer: async () => ({ status: 404, body: '' }),
       issueImportOpenAuthorizationToken: vi.fn(() => ({
         authorizationToken: 'unused-import-open-token',
         expiresAt: 5_000,
@@ -924,6 +936,7 @@ describe('createDirectTransferServerLifecycle', () => {
         startServer: vi.fn(async () => ({
           port: 46001,
           stop: vi.fn(async () => undefined),
+          requestPreparedTransfer: async () => ({ status: 404, body: '' }),
           issueImportOpenAuthorizationToken: vi.fn(() => ({
             authorizationToken: 'unused-import-open-token',
             expiresAt: 5_000,
@@ -1041,6 +1054,7 @@ describe('createDirectTransferServerLifecycle', () => {
       startServer: vi.fn(async () => ({
         port: 46001,
         stop: vi.fn(async () => undefined),
+        requestPreparedTransfer: async () => ({ status: 404, body: '' }),
         issueImportOpenAuthorizationToken: vi.fn(() => ({
           authorizationToken: 'unused-import-open-token',
           expiresAt: 5_000,
@@ -1109,6 +1123,7 @@ describe('createDirectTransferServerLifecycle', () => {
       startServer: vi.fn(async () => ({
         port: 46001,
         stop: vi.fn(async () => undefined),
+        requestPreparedTransfer: async () => ({ status: 404, body: '' }),
         issueImportOpenAuthorizationToken: vi.fn(() => ({
           authorizationToken: 'unused-import-open-token',
           expiresAt: 5_000,
@@ -1145,6 +1160,7 @@ describe('createDirectTransferServerLifecycle', () => {
     const startServer = vi.fn(async () => ({
       port: 46001,
       stop,
+      requestPreparedTransfer: async () => ({ status: 404, body: '' }),
       issueImportOpenAuthorizationToken: vi.fn(() => ({
         authorizationToken: 'unused-import-open-token',
         expiresAt: 2_000,
@@ -1231,6 +1247,7 @@ describe('createDirectTransferServerLifecycle', () => {
     const startServer = vi.fn(async () => ({
       port: 46001,
       stop,
+      requestPreparedTransfer: async () => ({ status: 404, body: '' }),
       issueImportOpenAuthorizationToken: vi.fn(() => ({
         authorizationToken: 'unused-import-open-token',
         expiresAt: 5_000,
@@ -1301,6 +1318,7 @@ describe('createDirectTransferServerLifecycle', () => {
     const startServer = vi.fn(async () => ({
       port: 46001,
       stop,
+      requestPreparedTransfer: async () => ({ status: 404, body: '' }),
       issueImportOpenAuthorizationToken: vi.fn(() => ({
         authorizationToken: 'unused-import-open-token',
         expiresAt: 2_000,
@@ -1377,6 +1395,7 @@ describe('createDirectTransferServerLifecycle', () => {
       startServer: vi.fn(async () => ({
         port: 46001,
         stop: stopServer,
+        requestPreparedTransfer: async () => ({ status: 404, body: '' }),
         issueImportOpenAuthorizationToken: vi.fn(() => ({
           authorizationToken: 'unused-import-open-token',
           expiresAt: 2_000,
@@ -1442,6 +1461,7 @@ describe('createDirectTransferServerLifecycle', () => {
     resolveStart({
       port: 46001,
       stop: stopServer,
+      requestPreparedTransfer: async () => ({ status: 404, body: '' }),
       issueImportOpenAuthorizationToken: vi.fn(() => ({
         authorizationToken: 'unused-import-open-token',
         expiresAt: 2_000,
@@ -1484,6 +1504,7 @@ describe('createDirectTransferServerLifecycle', () => {
       return {
         port: 46001,
         stop: vi.fn(async () => {}),
+        requestPreparedTransfer: async () => ({ status: 404, body: '' }),
         issueImportOpenAuthorizationToken: vi.fn(() => ({
           authorizationToken: 'unused-import-open-token',
           expiresAt: 2_000,
@@ -1556,6 +1577,7 @@ describe('createDirectTransferServerLifecycle', () => {
     const startServer = vi.fn(async () => ({
       port: 47321,
       stop: vi.fn(async () => {}),
+      requestPreparedTransfer: async () => ({ status: 404, body: '' }),
       issueImportOpenAuthorizationToken: vi.fn(() => ({ authorizationToken: 'unused', expiresAt: 2_000 })),
       openTrustedImportSession: vi.fn(async () => ({ success: false as const, error: 'unused' })),
       waitForImportTransferSettlement: async () => ({ success: false as const, error: "unused", errorCode: "indeterminate" }),

@@ -74,14 +74,17 @@ type RequestDiagnostic = {
     admissionDenied?: boolean;
     acknowledgementOutcomeCode?: string;
 };
+
 function readOutcomeCode(value: unknown, thrown = false): string {
     if (!value || typeof value !== 'object') return thrown ? 'unclassified_error' : 'ok';
     const result = value as Record<string, unknown>;
-    const code = readRpcErrorCode(value) ?? result.errorCode;
+    const code = readRpcErrorCode(value) ?? result.errorCode
+        ?? (thrown || result.ok === false ? result.code : undefined);
     // Retain typed native refusals as well as transport codes, never error prose.
     // Match the existing RPC provider diagnostic token budget (128 characters).
     // The end assertion rejects trailing newlines too, unlike JavaScript's `$`.
     if (typeof code === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,127}(?![\s\S])/.test(code)) return code;
+    if (thrown && result.name === 'AbortError') return 'request_cancelled';
     return thrown || code !== undefined || typeof result.error === 'string' || result.ok === false
         ? 'unclassified_error' : 'ok';
 }
@@ -217,7 +220,8 @@ export class RpcHandlerManager {
     async handleRequest(
         request: RpcRequest,
     ): Promise<any> {
-        return this.observeRequest(request.method, request.requestId, diagnostic => this.dispatchRequest(request, diagnostic));
+        const requestStartedAtMs = Date.now();
+        return this.observeRequest(request.method, request.requestId, diagnostic => this.dispatchRequest(request, diagnostic, requestStartedAtMs));
     }
 
     private async observeRequest(
@@ -263,7 +267,7 @@ export class RpcHandlerManager {
         }
     }
 
-    private async dispatchRequest(request: RpcRequest, diagnostic: RequestDiagnostic): Promise<unknown> {
+    private async dispatchRequest(request: RpcRequest, diagnostic: RequestDiagnostic, requestStartedAtMs: number): Promise<unknown> {
         // Admission captures its reply codec; later key adoption only affects new requests.
         const admittedContent = this.rpcContent;
         if (!admittedContent) {
@@ -489,13 +493,14 @@ export class RpcHandlerManager {
             ? request.timeoutMs
             : null;
         let timeout: ReturnType<typeof setTimeout> | undefined;
-        const deadlineAtMs = timeoutMs === null ? null : Date.now() + timeoutMs;
+        const cancellationDeadlineAtMs = timeoutMs === null ? null : requestStartedAtMs + timeoutMs;
+        const deadlineAtMs = cancellationDeadlineAtMs;
         const armDeadline = () => {
-            if (deadlineAtMs === null) return;
+            if (cancellationDeadlineAtMs === null) return;
             timeout = setTimeout(() => {
-                if (Date.now() < deadlineAtMs) { armDeadline(); return; }
-                controller.abort(new Error('RPC request timed out'));
-            }, Math.min(2_147_483_647, Math.max(0, deadlineAtMs - Date.now())));
+                if (Date.now() < cancellationDeadlineAtMs) { armDeadline(); return; }
+                controller.abort(Object.assign(new Error('RPC request timed out'), { code: 'RPC_REQUEST_TIMEOUT' }));
+            }, Math.min(2_147_483_647, Math.max(0, cancellationDeadlineAtMs - Date.now())));
         };
         armDeadline();
         let handlerExecutionId: number | null = null;
@@ -705,6 +710,8 @@ export class RpcHandlerManager {
             );
             const result = await handler(decryptedParams, Object.freeze({
                 signal: controller.signal,
+                requestStartedAtMs,
+                ...(deadlineAtMs === null ? {} : { deadlineAtMs }),
                 reportAdmissionDenial: (predicate: RpcAdmissionPredicate) => this.reportAdmissionDenial(diagnostic, predicate),
                 callerAuthority: request.callerAuthority === 'present_user' ? request.callerAuthority : 'account_automation',
                 ...(sessionActionOrigin?.success ? { sessionActionOrigin: sessionActionOrigin.data } : {}),
@@ -764,7 +771,12 @@ export class RpcHandlerManager {
                 error: error instanceof Error ? error.message : 'Unknown error',
                 ...(rpcErrorCode ? { errorCode: rpcErrorCode } : {}),
             };
-            return await respond(request, errorResponse);
+            const outcomeCode = readOutcomeCode(controller.signal.aborted ? controller.signal.reason : error, true);
+            const response = await respond(request, errorResponse);
+            // Native OS/process codes and cancellation are diagnostic facts;
+            // preserve them before the existing transport projection drops them.
+            diagnostic.outcomeCode = outcomeCode;
+            return response;
         } finally {
             await disposeRequesterAccountContext?.();
             if (handlerExecutionId !== null) {
@@ -791,9 +803,10 @@ export class RpcHandlerManager {
         verifiedPeerAuthority?: 'present_user' | 'account_automation';
         /** Installed host forwards an already-admitted requester; input never supplies authority. */
         rpcContext?: Pick<RpcHandlerContext, 'machineAdmission' | 'verifyMachineAdmissionCurrent' | 'callerInputAuthorization'
-            | 'callerAuthority' | 'callerInputConstraints' | 'sessionActionOrigin'>;
+            | 'callerAuthority' | 'callerInputConstraints' | 'sessionActionOrigin' | 'originalActionEnvelope'>;
     }>): Promise<unknown> {
         const prefixedMethod = this.getPrefixedMethod(method);
+        const requestStartedAtMs = Date.now();
         return this.observeRequest(prefixedMethod, undefined, async diagnostic => {
             diagnostic.admissionPredicate = 'handler_admission';
             const handler = this.handlers.get(prefixedMethod);
@@ -810,8 +823,10 @@ export class RpcHandlerManager {
                         callerInputAuthorization: options.rpcContext.callerInputAuthorization,
                         callerInputConstraints: options.rpcContext.callerInputConstraints,
                         sessionActionOrigin: options.rpcContext.sessionActionOrigin,
+                        originalActionEnvelope: options.rpcContext.originalActionEnvelope,
                     } : {}),
                     signal: options?.signal ?? new AbortController().signal,
+                    requestStartedAtMs,
                     reportAdmissionDenial: (predicate: RpcAdmissionPredicate) => this.reportAdmissionDenial(diagnostic, predicate),
                     ...((options?.rpcContext?.callerAuthority ?? options?.verifiedPeerAuthority)
                         ? { callerAuthority: options?.rpcContext?.callerAuthority ?? options?.verifiedPeerAuthority } : {}),

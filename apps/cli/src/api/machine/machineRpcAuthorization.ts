@@ -5,6 +5,8 @@ import { RequesterSessionCurrentnessPurposeV1Schema, type RequesterSessionCurren
 import { MachineAccessLossCustodyRequestV1Schema, MachineAdmissionVerifyResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { isSocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext, isSocketRpcMachineAccessLossServerOriginAuthorizationContext, parseSocketRpcAuthorizationContext, resolveSocketRpcSessionWriteAuthorizationMethod, resolveSocketRpcSessionAuthorization } from '@happier-dev/protocol/socketRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { PreparedTransferRpcRequestV1Schema, resolvePreparedTransferRpcPhaseV1 } from '@happier-dev/protocol/machines/transfer/preparedTransferRpcV1';
+import { SessionTransferRpcMethodV1Schema } from '@happier-dev/protocol/socketRpc';
 import type { SocketRpcAuthorizationContext } from '@happier-dev/protocol/socketRpc';
 import { SocketRpcMachineAdmissionContextV1Schema, type SocketRpcMachineAdmissionContextV1,
   WorkspaceSyncSourceRoutingV1Schema, type WorkspaceSyncSourceRoutingV1,
@@ -485,6 +487,12 @@ export async function authorizeMachineRpcRequest(request: Readonly<{
           ...(request.signal ? { signal: request.signal } : {}) })) return forbidden('machine_currentness');
       if (installationId !== machine.resolveInstallationId()) return forbidden('machine_installation');
       if (request.signal?.aborted) return forbidden('request_cancelled');
+      if (SessionTransferRpcMethodV1Schema.safeParse(request.method.slice(machine.machineId.length + 1)).success) {
+        const preparedTransfer = PreparedTransferRpcRequestV1Schema.safeParse(request.params);
+        if (preparedTransfer.success && request.method === `${machine.machineId}:${resolvePreparedTransferRpcPhaseV1(
+          preparedTransfer.data.path, preparedTransfer.data.httpMethod, preparedTransfer.data.body,
+        )}`) return { ok: true };
+      }
     } catch {
       return forbidden('authorization_unavailable');
     }

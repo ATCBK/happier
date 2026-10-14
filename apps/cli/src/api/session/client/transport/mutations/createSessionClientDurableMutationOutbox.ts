@@ -437,6 +437,7 @@ type DurableMutationDeliveryOutcome = Readonly<{
     ignoredLossy?: boolean;
     unsupportedCapability?: boolean;
     terminalFailureReason?:
+        | 'session_turn_mutation_rejected'
         | 'metadata_tuple_conflict'
         | 'transcript_message_provenance_missing_or_invalid'
         | 'transcript_message_invalid_observation';
@@ -826,6 +827,7 @@ function createGenericSessionClientDurableMutationOutbox(
                     ).token;
                 },
                 sessionId: params.sessionId,
+                serverUrl: params.serverUrl,
                 persistenceContext: params.persistenceContext,
                 initialRegisteredSessionStateFieldMutations: params.initialRegisteredSessionStateFieldMutations,
                 flushOnReady: params.flushOnReady,
@@ -1814,6 +1816,9 @@ function createGenericSessionClientDurableMutationOutboxInstance(
             }
             if (!result.delivered && result.reason === 'ignored_lossy') {
                 return { delivered: false, ignoredLossy: true };
+            }
+            if (!result.delivered && result.reason === 'session_turn_mutation_rejected') {
+                return { delivered: false, terminalFailureReason: 'session_turn_mutation_rejected' };
             }
             return { delivered: result.delivered };
         }

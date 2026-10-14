@@ -1859,6 +1859,89 @@ describe('RpcHandlerManager in-flight request tracking', () => {
 });
 
 describe('RpcHandlerManager request lifetime', () => {
+  it.each(['demo.page', 'demo.unrelated'])('gives every handler the full receipt-anchored forwarded budget (%s)', async method => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const rpc = new RpcHandlerManager({ scopePrefix: 'machine-budget', encryptionMode: 'plain', logger: () => {} });
+    const timeoutMs = 30_000;
+    const receivedAtMs = Date.now();
+    rpc.registerHandler(method, async (_request: unknown, context?: RpcHandlerContext) => {
+      const deadlineAtMs = context?.deadlineAtMs;
+      if (deadlineAtMs === undefined || !context) throw new Error('Missing receiving deadline');
+      await new Promise<void>(resolve => setTimeout(resolve, 20_000));
+      return { deadlineAtMs, cancelled: context.signal.aborted };
+    });
+    try {
+      const waiting = rpc.handleRequest({ method: `machine-budget:${method}`, params: {}, timeoutMs });
+      await vi.advanceTimersByTimeAsync(20_000);
+      await expect(waiting).resolves.toEqual({ deadlineAtMs: receivedAtMs + timeoutMs, cancelled: false });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      rpc.onSocketDisconnect();
+      vi.useRealTimers();
+    }
+  });
+
+  it('allows useful work in a short valid budget and cancels at its receipt deadline', async () => {
+    vi.useFakeTimers();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'machine-budget', encryptionMode: 'plain', logger: () => {} });
+    const receivedAtMs = Date.now();
+    rpc.registerHandler('demo.short', async (_request: unknown, context?: RpcHandlerContext) => {
+      if (!context) throw new Error('Missing receiving context');
+      await new Promise<void>(resolve => setTimeout(resolve, 1));
+      const worked = context.deadlineAtMs !== undefined && Date.now() < context.deadlineAtMs;
+      await new Promise<void>(resolve => context.signal.addEventListener('abort', () => resolve(), { once: true }));
+      return { worked, cancelledAtMs: Date.now() };
+    });
+    try {
+      const waiting = rpc.handleRequest({ method: 'machine-budget:demo.short', params: {}, timeoutMs: 5 });
+      await vi.advanceTimersByTimeAsync(5);
+      await expect(waiting).resolves.toEqual({ worked: true, cancelledAtMs: receivedAtMs + 5 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      rpc.onSocketDisconnect();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not replenish elapsed receiving validation time before assigning the deadline', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    // Model synchronous receiving validation consuming 1s between receipt and timer setup.
+    const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(10_000).mockReturnValue(11_000);
+    const rpc = new RpcHandlerManager({ scopePrefix: 'machine-budget', encryptionMode: 'plain', logger: () => {} });
+    rpc.registerHandler('demo.budget', async (_request: unknown, context?: RpcHandlerContext) => ({
+      remainingMs: context?.deadlineAtMs === undefined ? null : context.deadlineAtMs - Date.now(),
+    }));
+    try {
+      await expect(rpc.handleRequest({ method: 'machine-budget:demo.budget', params: {}, timeoutMs: 30_000 }))
+        .resolves.toEqual({ remainingMs: 29_000 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      clock.mockRestore();
+      rpc.onSocketDisconnect();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([undefined, null])('keeps an unbounded forwarded lifetime without a cooperative deadline (%s)', async timeoutMs => {
+    vi.useFakeTimers();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'machine-budget', encryptionMode: 'plain', logger: () => {} });
+    rpc.registerHandler('demo.unbounded', async (_request: unknown, context?: RpcHandlerContext) => {
+      await new Promise<void>(resolve => setTimeout(resolve, 60_000));
+      return { cancelled: context?.signal.aborted, hasDeadline: context?.deadlineAtMs !== undefined };
+    });
+    try {
+      const waiting = rpc.handleRequest({ method: 'machine-budget:demo.unbounded', params: {}, timeoutMs });
+      await vi.advanceTimersByTimeAsync(60_000);
+      await expect(waiting).resolves.toEqual({ cancelled: false, hasDeadline: false });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      rpc.onSocketDisconnect();
+      vi.useRealTimers();
+    }
+  });
+
   it('aborts only the exact request correlated by a server-relayed cancellation', async () => {
     const rpc = new RpcHandlerManager({
       scopePrefix: 'sess_1', encryptionKey: new Uint8Array(32), encryptionVariant: 'dataKey',

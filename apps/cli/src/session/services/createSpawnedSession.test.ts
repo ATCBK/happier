@@ -60,7 +60,10 @@ vi.mock('@/auth/validateStoredAuthTokenAgainstActiveServer', () => ({
   validateStoredAuthTokenAgainstActiveServer,
 }));
 
-vi.mock('@/session/transport/rpc/machineRpc', () => ({ callMachineRpc }));
+vi.mock('@/session/transport/rpc/machineRpc', async importOriginal => ({
+  ...await importOriginal<typeof import('@/session/transport/rpc/machineRpc')>(),
+  callMachineRpc, callExactMachineRpc: callMachineRpc,
+}));
 vi.mock('@/api/client/connectedServiceCredentialApi', async importOriginal => ({
   ...await importOriginal<typeof import('@/api/client/connectedServiceCredentialApi')>(),
   fetchAccountEncryptionCurrentness,

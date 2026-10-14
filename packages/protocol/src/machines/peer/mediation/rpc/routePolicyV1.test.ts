@@ -29,7 +29,10 @@ describe('MachineRpcRoutePolicyV1', () => {
         target: { kind: 'machine', machineId: 'native' },
       } }).binding;
       for (const method of [RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_CHUNK,
-        RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_ABORT]) {
+        RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_ABORT,
+        RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_PREPARE, RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_RELEASE,
+        RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT, RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_CHUNK,
+        RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_ABORT]) {
         expect(resolveMachineRpcExternalActionEffectV1(method, binding)).toBe(actionId);
         expect(resolveMachineRpcExternalActionEffectV1(method, { ...binding, target: { kind: 'session', sessionId: 'selected-session' } })).toBe(actionId);
         expect(resolveMachineRpcExternalActionEffectV1(method)).toBeNull();
@@ -38,6 +41,27 @@ describe('MachineRpcRoutePolicyV1', () => {
       }
       expect(resolveMachineRpcExternalActionEffectV1(RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_INIT, binding)).toBeNull();
       expect(resolveMachineRpcExternalActionEffectV1(RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_INIT, binding)).toBeNull();
+    }
+  });
+  it('spends only the matching filesystem transfer direction and exact Machine root', async () => {
+    const { resolveMachineRpcExternalActionEffectV1 } = await import('./routePolicyV1');
+    const binding = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-issued-transfer', binding: {
+      accountId: 'requester', authentication: { kind: 'terminal', tokenEpoch: 1 },
+      serverIdentityId: `srv_${'a'.repeat(32)}`, machineId: 'native', installationId: 'native-installation',
+      custodianAccountId: 'requester', actionId: 'daemon.filesystem.download', requestId: 'download-request',
+      requestEnvelopeDigest: 'b'.repeat(43), target: { kind: 'machine', machineId: 'native' },
+    } }).binding;
+    for (const method of [RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT, RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_CHUNK,
+      RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_ABORT]) {
+      expect(resolveMachineRpcExternalActionEffectV1(method, binding)).toBe('daemon.filesystem.download');
+      expect(resolveMachineRpcExternalActionEffectV1(method, { ...binding, actionId: 'daemon.filesystem.upload' })).toBeNull();
+      expect(resolveMachineRpcExternalActionEffectV1(method, { ...binding, target: { kind: 'machine', machineId: 'other' } })).toBeNull();
+      expect(resolveMachineRpcExternalActionEffectV1(method, { ...binding, target: { kind: 'session', sessionId: 'other-session' } })).toBeNull();
+    }
+    for (const method of [RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT, RPC_METHODS.DAEMON_TRANSFER_UPLOAD_CHUNK,
+      RPC_METHODS.DAEMON_TRANSFER_UPLOAD_FINALIZE, RPC_METHODS.DAEMON_TRANSFER_UPLOAD_ABORT]) {
+      expect(resolveMachineRpcExternalActionEffectV1(method, { ...binding, actionId: 'daemon.filesystem.upload' })).toBe('daemon.filesystem.upload');
+      expect(resolveMachineRpcExternalActionEffectV1(method, binding)).toBeNull();
     }
   });
   it('admits machine skill installation only through its canonical server-required Action routes', async () => {

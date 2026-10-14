@@ -340,7 +340,6 @@ const DIRECT_EPHEMERAL_POLICIES = Object.freeze([
   directEphemeral(RPC_METHODS.UI_ACTION_EXECUTE, 'Exact-Machine reverse delivery of an already admitted client Action to one connected app, with no server persistence or fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_SIMULATOR_PREVIEW_SNAPSHOT, 'Daemon-local simulator preview snapshot read with no server persistence or cross-device fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_SIMULATOR_PREVIEW_ACTION, 'Daemon-local simulator preview action dispatch with typed adapter validation and no durable server mutation.'),
-  directEphemeral(RPC_METHODS.DAEMON_PROMPT_ASSETS_LIST_TYPES, 'Daemon-local prompt asset type catalog read.'),
   directEphemeral(RPC_METHODS.DAEMON_REGISTRIES_FETCH, 'Daemon registry fetch resolves Account sources without receiving credentials or source lists.'),
   directEphemeral(RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_GET, 'Daemon-local session-runner runtime status read with no server persistence or cross-device fanout.'),
   directEphemeral(RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_V2_GET, 'Daemon-local additive session-runner status read carrying only exact process-currentness evidence beside the unchanged V1 aggregate.'),
@@ -530,8 +529,7 @@ const TRANSFER_CONTROL_OUTBOUND_METHODS = [
 const TRANSFER_CONTROL_METHODS = [
   RPC_METHODS.DAEMON_TRANSFER_COMPOSER_MEDIA_CAPABILITY_GET_V1,
   RPC_METHODS.DAEMON_TRANSFER_COMPOSER_MEDIA_RELEASE,
-  RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_INIT, RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_CHUNK,
-  RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_FINALIZE, RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_ABORT, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT,
+  RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT,
   RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_CHUNK, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_ABORT,
   RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_INIT, RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_CHUNK,
   RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_FINALIZE, RPC_METHODS.DAEMON_REGISTRIES_DOWNLOAD_ABORT,
@@ -577,7 +575,6 @@ const LOCAL_MUTATION_METHODS = [
   RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_PREPARE_SOURCE,
   RPC_METHODS.DAEMON_PROVIDERS_PROFILE_MIGRATION_CONFLICT_CONFIRM,
   RPC_METHODS.DAEMON_EXTENSIONS_RELOAD,
-  RPC_METHODS.DAEMON_PROMPT_ASSETS_DELETE,
   RPC_METHODS.SKILLS_MACHINE_INSTALL,
   RPC_METHODS.SKILLS_MACHINE_UNINSTALL,
   RPC_METHODS.DAEMON_WORKSPACE_SYNC_FLUSH,
@@ -1030,6 +1027,18 @@ export function resolveMachineRpcExternalActionEffectV1(method: string,
   }
   const declared = resolveMachineRpcRoutePolicy(method).actionSpecId;
   if (declared) return declared;
+  const exactTransferTarget = binding?.target && (binding.target.kind === 'machine'
+    ? binding.target.machineId === binding.machineId
+    : binding.actionId === 'skills.found.read' || binding.actionId === 'skills.found.adopt');
+  if (exactTransferTarget && (TRANSFER_CONTROL_OUTBOUND_METHODS as readonly string[]).includes(method)) {
+    // These phases transport the same prepared capability. The admitted root,
+    // exact installed target and signed phase body remain the Home authority.
+    if (binding.actionId === 'skills.found.read' || binding.actionId === 'skills.found.adopt'
+      || binding.actionId === 'skills.install' || binding.actionId === 'prompt_registry.install'
+      || binding.actionId === 'daemon.filesystem.download' || binding.actionId === 'daemon.filesystem.copy') return binding.actionId;
+  }
+  if (exactTransferTarget && (TRANSFER_CONTROL_INBOUND_METHODS as readonly string[]).includes(method)
+    && (binding.actionId === 'daemon.filesystem.upload' || binding.actionId === 'daemon.filesystem.copy')) return binding.actionId;
   if (method === RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT
     || method === RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_CHUNK
     || method === RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_FINALIZE

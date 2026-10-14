@@ -259,8 +259,6 @@ export async function callExactMachineRpc(params: Readonly<{
     installationId: string;
     privateKey: ExternalActionMachineRequestSigningKey;
   }>;
-  /** Only the installed Project root owner lends its socket; this adapter does not own its lifetime. */
-  projectOpenInstalledSocket?: Parameters<Parameters<typeof withUserScopedRpcSocket>[1]>[0];
 }> & (
   | Readonly<{ request: unknown; prepareRequest?: never }>
   | Readonly<{ request?: never; prepareRequest: () => unknown }>
@@ -279,12 +277,15 @@ export async function callExactMachineRpc(params: Readonly<{
       ? setupTimeoutMs : resolveSessionControlSocketConnectTimeoutMs();
     const deadlineAtMs = timeoutMs === null ? null : Date.now() + timeoutMs;
     const remainingTimeoutMs = () => deadlineAtMs === null ? null : Math.max(1, deadlineAtMs - Date.now());
-    if (params.projectOpenInstalledSocket && (params.method !== RPC_METHODS.PROJECTS_OPEN
-      || !params.externalAction?.context.originalActionEnvelope
-      || params.externalAction.effectActionId !== 'projects.open')) {
-      throw new Error('Installed Project root transport is unavailable');
-    }
-    const executeOnSocket: Parameters<typeof withUserScopedRpcSocket>[1] = async (socket, connect, attemptSignal) => {
+    const operation = withUserScopedRpcSocket({
+      token: params.credentials.token,
+      ...(params.authorityCeiling ? { authorityCeiling: params.authorityCeiling } : {}),
+      ...(params.serverUrl ? { serverUrl: params.serverUrl } : {}),
+      connectTimeoutMs,
+      signal,
+      ...(params.reattachOnReconnect ? { reattachOnReconnect: true } : {}),
+      disconnectMessage: 'Machine RPC socket disconnected before acknowledgement',
+    }, async (socket, connect, attemptSignal) => {
       const machineTarget = await resolveMachineRpcContentCodec({
         credentials: params.credentials,
         machineId,
@@ -403,21 +404,7 @@ export async function callExactMachineRpc(params: Readonly<{
           });
         },
       });
-    };
-    const operation = params.projectOpenInstalledSocket
-      ? executeOnSocket(params.projectOpenInstalledSocket, async () => {
-        signal.throwIfAborted();
-        if (!params.projectOpenInstalledSocket?.connected) throw new Error('Installed Project socket disconnected');
-      }, signal)
-      : withUserScopedRpcSocket({
-        token: params.credentials.token,
-        ...(params.authorityCeiling ? { authorityCeiling: params.authorityCeiling } : {}),
-        ...(params.serverUrl ? { serverUrl: params.serverUrl } : {}),
-        connectTimeoutMs,
-        signal,
-        ...(params.reattachOnReconnect ? { reattachOnReconnect: true } : {}),
-        disconnectMessage: 'Machine RPC socket disconnected before acknowledgement',
-      }, executeOnSocket);
+    });
     return await raceSocketIoAckTimeout(operation, timeoutMs ?? undefined, signal);
   } catch (error) {
     if (isSocketIoAckTimeoutError(error)) {

@@ -11,7 +11,6 @@ import { TransferSessionStore } from '@happier-dev/transfers/node';
 import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import {
   resolveTransferUploadInitTarget,
-  type NonPromptTransferUploadInitRequest,
   type TransferUploadInitRequest,
   type TransferUploadInitAttachmentDeps,
 } from '../targets/resolveTransferUploadInitTarget';
@@ -65,9 +64,6 @@ export function registerTransferUploadRpcHandlers(
         && request.sessionId !== deps.sessionAttachment.sessionId) {
         return { kind: 'rejected', response: { success: false, error: 'Attachment Session does not match the hosted Session' } };
       }
-      if (request.t === 'prompt_asset_upload_v1') {
-        return { kind: 'rejected', response: { success: false, error: 'Unknown upload request type' } };
-      }
       if (requestKind === 'session_attachment_upload_v1' && !deps.attachmentUpload) {
         return { kind: 'rejected', response: { success: false, error: 'Attachment uploads are unavailable' } };
       }
@@ -75,7 +71,7 @@ export function registerTransferUploadRpcHandlers(
         return { kind: 'rejected', response: { success: false, error: 'Composer media staging is unavailable' } };
       }
 
-      const uploadRequest: NonPromptTransferUploadInitRequest = deps.sessionAttachment && request.t === 'session_attachment_upload_v1'
+      const uploadRequest: TransferUploadInitRequest = deps.sessionAttachment && request.t === 'session_attachment_upload_v1'
         ? {
             t: request.t,
             sessionId: deps.sessionAttachment.sessionId,

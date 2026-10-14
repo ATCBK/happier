@@ -92,6 +92,11 @@ export type SessionTurnMutationDeliveryResult =
     | Readonly<{ delivered: false; reason: 'ignored_lossy' }>
     | Readonly<{
         delivered: false;
+        reason: 'session_turn_mutation_rejected';
+        httpStatus: 400 | 422;
+    }>
+    | Readonly<{
+        delivered: false;
         reason: 'exact_session_turn_mutation_not_delivered';
         diagnostic: ExactSessionTurnMutationNonDeliveryDiagnostic;
     }>
@@ -289,7 +294,7 @@ export async function deliverSessionTurnMutation(params: Readonly<{
         return { delivered: false, reason: 'ignored_lossy' };
     }
     if (httpResult.status === 'incompatible') {
-        return { delivered: false, reason: `incompatible_session_turn_mutation_http_${httpResult.statusCode}` };
+        return { delivered: false, reason: 'session_turn_mutation_rejected', httpStatus: httpResult.statusCode };
     }
     if (socketResult.status === 'receipt_mismatch' || httpResult.status === 'receipt_mismatch') {
         return { delivered: false, reason: 'session_turn_mutation_receipt_mismatch' };

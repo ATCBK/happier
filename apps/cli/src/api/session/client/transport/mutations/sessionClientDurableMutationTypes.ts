@@ -153,6 +153,7 @@ export type DaemonWorkStateFieldMutation = RegisteredSessionStateFieldMutationV1
 export type SessionClientDurableMutationAttemptReason =
     | 'delivery_not_confirmed'
     | 'delivery_error'
+    | 'session_turn_mutation_rejected'
     | 'metadata_tuple_conflict'
     | 'transcript_message_provenance_missing_or_invalid'
     | 'transcript_message_invalid_observation';

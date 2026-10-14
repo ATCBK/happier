@@ -4,6 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
+const { fixtureHome } = vi.hoisted(() => ({ fixtureHome: vi.fn<() => string | undefined>() }));
+vi.mock('node:os', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, homedir: () => fixtureHome() ?? actual.homedir() };
+});
 
 import type { TransferRelayV2SendEnvelope } from '@happier-dev/protocol';
 import { createTransferRecipientKeyPair, decryptEncryptedTransferChunkEnvelope } from '@happier-dev/transfers/node';
@@ -78,10 +83,11 @@ async function waitForSentCount(sent: readonly TransferRelayV2SendEnvelope[], co
 describe('rpcHandlers relay-v2 download wiring', () => {
     it('streams prompt asset downloads over the live relay-v2 channel', async () => {
         const homeDir = mkdtempSync(join(tmpdir(), 'happier-prompt-relay-home-'));
+        fixtureHome.mockReturnValue(homeDir);
 
         try {
             mkdirSync(join(homeDir, '.agents', 'skills', 'reviewer'), { recursive: true });
-            writeFileSync(join(homeDir, '.agents', 'skills', 'reviewer', 'SKILL.md'), '# Reviewer\n', 'utf8');
+            writeFileSync(join(homeDir, '.agents', 'skills', 'reviewer', 'SKILL.md'), '---\nname: reviewer\n---\n# Reviewer\n', 'utf8');
             writeFileSync(join(homeDir, '.agents', 'skills', 'reviewer', 'notes.txt'), 'Remember this\n', 'utf8');
 
             const mgr = createRpcHandlerManager();
@@ -95,7 +101,6 @@ describe('rpcHandlers relay-v2 download wiring', () => {
                     transferRelayV2Channel: relay.channel,
                 },
                 deps: {
-                    promptAssetsHomedir: () => homeDir,
                 },
             });
 
@@ -104,9 +109,7 @@ describe('rpcHandlers relay-v2 download wiring', () => {
 
             const recipientKeyPair = createTransferRecipientKeyPair();
             const initResponse = await init({
-                assetTypeId: 'agents.skill',
-                scope: 'user',
-                externalRef: { skillName: 'reviewer' },
+                path: join(homeDir, '.agents', 'skills', 'reviewer'),
                 recipientPublicKeyBase64: recipientKeyPair.recipientPublicKeyBase64,
             });
             expect(initResponse).toMatchObject({ success: true, downloadId: expect.any(String) });
@@ -202,10 +205,11 @@ describe('rpcHandlers relay-v2 download wiring', () => {
 
     it('replaces the relay-v2 download responder when machine RPC handlers are registered again', async () => {
         const homeDir = mkdtempSync(join(tmpdir(), 'happier-prompt-relay-home-reconnect-'));
+        fixtureHome.mockReturnValue(homeDir);
 
         try {
             mkdirSync(join(homeDir, '.agents', 'skills', 'reviewer'), { recursive: true });
-            writeFileSync(join(homeDir, '.agents', 'skills', 'reviewer', 'SKILL.md'), '# Reviewer\n', 'utf8');
+            writeFileSync(join(homeDir, '.agents', 'skills', 'reviewer', 'SKILL.md'), '---\nname: reviewer\n---\n# Reviewer\n', 'utf8');
             writeFileSync(join(homeDir, '.agents', 'skills', 'reviewer', 'notes.txt'), 'Remember this\n', 'utf8');
 
             const mgr = createRpcHandlerManager();
@@ -220,7 +224,6 @@ describe('rpcHandlers relay-v2 download wiring', () => {
                     transferRelayV2Channel: relay.channel,
                 },
                 deps: {
-                    promptAssetsHomedir: () => homeDir,
                 },
             });
 
@@ -233,7 +236,6 @@ describe('rpcHandlers relay-v2 download wiring', () => {
                     transferRelayV2Channel: relay.channel,
                 },
                 deps: {
-                    promptAssetsHomedir: () => homeDir,
                 },
             });
 
@@ -242,9 +244,7 @@ describe('rpcHandlers relay-v2 download wiring', () => {
 
             const recipientKeyPair = createTransferRecipientKeyPair();
             const initResponse = await init({
-                assetTypeId: 'agents.skill',
-                scope: 'user',
-                externalRef: { skillName: 'reviewer' },
+                path: join(homeDir, '.agents', 'skills', 'reviewer'),
                 recipientPublicKeyBase64: recipientKeyPair.recipientPublicKeyBase64,
             });
             expect(initResponse).toMatchObject({ success: true, downloadId: expect.any(String) });
@@ -288,7 +288,7 @@ describe('rpcHandlers relay-v2 download wiring', () => {
 
         try {
             mkdirSync(join(repo, 'reviewer'), { recursive: true });
-            writeFileSync(join(repo, 'reviewer', 'SKILL.md'), '# Reviewer\n', 'utf8');
+            writeFileSync(join(repo, 'reviewer', 'SKILL.md'), '---\nname: reviewer\n---\n# Reviewer\n', 'utf8');
             writeFileSync(join(repo, 'reviewer', 'notes.txt'), 'remember me\n', 'utf8');
             git(repo, ['init', '-b', 'main']);
             git(repo, ['add', '.']);
@@ -305,7 +305,6 @@ describe('rpcHandlers relay-v2 download wiring', () => {
                     transferRelayV2Channel: relay.channel,
                 },
                 deps: {
-                    promptAssetsHappierHomeDir: () => happierHomeDir,
                 },
             });
 

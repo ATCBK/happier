@@ -148,6 +148,12 @@ describe('deliverSessionTurnMutation exact end', () => {
         vi.mocked(axios.post).mockReset();
     });
 
+    it.each([400, 422])('reports a deterministic HTTP %s refusal as terminal', async (status) => {
+        vi.mocked(axios.post).mockRejectedValue({ response: { status } });
+        await expect(deliverSessionTurnMutation({ token: 'token', socket: null, mutation: ordinaryMutations[4] }))
+            .resolves.toMatchObject({ delivered: false, reason: 'session_turn_mutation_rejected', httpStatus: status });
+    });
+
     it.each(['applied', 'duplicate-terminal'] as const)(
         'releases exact custody for the positive %s socket receipt',
         async (decision) => {

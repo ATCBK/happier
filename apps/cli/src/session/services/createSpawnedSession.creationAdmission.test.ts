@@ -8,7 +8,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { createSocketTransportAdapter } from '@happier-dev/sync-client';
+import { createSocketTransportAdapter, markRpcRequestDisposition } from '@happier-dev/sync-client';
 import axios from 'axios';
 
 import {
@@ -105,6 +105,47 @@ describe('canonical Session creation admission', () => {
       metadataVersion: 1, metadataLayoutVersion: 1, encryptionMode: 'plain', metadata: JSON.stringify({ v: 1 }),
     });
     fetchAccountEncryptionCurrentness.mockRejectedValue(new Error('Account currentness unavailable'));
+  });
+
+  it('retains the spawn nonce after an uncoded post-dispatch disconnect', async () => {
+    spawn.mockRejectedValue(markRpcRequestDisposition(new Error('Connection lost after submission'), 'outcomeUnknown'));
+    const failure = await createSpawnedSession(params).catch((error: unknown) => error);
+    const submittedNonce = spawn.mock.calls[0]![0].spawnNonce;
+    expect(submittedNonce).toEqual(expect.any(String));
+    expect(failure).toMatchObject({ details: { spawnNonce: submittedNonce } });
+  });
+
+  it.each([
+    { disposition: 'outcomeUnknown', cancel: false, expected: { type: 'pending', retryWithSameCreationKey: true, outcome: 'unknown' } },
+    { disposition: 'notSent', cancel: false, expected: { type: 'error', code: 'spawn_failed', retryable: true } },
+    { disposition: 'notSent', cancel: true, expected: { type: 'error', code: 'cancelled', retryable: true } },
+  ] as const)('projects an uncoded post-dispatch disconnect truthfully ($disposition, cancel=$cancel)', async ({ disposition, cancel, expected }) => {
+    // The authenticated daemon transport is the boundary; Action projection and creator stay real.
+    const controller = new AbortController();
+    spawn.mockImplementation(async () => {
+      if (cancel) controller.abort();
+      throw markRpcRequestDisposition(new Error('Connection failed'), disposition);
+    });
+    const executor = createActionExecutor(createCliActionDeps({
+      token: params.credentials.token, credentials: params.credentials,
+      sessionId: 'cli-global', mode: 'plain', ctx: null, rawSession: {},
+      serverId: 'home-a', serverHttpBaseUrl: 'https://home-a.example.test',
+      actionsSettingsProvider: createActionSettingsProvider({ accountSettings: accountSettingsParse({ memoryUpkeepInNewBots: false }) }),
+      sessionSpawnDirectTargetTransport: {
+        machineId: 'machine-1',
+        prepare: async () => ({ ok: true, directory: '/repo', directoryKind: 'path', directoryCreationRequired: false, checkout: null }),
+        spawnedSession: { spawn, resolveSpawnSessionByNonce },
+      },
+    }));
+    const input = SessionSpawnNewInputV2Schema.parse({
+      creationKey: 'disconnected-creation', executionTarget: { serverId: 'home-a', machineId: 'machine-1' },
+      directory: { kind: 'path', path: '/repo' }, agentTarget: params.agentTarget,
+      connectedServices: { v: 2, bindingsByServiceId: {} }, memoryEnabled: false,
+    });
+    expect(await executor.execute('session.spawn_new', input, {
+      surface: 'cli', authority: 'present_user', serverId: 'home-a',
+      presentUserConfirmation: { actionId: 'session.spawn_new' }, actionRequestId: 'disconnected-creation', signal: controller.signal,
+    })).toMatchObject({ ok: true, result: expected });
   });
 
   it('refuses a recognized unavailable tag lookup before any provider spawn', async () => {

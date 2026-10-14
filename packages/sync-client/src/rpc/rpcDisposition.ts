@@ -1,3 +1,4 @@
+/** notSent includes an explicit pre-execution refusal; outcomeUnknown cannot prove whether effects occurred. */
 export type RpcRequestDisposition = 'notSent' | 'outcomeUnknown';
 const RPC_REQUEST_DISPOSITION = Symbol('rpcRequestDisposition');
 export function markRpcRequestDisposition(error: unknown, disposition: RpcRequestDisposition): unknown {

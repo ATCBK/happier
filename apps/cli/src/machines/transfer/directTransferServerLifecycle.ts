@@ -1,4 +1,5 @@
 import type { TransferEndpointCandidate } from '@happier-dev/protocol';
+import type { PreparedTransferRpcRequestV1, PreparedTransferRpcResponseV1 } from '@happier-dev/protocol/machines/transfer/preparedTransferRpcV1';
 
 import {
   buildDirectPeerTransferEndpointPath,
@@ -45,6 +46,7 @@ export type DirectTransferServerLifecycle = Readonly<{
   activity: LiveWorkProducerV1;
   /** Starts/reuses the canonical loopback listener and returns its actual bound port. */
   ensureListening: () => Promise<number>;
+  requestPreparedTransfer: (input: PreparedTransferRpcRequestV1) => Promise<PreparedTransferRpcResponseV1>;
   publishTransfer: (input: DirectTransferPublishInput) => PublishedDirectPeerTransfer;
   publishTransferWhenReady: (input: DirectTransferPublishInput) => Promise<PublishedDirectPeerTransfer>;
   prepareImportSession: (input: DirectTransferImportOpenRequest, filesystemScope?: PreparedFilesystemTransferScope, privateStagingDirectory?: string) => Promise<Readonly<{
@@ -170,13 +172,6 @@ export function createDirectTransferServerLifecycle(params: Readonly<{
   onStateChange?: (state: DirectTransferServerLifecycleState) => void | Promise<void>;
   resolveTailscaleServeHttpsBaseUrl?: (() => string | null) | null;
   composerMediaStage?: ComposerMediaStageUploadTargetDeps;
-  promptAssetUpload?: Parameters<StartDirectPeerTransferServer>[0] extends infer T
-    ? T extends Readonly<object>
-      ? T extends { promptAssetUpload?: infer P }
-        ? P
-        : never
-      : never
-    : never;
 }>): DirectTransferServerLifecycle {
   const now = params.now ?? Date.now;
   const idleStopMs = Math.max(0, Math.floor(params.idleStopMs ?? 30_000));
@@ -388,7 +383,6 @@ export function createDirectTransferServerLifecycle(params: Readonly<{
         resolveOnDemandTransfer: async (input) => registry?.resolveOnDemandTransferOnOpen(input) ?? null,
         accessPolicy: params.accessPolicy,
         ...(params.composerMediaStage ? { composerMediaStage: params.composerMediaStage } : {}),
-        ...(params.promptAssetUpload ? { promptAssetUpload: params.promptAssetUpload } : {}),
         onImportSessionCountChanged: (count) => {
           activeImportSessionCount = count;
           scheduleLifecycleTimer();
@@ -448,6 +442,18 @@ export function createDirectTransferServerLifecycle(params: Readonly<{
   });
   return {
     activity,
+    requestPreparedTransfer: async (input) => {
+      if (terminalStopped) throw new Error('Direct transfer server lifecycle is stopped');
+      clearLifecycleTimer();
+      idleDeadlineAt = null;
+      const started = await ensureServerStarted();
+      try {
+        if (terminalStopped) throw new Error('Direct transfer server lifecycle is stopped');
+        return await started.requestPreparedTransfer(input);
+      } finally {
+        scheduleLifecycleTimer();
+      }
+    },
     ensureListening: async () => (await ensureServerStarted()).port,
     publishTransfer(input) {
       if (terminalStopped) {

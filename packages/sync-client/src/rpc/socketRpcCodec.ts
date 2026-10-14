@@ -1,5 +1,6 @@
 import { createRpcCallError } from '@happier-dev/protocol/rpcErrors';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { markRpcRequestDisposition } from './rpcDisposition.js';
 
 export type SocketRpcContent =
   | Readonly<{ mode: 'plain' }>
@@ -11,6 +12,14 @@ export type SocketRpcContent =
 export type SocketRpcRequestBinding = Readonly<{ method: string; callId: string }>;
 export type DecodedSocketRpcRequest = Readonly<{ params: unknown; callId: string | null }>;
 
+function acknowledgementError(error: string, errorCode?: string) {
+  const failure = createRpcCallError({ error, errorCode });
+  // Reserved refusal codes in an actual error acknowledgement prove the call
+  // did not reach handler execution. Local response-decoding errors do not.
+  const refusedBeforeExecution = errorCode !== RPC_ERROR_CODES.OUTCOME_UNKNOWN
+    && Object.values(RPC_ERROR_CODES).some(code => code === errorCode);
+  return refusedBeforeExecution ? markRpcRequestDisposition(failure, 'notSent') : failure;
+}
 function updateRequired(): Error {
   return createRpcCallError({ error: 'Encrypted RPC binding is unavailable or invalid; update all Happier components', errorCode: RPC_ERROR_CODES.UPDATE_REQUIRED });
 }
@@ -52,16 +61,16 @@ async function decodeResult(content: SocketRpcContent, acknowledgement: unknown,
   if (ack.ok === true) {
     if (content.mode === 'plain') return ack.result;
     if (isRecord(ack.result) && typeof ack.result.error === 'string' && typeof ack.result.errorCode === 'string') {
-      throw createRpcCallError({ error: ack.result.error, errorCode: ack.result.errorCode });
+      throw acknowledgementError(ack.result.error, ack.result.errorCode);
     }
     const opened = await open(content, ack.result);
     if (opened.k !== 'res' || opened.c !== callId || Object.keys(opened).some(key => !['v', 'k', 'c', 'r'].includes(key))) throw updateRequired();
     return opened.r;
   }
-  throw createRpcCallError({
-    error: typeof ack.error === 'string' ? ack.error : 'RPC call failed',
-    errorCode: typeof ack.errorCode === 'string' ? ack.errorCode : undefined,
-  });
+  throw acknowledgementError(
+    typeof ack.error === 'string' ? ack.error : 'RPC call failed',
+    typeof ack.errorCode === 'string' ? ack.errorCode : undefined,
+  );
 }
 /** Responders encode their raw result; the relay owns the outer acknowledgement. */
 export const socketRpcCodec = Object.freeze({ encodeParams, decodeResult, decodeRequestParams, encodeResponse });
