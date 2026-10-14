@@ -13,7 +13,6 @@ import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { Text } from '@/components/ui/text/Text';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Typography } from '@/constants/Typography';
-import { resolveAnchoredListMoveV1 } from '@happier-dev/protocol/actions/anchoredListOrderV1';
 import { HomeHubLayoutIntentSchema } from '@happier-dev/protocol/home';
 import { EntityFlatReorderList, EntityFlatReorderRow, settleEntityReorderWrite, entityReorderPreview, entityReorderRefused, type EntityFlatReorderBinding } from '@/components/ui/treeDragDrop/ui/EntityFlatReorder';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
@@ -53,14 +52,19 @@ export const HomeLayoutEditor = React.memo(function HomeLayoutEditor(props: Read
         () => layout.sections.map((section) => ({ id: section.id, title: homeHubSectionTitle(section) })),
         [layout.sections],
     );
+    const projectMove: NonNullable<EntityFlatReorderBinding['projectMove']> = (sectionId, position) => {
+        try { return layout.projectMove(sectionId, position); }
+        catch { return null; }
+    };
     const binding: EntityFlatReorderBinding = {
         scope, kind: 'home-section', items: placed,
         getItem: (id) => scope && placed.some(item => item.id === id) ? { kind: 'home-section', scope, sectionId: id } : null,
         getSourceId: (item) => item.kind === 'home-section' ? item.sectionId : null,
+        projectMove,
         resolve: (sectionId, position) => {
             if (!scope) return entityReorderRefused('reorder_scope_unavailable');
             const ids = placed.map(item => item.id);
-            const next = resolveAnchoredListMoveV1(ids, sectionId, position);
+            const next = projectMove(sectionId, position);
             if (!next) return entityReorderRefused('reorder_member_gone');
             if (next.every((id, index) => id === ids[index])) return entityReorderRefused('same-position');
             return { status: 'allowed', effect: { actionId: 'home.hub.layout.update', input: { intent: { kind: 'move_to', sectionId, position } }, preview: entityReorderPreview(position, placed) } };

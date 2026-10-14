@@ -43,9 +43,16 @@ const scope = { serverId: 'home-a', accountId: 'account-a' };
 let runtime: EntityDragDropRuntime;
 const screens: RenderScreenResult[] = [];
 const domRows: HTMLElement[] = [];
-function RuntimeProbe() { runtime = useEntityDragDropRuntime(); return null; }
+function RuntimeProbe(props: Readonly<{ enumerate?: boolean }>) {
+    runtime = useEntityDragDropRuntime();
+    React.useEffect(() => props.enumerate ? runtime.subscribe(() => {
+        const sourceId = runtime.getSnapshot().sourceId;
+        if (sourceId) runtime.getDestinations(sourceId);
+    }) : undefined, [props.enumerate]);
+    return null;
+}
 
-function fixture(scrollRef?: React.RefObject<ScrollView | null>, acknowledgement?: Promise<void>) {
+function fixture(scrollRef?: React.RefObject<ScrollView | null>, acknowledgement?: Promise<void>, enumerate = false) {
     const model = { ids: ['a', 'b', 'c'], scope, writes: [] as TodoReorderInputV1[] };
     const binding = (): EntityFlatReorderBinding => ({
         scope: model.scope, kind: 'todo', items: model.ids.map(id => ({ id, title: id })),
@@ -68,7 +75,7 @@ function fixture(scrollRef?: React.RefObject<ScrollView | null>, acknowledgement
             return { status: 'applied' };
         },
     });
-    const render = () => <><RuntimeProbe /><EntityFlatReorderList binding={binding()} testID="list" initialOrganizing scrollRef={scrollRef}>
+    const render = () => <><RuntimeProbe enumerate={enumerate} /><EntityFlatReorderList binding={binding()} testID="list" initialOrganizing scrollRef={scrollRef}>
         {model.ids.map(id => <EntityFlatReorderRow key={id} id={id}>
             {({ renderHandle }) => <>{renderHandle(`grip:${id}`)}<Text>{id}</Text></>}
         </EntityFlatReorderRow>)}
@@ -177,6 +184,38 @@ describe('shared flat reorder UI binding', () => {
         f.model.ids = ['b', 'a', 'c'];
         await act(async () => { screen.tree.update(f.render()); });
         expect(order()).toEqual(['grip:b', 'grip:a', 'grip:c']);
+    });
+
+    it('lands the committed chooser destination despite enumeration and clears feedback on early acknowledgement', async () => {
+        const acknowledgement = createDeferred<void>();
+        const f = fixture(undefined, acknowledgement.promise, true);
+        const screen = await mount(f);
+        await key(screen, 'a', ' ');
+        const sourceId = runtime.getSnapshot().sourceId!;
+        await act(async () => { runtime.cancel(); });
+        const destination = runtime.getDestinations(sourceId).find(entry =>
+            AnchoredListPositionV1Schema.safeParse(entry.destination).data?.anchorId === 'c'
+            && AnchoredListPositionV1Schema.safeParse(entry.destination).data?.placement === 'before')!;
+        // A mounted chooser enumerates destinations on semantic notifications; enumeration is read-only.
+        const unsubscribe = runtime.subscribe(() => { runtime.getDestinations(sourceId); });
+        let move: Promise<unknown> | undefined;
+        const order = () => [...new Set(screen.root.findAll(node => typeof node.props?.testID === 'string' && node.props.testID.startsWith('grip:'))
+            .map(node => String(node.props.testID)))];
+        const row = () => screen.findAllByType('View').find(node => node.props.onLayout
+            && node.props.testID !== 'list' && node.findAll(child => child.props.testID === 'grip:a').length > 0)!;
+        try {
+            await act(async () => { move = runtime.perform(sourceId, destination.targetId, destination.destination); });
+            expect(runtime.getSnapshot().phase).toBe('pending');
+            expect.soft(order()).toEqual(['grip:b', 'grip:a', 'grip:c']);
+            expect(StyleSheet.flatten(row().props.style)?.opacity).toBeLessThan(1);
+            f.model.ids = ['b', 'a', 'c'];
+            await screen.update(f.render());
+            expect.soft(StyleSheet.flatten(row().props.style)?.opacity ?? 1).toBe(1);
+            expect.soft(screen.findByTestId('list.staged') === null).toBe(true);
+            await act(async () => { acknowledgement.resolve(); await move; });
+            expect(order()).toEqual(['grip:b', 'grip:a', 'grip:c']);
+            expect(StyleSheet.flatten(row().props.style)?.opacity ?? 1).toBe(1);
+        } finally { unsubscribe(); acknowledgement.resolve(); await move; }
     });
 
     it('keeps repeated row drops in the foreground list over smaller underlying widget targets', async () => {

@@ -415,8 +415,12 @@ describe('Home Customize entity reorder binding', () => {
         const effect = list().props.binding.resolve('setup', { anchorId: 'start', placement: 'before' });
         expect(effect.status).toBe('allowed');
         if (effect.status !== 'allowed') throw new Error('Expected the layout move to be admitted');
+        const projectMove = list().props.binding.projectMove;
+        if (!projectMove) throw new Error('Expected the Home layout placement owner to be bound');
+        const projectedOrder = projectMove('setup', { anchorId: 'start', placement: 'before' });
         await act(async () => { await list().props.binding.execute(effect.effect); });
         await flushHookEffects({ cycles: 3 });
+        expect(list().props.binding.items.map((item: { id: string }) => item.id)).toEqual(projectedOrder);
         expect(artifact.layout().order.indexOf('setup')).toBeLessThan(artifact.layout().order.indexOf('start'));
         // Acknowledged writes do not leave the mounted editor on the first Artifact revision.
         for (const [sectionId, anchorId] of [['start', 'setup'], ['attention', 'start']] as const) {

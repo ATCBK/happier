@@ -2,7 +2,7 @@ import * as React from 'react';
 import type { HomeHubLayoutIntent } from '@happier-dev/protocol/home';
 import { isSameWidgetDefinitionV1, widgetCandidateDefinitionV1, flattenWidgetLayoutWidgetsV1, type WidgetLayoutItemV1, type WidgetLayoutGroupV1, type WidgetInstanceV1, type WidgetInputBindingsV1, type WidgetSizeV1 } from '@happier-dev/protocol/widgets';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
-import { resolveHomeHubLayout, listHiddenHomeSetupSteps, HOME_HUB_BUILTIN_DEFINITIONS, type HomeHubSection } from './homeHubLayout';
+import { applyHomeHubLayoutIntent, resolveHomeHubLayout, listHiddenHomeSetupSteps, HOME_HUB_BUILTIN_DEFINITIONS, type HomeHubSection } from './homeHubLayout';
 import { useHomeWidgetCandidates } from './useHomeWidgetCandidates';
 import { useHomeHubArtifactLayout } from './useHomeHubArtifactLayout';
 import { useWidgetInstanceDescriptors } from '@/components/widgets/surface/useWidgetInstanceDescriptor';
@@ -27,6 +27,8 @@ export type HomeHubLayout = Readonly<{
     cancelFailedIntent: () => void;
     move: (id: string, step: -1 | 1) => Promise<void>;
     moveTo: (id: string, position: Extract<HomeHubLayoutIntent, { kind: 'move_to' }>['position']) => Promise<void>;
+    /** The same reducer and projection as the saved move; includes mandatory, non-hideable rows. */
+    projectMove: (id: string, position: Extract<HomeHubLayoutIntent, { kind: 'move_to' }>['position']) => readonly string[];
     reorder: (orderedIds: readonly string[]) => Promise<void>;
     setHidden: (id: string, hidden: boolean) => Promise<void>;
     setFrameStyle: (id: string, style: 'card' | 'plain' | null) => Promise<void>;
@@ -90,6 +92,9 @@ export function useHomeHubLayout(): HomeHubLayout {
         canCancelFailedIntent: Boolean(state.failedIntent), cancelFailedIntent: state.cancelFailedIntent,
         move: (sectionId, step) => dispatch({ kind: 'move', sectionId, step }),
         moveTo: (sectionId, position) => dispatch({ kind: 'move_to', sectionId, position }),
+        projectMove: (sectionId, position) => resolveHomeHubLayout(
+            applyHomeHubLayoutIntent(layout, HOME_HUB_BUILTIN_DEFINITIONS, layoutWidgets, { kind: 'move_to', sectionId, position }),
+            HOME_HUB_BUILTIN_DEFINITIONS, layoutWidgets).sections.map(section => section.id),
         reorder: sectionIds => dispatch({ kind: 'reorder', sectionIds: [...sectionIds] }),
         setHidden: (sectionId, hidden) => dispatch({ kind: 'visibility', sectionId, hidden }),
         setFrameStyle: (sectionId, frameStyle) => dispatch({ kind: 'frameStyle', sectionId, frameStyle }),
@@ -105,5 +110,5 @@ export function useHomeHubLayout(): HomeHubLayout {
         setGroup: (instanceId, options) => dispatch({ kind: 'group_set', instanceId, ...options }),
         setGroupInputs: (instanceId, bindings) => dispatch({ kind: 'group_inputs', instanceId, bindings }),
         moveItem: (instanceId, toIndex, groupId) => dispatch({ kind: 'move', instanceId, toIndex, ...(groupId === undefined ? {} : { groupId }) }),
-    }), [dispatch, layout, resolved, state.cancelFailedIntent, state.errorCode, state.failedIntent, state.retry, state.status]);
+    }), [dispatch, layout, layoutWidgets, resolved, state.cancelFailedIntent, state.errorCode, state.failedIntent, state.retry, state.status]);
 }
