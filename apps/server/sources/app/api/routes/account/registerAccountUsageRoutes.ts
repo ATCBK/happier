@@ -1,10 +1,5 @@
-import {
-    UsageAnalyticsQueryRequestSchema,
-    UsageAnalyticsQueryResponseSchema,
-    UsageEventIngestRequestSchema,
-    UsageNativeHistoryDeleteRequestSchema,
-    UsageModelPriceCatalogSchema,
-} from "@happier-dev/protocol";
+import { UsageAnalyticsQueryRequestSchema, UsageAnalyticsQueryResponseSchema, UsageEventIngestRequestSchema, UsageNativeHistoryDeleteRequestSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
+import { UsageModelPriceCatalogSchema } from '@happier-dev/protocol/usage/usageModelPriceSchemas';
 import { z } from "zod";
 import { inTx, type Tx } from "@/storage/inTx";
 import { log } from "@/utils/logging/log";
@@ -14,6 +9,8 @@ import { LegacyUsageReportRouteBodySchema } from "@/app/usage/legacyUsageReportS
 import { type Fastify } from "../../types";
 import { accountUsageRoutePaths } from "./accountUsageRoutePaths";
 import { readUsageModelPriceCatalog, refreshUsageModelPriceCatalog } from '@/app/usage/usageModelPriceCatalog';
+import { readCurrentSessionIdsInTx } from '@/app/session/access/sessionReadAdmission';
+import { readSessionAccessAuthenticationFromRequest, type SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 
 const LegacyUsageReportRouteResponseSchema = z.object({
     success: z.literal(true),
@@ -28,18 +25,11 @@ const UsageEventIngestRouteResponseSchema = z.object({
     createdAt: z.number(),
 });
 
-async function ensureOwnedSessionIds(tx: Tx, accountId: string, sessionIds: readonly string[]): Promise<boolean> {
-    if (sessionIds.length === 0) {
-        return true;
-    }
-
-    const count = await tx.session.count({
-        where: {
-            accountId,
-            id: { in: [...sessionIds] },
-        },
-    });
-    return count === sessionIds.length;
+async function ensureReadableSessionIds(tx: Tx, accountId: string, sessionIds: readonly string[],
+    authentication: SessionAccessAuthentication): Promise<boolean> {
+    const requested = [...new Set(sessionIds)];
+    const readable = await readCurrentSessionIdsInTx(tx, { accountId, sessionIds: requested, authentication });
+    return readable.size === requested.length;
 }
 
 export function registerAccountUsageRoutes(app: Fastify): void {
@@ -71,14 +61,7 @@ export function registerAccountUsageRoutes(app: Fastify): void {
         try {
             return await inTx(async tx => {
                 if (sessionId) {
-                    const session = await tx.session.findFirst({
-                        where: {
-                            id: sessionId,
-                            accountId: userId,
-                        },
-                        select: { id: true },
-                    });
-                    if (!session) {
+                    if (!await ensureReadableSessionIds(tx, userId, [sessionId], readSessionAccessAuthenticationFromRequest(request))) {
                         return reply.code(404).send({ error: 'Session not found' });
                     }
                 }
@@ -121,8 +104,9 @@ export function registerAccountUsageRoutes(app: Fastify): void {
         try {
             return await inTx(async tx => {
                 if (request.body.filters?.sessionIds?.length) {
-                    const isOwned = await ensureOwnedSessionIds(tx, request.userId, request.body.filters.sessionIds);
-                    if (!isOwned) {
+                    const isReadable = await ensureReadableSessionIds(tx, request.userId, request.body.filters.sessionIds,
+                        readSessionAccessAuthenticationFromRequest(request));
+                    if (!isReadable) {
                         return reply.code(404).send({ error: 'Session not found' });
                     }
                 }
