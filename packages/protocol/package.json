@@ -884,6 +884,11 @@
       "types": "./dist/connect/providerAccountUsageHistory.d.ts",
       "default": "./dist/connect/providerAccountUsageHistory.js"
     },
+    "./connect/providerAccountUsagePageProjection": {
+      "happier-source": "./src/connect/providerAccountUsagePageProjection.ts",
+      "types": "./dist/connect/providerAccountUsagePageProjection.d.ts",
+      "default": "./dist/connect/providerAccountUsagePageProjection.js"
+    },
     "./connect/deriveProviderAccountUsagePace": {
       "happier-source": "./src/connect/deriveProviderAccountUsagePace.ts",
       "types": "./dist/connect/deriveProviderAccountUsagePace.d.ts",
@@ -8058,6 +8063,11 @@
       "happier-source": "./src/workflows/workflowDefinitionEditV1.ts",
       "types": "./dist/workflows/workflowDefinitionEditV1.d.ts",
       "default": "./dist/workflows/workflowDefinitionEditV1.js"
+    },
+    "./workflows/workflowResultFieldsV1": {
+      "happier-source": "./src/workflows/workflowResultFieldsV1.ts",
+      "types": "./dist/workflows/workflowResultFieldsV1.d.ts",
+      "default": "./dist/workflows/workflowResultFieldsV1.js"
     },
     "./workflows/workflowDocumentV1": {
       "happier-source": "./src/workflows/workflowDocumentV1.ts",
