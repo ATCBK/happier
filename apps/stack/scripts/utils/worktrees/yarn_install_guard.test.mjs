@@ -188,7 +188,7 @@ test('dependency freshness ignores timestamp-only changes but detects same-size 
   t.after(async () => rm(dir, { recursive: true, force: true }));
 
   const packagePath = join(dir, 'package.json');
-  await writeFile(packagePath, '{"value":"one"}\n', 'utf-8');
+  await writeFile(packagePath, '{"dependencies":{"example":"1.0.0"}}\n', 'utf-8');
   await writeFile(join(dir, 'yarn.lock'), '# yarn\n', 'utf-8');
   await mkdir(join(dir, 'node_modules'), { recursive: true });
 
@@ -206,8 +206,9 @@ test('dependency freshness ignores timestamp-only changes but detects same-size 
     'a sync-only timestamp change must not reinstall unchanged dependencies',
   );
 
-  await writeFile(packagePath, '{"value":"two"}\n', 'utf-8');
+  await writeFile(packagePath, '{"dependencies":{"example":"1.0.1"}}\n', 'utf-8');
   await touch(packagePath, originalStats.mtimeMs + 60_000);
+  assert.equal((await stat(packagePath)).size, originalStats.size);
   assert.equal(
     await shouldRunYarnInstall({ installDir: dir, componentDir: dir }),
     true,

@@ -31,6 +31,7 @@ import {
 import { buildStubHappierServerSetSource } from './testkit/core/stub_happier_cli_server_set.mjs';
 import { resolvePreferredStackDaemonStatePaths } from './utils/auth/credentials_paths.mjs';
 import { resolveCliDistBuildLockPath, withCliDistBuildLock } from './utils/proc/cliDistBuildLock.mjs';
+import { withPatchedProcessEnv } from './testkit/core/env_scope.mjs';
 import {
   PINNED_RUNNER_MANAGED_PROVIDER_RUNTIME_RELATIVE_PATH,
   resolveNewestReadyPinnedRunnerSnapshot,
@@ -876,6 +877,7 @@ assert.deepEqual(remainingLifecycleLocks, [], 'typed admission failure must rele
 });
 
 test('source daemon holds publication through profile and start but releases it during stop', async (t) => {
+  withPatchedProcessEnv(t, { HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: undefined });
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-source-daemon-start-publication-lease-'));
   const { internalServerUrl, publicServerUrl } = await reserveLoopbackServerUrls();
   const cliDir = join(tmp, 'apps', 'cli');
@@ -2513,10 +2515,15 @@ test('startLocalDaemonWithAuth does not require a second CLI build when dist/ind
   }
 });
 
-test('startLocalDaemonWithAuth waits for a concurrent cli dist build to finish before starting', async () => {
+test('startLocalDaemonWithAuth waits for a concurrent cli dist build to finish before starting', async (t) => {
+  // This temporary publisher and caller model independent, uncharged work,
+  // not a lock-only waiter inside the public runner's charged envelope.
+  withPatchedProcessEnv(t, { HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: undefined });
   const tmp = await mkdtemp(join(tmpdir(), 'happy-stacks-daemon-dist-lock-wait-'));
-  let lockHolder = null;
+  let publisherPromise = null;
+  let startPromise = null;
   let fixturePid = null;
+  let shouldShutdown = false;
   try {
     const { internalServerUrl, publicServerUrl } = await reserveLoopbackServerUrls();
     const cliDir = join(tmp, 'apps', 'cli');
@@ -2537,54 +2544,46 @@ test('startLocalDaemonWithAuth waits for a concurrent cli dist build to finish b
     await writeFile(join(cliHomeDir, 'access.key'), 'dummy\n', 'utf-8');
     await writeFile(join(cliHomeDir, 'settings.json'), JSON.stringify({ machineId: 'test-machine' }) + '\n', 'utf-8');
 
-    lockHolder = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
-    const lockPath = join(tmp, '.project', 'tmp', 'cli-dist-build.lock');
-    await mkdir(join(tmp, '.project', 'tmp'), { recursive: true });
-    await writeFile(
-      lockPath,
-      JSON.stringify({
-        pid: lockHolder.pid,
-        createdAtMs: Date.now(),
-        updatedAtMs: Date.now(),
-      }),
-      'utf-8',
-    );
-
-    setTimeout(async () => {
-      try {
+    const lockPath = resolveCliDistBuildLockPath(tmp);
+    let publisherEntered;
+    const publisherReady = new Promise((resolve) => { publisherEntered = resolve; });
+    publisherPromise = withCliDistBuildLock(
+      async () => {
+        publisherEntered();
+        await new Promise((resolve) => setTimeout(resolve, 100));
         await mkdir(join(cliDir, 'dist'), { recursive: true });
         await writeFile(join(cliDir, 'dist', 'index.mjs'), distScript, 'utf-8');
         writeStubCliDistBuildManifest(cliDir);
-        await rm(lockPath, { force: true });
-      } catch {
-        // Best-effort: the test assertions below surface any failure.
-      }
-    }, 100);
+      },
+      { lockPath },
+    );
+    // Observe setup failures immediately; the real publisher releases its
+    // authenticated lease only after the complete manifest is available.
+    void publisherPromise.catch(() => {});
+    await Promise.race([publisherReady, publisherPromise]);
+    assert.equal(existsSync(join(cliDir, 'dist', 'index.mjs')), false,
+      'startup must begin while the concurrent publication is incomplete');
 
     const env = buildDaemonDistGuardEnv({
       HAPPIER_STACK_CLI_BUILD: '1',
     });
 
-    await Promise.race([
-      startLocalDaemonWithAuth({
-        cliBin,
-        cliHomeDir,
-        internalServerUrl,
-        publicServerUrl,
-        isShuttingDown: () => false,
-        forceRestart: true,
-        env,
-        stackName: 'dev',
-        cliIdentity: 'default',
-      }),
-      new Promise((_, reject) => {
-        setTimeout(() => {
-          reject(new Error('timed out waiting for daemon start while a concurrent cli dist build lock was active'));
-        }, 10_000);
-      }),
-    ]);
+    startPromise = startLocalDaemonWithAuth({
+      cliBin,
+      cliHomeDir,
+      internalServerUrl,
+      publicServerUrl,
+      isShuttingDown: () => shouldShutdown,
+      forceRestart: true,
+      env,
+      stackName: 'dev',
+      cliIdentity: 'default',
+    });
+    await Promise.all([publisherPromise, startPromise]);
 
     fixturePid = await readDaemonPid(join(cliHomeDir, 'daemon.state.json'));
+    assert.ok(fixturePid > 1, 'expected the daemon to start from the completed publication');
+    assert.equal(existsSync(lockPath), false, 'startup must release its final publication lease');
 
     await stopLocalDaemon({
       cliBin,
@@ -2594,14 +2593,17 @@ test('startLocalDaemonWithAuth waits for a concurrent cli dist build to finish b
     });
     assert.equal(await waitForProcessExit(fixturePid), true, `expected fixture daemon pid ${fixturePid} to exit`);
     fixturePid = null;
-
-    assert.ok(true);
   } finally {
+    shouldShutdown = true;
+    await publisherPromise?.catch(() => {});
+    await startPromise?.catch(() => {});
+    if (!fixturePid) {
+      const state = await readFile(join(tmp, 'stack', 'cli', 'daemon.state.json'), 'utf-8').catch(() => null);
+      if (state) fixturePid = Number(JSON.parse(state).pid);
+    }
     if (fixturePid) {
       try { process.kill(fixturePid, 'SIGKILL'); } catch {}
-    }
-    if (lockHolder && lockHolder.exitCode == null) {
-      lockHolder.kill('SIGTERM');
+      await waitForProcessExit(fixturePid);
     }
     await rm(tmp, { recursive: true, force: true });
   }
@@ -3572,7 +3574,7 @@ for (const { matchingLaunch, nativeLauncher } of [
   { matchingLaunch: true, nativeLauncher: false },
   { matchingLaunch: false, nativeLauncher: false },
 ]) {
-  test(`manual source daemon start attests only its recorded launch (matching=${matchingLaunch}, native=${nativeLauncher})`, async () => {
+  test(`manual source daemon start consumes and attests its recorded launch (matching=${matchingLaunch}, native=${nativeLauncher})`, async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'hstack-source-daemon-attestation-'));
     const cliHomeDir = join(tmp, 'stack', 'cli');
     const { internalServerUrl, publicServerUrl } = await reserveLoopbackServerUrls();
@@ -3587,14 +3589,34 @@ for (const { matchingLaunch, nativeLauncher } of [
       await mkdir(cliHomeDir, { recursive: true });
       await writeFile(join(cliHomeDir, 'access.key'), 'dummy\n');
       await writeFile(join(cliHomeDir, 'settings.json'), JSON.stringify({ machineId: 'test-machine' }));
+      // The retained selection is authoritative even if a long-lived caller
+      // still supplies its former complete launch graph.
+      const otherLaunch = !matchingLaunch
+        ? await writeRuntimeSnapshotHappyCliJsCommand({ snapshotDir: join(tmp, 'other-bundle') })
+        : null;
+      const startsPath = join(tmp, 'launch-starts');
+      if (otherLaunch) {
+        for (const [command, identity] of [[cliCommand, 'stale'], [otherLaunch.cliCommand, 'selected']]) {
+          const source = await readFile(command, 'utf8');
+          await writeFile(command, `import { appendFileSync as recordFixtureStart } from 'node:fs';
+if (process.argv[2] === 'daemon' && process.argv[3] === 'start') recordFixtureStart(${JSON.stringify(startsPath)}, ${JSON.stringify(`${identity}\n`)});
+${source}`);
+        }
+      }
       await recordStackRuntimeStart(runtimeStatePath, { stackName: 'source-attestation', ownerPid: process.pid,
         sourceRuntimeIdentities: { daemon: { selected: 'prepared-source', loaded: null } },
-        sourceRuntimeLaunch: { entrypoint: matchingLaunch ? cliCommand : join(tmp, 'other-bundle'), cliDir: dirname(cliCommand), env: {} } });
+        sourceRuntimeLaunch: { entrypoint: matchingLaunch ? cliCommand : otherLaunch.cliCommand,
+          cliDir: dirname(matchingLaunch ? cliCommand : otherLaunch.cliCommand), env: {} } });
       const result = await startLocalDaemonWithAuth({ cliBin, cliCommand, cliHomeDir, internalServerUrl, publicServerUrl,
         runtimeStatePath, env, stackName: 'source-attestation', isShuttingDown: () => false });
       assert.equal(result.started, true);
       assert.equal((await readStackRuntimeStateFile(runtimeStatePath)).sourceRuntimeIdentities.daemon.loaded,
-        matchingLaunch ? 'prepared-source' : null);
+        'prepared-source');
+      if (otherLaunch) {
+        const starts = await readFile(startsPath, 'utf8');
+        assert.match(starts, /selected/);
+        assert.doesNotMatch(starts, /stale/);
+      }
       if (matchingLaunch) {
         await recordStackRuntimeUpdate(runtimeStatePath, { sourceRuntimeIdentities: { daemon: { loaded: null } } });
         const adopted = await startLocalDaemonWithAuth({ cliBin, cliCommand, cliHomeDir, internalServerUrl, publicServerUrl,

@@ -667,7 +667,7 @@ test('source snapshot supervisor builds on each mirror without native transfer o
   await writeFile(credentialPath, '{}');
   const syncStackBaseDir = join(root, 'sync');
   await mkdir(join(syncStackBaseDir, 'mutagen'), { recursive: true });
-  await writeFile(join(syncStackBaseDir, 'mutagen/mutagen.yml'), renderMutagenProject({ sourceDir: process.cwd(), targets, ownerId: 'producer' }));
+  await writeFile(join(syncStackBaseDir, 'mutagen/mutagen.yml'), renderMutagenProject({ sourceDir: repoDir, targets, ownerId: 'producer' }));
   for (const target of targets) await mkdir(resolveRemoteStackStatePaths(target, { stackName, runtimeMode: 'controlled' }).stackBaseDir, { recursive: true });
   const states = [];
   let resolveRunning;
@@ -680,7 +680,7 @@ test('source snapshot supervisor builds on each mirror without native transfer o
   const phaseLogs = [];
   const execFileAsync = promisify(execFile);
   const controller = await startStackDevTargets({
-    stackName, stackBaseDir: join(root, 'consumer'), syncStackBaseDir, sourceDir: process.cwd(),
+    stackName, stackBaseDir: join(root, 'consumer'), syncStackBaseDir, sourceDir: repoDir,
     sourceSnapshot: true, credentialPath, localServerPort: 3005, publicServerUrl: 'http://127.0.0.1:3005',
     canonicalServerUrl: 'http://happier-agent-qa.localhost:3005',
     remoteServerRuntimeConfig: remoteLightSqliteRuntimeConfig,
@@ -939,36 +939,43 @@ test('controlled supervisor imports and verifies each separate server and daemon
 test('controlled pre-dispatch SSH unavailability is distinguishable from a rejected runtime or data contract', async (t) => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-controlled-unavailable-' });
   const target = { name: 'linux', platform: 'posix', ssh: 'boundary-ssh', repoDir: '/remote/repo', cliHomeDir: join(root, 'remote') };
-  await writeProducerSyncProject(root, process.cwd(), target);
-  await assert.rejects(startStackDevTargets({ stackName: 'agent-qa', stackBaseDir: root, sourceDir: process.cwd(),
-    localServerPort: 3005, publicServerUrl: 'http://127.0.0.1:3005',
-    runtimeSnapshot: { snapshotId: 'qa' }, runtimeTarget: { platform: process.platform, arch: process.arch },
-    targetPlans: [{ target, services: { server: true, expo: false, daemon: false } }], env: {},
-  }, {
-    runProcess: async input => input.command === 'ssh' ? { code: 255 } : readySyncResult(target),
-    spawnProcess: input => ({ ...input, exitCode: null }),
-    stopProcess: async child => { child.exitCode = 0; }, logger: { error() {} },
-  }), error => error.remotePreDispatchUnavailable === true);
-  const snapshot = await writeManagedRuntimeSnapshotLayout({ stackDir: join(root, 'producer') });
-  let partialArchive;
-  const execFileAsync = promisify(execFile);
-  await assert.rejects(startStackDevTargets({ stackName: 'agent-qa', stackBaseDir: root, sourceDir: process.cwd(),
-    localServerPort: 3005, publicServerUrl: 'http://127.0.0.1:3005', runtimeSnapshot: snapshot, runtimeTarget: snapshot.manifest.target,
-    targetPlans: [{ target, services: { server: true, expo: false, daemon: false } }], env: {},
-  }, {
-    runProcess: async () => readySyncResult(target), runCommand: async ({ commandArgs }) => {
-      if (commandArgs?.[2]?.includes('rmSync')) await execFileAsync(process.execPath, commandArgs.slice(1));
-      return { code: 0, out: JSON.stringify({ retainedRemoteData: false }) };
-    },
-    transferFile: async ({ remotePath }) => {
-      partialArchive = remotePath;
-      await mkdir(dirname(remotePath), { recursive: true });
-      await writeFile(remotePath, 'partial upload');
-      const error = new Error('SCP disconnected'); Object.assign(error, { name: 'OpenSshExecutionError', code: 'command_failed', status: 255 }); throw error;
-    },
-    spawnProcess: input => ({ ...input, exitCode: null }), stopProcess: async child => { child.exitCode = 0; }, logger: { error() {} },
-  }), error => error.remotePreDispatchUnavailable === true);
-  await assert.rejects(stat(partialArchive), { code: 'ENOENT' });
+  await writeProducerSyncProject(root, repoDir, target);
+  let unexpectedController;
+  try {
+    await assert.rejects(async () => {
+      unexpectedController = await startStackDevTargets({ stackName: 'agent-qa', stackBaseDir: root, sourceDir: repoDir,
+        localServerPort: 3005, publicServerUrl: 'http://127.0.0.1:3005',
+        runtimeSnapshot: { snapshotId: 'qa' }, runtimeTarget: { platform: process.platform, arch: process.arch },
+        targetPlans: [{ target, services: { server: true, expo: false, daemon: false } }], env: {},
+      }, {
+        runProcess: async input => input.command === 'ssh' ? { code: 255 } : readySyncResult(target),
+        spawnProcess: input => ({ ...input, exitCode: null }),
+        stopProcess: async child => { child.exitCode = 0; }, logger: { error() {} },
+      });
+    }, error => error.remotePreDispatchUnavailable === true);
+    const snapshot = await writeManagedRuntimeSnapshotLayout({ stackDir: join(root, 'producer') });
+    let partialArchive;
+    const execFileAsync = promisify(execFile);
+    await assert.rejects(async () => {
+      unexpectedController = await startStackDevTargets({ stackName: 'agent-qa', stackBaseDir: root, sourceDir: repoDir,
+        localServerPort: 3005, publicServerUrl: 'http://127.0.0.1:3005', runtimeSnapshot: snapshot, runtimeTarget: snapshot.manifest.target,
+        targetPlans: [{ target, services: { server: true, expo: false, daemon: false } }], env: {},
+      }, {
+        runProcess: async () => readySyncResult(target), runCommand: async ({ commandArgs }) => {
+          if (commandArgs?.[2]?.includes('rmSync')) await execFileAsync(process.execPath, commandArgs.slice(1));
+          return { code: 0, out: JSON.stringify({ retainedRemoteData: false }) };
+        },
+        transferFile: async ({ remotePath }) => {
+          partialArchive = remotePath;
+          await mkdir(dirname(remotePath), { recursive: true });
+          await writeFile(remotePath, 'partial upload');
+          const error = new Error('SCP disconnected'); Object.assign(error, { name: 'OpenSshExecutionError', code: 'command_failed', status: 255 }); throw error;
+        },
+        spawnProcess: input => ({ ...input, exitCode: null }), stopProcess: async child => { child.exitCode = 0; }, logger: { error() {} },
+      });
+    }, error => error.remotePreDispatchUnavailable === true);
+    await assert.rejects(stat(partialArchive), { code: 'ENOENT' });
+  } finally { await unexpectedController?.close(); }
 });
 
 test('only remote daemon placement requires local CLI workspace preparation', () => {
@@ -986,6 +993,53 @@ test('remote daemon startup without an orchestrated auth flow still rejects miss
     env: {},
     targetPlans: [{ target: { name: 'mac' }, services: { server: true, expo: true, daemon: true } }],
   }), /no daemon credential/);
+});
+
+test('remote daemon startup keeps its enrolled credential when the controller has an older seed', { skip: process.platform === 'win32' }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-enrolled-remote-auth-' });
+  const target = { name: 'linux', platform: 'posix', ssh: 'fixture-ssh', repoDir: repoDir, cliHomeDir: fixture.path('remote-cli') };
+  const paths = resolveRemoteStackStatePaths(target, { stackName: 'agent-qa' });
+  const remoteCredential = join(paths.cliHomeDir, 'servers', paths.activeServerId, 'access.key');
+  const controllerCredential = fixture.path('controller-access.key');
+  const enrolled = { token: 'qa-enrolled', encryption: { publicKey: Buffer.alloc(32, 1).toString('base64'), machineKey: Buffer.alloc(32, 2).toString('base64') } };
+  await mkdir(dirname(remoteCredential), { recursive: true });
+  await writeFile(remoteCredential, JSON.stringify(enrolled), { mode: 0o600 });
+  await writeFile(controllerCredential, JSON.stringify({ token: 'qa-controller', secret: Buffer.alloc(32, 3).toString('base64') }));
+  for (let start = 0; start < 2; start += 1) {
+    let controller;
+    let ready = false;
+    let notifyRunning;
+    const running = new Promise(resolve => { notifyRunning = resolve; });
+    try {
+      controller = await startStackDevTargets({
+        stackName: 'agent-qa', stackBaseDir: fixture.path('stack'), sourceDir: repoDir,
+        localServerPort: 3005, credentialPath: controllerCredential,
+        targetPlans: [{ target, commands: true, services: { server: false, expo: false, daemon: true } }], env: {},
+        onTargetStateChange: state => { if (state.status === 'running') notifyRunning(); },
+      }, {
+        runDependencyBootstrap: successfulDependencyBootstrap,
+        // Only the transport/process boundary is replaced. The supervisor's
+        // actual credential command runs against the real target fixture.
+        runProcess: async ({ command, args }) => {
+          if (command === 'scp') await copyFile(args.at(-2), args.at(-1).slice(`${target.ssh}:`.length));
+          if (command === 'ssh' && String(args.at(-1)).includes('.access-key-agent-qa.tmp')) {
+            const result = await promisify(execFile)('/bin/bash', ['-c', args.at(-1)]);
+            return { code: 0, out: result.stdout };
+          }
+          return { code: 0 };
+        },
+        spawnProcess: input => ({ ...input, exitCode: null }),
+        stopProcess: async child => { child.exitCode = 0; },
+        waitForDaemonReady: async () => {
+          assert.deepEqual(JSON.parse(await readFile(remoteCredential, 'utf8')), enrolled,
+            'the daemon must read its own enrollment after the real startup seed command');
+          ready = true;
+        },
+      });
+      await running;
+      assert.equal(ready, true);
+    } finally { await controller?.close(); }
+  }
 });
 
 test('attended remote services seed canonical-profile credentials after login without restarting services', async () => {

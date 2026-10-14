@@ -432,7 +432,7 @@ test('doctor gives borrowed-Expo runtime consumers their snapshot and producer p
   assert.match(res.stdout, /hstack stack runtime qa-consumer select/i);
   assert.doesNotMatch(res.stdout, /hstack stack build qa-consumer --all --activate-runtime/i);
   assert.match(res.stdout, /borrowed Expo: repo-producer \(degraded\)/i);
-  assert.match(res.stdout, /restore Expo on producer stack repo-producer/i);
+  assert.match(res.stdout, /park UI\/QA-UI until Expo READY on repo-producer/i);
   assert.match(res.stdout, /server health: unreachable/i);
   assert.doesNotMatch(res.stdout, /ui build dir missing/i);
   assert.doesNotMatch(res.stdout, /run: hstack build(?:\s|$)/i);

@@ -524,6 +524,18 @@ test('source web export uses fresh private source projections and one-shot origi
   delete env.HAPPIER_STACK_EXPO_SHARED_TMPDIR_BASE_DIR;
   delete env.HAPPIER_STACK_EXPO_SHARED_TMPDIR_KEY;
   let exportCalls = 0;
+  const residentEsbuildChildren = () => {
+    if (process.platform !== 'linux' && process.platform !== 'darwin') return [];
+    return execFileSync('ps', ['-axo', 'pid=,ppid=,stat=,comm='], { encoding: 'utf8' })
+      .split('\n').flatMap(line => {
+        const row = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/.exec(line);
+        return row && Number(row[2]) === process.pid && !row[3].startsWith('Z')
+          && /(?:^|[/\\])esbuild(?:\.exe)?$/.test(row[4]) ? [row[1]] : [];
+      });
+  };
+  // Other tests use the compiler in this process. This finite preparation
+  // owns only services it creates, not a preceding source tool's service.
+  const existingEsbuildChildren = new Set(residentEsbuildChildren());
   // Expo is the external process boundary. Source preparation and its entire
   // first-party compiler/generator graph remain real beneath this boundary.
   const runImpl = async (command, args, options) => {
@@ -542,15 +554,8 @@ test('source web export uses fresh private source projections and one-shot origi
     assert.equal(options.env.CI, '1');
     assert.equal(options.env.EXPO_PUBLIC_HAPPIER_SERVER_URL, '');
     assert.equal(options.env.EXPO_PUBLIC_DEBUG, exportCalls === 1 ? '0' : '1');
-    if (process.platform === 'linux' || process.platform === 'darwin') {
-      const children = execFileSync('ps', ['-axo', 'pid=,ppid=,stat=,comm='], { encoding: 'utf8' });
-      const residentEsbuild = children.split('\n').filter(line => {
-        const row = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/.exec(line);
-        return row && Number(row[2]) === process.pid && !row[3].startsWith('Z')
-          && /(?:^|[/\\])esbuild(?:\.exe)?$/.test(row[4]);
-      });
-      assert.deepEqual(residentEsbuild, [], 'source preparation must release its esbuild service before Expo starts');
-    }
+    assert.deepEqual(residentEsbuildChildren().filter(pid => !existingEsbuildChildren.has(pid)), [],
+      'source preparation must release its esbuild service before Expo starts');
     const inventory = await readFile(options.env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY, 'utf8');
     assert.match(inventory, /happier\.channels/);
     assert.match(inventory, /happier\.posthog/);
@@ -613,9 +618,6 @@ test('source web export uses fresh private source projections and one-shot origi
 });
 
 test('source web export admits its complete finite capture before consumption and reuses custody for Expo',
-  // Two real 22k-file captures cost ~35s each on the managed Windows/WSL
-  // worker, before real SDK preparation. This is a fixture budget, not an
-  // admission deadline or production consumption limit.
   { skip: process.platform !== 'linux', timeout: 180000 }, async (context) => {
     const fixture = await createTempFixture(context, { prefix: 'happier-source-expo-admission-', registerCleanup: false });
     let pending;
@@ -624,6 +626,31 @@ test('source web export admits its complete finite capture before consumption an
     const sourceRepo = fileURLToPath(new URL('../../../../', import.meta.url));
     const repoDir = fixture.path('repo');
     await captureSourceWebBuildInputs({ repoDir: sourceRepo, outputDir: repoDir });
+    // Keep the real captured compiler/tooling, but author one small app/plugin
+    // for this admission contract. Other cases exercise the complete app census.
+    const pluginName = '@happier-dev/plugins-admission-fixture';
+    await writeFile(join(repoDir, 'apps/cli/package.json'), JSON.stringify({ name: '@happier-dev/cli',
+      type: 'module', bundledDependencies: [pluginName] }));
+    await writeFile(join(repoDir, 'apps/ui/package.json'), JSON.stringify({ name: '@happier-dev/ui',
+      type: 'module', dependencies: { [pluginName]: '0.0.0' } }));
+    await rm(join(repoDir, 'apps/ui/sources'), { recursive: true });
+    await mkdir(join(repoDir, 'apps/ui/sources/app'), { recursive: true });
+    const uiInput = join(repoDir, 'apps/ui/sources/app/_layout.tsx');
+    const uiSource = 'export const admissionInput = "captured-ui-input";';
+    await writeFile(uiInput, uiSource);
+    const pluginRoot = join(repoDir, 'packages/plugins/admission-fixture');
+    await mkdir(join(pluginRoot, 'src'), { recursive: true });
+    await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({ name: pluginName, version: '0.0.0',
+      type: 'module', exports: { './manifest': './src/manifest.ts', './happier-plugin-ui/panel': './src/panel.ts' } }));
+    await writeFile(join(pluginRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify({
+      id: 'happier.admission-fixture', contributes: { ui: {
+        renderers: [{ id: 'panel', kind: 'reactNative', artifact: 'panel' }],
+      } },
+    })};`);
+    const pluginInput = join(pluginRoot, 'src/panel.ts');
+    await writeFile(pluginInput, 'export function renderSurface() { return "captured-plugin-input"; }');
+    const toolInput = 'apps/ui/scripts/prepareSourcePluginUiArtifacts.mjs';
+    const toolDigest = createHash('sha256').update(await readFile(join(repoDir, toolInput))).digest('hex');
     const outputDir = fixture.path('export');
     const available = fixture.path('available-memory');
     const lowMemoryObserved = fixture.path('low-memory-observed');
@@ -647,11 +674,28 @@ esac
     await writeFile(expo, `#!/bin/sh\nexec '${process.execPath}' '${expoScript}' "$@"\n`);
     await chmod(expo, 0o755);
     await writeFile(expoScript, `
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {mkdirSync,readFileSync,readdirSync,writeFileSync} from 'node:fs';
-import {join} from 'node:path';
+import {join,resolve} from 'node:path';
+import {runInNewContext} from 'node:vm';
 const root=${JSON.stringify(native.admissionRoot)};
 const token=process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN;
 const owner=token && join(root,'owners',token.replace(':','-'));
+const capturedRepo=resolve(process.cwd(),'../..');
+assert.equal(readFileSync(join(capturedRepo,'apps/ui/sources/app/_layout.tsx'),'utf8'),${JSON.stringify(uiSource)});
+assert.equal(createHash('sha256').update(readFileSync(join(capturedRepo,${JSON.stringify(toolInput)}))).digest('hex'),${JSON.stringify(toolDigest)});
+const inputs=Object.keys(JSON.parse(readFileSync(${JSON.stringify(join(outputDir, 'tools/metafile.json'))},'utf8')).inputs).map(path=>path.replaceAll('\\\\','/'));
+assert.ok(inputs.some(path=>path.endsWith('/workspace/'+${JSON.stringify(toolInput)})));
+const pluginInputs=inputs.filter(path=>path.includes('packages/plugins/'));
+assert.ok(pluginInputs.length>0);
+assert.ok(pluginInputs.every(path=>path.includes('/packages/plugins/admission-fixture/')));
+const inventory=readFileSync(process.env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY,'utf8').replaceAll('export const ','const ');
+const artifacts=runInNewContext(inventory+'\\nBUNDLED_PLUGIN_UI_APP_ARTIFACTS',{require:path=>path});
+assert.deepEqual(Array.from(artifacts,artifact=>artifact.pluginId),['happier.admission-fixture']);
+const module={exports:{}};
+runInNewContext(readFileSync(artifacts[0].files[0].asset,'utf8'),{module,exports:module.exports});
+assert.equal(module.exports.renderSurface(),'captured-plugin-input');
 writeFileSync(${JSON.stringify(executed)},JSON.stringify({className:owner ? readFileSync(join(owner,'class'),'utf8').trim() : null, owners:readdirSync(join(root,'owners')).length,cwd:process.cwd()}));
 const output=process.argv[process.argv.indexOf('--output-dir')+1];
 mkdirSync(output);writeFileSync(join(output,'index.html'),'<!doctype html><script src="./app.js"></script>');
@@ -667,7 +711,11 @@ writeFileSync(join(output,'app.js'),'globalThis.ready=true;');
     await writeFile(commandBoundary, `
 export {prepareExpoCommandEnv,applyExpoExportMaxWorkersArgs} from ${JSON.stringify(new URL('../utils/expo/command.mjs', import.meta.url).href)};
 import {writeFile} from 'node:fs/promises';
-export async function resolveExpoBin() { return ${JSON.stringify(expo)}; }
+export async function resolveExpoBin() {
+  await writeFile(${JSON.stringify(uiInput)},'export const admissionInput = "moving-ui-input";');
+  await writeFile(${JSON.stringify(pluginInput)},'export function renderSurface() { return "moving-plugin-input"; }');
+  return ${JSON.stringify(expo)};
+}
 `);
     const sourceUrl = new URL('./build_source_web_ui.mjs', import.meta.url);
     const publicOwner = fixture.path('public-source-web-ui.mjs');

@@ -269,7 +269,7 @@ function countEvent(events, expected) {
 
 test('dev reaches Expo before starting remote development targets', async () => {
   const source = await readFile(join(scriptsDir, 'dev.mjs'), 'utf-8');
-  const expoStartIndex = source.lastIndexOf('await ensureDevExpoServer({');
+  const expoStartIndex = source.indexOf('const expoStartup = startExpo ? ensureExpoAvailable()');
   const serverStartIndex = source.indexOf('await startDevServer({');
   const daemonStartIndex = source.indexOf('if (startupDecision.startDaemon');
   const devTargetsStartIndex = source.indexOf(

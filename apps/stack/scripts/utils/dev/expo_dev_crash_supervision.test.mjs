@@ -118,7 +118,10 @@ test('initial Metro spawn remains pending until a missing installed executable i
   await writeFile(join(uiDir, 'package.json'), '{"name":"missing-executable-fixture"}');
   let outcome = 'pending';
   const startup = ensureDevExpoServer({ startUi: true, uiDir, autostart: { baseDir: fixture.root },
-    baseEnv: { ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: uiDir }), HAPPIER_STACK_EXPO_RESTART_BASE_DELAY_MS: '10', HAPPIER_STACK_EXPO_RESTART_MAX_DELAY_MS: '10' },
+    // This fixture repairs its installed executable directly; a real package
+    // manager refresh would remove that boundary while startup is retrying.
+    baseEnv: { ...sanitizeStackTestRunnerEnv(process.env, { isolatedStackRoot: uiDir }), HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
+      HAPPIER_STACK_EXPO_RESTART_BASE_DELAY_MS: '10', HAPPIER_STACK_EXPO_RESTART_MAX_DELAY_MS: '10' },
     apiServerUrl: 'http://127.0.0.1:1', stackMode: true, stackName: 'qa-initial-recovery',
     envPath: '', runtimeStatePath: null, children, isShuttingDown: () => shuttingDown,
     quiet: true, spawnOptions: { silent: true } });
@@ -245,6 +248,7 @@ for (const repair of ['source', 'dependency readiness', 'missing dependency read
 test('ensureDevExpoServer restarts Expo after a Node heap OOM abort', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-expo-oom-supervision-'));
   const children = [];
+  let result;
   try {
     const uiDir = join(tmp, 'ui');
     await mkdir(join(uiDir, 'node_modules', '.bin'), { recursive: true });
@@ -276,7 +280,7 @@ test('ensureDevExpoServer restarts Expo after a Node heap OOM abort', async () =
 
     const runtimeStatePath = join(tmp, 'stack.runtime.json');
     const envPath = join(tmp, 'stack.env');
-    const result = await ensureDevExpoServer({
+    result = await ensureDevExpoServer({
       startUi: true,
       startMobile: false,
       uiDir,
@@ -334,9 +338,11 @@ test('ensureDevExpoServer restarts Expo after a Node heap OOM abort', async () =
     const state = JSON.parse(await readFile(paths.statePath, 'utf-8'));
     assert.equal(state.pid, children[1].pid);
   } finally {
+    await result?.close?.();
     for (const child of children) {
       killProcessTreeByPid(child?.pid);
     }
+    await Promise.all(children.map(child => child.completion));
     await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
@@ -344,6 +350,7 @@ test('ensureDevExpoServer restarts Expo after a Node heap OOM abort', async () =
 test('ensureDevExpoServer restarts Expo after an unexpected SIGKILL while the stack owner is alive', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-expo-sigkill-supervision-'));
   const children = [];
+  let result;
   try {
     const uiDir = join(tmp, 'ui');
     await mkdir(join(uiDir, 'node_modules', '.bin'), { recursive: true });
@@ -371,7 +378,7 @@ test('ensureDevExpoServer restarts Expo after an unexpected SIGKILL while the st
 
     const runtimeStatePath = join(tmp, 'stack.runtime.json');
     const envPath = join(tmp, 'stack.env');
-    const result = await ensureDevExpoServer({
+    result = await ensureDevExpoServer({
       startUi: true,
       startMobile: false,
       uiDir,
@@ -415,9 +422,11 @@ test('ensureDevExpoServer restarts Expo after an unexpected SIGKILL while the st
     assert.equal(runtime?.processes?.expoPid, children[1].pid);
     assert.equal(runtime?.expo?.webPort, 45679);
   } finally {
+    await result?.close?.();
     for (const child of children) {
       killProcessTreeByPid(child?.pid);
     }
+    await Promise.all(children.map(child => child.completion));
     await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
@@ -425,6 +434,7 @@ test('ensureDevExpoServer restarts Expo after an unexpected SIGKILL while the st
 test('ensureDevExpoServer restores the restart budget after a replacement remains stable', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-expo-stable-restart-budget-'));
   const children = [];
+  let result;
   try {
     const uiDir = join(tmp, 'ui');
     await mkdir(join(uiDir, 'node_modules', '.bin'), { recursive: true });
@@ -455,7 +465,7 @@ test('ensureDevExpoServer restores the restart budget after a replacement remain
 
     const runtimeStatePath = join(tmp, 'stack.runtime.json');
     const envPath = join(tmp, 'stack.env');
-    const result = await ensureDevExpoServer({
+    result = await ensureDevExpoServer({
       startUi: true,
       startMobile: false,
       uiDir,
@@ -494,9 +504,11 @@ test('ensureDevExpoServer restores the restart budget after a replacement remain
     assert.equal(children[1].signalCode, 'SIGKILL');
     assert.equal(children[2].exitCode, null);
   } finally {
+    await result?.close?.();
     for (const child of children) {
       killProcessTreeByPid(child?.pid);
     }
+    await Promise.all(children.map(child => child.completion));
     await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
@@ -504,6 +516,7 @@ test('ensureDevExpoServer restores the restart budget after a replacement remain
 test('ensureDevExpoServer continues capped backoff when the stability override is zero', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-expo-zero-stability-window-'));
   const children = [];
+  let result;
   try {
     const uiDir = join(tmp, 'ui');
     await mkdir(join(uiDir, 'node_modules', '.bin'), { recursive: true });
@@ -530,7 +543,7 @@ test('ensureDevExpoServer continues capped backoff when the stability override i
 
     const runtimeStatePath = join(tmp, 'stack.runtime.json');
     const envPath = join(tmp, 'stack.env');
-    const result = await ensureDevExpoServer({
+    result = await ensureDevExpoServer({
       startUi: true,
       startMobile: false,
       uiDir,
@@ -570,9 +583,11 @@ test('ensureDevExpoServer continues capped backoff when the stability override i
     await waitForCondition(async () => await readRunCount(runCountPath) === 3);
     assert.equal(children.length, 3);
   } finally {
+    await result?.close?.();
     for (const child of children) {
       killProcessTreeByPid(child?.pid);
     }
+    await Promise.all(children.map(child => child.completion));
     await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
@@ -580,6 +595,7 @@ test('ensureDevExpoServer continues capped backoff when the stability override i
 test('ensureDevExpoServer clears published UI runtime metadata without restarting during stack shutdown', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-expo-shutdown-supervision-'));
   const children = [];
+  let result;
   let shuttingDown = false;
   try {
     const uiDir = join(tmp, 'ui');
@@ -605,7 +621,7 @@ test('ensureDevExpoServer clears published UI runtime metadata without restartin
 
     const runtimeStatePath = join(tmp, 'stack.runtime.json');
     const envPath = join(tmp, 'stack.env');
-    const result = await ensureDevExpoServer({
+    result = await ensureDevExpoServer({
       startUi: true,
       startMobile: false,
       uiDir,
@@ -651,9 +667,12 @@ test('ensureDevExpoServer clears published UI runtime metadata without restartin
     assert.equal(runtime?.expo?.webPort, null);
     assert.equal(runtime?.expo?.mobilePort, null);
   } finally {
+    shuttingDown = true;
+    await result?.close?.();
     for (const child of children) {
       killProcessTreeByPid(child?.pid);
     }
+    await Promise.all(children.map(child => child.completion));
     await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
@@ -661,6 +680,7 @@ test('ensureDevExpoServer clears published UI runtime metadata without restartin
 test('ensureDevExpoServer retries after a transient replacement spawn failure', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-expo-transient-spawn-failure-'));
   const children = [];
+  let result;
   try {
     const uiDir = join(tmp, 'ui');
     await mkdir(join(uiDir, 'node_modules', '.bin'), { recursive: true });
@@ -687,7 +707,7 @@ test('ensureDevExpoServer retries after a transient replacement spawn failure', 
     const runtimeStatePath = join(tmp, 'stack.runtime.json');
     const envPath = join(tmp, 'stack.env');
     const teeFile = join(tmp, 'expo.log');
-    const result = await ensureDevExpoServer({
+    result = await ensureDevExpoServer({
       startUi: true,
       startMobile: false,
       uiDir,
@@ -736,9 +756,11 @@ test('ensureDevExpoServer retries after a transient replacement spawn failure', 
     );
     assert.equal(await readRunCount(runCountPath), 2);
   } finally {
+    await result?.close?.();
     for (const child of children) {
       killProcessTreeByPid(child?.pid);
     }
+    await Promise.all(children.map(child => child.completion));
     await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
@@ -746,6 +768,7 @@ test('ensureDevExpoServer retries after a transient replacement spawn failure', 
 test('ensureDevExpoServer does not retry a replacement spawn failure after shutdown begins during backoff', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-expo-spawn-failure-shutdown-'));
   const children = [];
+  let result;
   let shuttingDown = false;
   try {
     const uiDir = join(tmp, 'ui');
@@ -773,7 +796,7 @@ test('ensureDevExpoServer does not retry a replacement spawn failure after shutd
     const runtimeStatePath = join(tmp, 'stack.runtime.json');
     const envPath = join(tmp, 'stack.env');
     const teeFile = join(tmp, 'expo.log');
-    const result = await ensureDevExpoServer({
+    result = await ensureDevExpoServer({
       startUi: true,
       startMobile: false,
       uiDir,
@@ -828,9 +851,11 @@ test('ensureDevExpoServer does not retry a replacement spawn failure after shutd
     assert.equal(runtime?.expo?.port, null);
   } finally {
     shuttingDown = true;
+    await result?.close?.();
     for (const child of children) {
       killProcessTreeByPid(child?.pid);
     }
+    await Promise.all(children.map(child => child.completion));
     await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });

@@ -10,6 +10,7 @@ import {
   ensureWorkspacePackagesBuiltForComponent as ensureWorkspacePackagesBuiltForComponentCanonical,
 } from '../../../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs';
 import { buildBundledWorkspaceDependenciesForCli } from '../../../../cli/scripts/buildSharedDeps.mjs';
+import { installWorkspaceAdmissionProcessFixture } from '../../testkit/core/native_admission_fixture.mjs';
 
 async function waitForFile(path, { timeoutMs = 5_000 } = {}) {
   const startedAt = Date.now();
@@ -142,23 +143,6 @@ function applyEnvOverrides(t, vars) {
   }
 }
 
-function captureStderr(t) {
-  const chunks = [];
-  const originalWrite = process.stderr.write.bind(process.stderr);
-  process.stderr.write = ((chunk, encoding, callback) => {
-    const text = typeof chunk === 'string' ? chunk : chunk?.toString?.(encoding) ?? String(chunk ?? '');
-    chunks.push(text);
-    if (typeof callback === 'function') {
-      callback();
-    }
-    return true;
-  });
-  t.after(() => {
-    process.stderr.write = originalWrite;
-  });
-  return chunks;
-}
-
 async function writeQuietWorkspaceBuildFailurePackageManager({ binDir, name, buildArgs }) {
   await mkdir(binDir, { recursive: true });
   const entrypointPath = join(binDir, `${name}-quiet-workspace-build-failure.cjs`);
@@ -241,7 +225,21 @@ async function createQuietWorkspaceBuildFailureFixture(t, { packageManager }) {
     const fixtureExecPath = join(root, 'fixture-node-bin', process.platform === 'win32' ? 'node.exe' : 'node');
     await mkdir(join(fixtureExecPath, '..'), { recursive: true });
     if (process.platform === 'win32') await cp(originalExecPath, fixtureExecPath);
-    else await symlink(originalExecPath, fixtureExecPath);
+    else {
+      await symlink(originalExecPath, fixtureExecPath);
+      // Preserve native admission's real OS tools, including disk observation,
+      // without exposing sibling package-manager shims that replace npm.
+      const nativeTools = process.platform === 'linux'
+        ? ['uname', 'mkdir', 'stat', 'id', 'sed', 'awk', 'mktemp', 'mkfifo', 'rm', 'rmdir', 'flock', 'date', 'sleep', 'df']
+        : ['uname'];
+      for (const tool of nativeTools) {
+        const resolved = spawnSync('/bin/sh', ['-c', 'command -v "$1"', 'fixture-tool', tool], {
+          encoding: 'utf8', env: process.env,
+        });
+        assert.equal(resolved.status, 0, `native fixture tool is unavailable: ${tool}`);
+        await symlink(resolved.stdout.trim(), join(binDir, tool));
+      }
+    }
     process.execPath = fixtureExecPath;
     t.after(() => { process.execPath = originalExecPath; });
   }
@@ -913,7 +911,6 @@ test('ensureWorkspacePackagesBuiltForComponent does not run concurrent builds fo
     delaySecondsByPackage: { cliCommon: 1 },
   });
 
-  const stderrChunks = captureStderr(t);
   applyEnvOverrides(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
     OUTPUT_PATH: outputPath,
@@ -922,15 +919,25 @@ test('ensureWorkspacePackagesBuiltForComponent does not run concurrent builds fo
     HAPPIER_WORKSPACE_BUILD_NOTICE_EVERY_MS: '999999',
   });
 
-  await Promise.all([
-    ensureWorkspacePackagesBuiltForComponent(join(root, 'apps', 'ui'), { quiet: true, env: process.env }),
-    ensureWorkspacePackagesBuiltForComponent(join(root, 'apps', 'ui'), { quiet: true, env: process.env }),
-  ]);
+  const { env } = await installWorkspaceAdmissionProcessFixture(t, root);
+  const publicationResults = [];
+  const options = { quiet: true, env, onPackageBuildResult: result => { publicationResults.push(result); } };
+  const builds = [
+    ensureWorkspacePackagesBuiltForComponent(join(root, 'apps', 'ui'), options),
+    ensureWorkspacePackagesBuiltForComponent(join(root, 'apps', 'ui'), options),
+  ];
+  try {
+    await Promise.all(builds);
+  } finally {
+    await Promise.allSettled(builds);
+  }
 
   const out = await readFile(outputPath, 'utf-8');
   const occurrences = out.split('\n').filter((l) => l.includes('/packages/cli-common :: -s build')).length;
   assert.equal(occurrences, 1);
-  assert.match(stderrChunks.join(''), /waiting for @happier-dev\/cli-common dist build lock/);
+  assert.ok(publicationResults.some(result => result.packageName === '@happier-dev/cli-common'
+    && result.reason === 'concurrent_build_already_completed'),
+    'the second preparer must observe the completed canonical publication after waiting');
 
   const lockOut = await readFile(lockOutputPath, 'utf-8');
   assert.match(lockOut, /packages\/cli-common :: .*\/\.project\/tmp\/workspace-dist-builds\/happier-dev-cli-common\.lock/);
@@ -1007,10 +1014,14 @@ test('CLI shared dependency preparation waits for the canonical workspace packag
     HAPPIER_STACK_ENV_FILE: null,
   });
 
+  const { env } = await installWorkspaceAdmissionProcessFixture(t, root);
   const canonicalBuild = ensureWorkspacePackagesBuiltForComponent(join(root, 'apps', 'cli'), {
     quiet: true,
-    env: process.env,
+    env,
   });
+  // The fixture releases this producer in finally, after observing its start.
+  // Observe early failures now, then propagate every terminal failure below.
+  void canonicalBuild.catch(() => {});
   let bypassCompileStarted = false;
   let cliPreparation;
   let assertionError = null;
@@ -1018,12 +1029,14 @@ test('CLI shared dependency preparation waits for the canonical workspace packag
     await waitForFile(buildStartedPath);
     cliPreparation = buildBundledWorkspaceDependenciesForCli({
       repoRoot: root,
+      env,
       workspaceNames: ['protocol'],
       runWorkspaceArtifactBuildImpl: () => false,
       runTscImpl: () => {
         bypassCompileStarted = true;
       },
     });
+    void cliPreparation.catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(
       bypassCompileStarted,
@@ -1034,7 +1047,10 @@ test('CLI shared dependency preparation waits for the canonical workspace packag
     assertionError = error;
   } finally {
     await writeFile(buildReleasePath, 'release\n', 'utf-8');
-    await Promise.allSettled([canonicalBuild, cliPreparation]);
+    const results = await Promise.allSettled([canonicalBuild, cliPreparation]);
+    for (const result of results) {
+      if (result.status === 'rejected') assertionError ??= result.reason;
+    }
   }
   if (assertionError) throw assertionError;
 

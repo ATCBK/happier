@@ -76,7 +76,8 @@ else if (process.argv.includes('build:prepared')) {
   });
   try {
     await waitFor(async () => stderr.includes('workspace-lease-busy') && (await readdir(join(admissionRoot, 'waiters'))).length === 1);
-    assert.equal(existsSync(`${lockPath}.priority-claim`), true, 'joint admission priority-claim expectation');
+    assert.equal(existsSync(`${lockPath}.priority-claim`), false,
+      'an unreserved joint-admission waiter must not retain a publication claim');
     assert.equal((await readdir(join(admissionRoot, 'waiters'))).length, 1, 'B wait belongs to unreserved joint producer, not a parent publication lock');
     assert.deepEqual(await readdir(join(admissionRoot, 'owners')), []);
     release(); await holder;

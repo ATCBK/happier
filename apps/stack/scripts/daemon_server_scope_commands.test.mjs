@@ -214,9 +214,9 @@ test('hstack dev ignores a running daemon from another server scope', async () =
             },
         );
 
-        assert.equal(result.code, 1, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+        assert.equal(result.code, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
         assert.doesNotMatch(result.stdout, /dev: already running/);
-        assert.match(result.stderr, /daemon auth required/);
+        assert.match(result.stderr, /daemon startup failed; keeping other components running.*daemon auth required/);
     } finally {
         try {
             process.kill(-otherDaemon.pid, 'SIGTERM');

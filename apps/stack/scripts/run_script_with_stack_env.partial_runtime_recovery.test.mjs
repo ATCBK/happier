@@ -791,7 +791,7 @@ async function spawnMetroLikeServer({ includeNeedle = '' } = {}) {
   };
 }
 
-test('dev restart preflight follows the canonical local-versus-external server topology', async (t) => {
+test('dev restart delegates source preparation to the development owner for every server topology', async (t) => {
   const temp = await withTempDir();
   const storageDir = join(temp.dir, 'storage');
   const rootDir = join(temp.dir, 'repo');
@@ -827,25 +827,21 @@ test('dev restart preflight follows the canonical local-versus-external server t
         name: 'no-server-env',
         args: ['--no-server'],
         env: ['HAPPIER_SERVER_URL=https://external.example.test'],
-        expectsPreflight: false,
       },
       {
         name: 'explicit-server-url',
         args: ['--server-url=https://external.example.test'],
         env: [],
-        expectsPreflight: false,
       },
       {
         name: 'local-server',
         args: [],
         env: [],
-        expectsPreflight: true,
       },
       {
         name: 'local-server-watch-admits-prior-outputs',
         args: ['--watch'],
         env: ['PREFLIGHT_FAIL=1'],
-        expectsPreflight: false,
       },
     ];
     for (const scenario of cases) {
@@ -877,11 +873,7 @@ test('dev restart preflight follows the canonical local-versus-external server t
         /exited \(code=17/,
       );
       assert.equal(await readFile(devStartMarkerPath, 'utf8'), 'started\n');
-      if (scenario.expectsPreflight) {
-        assert.equal(await readFile(markerPath, 'utf8'), 'ran\n');
-      } else {
-        await assert.rejects(readFile(markerPath, 'utf8'), { code: 'ENOENT' });
-      }
+      await assert.rejects(readFile(markerPath, 'utf8'), { code: 'ENOENT' });
     }
   } finally {
     restore();
