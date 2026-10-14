@@ -132,7 +132,8 @@ const MachineSummaryInstrumentView = React.memo(function MachineSummaryInstrumen
                 <Text numberOfLines={1} style={styles.label}>{machineSummaryMetricTitle(props.metric)}</Text>
             </View>
         );
-        return instrument?.exact ? <Tooltip label={instrument.exact}>{ring}</Tooltip> : ring;
+        // The tooltip's host takes the ring's column, so the rings spread over the card (loading and loaded alike).
+        return instrument?.exact ? <Tooltip label={instrument.exact} style={styles.ringTile}>{ring}</Tooltip> : ring;
     }
     const drawn = renderInstrument({ ...props, inkColor, trackColor: theme.colors.border.subtle });
     const body = (
@@ -283,6 +284,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     tileInstrument: {
         height: 24,
         justifyContent: 'center',
+    },
+    ringTile: {
+        flex: 1,
+        minWidth: 0,
     },
     ringFigure: {
         flex: 1,

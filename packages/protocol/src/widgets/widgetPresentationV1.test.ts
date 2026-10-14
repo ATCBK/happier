@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getWidgetSupportedSizesV1, getWidgetSizeFootprintV1, getSessionBoardWidgetFootprintV1,
-  normalizeWidgetSizeForSurfaceV1, resolveSessionBoardWidgetSizeV1, resolveWidgetSizeChoicesV1,
+  normalizeWidgetSizeForSurfaceV1, resolveSessionBoardWidgetSizeV1, resolveWidgetRowOwnerSizeV1, resolveWidgetSizeChoicesV1,
   stepWidgetSizeV1, WidgetSizeDeclarationV1Schema, WidgetSessionBoardWidthV1Schema, WidgetSurfacePresentationV1Schema, WidgetExpectedPresentationV1Schema, WIDGET_SIZE_ORDER_V1,
 } from './widgetPresentationV1.js';
 import type { WidgetSurfaceRefV1 } from './widgetInstanceV1.js';
@@ -34,6 +34,16 @@ describe('portable widget size policy', () => {
     expect(tall.columnSpan).not.toBe(full.columnSpan);
     expect(tall.height).not.toBe(full.height);
     expect(WidgetSizeDeclarationV1Schema.safeParse({ sizes: ['small'], defaultSize: 'tall' }).success).toBe(false);
+  });
+  it('presents a card that owns its row at its full-row size of the same height, when the widget declares one', () => {
+    expect(resolveWidgetRowOwnerSizeV1('home', 'small')).toBe('wide');
+    expect(resolveWidgetRowOwnerSizeV1('home', 'medium')).toBe('full');
+    expect(resolveWidgetRowOwnerSizeV1('home', 'tall')).toBe('large');
+    expect(resolveWidgetRowOwnerSizeV1('home', 'full')).toBe('full');
+    // A definition that declares no full-row size of that height keeps the size it was saved at.
+    expect(resolveWidgetRowOwnerSizeV1('home', 'small', { sizes: ['small', 'medium'], defaultSize: 'small' })).toBe('small');
+    expect(resolveWidgetRowOwnerSizeV1('home', 'medium', { sizes: ['small', 'medium', 'wide'], defaultSize: 'small' })).toBe('medium');
+    expect(resolveWidgetRowOwnerSizeV1('project', 'small')).toBe('small');
   });
   it('steps through the same canonical order and clamps at the ends', () => {
     const choices = ['tall', 'small', 'full'] as const;

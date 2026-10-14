@@ -200,6 +200,8 @@ function VitalsContent(
   const rings = (
     <HappierPressable
       testID={`${testID}.rings`}
+      // Small is the rings alone: they spread over the card's whole width (a card on a phone is one full row).
+      {...(size === 'small' ? { style: styles.spread } : {})}
       onPress={() => open({ id: 'overview' })}
       accessibilityRole="button"
       accessibilityLabel={t('machines.widgets.body.vitals.openOverview', {
@@ -653,6 +655,9 @@ const styles = StyleSheet.create((theme) => ({
   centred: {
     flexGrow: 1,
     justifyContent: 'center',
+  },
+  spread: {
+    alignSelf: 'stretch',
   },
   phrase: {
     gap: theme.space.s2,

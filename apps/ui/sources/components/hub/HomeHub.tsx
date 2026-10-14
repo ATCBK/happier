@@ -117,6 +117,7 @@ type HubGroupChildPlacement = Readonly<{ group: HubGroupSection; index: number; 
  */
 const HubSectionSlot = React.memo(function HubSectionSlot(props: SlotProps & Readonly<{
     section: HomeHubSection<WidgetCandidate>;
+    ownsRow?: boolean;
 }>) {
     const section = props.section;
     if (section.kind === 'widget') return <HubWidgetSlot {...props} section={section} />;
@@ -260,6 +261,8 @@ function HubGroupSlot(props: SlotProps & Readonly<{ section: HubGroupSection }>)
 function HubWidgetSlot(props: SlotProps & Readonly<{
     section: HubWidgetSectionModel;
     parent?: HubGroupChildPlacement;
+    /** Alone in its row: the card presents at its full-row size. */
+    ownsRow?: boolean;
 }>) {
     const hover = useRowActionHoverHost();
     const frameStyle = useWidgetFrameStyle('home', props.section.frameStyle);
@@ -325,6 +328,7 @@ function HubWidgetSlot(props: SlotProps & Readonly<{
                 widget={props.section.widget}
                 instance={props.section.instance}
                 size={props.section.size}
+                ownsRow={props.ownsRow === true}
                 menu={menu}
                 frameStyle={frameStyle}
                 tracker={props.tracker}
@@ -567,12 +571,12 @@ export const HomeHub = React.memo(function HomeHub() {
             ) : <HomeHubSectionList
                 // Under the atmosphere a composer that leads Home stands in the hero; moved lower, it stays where it was put.
                 sections={heroComposer ? layout.sections.filter(section => section.id !== 'start') : layout.sections}
-                renderSection={(section, index) => section.kind === 'builtin' ? (
+                renderSection={(section, index, placement) => section.kind === 'builtin' ? (
                     <HubSectionSlot key={section.id} section={section} index={index} {...slotProps} />
                 ) : (
                     // Ungroup fans its widgets out to their own cards; Group with merges cards into one.
                     <WidgetGroupMembershipArrivalView key={section.id} arrival={arrivals.get(section.id)} style={styles.card}>
-                        <HubSectionSlot section={section} index={index} {...slotProps} />
+                        <HubSectionSlot section={section} index={index} ownsRow={placement.ownsRow} {...slotProps} />
                     </WidgetGroupMembershipArrivalView>
                 )}
             />}

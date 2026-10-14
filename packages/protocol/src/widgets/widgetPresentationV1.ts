@@ -88,6 +88,20 @@ export function normalizeWidgetSizeForSurfaceV1(kind: WidgetSurfaceRefV1['owner'
   const choices = resolveWidgetSizeChoicesV1(kind, declaration);
   return size && choices.sizes.includes(size) ? size : choices.defaultSize;
 }
+/**
+ * The size a card presents at when it owns its whole row (nothing sits beside it): the same height
+ * spanning every column of the grid, when the widget declares one. The saved size is untouched; this is
+ * placement, so a Small left alone reads as its Wide (a Medium as its Full) instead of a stretched Small.
+ */
+export function resolveWidgetRowOwnerSizeV1(kind: WidgetSurfaceRefV1['owner']['kind'], size: WidgetSizeV1, declaration?: WidgetSizeDeclarationV1): WidgetSizeV1 {
+  const own = getWidgetSizeFootprintV1(kind, size);
+  if (!own || own.columnSpan >= own.columns) return size;
+  const sibling = resolveWidgetSizeChoicesV1(kind, declaration).sizes.find(candidate => {
+    const footprint = getWidgetSizeFootprintV1(kind, candidate);
+    return footprint !== undefined && footprint.columnSpan === footprint.columns && footprint.rowSpan === own.rowSpan;
+  });
+  return sibling ?? size;
+}
 export function stepWidgetSizeV1(sizes: readonly WidgetSizeV1[], current: WidgetSizeV1 | undefined, step: -1 | 1): WidgetSizeV1 | undefined {
   const ordered = WIDGET_SIZE_ORDER_V1.filter(size => sizes.includes(size));
   if (!ordered.length) return undefined;

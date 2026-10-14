@@ -65,6 +65,45 @@ function rowSpanningCards(entries: readonly Placed[]): ReadonlySet<string> {
     return spanning;
 }
 
+/** What a section is told about where it landed. */
+export type HomeHubSectionPlacement = Readonly<{
+    /**
+     * The card has its whole row to itself in a two-up grid, though it was saved at a half-row size. It
+     * presents at its full-row size (lab rw-V: a Small left alone reads as its Wide) instead of stretching.
+     */
+    ownsRow: boolean;
+}>;
+
+type RenderSection = (section: HomeHubSection<WidgetCandidate>, index: number, placement: HomeHubSectionPlacement) => React.ReactNode;
+
+/**
+ * One row container of cards. It reads how many columns the grid resolved, so a card placed alone in its row
+ * is told it owns the row only where the row really is two-up (on a phone every card already does).
+ */
+function CardRow(props: Readonly<{ slot: Extract<Slot, { kind: 'cards' }>; renderSection: RenderSection }>) {
+    const { slot, renderSection } = props;
+    const [columns, setColumns] = React.useState(1);
+    const spanning = rowSpanningCards(slot.entries);
+    return (
+        // A sheetless group gives the card row the same column edges as every other section.
+        <ItemGroup surface="none">
+            <CardGrid testID={`home-hub.${slot.key}`} columns={HOME_HUB_CARD_ROW_COLUMNS} onColumnCountChange={setColumns}>
+                {slot.entries.map((entry) => {
+                    if (!spanning.has(entry.section.id)) {
+                        return <React.Fragment key={entry.section.id}>{renderSection(entry.section, entry.index, { ownsRow: false })}</React.Fragment>;
+                    }
+                    const ownsRow = columns > 1 && !spansRow(entry.section);
+                    return (
+                        <CardGridCell key={entry.section.id} span="row">
+                            {renderSection(entry.section, entry.index, { ownsRow })}
+                        </CardGridCell>
+                    );
+                })}
+            </CardGrid>
+        </ItemGroup>
+    );
+}
+
 /**
  * Home's sections below the header, on one column: every block shares the page column's edges
  * (the composer's width), grids fill that width, and consecutive cards (widgets, Latest runs) form
@@ -74,30 +113,15 @@ function rowSpanningCards(entries: readonly Placed[]): ReadonlySet<string> {
  */
 export function HomeHubSectionList(props: Readonly<{
     sections: readonly HomeHubSection<WidgetCandidate>[];
-    renderSection: (section: HomeHubSection<WidgetCandidate>, index: number) => React.ReactNode;
+    renderSection: RenderSection;
 }>) {
     return (
         <>
-            {buildSlots(props.sections).map((slot) => {
-                if (slot.kind === 'single') {
-                    return <React.Fragment key={slot.key}>{props.renderSection(slot.entry.section, slot.entry.index)}</React.Fragment>;
-                }
-                const spanning = rowSpanningCards(slot.entries);
-                return (
-                    // A sheetless group gives the card row the same column edges as every other section.
-                    <ItemGroup key={slot.key} surface="none">
-                        <CardGrid testID={`home-hub.${slot.key}`} columns={HOME_HUB_CARD_ROW_COLUMNS}>
-                            {slot.entries.map((entry) => (spanning.has(entry.section.id) ? (
-                                <CardGridCell key={entry.section.id} span="row">
-                                    {props.renderSection(entry.section, entry.index)}
-                                </CardGridCell>
-                            ) : (
-                                <React.Fragment key={entry.section.id}>{props.renderSection(entry.section, entry.index)}</React.Fragment>
-                            )))}
-                        </CardGrid>
-                    </ItemGroup>
-                );
-            })}
+            {buildSlots(props.sections).map((slot) => (
+                slot.kind === 'single'
+                    ? <React.Fragment key={slot.key}>{props.renderSection(slot.entry.section, slot.entry.index, { ownsRow: false })}</React.Fragment>
+                    : <CardRow key={slot.key} slot={slot} renderSection={props.renderSection} />
+            ))}
         </>
     );
 }
