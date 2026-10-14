@@ -5,6 +5,7 @@ import { getDefaultServerUrl } from '@/sync/domains/server/serverConfig';
 import { createEmbedSessionRuntime } from './createEmbedSessionRuntime';
 import { EmbedRuntimeStateSurface } from '@/embed/state/EmbedRuntimeStateSurface';
 import type { EmbedSessionRuntime, EmbedSessionRuntimeSnapshot } from './createEmbedSessionRuntime';
+import { resolveEmbedEndpointUrl } from './resolveEmbedEndpointUrl';
 
 const Context = React.createContext<Readonly<{ runtime: EmbedSessionRuntime; snapshot: EmbedSessionRuntimeSnapshot }> | null>(null);
 
@@ -13,7 +14,10 @@ export function EmbedSessionRuntimeProvider(props: Readonly<{ children: React.Re
     const router = useRouter();
     const routerRef = React.useRef(router);
     routerRef.current = router;
-    const endpointUrl = props.endpointUrl ?? getDefaultServerUrl();
+    const endpointUrl = props.endpointUrl ?? resolveEmbedEndpointUrl(
+        typeof window === 'undefined' ? '' : window.location.search,
+        getDefaultServerUrl(),
+    );
     const [runtime, setRuntime] = React.useState<EmbedSessionRuntime | null>(null);
     const [pageActive, setPageActive] = React.useState(true);
     const pageActiveRef = React.useRef(true);
@@ -47,7 +51,11 @@ export function EmbedSessionRuntimeProvider(props: Readonly<{ children: React.Re
         setBootError(false);
         const navigate = (sessionId: string | null) => {
             const search = typeof window === 'undefined' ? new URLSearchParams() : new URLSearchParams(window.location.search);
-            const identity = { ...(search.has('i') ? { i: search.get('i')! } : {}), ...(search.has('n') ? { n: search.get('n')! } : {}) };
+            const identity = {
+                ...(search.has('i') ? { i: search.get('i')! } : {}),
+                ...(search.has('n') ? { n: search.get('n')! } : {}),
+                ...(search.has('server') ? { server: search.get('server')! } : {}),
+            };
             routerRef.current.replace(sessionId === null
                 ? { pathname: '/embed/new', params: identity }
                 : { pathname: '/embed/session/[id]', params: { ...identity, id: sessionId } });

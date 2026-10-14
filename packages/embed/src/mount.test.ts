@@ -162,6 +162,24 @@ describe('embed host', () => {
     expect(container.querySelector('[role="status"]')).not.toBeNull();
     handle.destroy();
   });
+  it('preserves the supplied Home selection through the frame runtime resolver', async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const handle = mountHappierSession(container, {
+      happierUrl: 'https://app.happier.dev/?server=https%3A%2F%2Fhome.example&happier_hmr=0',
+      getCredential: vi.fn(),
+    });
+    const frameUrl = new URL(container.querySelector('iframe')!.src);
+    expect(frameUrl.pathname).toBe('/embed/new');
+    expect(frameUrl.searchParams.get('server')).toBe('https://home.example');
+    expect(frameUrl.searchParams.get('happier_hmr')).toBe('0');
+    const resolverModulePath = '../../../apps/ui/sources/embed/runtime/resolveEmbedEndpointUrl.ts';
+    const { resolveEmbedEndpointUrl } = await import(resolverModulePath) as {
+      resolveEmbedEndpointUrl(search: string, fallbackUrl: string): string;
+    };
+    expect(resolveEmbedEndpointUrl(frameUrl.search, 'https://default.example')).toBe('https://home.example');
+    handle.destroy();
+  });
   it('restarts initial credential selection for a switch and drops pending results on destruction', async () => {
     const m = mount('A');
     let resolveA!: (value: typeof credential) => void;
