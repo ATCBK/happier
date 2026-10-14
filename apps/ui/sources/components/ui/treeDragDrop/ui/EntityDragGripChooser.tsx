@@ -3,6 +3,8 @@ import type { HappierDropChooserSection } from '@happier-dev/plugin-ui/presentat
 
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 
+const CHOOSER_MAX_WIDTH_PX = 480;
+
 /**
  * The one Move chooser a drag grip opens. Its trigger is a small grip, so the menu is sized by its
  * own rows and never matched to the trigger's width (a grip-wide menu collapses to a sliver).
@@ -26,6 +28,9 @@ export function EntityDragGripChooser(
         ? {}
         : { closeOnSelect: props.closeOnSelect })}
       matchTriggerWidth={false}
+      // "Move below New in PRs & Issues · Capacity" names a real destination: the menu is as wide as its longest
+      // row (the overlay still clamps it to the room), not the 320 px default that ellipsized it.
+      maxWidthCap={CHOOSER_MAX_WIDTH_PX}
       items={props.sections.flatMap((section) =>
         section.options.map((option) => ({
           id: option.id,

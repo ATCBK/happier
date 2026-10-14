@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
 import { Switch } from '@/components/ui/forms/Switch';
+import { Tooltip } from '@/components/ui/overlays/Tooltip';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
@@ -193,10 +194,11 @@ function EditorRowView(props: Readonly<{
                         showChevron={false}
                         showDivider={props.showDivider && size === null}
                         rightElement={group ? undefined : alwaysShown ? (
-                            <View style={styles.locked}>
+                            // The lock alone: a word here would take the title's room ("Needs your attent…"); hover or
+                            // focus says it, and assistive tech reads it.
+                            <Tooltip testID={`home-layout.${row.id}.locked`} label={t('homeIndex.alwaysShown')} style={styles.locked}>
                                 <Icon name="lock" size={ICON_SIZE.xs} color={theme.colors.text.tertiary} />
-                                <Text style={styles.lockedText}>{t('homeIndex.alwaysShown')}</Text>
-                            </View>
+                            </Tooltip>
                         ) : (
                             <Switch
                                 testID={`home-layout.${row.id}.shown`}
@@ -264,10 +266,5 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: theme.space.s4,
-    },
-    lockedText: {
-        ...Typography.default(),
-        ...happierPageTextMetrics('meta'),
-        color: theme.colors.text.tertiary,
     },
 }));
