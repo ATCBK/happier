@@ -174,6 +174,27 @@ export type NativeAgentRuntimeLeaseIdentity = Readonly<{
 
 const RUN_SESSION_PROJECTION_UNAVAILABLE_CODE = 'agent_run_session_projection_unavailable';
 
+function withRunScopedSessionHooks(context: AgentSessionRuntimeContext): AgentSessionRuntimeContext {
+    const hooks = context.session.services.sessionHooks;
+    return Object.freeze({
+        ...context,
+        session: Object.freeze({
+            ...context.session,
+            services: Object.freeze({
+                ...context.session.services,
+                sessionHooks: Object.freeze({
+                    ...hooks,
+                    // Child runtimes share Session identity, never its retained hook endpoint or files.
+                    startServer: (request: Parameters<typeof hooks.startServer>[0]) =>
+                        hooks.startServer({ ...request, lifetime: 'invocation' }),
+                    createPluginDir: (request: Parameters<typeof hooks.createPluginDir>[0]) =>
+                        hooks.createPluginDir({ ...request, lifetime: 'invocation' }),
+                }),
+            }),
+        }),
+    });
+}
+
 export function createRunScopedWorkStateService(signal: AbortSignal): WorkStateService {
     return Object.freeze({
         publisher: () => Object.freeze({
@@ -1411,7 +1432,7 @@ export function createNativeAgentSessionExecutionRunHostRuntime(params: Readonly
                 let unsubscribeMcpToolPolicy: (() => void) | undefined;
                 try {
                     const runScopedContext: AgentSessionRuntimeContext = Object.freeze({
-                        ...sessionContext.context,
+                        ...withRunScopedSessionHooks(sessionContext.context),
                         // A finite child Run may reuse its parent's Session context
                         // services, but it never owns the parent's published work state.
                         workState: createRunScopedWorkStateService(executionContext.signal),
@@ -1628,7 +1649,7 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                 await sessionContext.dispose();
                 throw error;
             }
-            const context = sessionContext.context;
+            const context = withRunScopedSessionHooks(sessionContext.context);
             skillIndex = sessionContext.skillIndex;
             let unsubscribeMcpToolPolicy: (() => void) | undefined;
             disposeSessionContext = async () => { unsubscribeMcpToolPolicy?.(); await sessionContext.dispose(); };

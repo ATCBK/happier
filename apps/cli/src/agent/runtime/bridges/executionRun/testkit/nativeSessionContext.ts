@@ -14,6 +14,7 @@ import { withExecutionRunHostRuntimeCleanup } from '../hostRuntime/cleanup';
 import { withExecutionRunPermissionResponder } from '../hostRuntime/permissionResponder';
 import { withExecutionRunRuntimeIdentityPublication } from '@/agent/runtime/identity/executionRunRuntimeIdentityPublication';
 import { createExecutionRunPermissionHandler } from '@/agent/executionRuns/policy/executionRunPermissionDecision';
+import type { HostSessionHooksOwner } from '@/plugins/runtime/hooks/session/service';
 
 /** Real native factory and live wrapper chain; only the Agent SDK and Session transport are fixtures. */
 export function createVoiceSessionRuntimeThroughNativeFactory(params: Readonly<{
@@ -70,10 +71,11 @@ export function createVoiceSessionContextLease(params: Readonly<{
     services: AgentSessionRuntimeContext['services'];
     signal: AbortSignal;
     dispose: () => Promise<void>;
+    sessionHooks?: HostSessionHooksOwner;
 }>): Readonly<{ context: AgentSessionRuntimeContext; dispose(): Promise<void> }> {
     const sessionServices = createNativeAgentSessionHostServices({
         owners: {
-            features: { isEnabled: () => true }, sessionHooks: {}, transcripts: { fileFollow: {} },
+            features: { isEnabled: () => true }, sessionHooks: params.sessionHooks ?? {}, transcripts: { fileFollow: {} },
             accountUsage: {}, mcp: {}, toolExecution: {},
         },
         agentId: 'acme.voice/agents/default', sessionId: 'session-parent', directory: '/repo',
