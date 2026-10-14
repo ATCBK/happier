@@ -290,11 +290,11 @@ export function UsagePlansNothingRead(
       testID={`${props.testID}.coverage`}
     />
   );
-  // On the Usage page the header says once what is still being read; the body holds its room with the
-  // first-load skeleton (lab kitstates "Loading · first time"), never a spinner or a repeated sentence.
-  // On the Usage page the header says once what is still being read; the body holds its room.
+  // The body holds its room with the first-load skeleton (lab kitstates "Loading · first time"), never a
+  // blank card under a header. Once the Usage page's own detail has arrived its header says what is still
+  // being read; before that (and on Home, a Board) the quiet line under the skeleton says it.
   if (outstanding && pageHasDetail) return <UsageBodyReading testID={`${props.testID}.loading`} />;
-  if (outstanding) return coverage;
+  if (outstanding) return <><UsageBodyReading testID={`${props.testID}.loading`} />{coverage}</>;
   return (
     <View style={styles.nothingRead}>
       <UsageBodyInsufficient

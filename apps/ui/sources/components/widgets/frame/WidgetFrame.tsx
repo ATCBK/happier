@@ -377,7 +377,8 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
             } : undefined}
             renderText={renderText}
             footer={footerNode}
-            fill={props.widgetPresentation ? false : props.fill}
+            // A card with a footprint keeps its rows' height; inside a group its cell is the band's, so it fills it.
+            fill={props.widgetPresentation && !props.grouped ? false : props.fill ?? props.grouped}
             bodyStyle={props.bodyStyle}
             accessibilityLabel={props.accessibilityLabel
                 ?? (typeof props.source === 'string' && typeof props.title === 'string' ? `${props.title}, ${props.source}` : undefined)}
@@ -388,9 +389,10 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
                 <WidgetPresentationProvider value={widgetPresentation}>
                 {props.widgetPresentation && bodyHeight !== 'fixed' ? (
                     // Nothing clips or scrolls here: the body is measured (its size and width still
-                    // reach it) and the frame takes the height that results.
+                    // reach it) and the frame takes the height that results. A frame stretched by its band
+                    // (a group's shorter column) hands the extra height to this viewport, so the body fills it.
                     <View testID={`${props.testID}.viewport`} onLayout={onViewportLayout}
-                        style={{ minHeight: bodyHeight === 'grow' ? props.viewportHeight ?? rows * rowHeight : undefined, minWidth: 0 }}>
+                        style={{ minHeight: bodyHeight === 'grow' ? props.viewportHeight ?? rows * rowHeight : undefined, flexGrow: 1, minWidth: 0 }}>
                         <WidgetFrameBodyView testID={props.testID} body={props.body} rows={rows} />
                     </View>
                 ) : props.widgetPresentation ? (
