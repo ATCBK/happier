@@ -28,7 +28,8 @@ export async function smokeSourceRuntimeReload({ components, ui, env = process.e
     return;
   }
   const dbProvider = server.env?.HAPPIER_DB_PROVIDER ?? env.HAPPIER_DB_PROVIDER ?? 'sqlite';
-  if (dbProvider !== 'sqlite' && dbProvider !== 'pglite') {
+  const smokeDbProvider = dbProvider === 'postgres' ? 'pglite' : dbProvider;
+  if (smokeDbProvider !== 'sqlite' && smokeDbProvider !== 'pglite') {
     throw new Error(`[reload] cannot smoke ${dbProvider} without a separately authorized scratch database; incumbent retained`);
   }
   const scratch = await mkdtemp(join(tmpdir(), 'hstack-reload-smoke-'));
@@ -50,7 +51,7 @@ export async function smokeSourceRuntimeReload({ components, ui, env = process.e
       HAPPIER_SERVER_LIGHT_PRIVATE_FILES_DIR: join(scratch, 'private-files'),
       HAPPIER_SERVER_LIGHT_DB_DIR: join(scratch, 'pglite'),
       HAPPIER_CANONICAL_SERVER_URL: url, HAPPIER_PUBLIC_SERVER_URL: url,
-      HAPPIER_DB_PROVIDER: dbProvider, DATABASE_URL: '', HANDY_MASTER_SECRET: '',
+      HAPPIER_DB_PROVIDER: smokeDbProvider, DATABASE_URL: '', HANDY_MASTER_SECRET: '',
       HAPPIER_SQLITE_AUTO_MIGRATE: '1', HAPPY_SQLITE_AUTO_MIGRATE: '1',
       HAPPIER_STACK_SHARED_DB_SOURCE_STACK: '', HAPPIER_STACK_SHARED_DB_SOURCE_ENV_FILE: '',
       HAPPIER_STACK_MIGRATE_MODE: '', HAPPIER_STACK_LOG_TEE_DIR: '', METRICS_ENABLED: 'false' };

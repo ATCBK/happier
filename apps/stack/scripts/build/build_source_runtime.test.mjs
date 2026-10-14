@@ -743,7 +743,7 @@ async function reloadServerGraph(graph, source) {
   const runtimeDir = join(outputDir, 'apps/server');
   await mkdir(join(runtimeDir, 'sources'), { recursive: true });
   const server = { identity: 'server-candidate', runtimeDir, serverDir: runtimeDir,
-    entrypoint: join(runtimeDir, 'sources/main.mjs'), env: { HAPPIER_DB_PROVIDER: 'sqlite' },
+    entrypoint: join(runtimeDir, 'sources/main.mjs'), dbProvider: 'sqlite', env: { HAPPIER_DB_PROVIDER: 'sqlite' },
     migration: { mode: 'disabled' } };
   await writeFile(server.entrypoint, source);
   await writeFile(join(outputDir, 'source-bundle.json'), JSON.stringify(server));
