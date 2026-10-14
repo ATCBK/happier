@@ -6,6 +6,7 @@ import {
 } from '@happier-dev/protocol/plugins/ui/entityDragDrop';
 import type { PluginUiJsonValueV1 } from '@happier-dev/protocol/plugins/ui';
 import { isFiniteRect } from './geometry/treeDropCoordinateSpace';
+import { ENTITY_DROP_UNCHANGED_CODES } from './entityDropNoChange';
 import type {
     EntityDragDropRuntime, EntityDragDropSnapshot, EntityDragSource, EntityDropTarget,
     EntityDragInput, EntityDragCarry, EntityDropDestination, EntityDragSourceDescription,
@@ -331,7 +332,8 @@ export function createEntityDragDropRuntime(options: Readonly<{
                         ...destination, targetId: target.id,
                         admission: resolve({ ...active, destination: destination.destination }, target),
                     }));
-                });
+                }).filter(destination => destination.admission.status !== 'refused'
+                    || !ENTITY_DROP_UNCHANGED_CODES.has(destination.admission.reason.code));
         },
         perform: async (sourceId, targetId, destination, input = 'chooser') => {
             if (carry) return null;

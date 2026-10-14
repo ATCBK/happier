@@ -257,6 +257,27 @@ describe('mounted entity drag owner', () => {
         ]);
     });
 
+    it('omits unchanged chooser destinations while retaining denied and pending choices and pointer admission', async () => {
+        const f = fixture();
+        const unchanged = ['same-position', 'no-change', 'board-no-change', 'widget_position_unchanged', 'workspace_tab_already_here'];
+        const codes = [...unchanged, 'reports_to_forbidden', 'widget_admission_pending'];
+        f.runtime.registerTarget({ ...f.target,
+            listDestinations: () => codes.map(code => ({ destination: code, label: code })),
+            resolve: ({ destination }) => ({ status: 'refused', reason: { code: String(destination), message: 'Unavailable' } }),
+        });
+        f.runtime.registerTarget({ ...f.target, id: 'unchanged-direct',
+            resolve: () => ({ status: 'refused', reason: { code: 'same-position', message: 'Already here' } }),
+        });
+        expect(f.runtime.getDestinations('source').map(destination => destination.label)).toEqual([
+            'reports_to_forbidden', 'widget_admission_pending',
+        ]);
+        const carry = f.runtime.begin('source', 'pointer')!;
+        carry.choose('unchanged-direct');
+        expect(f.runtime.getSnapshot().admission).toMatchObject({ status: 'refused', reason: { code: 'same-position' } });
+        expect(await carry.release()).toMatchObject({ status: 'refused', reason: { code: 'same-position' } });
+        expect(f.effects).toEqual([]);
+    });
+
     it('realm cancellation retires uncommitted input, preserves dispatched outcomes and removes its listeners', async () => {
         const f = fixture();
         const events = new EventTarget();
