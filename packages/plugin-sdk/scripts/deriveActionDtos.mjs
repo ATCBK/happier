@@ -521,7 +521,7 @@ function deriveProgram({ repoRoot, keys, bindings, extraNames = [], extraInputNa
         }
         return selected.has(statement) ? [statement.getText(full)] : [];
       });
-      if (!statements.some(text => /import \{ z \} from ['"]zod['"]/u.test(text))) statements.unshift("import { z } from 'zod';");
+      if (!statements.some(text => /import \{ z \} from ['"]zod(?:\/mini)?['"]/u.test(text))) statements.unshift("import { z } from 'zod';");
       overlays.set(path, statements.join('\n') + '\n');
     }
     const rootPath = resolve(protocol, 'actions/actionDtoDerivation.ts');
