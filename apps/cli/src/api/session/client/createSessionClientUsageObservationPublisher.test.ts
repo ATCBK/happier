@@ -3,6 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { logger } from '@/ui/logger';
 import { createSessionClientUsageObservationPublisher } from './createSessionClientUsageObservationPublisher';
+import { withTempDir } from '@/testkit/fs/tempDir';
+import { join } from 'node:path';
+import { getActiveProjectAccountRowsSnapshot, withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
+import { UsageEventIngestRequestSchema } from '@happier-dev/protocol';
 
 const input = {
     sessionId: 'session-usage', externalKey: 'native-record-1',
@@ -17,9 +21,47 @@ const input = {
 afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    withdrawActiveProjectAccountRowsSnapshot();
 });
 
 describe('Session usage transport publisher', () => {
+    it('resolves the actual execution root through the accepted Account checkout owner when creation has no Project metadata', async () => {
+        await withTempDir('session-usage-project-', async directory => {
+            const token = `header.${Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url')}.signature`;
+            vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ features: {}, capabilities: { server: { usageAnalytics: {
+                version: 1, eventsIngest: { path: '/v2/usage-events' }, query: { path: '/v2/usage/query' },
+                legacy: { usageReportsPath: '/v2/usage-reports', usageQueryPath: '/v1/usage/query' },
+            } } } }), { headers: { 'content-type': 'application/json' } })));
+            const key = { kind: 'workspace-ref' as const, serverId: 'home', id: 'accepted-checkout' };
+            const row = { key, revision: 0, content: { t: 'plain', v: { key, value: {
+                id: 'accepted-checkout', projectKey: 'accepted-project', serverId: 'home', machineId: 'machine',
+                rootPath: '/private/repository', createdAtMs: 1,
+            } } } };
+            // Actual HTTP boundary; Account mode, cipher, Project resolver and ingest mapper run real logic.
+            vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { mode: 'plain', updatedAt: 0 } });
+            const posted: unknown[] = [];
+            vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+                if (url.endsWith('/list')) return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [row] } };
+                posted.push(body); return { data: { ok: true } };
+            });
+            const publisher = createSessionClientUsageObservationPublisher({ token,
+                transport: { serverId: 'home', serverUrl: 'https://session-project.test',
+                    createSessionSocketTransport: () => { throw new Error('unused'); } },
+                getSessionMetadata: () => ({ machineId: 'machine', path: '/agent/repository',
+                    sessionWorkspaceLocationV1: { v: 1, machineId: 'machine', agentPath: '/agent/repository', machinePath: '/private/repository' } }),
+                getSocket: () => ({ connected: false, emit() {} }),
+                projectContext: { machineId: 'machine', signal: new AbortController().signal,
+                    deviceLocalSecretKeyFile: join(directory, 'device.key'), readCredentials: async () => ({ token, encryption: null }) },
+            });
+            await publisher.publish({ ...input, turnId: 'host-paid-turn' });
+            expect(posted).toHaveLength(1);
+            expect(UsageEventIngestRequestSchema.parse(posted[0])).toMatchObject({ turnId: 'host-paid-turn',
+                projectKey: 'accepted-project', workspaceId: 'accepted-checkout', machineId: 'machine' });
+            expect(JSON.stringify(posted)).not.toContain('/private/repository');
+            expect(JSON.stringify(posted)).not.toContain('/agent/repository');
+            expect(getActiveProjectAccountRowsSnapshot()).toBeNull();
+        });
+    });
     it('publishes the captured request source after metadata switches and removes forged metadata proof', async () => {
         vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ features: {}, capabilities: { server: { usageAnalytics: {
             version: 1, eventsIngest: { path: '/v2/usage-events' }, query: { path: '/v2/usage/query' },

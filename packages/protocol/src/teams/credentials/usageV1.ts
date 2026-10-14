@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { KEYSET_CURSOR_MAX_LENGTH_V1 } from '../../pagination/keysetCursorV1.js';
 import {
+  UsageAnalyticsCostModeSchema,
   UsageAnalyticsGranularitySchema,
   UsageObservationCostSchema,
   UsageObservationTokensSchema,
@@ -137,7 +138,7 @@ export const TeamCredentialUsageQueryInputV1Schema = lazyZodSchema(() => z.objec
   startMs: z.number().int().min(0),
   endMs: z.number().int().min(0),
   granularity: UsageAnalyticsGranularitySchema.default('day'),
-  costMode: z.enum(['auto', 'reported', 'estimated']).default('auto'),
+  costMode: UsageAnalyticsCostModeSchema.default('auto'),
   breakdown: TeamCredentialUsageBreakdownDimensionV1Schema.optional(),
   cursor: z.string().min(1).max(KEYSET_CURSOR_MAX_LENGTH_V1).optional(),
 }).strict().refine((value) => value.endMs >= value.startMs, {

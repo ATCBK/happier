@@ -12,6 +12,7 @@ export const AgentProbeModelSchema = lazyZodSchema(() => z.object({
   extendedContextModelId: z.string().trim().min(1).optional(),
   modelOptions: z.array(ProbedCatalogOptionSchema).readonly().optional(),
   capabilities: ProviderModelDescriptorV1Schema.shape.capabilities,
+  costTier: ProviderModelDescriptorV1Schema.shape.costTier,
 }).strict());
 export type AgentProbeModel = z.output<typeof AgentProbeModelSchema>;
 

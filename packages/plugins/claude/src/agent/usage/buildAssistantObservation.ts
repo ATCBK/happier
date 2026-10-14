@@ -17,6 +17,7 @@ export function buildClaudeAssistantUsageObservation(params: Readonly<{
     nativeRecordId?: string | null;
     inferenceId?: string | null;
     nativeSessionId?: string | null;
+    turnId?: string | null;
     observedAtMs?: number;
     usage: ClaudeTokenUsage;
 }>): ClaudeUsageObservation | null {
@@ -57,6 +58,7 @@ export function buildClaudeAssistantUsageObservation(params: Readonly<{
         ...(params.nativeRecordId ? { nativeRecordId: params.nativeRecordId } : {}),
         ...(params.inferenceId ? { inferenceId: params.inferenceId } : {}),
         ...(params.nativeSessionId ? { nativeSessionId: params.nativeSessionId } : {}),
+        ...(params.turnId ? { turnId: params.turnId } : {}),
         ...(params.observedAtMs === undefined ? {} : { observedAtMs: params.observedAtMs }),
         modelId: typeof params.modelId === 'string' && params.modelId.trim().length > 0 ? params.modelId.trim() : null,
         tokens,

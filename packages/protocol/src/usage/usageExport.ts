@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { encodeBase64, readCanonicalPaddedBase64DecodedLength } from '../crypto/base64.js';
 import { UsageQuerySchema, normalizeUsageQuery } from '../inputs/usageQuery.js';
-import { UsageAnalyticsQueryResponseSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
+import { UsageAnalyticsQueryResponseSchema, UsageQueryAccountingSchema } from './usageAnalyticsContracts.js';
 
 export const UsageExportFieldSchema = lazyZodSchema(() => UsageAnalyticsQueryResponseSchema.omit({ v: true }).keyof());
 export const UsageExportInputSchema = lazyZodSchema(() => z.object({
@@ -44,9 +44,9 @@ export function buildUsageCsvDocument(rows: readonly (readonly string[])[]): str
 }
 
 /** Serialize only explicitly selected authorized facts, identically on headless and UI hosts. */
-export function buildUsageFileResult(input: UsageExportInput, value: UsageAnalyticsQueryResponse, asOfMs: number | null): UsageFileResult {
+export function buildUsageFileResult(input: UsageExportInput, value: z.infer<typeof UsageQueryAccountingSchema>, asOfMs: number | null): UsageFileResult {
   const request = UsageExportInputSchema.parse(input);
-  const accounting = UsageAnalyticsQueryResponseSchema.parse(value);
+  const accounting = UsageQueryAccountingSchema.parse(value);
   const fields = [...new Set(request.fields)];
   const selected = Object.fromEntries(fields.map(field => [field, accounting[field]]));
   let content: string;

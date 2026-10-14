@@ -6,6 +6,7 @@ import { normalizeWorkspaceRootPathV1, resolveWorkspacePathBasenameV1, resolveWo
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { mutateProjectAccountOrganization, readProjectAccountRows } from '@/workspaces/projectAccountRows';
+import type { ProjectAccountSessionCustody } from '@/workspaces/projectAccountRows';
 
 export type NativeUsageProjectWitness = Readonly<{ rootPath: string; label?: string }>;
 export type NativeUsageProjectResolverInput = Readonly<{
@@ -13,6 +14,8 @@ export type NativeUsageProjectResolverInput = Readonly<{
     storage: DeviceLocalSecretStorage;
     serverHttpBaseUrl: string;
     readCredentials(): Promise<StoredCredentials | null>;
+    /** Private Session reads must not publish into the daemon's Active Account projection. */
+    sessionCustody?: ProjectAccountSessionCustody;
 }>;
 
 /** Reuses accepted checkouts read-only; native-only labels use the existing Account organization row. */
@@ -27,7 +30,8 @@ export function createNativeUsageProjectResolver(input: NativeUsageProjectResolv
             throw refusal('usage_account_authority_unavailable');
         }
         return await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, async () => {
-            const rowInput = { credentials, serverId: input.authority.serverId, signal };
+            const rowInput = { credentials, serverId: input.authority.serverId, signal,
+                ...(input.sessionCustody ? { sessionCustody: input.sessionCustody } : {}) };
             const snapshot = await readProjectAccountRows(rowInput);
             signal.throwIfAborted();
             const workspace = resolveWorkspaceRefV1(snapshot.workspaceRefs, {

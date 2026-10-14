@@ -3,7 +3,7 @@ import type { UsageCoachPreferencesV1 } from '../account/settings/usageCoachPref
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { getUsageQueryKey, normalizeUsageQuery, resolveUsageQueryPeriod, UsageQuerySchema, type UsageQuery } from '../inputs/usageQuery.js';
-import { UsageAnalyticsCoverageSchema, UsageAnalyticsQueryResponseSchema, UsageAnalyticsSourceCoverageSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
+import { UsageQueryAccountingSchema, UsageAnalyticsSourceCoverageSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
 import { UsageCostFactTotalSchema, projectUsageCostFactTotals } from './usageCostFactTotals.js';
 import { allocateUsageOutcomes, UsageWorkProjectionSchema, type UsageWorkEvidence } from './usageOutcomeAllocation.js';
 import type { ScmBranchWorkEvidence } from '../scm/branches.js';
@@ -53,12 +53,11 @@ export const UsageQueryPoolSnapshotSchema = lazyZodSchema(() => z.object({
 export type UsageQueryPoolSnapshot = z.infer<typeof UsageQueryPoolSnapshotSchema>;
 export type UsagePoolSourceSnapshot = Readonly<{ query: UsageQuery; value: readonly UsageQueryPoolSnapshot[] }>;
 
-// Opened machine labels belong to the authorized client projection, not accounting storage or its server response.
-const UsageQueryAccountingSchema = lazyZodSchema(() => UsageAnalyticsQueryResponseSchema.extend({
-  coverage: UsageAnalyticsCoverageSchema.extend({ sources: z.array(UsageAnalyticsSourceCoverageSchema.extend({
-    displayLocation: z.string().trim().min(1).optional(),
-  }).strict()) }).strict().optional(),
-}));
+function readBoundedAccountingPeriod(value: UsageAnalyticsQueryResponse | undefined) {
+  const range = value?.coverage?.range;
+  return range?.startMs !== undefined && range.endMs !== undefined
+    ? { startMs: range.startMs, endMs: range.endMs } : undefined;
+}
 
 export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.object({
   key: z.string().min(1),
@@ -94,9 +93,13 @@ export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.object({
     slice.comparison.costFactTotals, projectUsageCostFactTotals(slice.comparison.accounting.costFacts ?? [])))) {
     context.addIssue({ code: 'custom', path: ['comparison', 'costFactTotals'], message: 'Comparison money totals must preserve their admitted accounting and source provenance' });
   }
+  // Retained private evidence can have an older read window during progression.
+  // Accounting comparisons and calendar facts belong to the witnessed A window.
+  const accountingPeriod = 'relative' in slice.shownQuery.period
+    ? readBoundedAccountingPeriod(slice.accounting) ?? slice.coach?.period ?? slice.accounting?.coverage?.range
+    : slice.shownQuery.period;
   if (slice.comparison) {
-    const expected = resolveUsageComparisonQuery(slice.requestedQuery, 'relative' in slice.requestedQuery.period
-      ? slice.coach?.period ?? slice.accounting?.coverage?.range : slice.requestedQuery.period);
+    const expected = resolveUsageComparisonQuery(slice.requestedQuery, accountingPeriod);
     if (!expected || getUsageQueryKey(slice.comparison.query) !== getUsageQueryKey(expected)) {
       context.addIssue({ code: 'custom', path: ['comparison', 'query'], message: 'Comparison must identify the exact preceding range' });
     }
@@ -113,10 +116,10 @@ export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.object({
   }
   const week = slice.planInsights?.recordedWeek;
   const witnessedPeriod = 'relative' in slice.shownQuery.period
-    ? slice.coach?.period ?? slice.accounting?.coverage?.range
+    ? slice.coach?.period ?? accountingPeriod
     : slice.shownQuery.period;
   if (week?.status === 'available' && (!slice.accounting?.activity
-    || week.startMs !== witnessedPeriod?.startMs || week.endMs !== witnessedPeriod?.endMs
+    || week.startMs !== accountingPeriod?.startMs || week.endMs !== accountingPeriod?.endMs
     || week.timeZoneOffsetMinutes !== slice.shownQuery.timeZoneOffsetMinutes)) {
     context.addIssue({ code: 'custom', path: ['planInsights', 'recordedWeek'], message: 'Recorded week must preserve admitted accounting period and calendar' });
   }
@@ -291,8 +294,11 @@ export function resolveUsagePageAggregation(input: Readonly<{
     const pools = poolsByQuery.get(key);
     const snapshot = projectPrices(retainAccountingOnReadFailure(observed, prior?.accounting,
       prior?.sources.find(source => source.source === 'accounting')?.asOfMs));
-    const period = observed?.period ?? (input.nowMs !== undefined ? resolveUsageQueryPeriod(query, input.nowMs)
+    const readPeriod = observed?.period ?? (input.nowMs !== undefined ? resolveUsageQueryPeriod(query, input.nowMs)
       : 'relative' in query.period ? snapshot?.value?.coverage?.range ?? query.period : query.period);
+    // A failed refresh retains the prior accounting window as well as its
+    // values; it cannot compare those values against a later requested range.
+    const period = 'relative' in query.period ? readBoundedAccountingPeriod(snapshot?.value) ?? readPeriod : readPeriod;
     const comparisonQuery = resolveUsageComparisonQuery(query, period);
     const previousComparison = comparisonQuery && prior?.comparison
       && getUsageQueryKey(prior.comparison.query) === getUsageQueryKey(comparisonQuery) ? prior.comparison : undefined;
@@ -342,7 +348,9 @@ export function resolveUsagePageAggregation(input: Readonly<{
       pricingOverrides: input.pricingOverrides,
       preferences: input.coachPreferences,
     });
-    const retainedCoach = input.coachPreferences === null ? undefined : retainedDetail?.coach;
+    // Source-only initial progress has no observed Coach evidence to retain.
+    // It must not replace the first accounting-backed evaluation while detail loads.
+    const retainedCoach = input.coachPreferences === null || retainedDetail?.coach?.asOfMs === null ? undefined : retainedDetail?.coach;
     const retainedEvaluations = retainedCoach?.evaluations.map(evaluation => {
       const configured = coach?.evaluations.find(row => row.detectorId === evaluation.detectorId);
       // Retention must not revive evidence that the current evaluator's configuration refuses.
@@ -394,7 +402,7 @@ export function resolveUsagePageAggregation(input: Readonly<{
       } }),
       ...(comparisonQuery ? { comparison: { query: comparisonQuery, source: comparisonSource,
         ...(comparisonSnapshot?.value === undefined ? {} : { accounting: projectSourceLocations(comparisonSnapshot.value), costFactTotals: projectUsageCostFactTotals(comparisonSnapshot.value.costFacts ?? []) }) } } : {}),
-      ...(snapshot?.value?.contributions === undefined ? {} : { work: UsageWorkProjectionSchema.parse(allocateUsageOutcomes({
+      ...(!query.includeWorkEvidence || snapshot?.value?.contributions === undefined ? {} : { work: UsageWorkProjectionSchema.parse(allocateUsageOutcomes({
         contributions: snapshot.value.contributions,
         evidence: workEvidence,
         branchEvidence,

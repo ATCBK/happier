@@ -24,7 +24,7 @@ export async function collectUsageWorkSources(input: Readonly<{
     // Generic transport refusals quarantine every private sibling read. Only
     // explicit native failures may retain other independently witnessed graphs.
     const nativeReadFailureCodes = ['COMMAND_FAILED', 'COMMAND_TIMEOUT', 'COMMAND_OUTPUT_LIMIT_EXCEEDED',
-        'REMOTE_NETWORK_FAILED', 'REPOSITORY_REFRESH_FAILED', 'FEATURE_UNSUPPORTED'];
+        'REMOTE_NETWORK_FAILED', 'REPOSITORY_REFRESH_FAILED'];
     const loadSession = async (sessionId: string): Promise<SessionWorkSourceResult> => {
         const read = await input.readSession(sessionId);
         if (!read) return { status: 'unknown' };
@@ -38,6 +38,7 @@ export async function collectUsageWorkSources(input: Readonly<{
                 await input.assertCurrent();
                 if (!response.success) return { status: 'error', quarantine: true };
                 if (!response.data.success) {
+                    if (response.data.errorCode === 'FEATURE_UNSUPPORTED') return { status: 'unsupported' };
                     const nativeFailure = nativeReadFailureCodes.includes(response.data.errorCode ?? '');
                     return { status: 'error', quarantine: !nativeFailure };
                 }
@@ -49,6 +50,7 @@ export async function collectUsageWorkSources(input: Readonly<{
             await input.assertCurrent();
             if (!response.success) return { status: 'error', quarantine: true };
             if (!response.data.success) {
+                if (response.data.errorCode === 'FEATURE_UNSUPPORTED') return { status: 'unsupported' };
                 // The incumbent transport maps generic refusals to BACKEND_UNAVAILABLE.
                 // Only explicit native-read failures can retain a sibling state's facts.
                 const nativeFailure = nativeReadFailureCodes.includes(response.data.errorCode ?? '');

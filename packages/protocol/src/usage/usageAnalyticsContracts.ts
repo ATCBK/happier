@@ -151,6 +151,9 @@ export const UsageAnalyticsGranularitySchema = lazyZodSchema(() => z.enum([
 ]));
 export type UsageAnalyticsGranularity = z.infer<typeof UsageAnalyticsGranularitySchema>;
 
+/** The one cost-mode vocabulary of the usage query, its presentation and Team credential usage. */
+export const UsageAnalyticsCostModeSchema = lazyZodSchema(() => z.enum(['auto', 'reported', 'estimated', 'api_equivalent']));
+
 export const UsageAnalyticsBreakdownDimensionSchema = lazyZodSchema(() => z.enum([
   'agent',
   'model',
@@ -182,7 +185,7 @@ export const UsageAnalyticsQueryRequestSchema = lazyZodSchema(() => z.object({
   }).strict().optional(),
   granularity: UsageAnalyticsGranularitySchema.default('day'),
   timeZoneOffsetMinutes: z.number().int().min(-840).max(840).default(0),
-  costMode: z.enum(['auto', 'reported', 'estimated', 'api_equivalent']).optional(),
+  costMode: UsageAnalyticsCostModeSchema.optional(),
   breakdowns: z.array(UsageAnalyticsBreakdownDimensionSchema).max(8).optional(),
   filters: UsageAnalyticsQueryFiltersSchema.optional(),
   includeSeries: z.boolean().default(true),
@@ -325,7 +328,7 @@ const UsageAnalyticsMessageStatsSchema = lazyZodSchema(() => z.object({
 }).strict());
 
 const UsageAnalyticsCostPresentationSchema = lazyZodSchema(() => z.object({
-  mode: z.enum(['auto', 'reported', 'estimated', 'api_equivalent']),
+  mode: UsageAnalyticsCostModeSchema,
   effectiveUsd: NonNegativeNumberSchema,
   currency: z.string().trim().min(1),
   source: z.string().trim().min(1),
@@ -462,6 +465,13 @@ export const UsageAnalyticsQueryResponseSchema = lazyZodSchema(() => z.object({
   tokenCategories: UsageObservationTokensSchema.optional(),
 }).strict());
 export type UsageAnalyticsQueryResponse = z.infer<typeof UsageAnalyticsQueryResponseSchema>;
+
+/** Opened machine labels belong to authorized client reads, never the server accounting response. */
+export const UsageQueryAccountingSchema = lazyZodSchema(() => UsageAnalyticsQueryResponseSchema.extend({
+  coverage: UsageAnalyticsCoverageSchema.extend({ sources: z.array(UsageAnalyticsSourceCoverageSchema.extend({
+    displayLocation: z.string().trim().min(1).optional(),
+  }).strict()) }).strict().optional(),
+}));
 
 export const ServerUsageAnalyticsCapabilitiesSchema = lazyZodSchema(() => z.object({
   version: z.literal(1),

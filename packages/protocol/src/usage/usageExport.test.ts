@@ -3,6 +3,7 @@ import { decodeBase64 } from '../crypto/base64.js';
 import { normalizeUsageQuery } from '../inputs/usageQuery.js';
 import { UsageAnalyticsQueryResponseSchema } from './usageAnalyticsContracts.js';
 import { buildUsageFileResult, UsageExportInputSchema, UsageFileResultSchema } from './usageExport.js';
+import { resolveUsagePageAggregation, UsageQueryBatchResultSchema } from './resolveUsagePageAggregation.js';
 
 const tokens = { input: 10, output: 2, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 12 };
 const response = UsageAnalyticsQueryResponseSchema.parse({ v: 1,
@@ -15,6 +16,27 @@ const response = UsageAnalyticsQueryResponseSchema.parse({ v: 1,
 const query = normalizeUsageQuery({ costBasis: 'estimated' });
 
 describe('authorized selected-field usage file bytes', () => {
+  it('exports authorized client coverage from the admitted query producer in every document format', () => {
+    const accounting = UsageAnalyticsQueryResponseSchema.parse({ ...response, coverage: {
+      status: 'partial', reasons: ['incomplete_history'], missingDimensions: [],
+      sources: [{ source: 'native', path: 'native', status: 'partial', machineId: 'machine', eventCount: 1, asOfMs: 100 }],
+      range: { complete: false }, ranked: [],
+    } });
+    const batch = UsageQueryBatchResultSchema.parse(resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, value: accounting, status: 'available', asOfMs: 100 }],
+      sourceLocations: [{ machineId: 'machine', displayLocation: 'Private workstation' }],
+    }));
+    const value = batch.results[0]!.accounting!;
+    expect(value.coverage?.sources[0]).toMatchObject({ displayLocation: 'Private workstation' });
+    for (const format of ['json', 'csv', 'text'] as const) {
+      const file = UsageFileResultSchema.parse(buildUsageFileResult({ query, format, fields: ['coverage'] }, value, 100));
+      const content = new TextDecoder().decode(decodeBase64(file.base64));
+      expect(content).toContain('Private workstation');
+      expect(content).not.toContain('Private session');
+      const unselected = buildUsageFileResult({ query, format, fields: ['totals'] }, value, 100);
+      expect(new TextDecoder().decode(decodeBase64(unselected.base64))).not.toContain('Private workstation');
+    }
+  });
   it('keeps monetary absence and selected basis explicit in every format without unselected labels', () => {
     for (const format of ['json', 'csv', 'text'] as const) {
       const result = buildUsageFileResult({ query, format, fields: ['costFacts'] }, response, 100);

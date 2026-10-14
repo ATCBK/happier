@@ -7,6 +7,7 @@ import { buildProviderAccountUsageRecordId } from '../connect/providerAccountUsa
 import { ConnectedServiceQuotaGetResultV1Schema } from '../connect/providerAccountUsageHistorySchemasV1.js';
 import { projectUsagePlanInsights } from './usagePlanInsights.js';
 import { USAGE_COACH_DETECTOR_IDS } from './coach/coachDetectorIds.js';
+import { readUsageScopeOptions } from './usageFilterOptions.js';
 
 const tokens = { input: 12, output: 4, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 16 };
 const accounting = UsageAnalyticsQueryResponseSchema.parse({
@@ -14,6 +15,73 @@ const accounting = UsageAnalyticsQueryResponseSchema.parse({
 });
 
 describe('resolveUsagePageAggregation', () => {
+  it('projects Work allocations only for the slice that requested Work evidence', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, includeWorkEvidence: false });
+    const workQuery = normalizeUsageQuery({ ...query, includeWorkEvidence: true });
+    const contribution = { id: 'one', observedAtMs: 150, sessionId: 'session', turnId: null, agentId: null,
+      modelId: null, machineId: null, projectKey: null, workspaceId: null, source: null,
+      tokens, cost: accounting.totals.cost };
+    const observed = { ...accounting, contributions: [contribution] };
+    const batch = resolveUsagePageAggregation({ queries: [query, workQuery], accounting: [query, workQuery].map(query => ({
+      query, status: 'available' as const, value: observed,
+    })) });
+    expect(batch.results[0]?.accounting?.contributions).toEqual([contribution]);
+    expect(batch.results[0]?.work).toBeUndefined();
+    expect(batch.results[1]?.work?.allocations.map(row => row.contribution)).toEqual([contribution]);
+    expect(UsageQueryBatchResultSchema.safeParse(batch).success).toBe(true);
+  });
+  it('does not retain an unobserved initial Coach in place of the first admitted accounting evidence', () => {
+    const nowMs = Date.UTC(2026, 9, 14, 12);
+    const query = normalizeUsageQuery({ period: { relative: '7days' } });
+    const initial = resolveUsagePageAggregation({ queries: [query], nowMs,
+      accounting: [{ query, status: 'pending' }], sources: [{ source: 'how_you_work', status: 'pending' }] });
+    expect(initial.results[0]?.coach?.asOfMs).toBeNull();
+    const arrived = resolveUsagePageAggregation({ queries: [query], nowMs, previous: initial,
+      accounting: [{ query, status: 'available', value: accounting, asOfMs: nowMs }],
+      sources: [{ source: 'how_you_work', status: 'pending' }] });
+    expect(arrived.results[0]?.coach).toMatchObject({ asOfMs: nowMs, currentness: 'current' });
+    expect(UsageQueryBatchResultSchema.safeParse(arrived).success).toBe(true);
+  });
+  it('keeps relative accounting comparisons exact while older private Coach evidence is retained during refresh', () => {
+    const nowMs = Date.UTC(2026, 9, 13, 12);
+    const laterMs = nowMs + 797_526;
+    const query = normalizeUsageQuery({ period: { relative: '7days' } });
+    const period = resolveUsageQueryPeriod(query, nowMs);
+    const laterPeriod = resolveUsageQueryPeriod(query, laterMs);
+    const observed = (range: typeof period) => UsageAnalyticsQueryResponseSchema.parse({ ...accounting,
+      coverage: { status: 'partial', reasons: [], missingDimensions: [], ranked: [], sources: [], range: { ...range, complete: false } },
+    });
+    const first = resolveUsagePageAggregation({ queries: [query], nowMs,
+      accounting: [{ query, period, value: observed(period), status: 'available', asOfMs: nowMs }],
+      howYouWork: [{ query, asOfMs: nowMs, detail: { status: 'partial', facts: [] } }],
+    });
+    const refreshed = resolveUsagePageAggregation({ queries: [query], nowMs: laterMs, previous: first,
+      accounting: [{ query, period: laterPeriod, value: observed(laterPeriod), status: 'available', asOfMs: laterMs }],
+      sources: [{ source: 'how_you_work', status: 'pending' }],
+    });
+    const slice = refreshed.results[0]!;
+    expect(slice.coach).toMatchObject({ period, currentness: 'stale' });
+    expect(slice.accounting?.coverage?.range).toMatchObject(laterPeriod);
+    expect(slice.comparison?.query).toEqual(resolveUsagePageAccountingRequests([query], laterMs)[1]);
+    const parsed = UsageQueryBatchResultSchema.safeParse(refreshed);
+    expect(parsed.success, parsed.success ? undefined : JSON.stringify(parsed.error.issues)).toBe(true);
+    expect(UsageQueryBatchResultSchema.safeParse({ ...refreshed, results: [{ ...slice, comparison: {
+      ...slice.comparison, query: resolveUsagePageAccountingRequests([query], nowMs)[1],
+    } }] }).success).toBe(false);
+    const failed = resolveUsagePageAggregation({ queries: [query], nowMs: laterMs, previous: first,
+      accounting: [{ query, period: laterPeriod, status: 'error', errorCode: 'usage_query_failed' }],
+      sources: [{ source: 'how_you_work', status: 'pending' }],
+    });
+    expect(failed.results[0]?.accounting?.coverage?.range).toMatchObject(period);
+    expect(failed.results[0]?.comparison?.query).toEqual(first.results[0]?.comparison?.query);
+    expect(UsageQueryBatchResultSchema.safeParse(failed).success).toBe(true);
+    const unboundedCoverage = resolveUsagePageAggregation({ queries: [query], nowMs: laterMs,
+      accounting: [{ query, period: laterPeriod, value: observed({ startMs: laterPeriod.startMs }),
+        status: 'available', asOfMs: laterMs }],
+    });
+    expect(unboundedCoverage.results[0]?.coach?.period).toEqual(laterPeriod);
+    expect(UsageQueryBatchResultSchema.safeParse(unboundedCoverage).success).toBe(true);
+  });
   it('uses the witnessed relative range for comparison and private detail even when accounting fails', () => {
     const nowMs = Date.UTC(2026, 9, 12, 12);
     const query = normalizeUsageQuery({ period: { relative: '7days' } });
@@ -86,17 +154,29 @@ describe('resolveUsagePageAggregation', () => {
       { source: 'history', path: 'native', status: 'partial', eventCount: 1, machineId: 'missing', captureKind: 'from_logs' },
       { source: 'legacy', path: 'legacy', status: 'unknown', eventCount: 1 },
     ] };
+    const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting, coverage,
+      breakdowns: { machine: [{ key: 'work', label: 'Work', eventCount: 1, tokens, cost: accounting.totals.cost }] },
+    });
     const first = resolveUsagePageAggregation({ queries: [query], accounting: [{ query,
-      value: { ...accounting, coverage }, status: 'available' }], sourceLocations: [{ machineId: 'work', displayLocation: 'Workstation' }] });
+      value, status: 'available' }], sourceLocations: [{ machineId: 'work', displayLocation: 'Workstation' }] });
     expect(first.results[0]?.accounting?.coverage?.sources).toEqual([
       { ...coverage.sources[0], displayLocation: 'Workstation' }, coverage.sources[1], coverage.sources[2],
     ]);
     expect(UsageQueryBatchResultSchema.safeParse(first).success).toBe(true);
+    // The ranked chart can omit a machine that still has admitted coverage. It
+    // must remain selectable without inventing identities for older source rows.
+    expect(readUsageScopeOptions(first.results, 'machines', ['selected'])).toEqual(new Map([
+      ['work', 'Work'], ['missing', 'missing'], ['selected', 'selected'],
+    ]));
+    expect(first.results[0]?.accounting?.breakdowns?.machine).toHaveLength(1);
     const retired = resolveUsagePageAggregation({ queries: [query], previous: first,
       accounting: [{ query, status: 'error', errorCode: 'network_error' }], sourceLocations: [] });
     expect(retired.results[0]?.accounting?.coverage?.sources.every(source => !('displayLocation' in source))).toBe(true);
     expect(UsageAnalyticsQueryResponseSchema.safeParse({ ...accounting, coverage: { ...coverage,
       sources: [{ ...coverage.sources[0], displayLocation: '/private/project' }] } }).success).toBe(false);
+    const denied = resolveUsagePageAggregation({ queries: [query], previous: first,
+      accounting: [{ query, status: 'error', errorCode: 'permission_denied' }] });
+    expect(readUsageScopeOptions(denied.results, 'machines', ['selected'])).toEqual(new Map([['selected', 'selected']]));
   });
   it('reprojects chosen night hours while retaining the exact query private interval evidence during a reread', () => {
     const hour = 3_600_000;
