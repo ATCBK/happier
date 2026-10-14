@@ -72,6 +72,23 @@ export const WorkflowInputDefinitionSchema = lazyZodSchema(() => z.object({
 }));
 export type WorkflowInputDefinition = z.infer<typeof WorkflowInputDefinitionSchema>;
 
+/**
+ * What a Workflow input is called to a person: its declared presentation title, else its key read as
+ * words ("qa_note" → "Qa note"). Every field, chip and review row names an input through this one rule.
+ */
+export function workflowInputTitle(
+  definition: Pick<WorkflowInputDefinition, 'name'>,
+  presentation?: Readonly<{ title?: string }>,
+): string {
+  if (presentation?.title) return presentation.title;
+  const words = definition.name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_\-.]+/g, ' ')
+    .trim()
+    .toLowerCase();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : definition.name;
+}
+
 /** Presentation adapter only: Workflow admission, defaults and references stay Workflow-owned. */
 export function workflowInputToFieldHint(
   definition: WorkflowInputDefinition,
@@ -80,7 +97,7 @@ export function workflowInputToFieldHint(
   const hasChoices = definition.enum !== undefined || definition.optionsSourceId !== undefined || definition.inputType !== undefined;
   return {
     path: definition.name,
-    title: presentation?.title ?? definition.name,
+    title: workflowInputTitle(definition, presentation),
     ...(definition.description === undefined ? {} : { description: definition.description }),
     widget: hasChoices ? definition.valueType === 'json' && !definition.inputType ? 'multiselect' : 'select'
       : definition.valueType === 'string' ? 'text' : definition.valueType,

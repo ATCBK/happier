@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierInputField } from '@happier-dev/plugin-ui/presentation';
 import type { JsonValue, RoleOverrideV1, WorkflowDefinitionV1, WorkflowMaterializedLeafV1 } from '@happier-dev/protocol';
-import { workflowInputToFieldHint, type WorkflowInputDefinition } from '@happier-dev/protocol/workflows/workflowV1';
+import { workflowInputTitle, workflowInputToFieldHint, type WorkflowInputDefinition } from '@happier-dev/protocol/workflows/workflowV1';
 import { validateWorkflowDefinition } from '@happier-dev/protocol/workflows/workflowValidationV1';
 import type { InputOptionsConsumerV1 } from '@happier-dev/protocol/inputs';
 import { actionInputOptionValueKey, isSameActionInputOptionValue, readActionInputOptionValue, type ActionInputOptionValue } from '@happier-dev/protocol/actions/actionInputHintsRuntime';
@@ -142,7 +142,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
     const remaining = fields.filter((field) => field !== main);
     const missingFields = fields.filter((field) => field.errorCode === 'missing_required_input');
     const missing = missingFields.length;
-    const inputTitle = (definition: WorkflowInputDefinition) => props.inputPresentation?.[definition.name]?.title ?? definition.name;
+    const inputTitle = (definition: WorkflowInputDefinition) => workflowInputTitle(definition, props.inputPresentation?.[definition.name]);
     const blocked = fields.find((field) => field.blocking) ?? null;
     const disabled = props.pending === true || props.startDisabled === true || blocked !== null || definitionIssue !== null
         || (!acceptedRepeat && roleDraft.status !== 'ready') || visibility.status !== 'ready' || !visibility.resolution.ok;
@@ -423,7 +423,7 @@ export function WorkflowRunInputs(props: Readonly<{
         <CoreCollectionScope><View style={styles.fields}>{props.fields.map((field) => {
         const definition = field.definition;
         const presentation = props.presentation?.[definition.name];
-        const title = presentation?.title ?? definition.name;
+        const title = workflowInputTitle(definition, presentation);
         const id = `${props.prefix}-${definition.name}`;
         const repair = field.errorCode === 'missing_required_input' ? t('workflows.start.required')
             : describeWorkflowInputRepair({ valueType: definition.valueType, errorCode: field.errorCode });

@@ -9,6 +9,7 @@ import {
   WorkflowSessionAuthoringSelectionSchema,
   WorkflowInputDefinitionSchema,
   WorkflowStepSchema,
+  workflowInputTitle,
   workflowInputToFieldHint,
   type WorkflowDefinitionV1,
 } from './workflowV1.js';
@@ -64,6 +65,13 @@ describe('workflow input option sources', () => {
         options: [{ value: 'safe', label: 'Safe mode' }, { value: 'fast', label: 'fast' }] });
     expect(WorkflowInputDefinitionSchema.safeParse({ name: 'channel', valueType: 'string', required: true,
       default: 'push', optionsSourceId: 'notifications.channels.available' }).success).toBe(false);
+  });
+  it('names an input without a declared title from its key, in one place', () => {
+    const input = { name: 'qa_note', valueType: 'string', required: false } as const;
+    expect(workflowInputTitle(input)).toBe('Qa note');
+    expect(workflowInputTitle({ ...input, name: 'repoName' })).toBe('Repo name');
+    expect(workflowInputTitle(input, { title: 'Note for QA' })).toBe('Note for QA');
+    expect(workflowInputToFieldHint(input).title).toBe('Qa note');
   });
   it('preserves a declared string enum and rejects incompatible types and defaults', () => {
     const input = { name: 'apply', valueType: 'string', required: false, default: 'fix', enum: ['fix', 'report'] };
