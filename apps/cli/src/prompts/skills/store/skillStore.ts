@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Stats } from 'node:fs';
 import { z } from 'zod';
+import { z as zMini } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { PromptBundleEntryV1Schema, validatePromptBundleBodyV1AgainstSchemaId, validateStoredPromptBundleBodyV1AgainstSchemaId, type PromptBundleEntryV1 } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
@@ -17,7 +18,7 @@ export const SkillOwnerKeySchema = z.string().refine(value => {
 export const EnsureSkillSessionDirInputSchema = z.object({
     ownerKey: SkillOwnerKeySchema,
     items: z.array(z.object({ skillId: z.string().min(1), name: segment, digest: digestSchema,
-        files: z.array(PromptBundleEntryV1Schema.strict()) }).strict()),
+        files: z.array(zMini.catchall(PromptBundleEntryV1Schema, zMini.never())) }).strict()),
     nativeDisables: z.array(z.object({ name: z.string().min(1), path: z.string().min(1) }).strict()),
 }).strict().refine(input => new Set(input.items.map(item => item.name)).size === input.items.length,
     { message: 'Delivered skill names must be unique' });

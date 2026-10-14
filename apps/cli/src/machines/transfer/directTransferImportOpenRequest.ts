@@ -3,6 +3,7 @@ import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugin
 import { SessionExecutionTargetV1Schema } from '@happier-dev/protocol/sessions/creation/sessionExecutionTargetV1';
 import { SessionAttachmentUploadInitRequestV1Schema } from '@happier-dev/protocol/transfers/sessions/sessionAttachmentUploadInitRequestV1';
 import { z } from 'zod';
+import { z as zMini } from 'zod/mini';
 
 import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapter';
 
@@ -54,6 +55,6 @@ export const DirectTransferImportOpenRequestSchema = z.discriminatedUnion('t', [
       overwrite: z.unknown(),
       sha256: z.unknown().optional(),
     }).strict(),
-    SessionAttachmentUploadInitRequestV1Schema.extend(directTransferImportOpenCommonFields),
+    zMini.extend(SessionAttachmentUploadInitRequestV1Schema, directTransferImportOpenCommonFields),
     ComposerMediaStageUploadOpenRequestSchema,
   ]);

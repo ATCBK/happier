@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { z as zMini } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
 import { ExternalSessionsSourceSchema } from '@happier-dev/protocol/sessions/external/sourceCatalog';
@@ -12,10 +13,10 @@ export const NativeUsageCaptureAuthoritySchema = z.object({
 }).strict();
 export type NativeUsageCaptureAuthority = z.infer<typeof NativeUsageCaptureAuthoritySchema>;
 
-const NativeUsagePendingObservationSchema = AgentExternalSessionAccountingObservationSchema.extend({
+const NativeUsagePendingObservationSchema = zMini.catchall(zMini.safeExtend(AgentExternalSessionAccountingObservationSchema, {
     projectKey: z.string().min(1).optional(),
     workspaceId: z.string().min(1).optional(),
-}).strict();
+}), zMini.never());
 
 export const NativeUsageCaptureSourceSchema = z.object({
     sourceId: z.string().min(1),
@@ -29,7 +30,7 @@ export const NativeUsageCaptureSourceSchema = z.object({
     consented: z.boolean(),
     cursor: z.string().optional(),
     pending: z.array(NativeUsagePendingObservationSchema),
-    coverage: AgentExternalSessionAccountingCoverageSchema.optional(),
+    coverage: z.optional(AgentExternalSessionAccountingCoverageSchema),
     asOf: z.number().int().nonnegative().optional(),
     error: z.string().optional(),
 }).strict();

@@ -56,7 +56,7 @@ const StoredLocalAgentResumeRecordV1Schema = z.object({
     agentId: z.string().trim().min(1),
 
     // What to resume: the Agent's own conversation id, in its catalog's terms.
-    vendorResumeId: NonBlankOpaqueIdentifierSchema.max(512),
+    vendorResumeId: NonBlankOpaqueIdentifierSchema.check(z.maxLength(512)),
 
     /**
      * Transcript head at this Agent's departure — the boundary its own

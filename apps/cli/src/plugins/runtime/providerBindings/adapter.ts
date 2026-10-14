@@ -26,8 +26,8 @@ const ProviderBindingKeySchema = z.string().trim().min(1).max(512);
 const PrepareInputBaseSchema = z.object({
     v: z.literal(1),
     agentTargetKey: ProviderAgentTargetKeySchema,
-    model: ProviderModelDescriptorV1Schema.optional(),
-    claudeHelperModels: ProviderClaudeHelperModelsV1Schema.optional(),
+    model: z.optional(ProviderModelDescriptorV1Schema),
+    claudeHelperModels: z.optional(ProviderClaudeHelperModelsV1Schema),
     reservedBindingCandidate: z.object({
         contributionKey: ProviderContributionKeySchema,
         endpointTemplateId: ProviderLocalIdSchema,
@@ -44,7 +44,7 @@ const PrepareInputSchema = z.union([
 const PreparedSchema = z.object({
     v: z.literal(1),
     materialization: MaterializationKindSchema,
-    adapterBindingKey: ProviderAdapterBindingKeyV1Schema.optional(),
+    adapterBindingKey: z.optional(ProviderAdapterBindingKeyV1Schema),
 }).strict();
 
 const ResolvedSelectionBaseSchema = z.object({
@@ -60,15 +60,15 @@ const ResolvedFactsSchema = z.object({
     v: z.literal(1),
     agentTargetKey: ProviderAgentTargetKeySchema,
     selection: ResolvedSelectionSchema,
-    contributionKey: ProviderContributionKeySchema.nullable(),
+    contributionKey: z.nullable(ProviderContributionKeySchema),
     endpoint: z.object({
         endpointTemplateId: ProviderLocalIdSchema,
         normalizedUrl: ProviderEndpointUrlSyntaxSchema,
         protocol: ProviderWireProtocolSchema,
         publicHeaders: z.record(z.string(), z.string()),
     }).strict(),
-    runtimeCredentialTransport: ProviderCredentialTransportV1Schema.nullable(),
-    claudeHelperModels: ProviderClaudeHelperModelsV1Schema.optional(),
+    runtimeCredentialTransport: z.nullable(ProviderCredentialTransportV1Schema),
+    claudeHelperModels: z.optional(ProviderClaudeHelperModelsV1Schema),
     compatibilityFingerprint: z.string().min(1).max(512),
 }).strict();
 
