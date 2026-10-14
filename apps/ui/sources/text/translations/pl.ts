@@ -10459,6 +10459,8 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
       portInUse: ({ port }: { port: number }) => `Port ${port} jest już używany. Zatrzymaj istniejącą usługę lub wybierz inny port.`,
       portInUseSameProject: ({ port }: { port: number }) => `Port ${port} jest już używany przez ten projekt. Użyj działającej usługi lub wybierz inny port.`,
       processExit: ({ code }: { code: string }) => `Usługa zakończyła się z kodem ${code}. Przed ponowną próbą sprawdź szczegóły.`,
+      openRunning: ({ service }: { service: string }) => `Otwórz działającą usługę ${service}`,
+      exitCode: ({ code }: { code: string }) => `Kod wyjścia ${code}`,
       docker: {
                   not_installed: ({ machine }: { machine: string }) => `Docker nie jest zainstalowany na ${machine}. Zainstaluj go przed uruchomieniem tej usługi.`,
                   not_running: ({ machine }: { machine: string }) => `Docker nie działa lub jest niedostępny na ${machine}. Uruchom go i sprawdź połączenie.`,

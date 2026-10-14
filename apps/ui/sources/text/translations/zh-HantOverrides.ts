@@ -8791,6 +8791,8 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
       portInUse: ({ port }: { port: number }) => `連接埠 ${port} 已被佔用。請停止現有服務或選擇其他連接埠。`,
       portInUseSameProject: ({ port }: { port: number }) => `此專案已在使用連接埠 ${port}。請使用正在執行的服務或選擇其他連接埠。`,
       processExit: ({ code }: { code: string }) => `服務已結束，代碼為 ${code}。重試前請查看詳細資料。`,
+      openRunning: ({ service }: { service: string }) => `開啟執行中的 ${service}`,
+      exitCode: ({ code }: { code: string }) => `結束代碼 ${code}`,
       docker: {
                   not_installed: ({ machine }: { machine: string }) => `${machine} 上未安裝 Docker。請先安裝 Docker，再啟動此服務。`,
                   not_running: ({ machine }: { machine: string }) => `${machine} 上的 Docker 未執行或無法連線。請啟動 Docker 並檢查連線。`,
