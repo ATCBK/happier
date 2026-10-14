@@ -106,6 +106,8 @@ describe('forked voice inference runtime loader', () => {
     });
     handles.push(handle);
 
+    expect(handle.readProcessRoots()).toEqual([]);
+    expect(observations).toEqual([]);
     const first = await handle.runtimeLoader();
     const second = await handle.runtimeLoader();
     expect(first).toBe(second);

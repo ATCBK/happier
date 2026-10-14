@@ -44,19 +44,17 @@ import { retireMachineSyncRuntimeAttempt } from '../machine/bootstrapMachineSync
 import { createProjectWorkerAdmission } from '@/workspaces/execution/projectWorkerAdmission';
 import { getMachineFinitePolicyV1 } from '@happier-dev/protocol/machines/machineFinitePolicyV1';
 import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { DaemonVoiceInferenceStatusResponseSchema } from '@happier-dev/protocol/daemon/voiceInference';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 
 const automationWorkerMocks = vi.hoisted(() => ({
   startAutomationWorker: vi.fn(),
 }));
-const voiceInferenceWorkerMocks = vi.hoisted(() => ({
-  startVoiceInferenceWorker: vi.fn(async () => ({ stop: vi.fn(async () => {}) })),
-}));
 
 vi.mock('../automation/automationWorker', () => ({
   startAutomationWorker: automationWorkerMocks.startAutomationWorker,
-}));
-vi.mock('../voiceInference/voiceInferenceWorker', () => ({
-  startVoiceInferenceWorker: voiceInferenceWorkerMocks.startVoiceInferenceWorker,
 }));
 
 const deviceLocalSecretStorage = {
@@ -524,15 +522,78 @@ describe('createDaemonMachineBootstrapRuntime', () => {
 
   it('does not start the daemon inference worker while its canonical feature decision is disabled', async () => {
     const previous = process.env.HAPPIER_FEATURE_VOICE_DAEMON_INFERENCE__ENABLED;
-    delete process.env.HAPPIER_FEATURE_VOICE_DAEMON_INFERENCE__ENABLED;
+    process.env.HAPPIER_FEATURE_VOICE_DAEMON_INFERENCE__ENABLED = 'false';
     try {
       const runtime = createDaemonMachineBootstrapRuntime(createBaseRuntimeParams());
       await expect(runtime.startVoiceInferenceWorkerForMachine('machine_1', 'account_1'))
         .resolves.toBeNull();
-      expect(voiceInferenceWorkerMocks.startVoiceInferenceWorker).not.toHaveBeenCalled();
     } finally {
       if (previous === undefined) delete process.env.HAPPIER_FEATURE_VOICE_DAEMON_INFERENCE__ENABLED;
       else process.env.HAPPIER_FEATURE_VOICE_DAEMON_INFERENCE__ENABLED = previous;
+    }
+  });
+
+  it.each([undefined, 'false'])('wires bootstrap inference into Machine RPC with local override %s without loading models', async (override) => {
+    const home = await mkdtemp(join(tmpdir(), 'daemon-inference-default-'));
+    const envScope = createEnvKeyScope([
+      'HAPPIER_HOME_DIR', 'HAPPIER_FEATURE_POLICY_ENV', 'HAPPIER_BUILD_FEATURES_ALLOW',
+      'HAPPIER_BUILD_FEATURES_DENY', 'HAPPIER_FEATURE_VOICE__ENABLED',
+      'HAPPIER_FEATURE_VOICE_AGENT__ENABLED', 'HAPPIER_FEATURE_EXECUTION_RUNS__ENABLED',
+      'HAPPIER_FEATURE_VOICE_DAEMON_INFERENCE__ENABLED',
+    ]);
+    envScope.patch({
+      HAPPIER_HOME_DIR: home, HAPPIER_FEATURE_POLICY_ENV: '',
+      HAPPIER_BUILD_FEATURES_ALLOW: undefined, HAPPIER_BUILD_FEATURES_DENY: undefined,
+      HAPPIER_FEATURE_VOICE__ENABLED: undefined, HAPPIER_FEATURE_VOICE_AGENT__ENABLED: undefined,
+      HAPPIER_FEATURE_EXECUTION_RUNS__ENABLED: undefined,
+      HAPPIER_FEATURE_VOICE_DAEMON_INFERENCE__ENABLED: override,
+    });
+    reloadConfiguration();
+    const credentials = { token: 'inference-default-token', encryption: null };
+    // Only Home HTTP is controlled; bootstrap, worker, RPC registration and schemas stay real.
+    const homeRead = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { id: 'inference-account' } });
+    const features = FeaturesResponseSchema.parse({ features: { voice: { enabled: true } } });
+    const runtime = createDaemonMachineBootstrapRuntime(createBaseRuntimeParams({
+      api: await ApiClient.create(credentials), credentials,
+      getServerFeaturesSnapshot: () => ({ status: 'ready', features }),
+      workspaceSyncHandoffAdapter: undefined,
+    }));
+    let apiMachine: ApiMachineClient | null = null;
+    let worker: Awaited<ReturnType<typeof runtime.startVoiceInferenceWorkerForMachine>> = null;
+    try {
+      worker = await runtime.startVoiceInferenceWorkerForMachine('inference-machine', 'inference-account');
+      apiMachine = await runtime.createConnectedApiMachine({
+        id: 'inference-machine', encryptionKey: new Uint8Array(32), encryptionVariant: 'legacy',
+        encryptionMode: 'plain', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
+      });
+      if (!apiMachine) throw new Error('Missing Machine client');
+      apiMachine.setRPCHandlers({
+        spawnSession: async () => ({ type: 'success', sessionId: 'unused' }),
+        stopSession: async () => true, requestShutdown() {},
+        ...(worker ? { voiceInference: worker } : {}),
+      });
+      if (override === undefined) {
+        expect(worker).not.toBeNull();
+        const response = DaemonVoiceInferenceStatusResponseSchema.parse(
+          await apiMachine.invokeLocalMachineAction(RPC_METHODS.DAEMON_VOICE_INFERENCE_STATUS, {}),
+        );
+        expect(response).toMatchObject({ ok: true });
+        if (!response.ok) throw new Error(response.errorCode);
+        expect(response.models.every(model => model.installState === 'not_installed')).toBe(true);
+        expect(worker!.readProcessRoots()).toEqual([]);
+      } else {
+        expect(worker).toBeNull();
+        await expect(apiMachine.invokeLocalMachineAction(RPC_METHODS.DAEMON_VOICE_INFERENCE_STATUS, {}))
+          .resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
+      }
+    } finally {
+      await apiMachine?.shutdown();
+      await worker?.stop();
+      await runtime.beforeShutdown();
+      homeRead.mockRestore();
+      envScope.restore();
+      reloadConfiguration();
+      await rm(home, { recursive: true, force: true });
     }
   });
 
