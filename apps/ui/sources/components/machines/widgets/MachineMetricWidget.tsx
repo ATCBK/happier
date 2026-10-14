@@ -7,6 +7,7 @@ import type { MachinePageTabParams } from '@/components/machines/page/machinePag
 import { MachineSummaryStrip } from '@/components/machines/summary/MachineSummaryStrip';
 import type { MachineSummaryMetric } from '@/components/machines/summary/machineSummaryStripModel';
 import { CpuTile } from '@/components/machines/vitals/CpuTile';
+import { VitalsTileOpenContext } from '@/components/machines/vitals/VitalsSheet';
 import { DiskTile } from '@/components/machines/vitals/DiskTile';
 import { MemoryTile } from '@/components/machines/vitals/MemoryTile';
 import { NetworkTile } from '@/components/machines/vitals/NetworkTile';
@@ -266,6 +267,8 @@ function MetricTile(
     range: config.range,
   });
   const view = vitals.view;
+  const openTarget = React.useMemo(() => ({ onOpen: props.onOpen,
+    accessibilityLabel: t('machines.widgets.body.fleet.openMachine', { machine: props.facts.name }) }), [props.facts.name, props.onOpen]);
   const freshness: MachineWidgetFreshness =
     view.kind === 'ready' && view.freshness === 'offline'
       ? { kind: 'offline' }
@@ -371,15 +374,10 @@ function MetricTile(
         live={live}
       />
     );
+  // The tile's chart and per-core disclosure are controls of their own: it opens from its title.
   return (
     <MachineWidgetColumn testID={props.testID}>
-      <HappierPressable
-        testID={`${props.testID}.open`}
-        onPress={props.onOpen}
-        accessibilityRole="button"
-      >
-        {tile}
-      </HappierPressable>
+      <VitalsTileOpenContext.Provider value={openTarget}>{tile}</VitalsTileOpenContext.Provider>
     </MachineWidgetColumn>
   );
 }

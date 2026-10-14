@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import { HAPPIER_DATA_METRICS } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_DATA_METRICS, HappierPressable } from '@happier-dev/plugin-ui/presentation';
 
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
@@ -65,6 +65,12 @@ export const VitalsSheet = React.memo(function VitalsSheet(
 });
 
 /**
+ * A tile shown somewhere else (a Metric widget) opens its machine page from its title. The tile's own
+ * chart and disclosures stay separate controls, never nested inside one big button.
+ */
+export const VitalsTileOpenContext = React.createContext<Readonly<{ onOpen: () => void; accessibilityLabel: string }> | null>(null);
+
+/**
  * One vital's anatomy (lab kit `vital`): the label with its quiet fact at the right, the value with its
  * unit and a short phrase, one line under it, then the tile's instruments. Every tile keeps this rhythm,
  * so their values and charts line up across the sheet.
@@ -80,12 +86,28 @@ export const VitalsTile = React.memo(function VitalsTile(
     testID?: string;
   }>,
 ) {
+  const open = React.useContext(VitalsTileOpenContext);
   return (
     <View testID={props.testID} style={styles.tile}>
       <View style={styles.labelRow}>
-        <Text accessibilityRole="header" numberOfLines={1} style={styles.label}>
-          {props.label}
-        </Text>
+        {open ? (
+          <HappierPressable
+            testID={props.testID ? `${props.testID}.open` : undefined}
+            accessibilityRole="button"
+            accessibilityLabel={open.accessibilityLabel}
+            onPress={open.onOpen}
+          >
+            {(state) => (
+              <Text numberOfLines={1} style={[styles.label, state.hovered ? styles.labelHovered : null]}>
+                {props.label}
+              </Text>
+            )}
+          </HappierPressable>
+        ) : (
+          <Text accessibilityRole="header" numberOfLines={1} style={styles.label}>
+            {props.label}
+          </Text>
+        )}
         {props.labelAccessory}
         {props.meta !== undefined && props.meta !== null ? (
           <View style={styles.meta}>{props.meta}</View>
@@ -210,6 +232,10 @@ const styles = StyleSheet.create((theme) => ({
     ...Typography.default('medium'),
     color: theme.colors.text.secondary,
     flexShrink: 0,
+  },
+  // Hover changes colour only: the title it opens from reads as ink.
+  labelHovered: {
+    color: theme.colors.text.primary,
   },
   meta: {
     marginLeft: 'auto',
