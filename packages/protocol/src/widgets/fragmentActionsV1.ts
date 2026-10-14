@@ -31,3 +31,14 @@ export function readWidgetLayoutFragmentActionAccountV1(input: unknown) {
     const parsed = WidgetDefinitionAccountV1Schema.safeParse(value);
     return parsed.success ? parsed.data : null;
 }
+
+/** Presentation only: captured target identity wins over a proposed rename. Never enters mutation input. */
+export function readWidgetLayoutFragmentApprovalNameV1(input: unknown, preview?: unknown): string | null {
+    const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown> : {};
+    const value = record(input);
+    for (const candidate of [record(preview).widgetLibraryName, record(value.fragment).name, record(value.patch).name, value.name]) {
+        if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    }
+    return null;
+}

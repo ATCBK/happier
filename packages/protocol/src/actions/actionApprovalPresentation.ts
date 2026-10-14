@@ -457,7 +457,8 @@ export function describeApprovalActionFields(input: Readonly<{
       // in Details, rather than adding an opaque id to that first reading.
       || field.path === 'itemId' && Boolean(readApprovalVisualItem(input.actionId, presentationInput)?.title?.trim())
       || input.actionId.startsWith('providers.') && field.path === 'action'
-      || input.actionId === 'widgets.fragment.create' && field.path === 'artifactId');
+      || (input.actionId.startsWith('widgets.fragment.') || input.actionId.startsWith('widgets.definition.'))
+        && (field.path === 'artifactId' || field.path === 'newArtifactId'));
     rows.push({
       kind: 'value', path: field.path, title: field.title, value,
       ...(reference ? { reference } : {}),

@@ -11,6 +11,15 @@ import { readBuiltInSettingDeclarationV1 } from './settings/settingsDeclarations
 import { skillFileFromBytesV1 } from '../prompts/library/skills/skillZipV1.js';
 
 describe('approval field presentation', () => {
+  it('keeps saved-group library ids in technical detail and names a stored rename request', () => {
+    const input = getActionSpec('widgets.fragment.update').inputSchema.parse({
+      account: { serverId: 'home', accountId: 'owner' }, artifactId: 'opaque-library-id', patch: { name: 'Capacity and PRs' },
+    });
+    const presentation = describeApprovalActionFields({ actionId: 'widgets.fragment.update', actionArgs: input });
+    expect(presentation.unrepresentable).toBeNull();
+    expect(presentation.rows.find(row => row.path === 'artifactId')).toMatchObject({ technical: true });
+    expect(getActionSpec('widgets.fragment.update').approvalPresentation?.summary(input)).toContain('Capacity and PRs');
+  });
   it('reviews skill write operands independently of their deliberately narrow observation previews', () => {
     const file = skillFileFromBytesV1('SKILL.md', new TextEncoder().encode('---\nname: review\n---\nReview exactly this.'), 0o644);
     const cases = [

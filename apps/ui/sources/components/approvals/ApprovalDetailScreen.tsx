@@ -551,6 +551,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
     storedTitle: parsed.request.summary,
     actionId: parsed.kind === 'target' ? null : String(parsed.request.actionId),
     qualifiedActionId: parsed.kind === 'target' ? parsed.request.qualifiedActionId : null,
+    ...(parsed.kind === 'built_in' ? { actionArgs: parsed.request.actionArgs, preview: parsed.request.preview } : {}),
     sessionIds: [sessionId, parsed.request.createdBy.sessionId],
   });
   const actionValue = requestTitle.actionTitle

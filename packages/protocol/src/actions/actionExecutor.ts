@@ -119,7 +119,7 @@ import { admitWidgetActionSurfaceV1, readWidgetActionSurfaceAdmissionV1 } from '
 import { setWidgetInputBindingsV1 } from '../widgets/widgetInstanceV1.js';
 import { executeWidgetDefinitionActionV1 } from '../widgets/executeWidgetDefinitionActionV1.js';
 import { WidgetLayoutFragmentActionIdV1Schema } from '../widgets/fragmentActionIdsV1.js';
-import { readWidgetLayoutFragmentActionAccountV1 } from '../widgets/fragmentActionsV1.js';
+import { readWidgetLayoutFragmentActionAccountV1, readWidgetLayoutFragmentApprovalNameV1 } from '../widgets/fragmentActionsV1.js';
 import { executeWidgetLayoutFragmentActionV1 } from '../widgets/executeWidgetLayoutFragmentActionV1.js';
 import { executeWidgetSnapshotPostV1 } from '../widgets/executeWidgetSnapshotPostV1.js';
 import { prepareWidgetDefinitionPublicationV1 } from '../widgets/widgetDefinitionPublicationV1.js';
@@ -1193,8 +1193,11 @@ function mapApprovalCreatedBySurface(surface: ActionExecutorContext['surface']):
  * The approval's human title. The target Session travels as the request's own `sessionId` (readers
  * name it from there), so it is never appended to the title as a raw id.
  */
-function buildApprovalSummary(spec: ActionSpec, input?: unknown): string {
+function buildApprovalSummary(spec: ActionSpec, input?: unknown, preview?: unknown): string {
   const summary = String(spec.title ?? '').trim() || String(spec.id);
+  const fragmentName = WidgetLayoutFragmentActionIdV1Schema.safeParse(spec.id).success
+    ? readWidgetLayoutFragmentApprovalNameV1(input, preview) : null;
+  if (fragmentName) return `${summary} · ${fragmentName}`;
   const disclosure = machineAccessApprovalDisclosure(spec.id, input);
   return disclosure ? `${summary}\n\n${disclosure.description}` : summary;
 }
@@ -1255,7 +1258,7 @@ async function prepareApprovalRequest(params: Readonly<{
   actionArgs: unknown;
   context: ActionExecutorContext;
   computerApprovalDisplay?: ComputerApprovalDisplayV1;
-}>): Promise<Readonly<{ actionArgs: unknown; preview: unknown }> | null> {
+}>): Promise<Readonly<{ actionArgs: unknown; preview: unknown }> | ActionExecuteFailure | null> {
   const spec = getActionSpec(params.actionId);
   let computerApprovalDisplay = params.computerApprovalDisplay;
   if (!computerApprovalDisplay && (params.actionId === 'computer.target.select'
@@ -1270,10 +1273,24 @@ async function prepareApprovalRequest(params: Readonly<{
   const observedInput = spec.projectObservationInput
     ? spec.projectObservationInput(params.input)
     : params.input;
+  const fragmentAction = WidgetLayoutFragmentActionIdV1Schema.safeParse(params.actionId);
+  if (fragmentAction.success) {
+    const account = readWidgetLayoutFragmentActionAccountV1(params.input);
+    if (!account) return { ok: false, errorCode: 'widget_scope_unavailable', error: 'widget_scope_unavailable' };
+    const failure = await admitWidgetActionSurfaceV1(params.deps, { ...account, owner: { kind: 'home' } }, params.context);
+    if (failure) return failure;
+  }
+  const libraryItem = fragmentAction.success && ['widgets.fragment.update', 'widgets.fragment.delete', 'widgets.fragment.duplicate'].includes(params.actionId)
+    && typeof readRecord(params.input).artifactId === 'string' && params.deps.widgetLayoutFragmentArtifacts
+    ? await params.deps.widgetLayoutFragmentArtifacts.get(String(readRecord(params.input).artifactId), params.context.signal) : null;
+  const widgetLibraryName = fragmentAction.success
+    ? libraryItem?.name ?? readWidgetLayoutFragmentApprovalNameV1(params.input) : null;
+  const summaryInput = libraryItem ? { ...readRecord(params.input), fragment: { name: libraryItem.name } } : params.input;
   const defaultPreview = {
     actionId: params.actionId,
     actionArgs: observedInput,
-    summary: buildApprovalPreviewSummary(spec, params.input),
+    summary: buildApprovalPreviewSummary(spec, summaryInput),
+    ...(widgetLibraryName ? { widgetLibraryName } : {}),
   } as const;
   if (params.actionId === 'computer.secret.fill' || params.actionId === 'browser.automation.secret.fill') {
     return { actionArgs: observedInput, preview: { actionId: params.actionId, actionArgs: observedInput } };
@@ -1293,6 +1310,7 @@ async function prepareApprovalRequest(params: Readonly<{
     actionId: params.actionId,
     actionArgs: observedInput,
     summary: customizedSummary || defaultPreview.summary,
+    ...(widgetLibraryName ? { widgetLibraryName } : {}),
     ...(computerApprovalDisplay ? { computerApprovalDisplay } : {}),
     ...(machineAccessApprovalDisclosure(params.actionId, params.input)
       ? { machineAccessDisclosure: machineAccessApprovalDisclosure(params.actionId, params.input) } : {}),
@@ -3951,6 +3969,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             error: errorCode,
           });
         }
+        if ('ok' in preparedApproval) return preparedApproval;
         const approvalActionArgs = preparedApproval.actionArgs;
         const executionOriginV1 = buildApprovalExecutionOriginV1({
           actionId,
@@ -3987,7 +4006,6 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           },
           actionId,
           actionArgs: approvalActionArgs,
-          summary: buildApprovalSummary(spec, admittedInput),
           preview: preparedApproval.preview,
           ...(requiredDirectoryApproval
             ? { sessionCreationDirectoryApproval: requiredDirectoryApproval }
@@ -9510,8 +9528,6 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (!String(data.summary ?? '').trim()) {
           return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
         }
-        const summary = buildApprovalSummary(targetSpec, targetArgs);
-
         const initialApprovalActionArgs = targetActionId === 'session.spawn_new'
           ? materializeSessionSpawnApprovalInput(targetArgs, ctx)
           : targetArgs;
@@ -9526,6 +9542,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const errorCode = ctx.signal?.aborted ? 'cancelled' : 'approval_context_unavailable';
           return { ok: false, errorCode, error: errorCode };
         }
+        if ('ok' in preparedApproval) return preparedApproval;
+        const summary = buildApprovalSummary(targetSpec, targetArgs, preparedApproval.preview);
         const approvalActionArgs = preparedApproval.actionArgs;
         const executionOriginV1 = buildApprovalExecutionOriginV1({
           actionId: targetActionId,

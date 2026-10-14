@@ -56,14 +56,17 @@ export const ApprovalInboxCard = React.memo((props: Readonly<{
   const scopedSession = useSessionListRenderableWithServerScope(serverId || null, serverId ? sessionId : '');
   const session = serverId ? scopedSession : legacySession;
   const nowMs = React.useMemo(() => props.nowMs ?? Date.now(), [props.nowMs, session]);
+  const parsedApproval = React.useMemo(() => approvalArtifactBodyMatchesHeaderV1(props.artifact.header ?? {},
+    'body' in props.artifact && typeof props.artifact.body === 'string' ? props.artifact.body : null), [props.artifact]);
 
   // The one title rule shared with the approval page.
   const { title, actionTitle } = React.useMemo(() => resolveApprovalRequestTitle({
     storedTitle: String(storedTitle),
     actionId: actionIdRaw,
     qualifiedActionId,
+    ...(parsedApproval?.family === 'built_in' ? { actionArgs: parsedApproval.request.actionArgs, preview: parsedApproval.request.preview } : {}),
     sessionIds: [sessionId],
-  }), [actionIdRaw, qualifiedActionId, sessionId, storedTitle]);
+  }), [actionIdRaw, parsedApproval, qualifiedActionId, sessionId, storedTitle]);
 
   // A locked session's cached name stays private, as on every other approval surface.
   const encryption = session && serverId ? projectUiSessionAwareness(session, nowMs).encryption : null;
@@ -81,10 +84,9 @@ export const ApprovalInboxCard = React.memo((props: Readonly<{
   const askingSession = sessionTitle ?? (sessionId ? describeUnnamedApprovalSession(homeName) : null);
   // An agent's cleanup or stop proposal says what it holds (lab `ra` A5): "7 items, all safe · …".
   const proposalFacts = React.useMemo(() => {
-    const parsed = approvalArtifactBodyMatchesHeaderV1(props.artifact.header ?? {}, 'body' in props.artifact && typeof props.artifact.body === 'string' ? props.artifact.body : null);
-    const model = parsed?.family === 'built_in' ? readResourceProposalApproval(parsed.request) : null;
+    const model = parsedApproval?.family === 'built_in' ? readResourceProposalApproval(parsedApproval.request) : null;
     return model ? describeResourceProposalInboxFacts(model) : null;
-  }, [props.artifact]);
+  }, [parsedApproval]);
   const distinguishingFacts = [
     proposalFacts,
     actionTitle && actionTitle !== title && !proposalFacts ? actionTitle : null,

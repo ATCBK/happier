@@ -15,6 +15,7 @@ import { readBuiltinWidgetDescriptorV1 } from '../../widgets/builtinWidgetDescri
 import { WidgetDefinitionRefV1Schema } from '../../widgets/widgetInstanceV1.js';
 import { WIDGET_LAYOUT_FRAGMENT_ACTION_IDS_V1, WidgetLayoutFragmentActionInputSchemasV1, WidgetLayoutFragmentActionOutputSchemasV1,
   type WidgetLayoutFragmentActionIdV1 } from '../../widgets/fragmentActionsV1.js';
+import { readWidgetLayoutFragmentApprovalNameV1 } from '../../widgets/fragmentActionsV1.js';
 
 /** What a person reads in Settings, approvals and the form. Agents read `description`. */
 const WIDGET_INSTANCE_ACTION_COPY = {
@@ -394,8 +395,20 @@ export const WIDGET_LAYOUT_FRAGMENT_ACTION_SPECS_V1: readonly (PreNormalizedActi
     approvalPresentation: { summary: input => {
       const value = readRecord(input);
       const fragment = readRecord(value.fragment);
-      const name = typeof fragment.name === 'string' && fragment.name.trim() ? fragment.name.trim() : 'group';
-      return id === 'widgets.fragment.create' ? `Save ${quote(name)} to Your widgets${widgetGroupApprovalContents(fragment.group)}.` : null;
+      const name = readWidgetLayoutFragmentApprovalNameV1(input);
+      // Without a captured original name, a rename only supplies its new name.
+      const targetName = id === 'widgets.fragment.update'
+        ? typeof fragment.name === 'string' && fragment.name.trim() ? fragment.name.trim() : null : name;
+      const target = targetName ? quote(targetName) : 'the saved group';
+      const patch = readRecord(value.patch);
+      switch (id) {
+        case 'widgets.fragment.create': return `Save ${name ? quote(name) : 'the group'} to Your widgets${widgetGroupApprovalContents(fragment.group)}.`;
+        case 'widgets.fragment.update': return typeof patch.name === 'string' && patch.name.trim()
+          ? `Rename ${target} to ${quote(patch.name.trim())} in Your widgets.` : `Change ${target} in Your widgets.`;
+        case 'widgets.fragment.duplicate': return `Duplicate ${target} in Your widgets.`;
+        case 'widgets.fragment.delete': return `Delete ${target} from Your widgets.`;
+        default: return null;
+      }
     } },
     inputHints: { description: WIDGET_LAYOUT_FRAGMENT_ACTION_COPY[id][1], fields: WIDGET_LAYOUT_FRAGMENT_ACTION_FIELDS[id] }, cli: { acceptsServerId: true, commands: [{ path: id.split('.'), visibility: 'canonical' }] },
   } as const satisfies PreNormalizedActionSpec;

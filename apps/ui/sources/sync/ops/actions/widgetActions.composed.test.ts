@@ -9,6 +9,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { standardCleanup, createSessionFixture } from '@/dev/testkit';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { HomeHubLayoutV1Schema, buildHomeHubArtifactIdV1 } from '@happier-dev/protocol/home';
 import { WorkBoardV1Schema, WorkBoardWidgetPlacementV1Schema } from '@happier-dev/protocol/boards/workBoardV1';
 import {
@@ -192,7 +193,7 @@ describe('widget semantic Actions through production UI composition', () => {
         expect(HomeHubLayoutV1Schema.safeParse({ ...layout, authority: 'forged' }).success).toBe(false);
         expect(WidgetInstanceV1Schema.safeParse({ ...group.children[0]!.instance, machineId: 'forged' }).success).toBe(false);
 
-        const draft = WidgetLayoutFragmentDraftV1Schema.parse({ name: 'Saved group', inputs: { fields: [] },
+        const draft = WidgetLayoutFragmentDraftV1Schema.parse({ name: 'Capacity and PRs', inputs: { fields: [] },
             inputSchema: { type: 'object', properties: {}, additionalProperties: false },
             group: captureWidgetLayoutFragmentGroupV1(group) });
         const saved = await executor.execute('widgets.fragment.create', { account: { serverId, accountId }, artifactId: 'saved-group', fragment: draft }, context());
@@ -201,6 +202,17 @@ describe('widget semantic Actions through production UI composition', () => {
         const output = WidgetLayoutFragmentActionOutputSchemasV1['widgets.fragment.create'].parse(saved.result);
         const stored = WidgetLayoutFragmentV1Schema.parse(storedBody('saved-group'));
         expect(stored).toEqual(output.fragment);
+        const proposed = await executor.execute('widgets.fragment.delete', { account: { serverId, accountId }, artifactId: 'saved-group' }, {
+            surface: 'cli', authority: 'account_automation', serverId, expectedAccountId: accountId,
+            actionCaller: { kind: 'host' }, actionRequestId: 'delete-saved-group',
+        });
+        expect(proposed, JSON.stringify(proposed)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+        if (!proposed.ok || !proposed.result || typeof proposed.result !== 'object'
+            || typeof Reflect.get(proposed.result, 'artifactId') !== 'string') throw new Error('Expected persisted approval');
+        const request = ApprovalRequestV2Schema.parse(storedBody(String(Reflect.get(proposed.result, 'artifactId'))));
+        expect(request.summary).toContain(output.fragment.name);
+        expect(request.preview).toMatchObject({ widgetLibraryName: output.fragment.name, summary: expect.stringContaining(output.fragment.name) });
+        expect(WidgetLayoutFragmentV1Schema.parse(storedBody('saved-group'))).toEqual(output.fragment);
         expect(stored.group.children.every(child => !('id' in child.instance))).toBe(true);
         expect(WidgetLayoutFragmentV1Schema.safeParse({ ...stored, group: { ...stored.group, accountId: 'forged' } }).success).toBe(false);
         const listed = await createDefaultActionExecutor().execute('widgets.item.list', { surface }, context());
