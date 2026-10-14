@@ -61,6 +61,46 @@ function harness(registry?: ReturnType<typeof createRegistryHostV1>, foundReader
     failRules: (value: boolean) => { failRules = value; }, failSession: (value: boolean) => { failSession = value; } };
 }
 describe('skill library Actions', () => {
+  it('starts independent Artifact inventory while display catalogs are still pending', async () => {
+    const h = harness();
+    const created = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.create'].parse(await h.execute('skills.create', { name: 'sample', files }, { surface: 'ui' }));
+    let release!: () => void;
+    const catalogReady = new Promise<void>(resolve => { release = resolve; });
+    let inventoryStarted = false;
+    const execute = createSkillActionExecuteV1({ store: { ...h.store, list: async options => {
+      inventoryStarted = true; return h.store.list!(options);
+    } }, skillRules: { ...h.skillRules, readCatalog: async (...args) => {
+      await catalogReady; return h.skillRules.readCatalog(...args);
+    } }, randomId: () => 'unused', includeInSession: async () => ({ ok: true }) });
+    const pending = execute('skills.list', {}, { surface: 'ui' });
+    try { expect(inventoryStarted).toBe(true); }
+    finally { release(); }
+    const listed = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await pending);
+    expect(listed.items.find(item => item.skillId === created.skillId)?.name).toBe('sample');
+  });
+
+  it('lists only upstream-tracked skills without reading display catalogs or written content', async () => {
+    const h = harness();
+    const created = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.create'].parse(await h.execute('skills.create', { name: 'sample', files }, { surface: 'ui' }));
+    const written = h.artifacts.get(created.skillId)!;
+    const provenance = { kind: 'registry' as const, registry: { sourceId: 'repo', format: 'git' as const,
+      sourceUrl: 'https://github.com/a/b', itemId: '', importedAt: 1,
+      ref: { kind: 'gitTree' as const, repo: 'https://github.com/a/b', path: '', commit: '1'.repeat(40), treeSha: '2'.repeat(40) } } };
+    const tracked = { ...written, id: 'tracked', header: { ...written.header, skillLock: { provenance, updatePolicy: 'manual' } } };
+    const broken = { ...tracked, id: 'broken', body: '{malformed' };
+    const opened: string[] = [];
+    const execute = createSkillActionExecuteV1({
+      store: { ...h.store, list: async options => options?.cursor
+        ? { coverage: 'complete', items: [{ id: tracked.id, header: tracked.header, updatedAtMs: 1, owned: true }, { id: broken.id, header: broken.header, updatedAtMs: 1, owned: true }] }
+        : { coverage: 'partial', nextCursor: 'next', items: [{ id: written.id, header: written.header, updatedAtMs: 1, owned: true }] },
+        read: async id => { opened.push(id); if (id === tracked.id) return tracked; if (id === broken.id) return broken; throw new Error('Written content is irrelevant to upstream checks'); } },
+      skillRules: { ...h.skillRules, readCatalog: async () => { throw new Error('Display catalogs are irrelevant to upstream checks'); } },
+      randomId: () => 'unused', includeInSession: async () => { throw new Error('No Session mutation'); },
+    });
+    expect(await execute.listRegistryTrackedSkills()).toEqual([{ skillId: 'tracked', name: 'sample', createdAt: 1, provenance }]);
+    expect(opened.sort()).toEqual(['broken', 'tracked']);
+  });
+
   it('lists predecessor-valid non-YAML content and cost, while new writes remain valid YAML only', async () => {
     const h = harness();
     const vector = retainedFrontmatter.cases.find(item => item.id === 'unquoted-colon')!;
