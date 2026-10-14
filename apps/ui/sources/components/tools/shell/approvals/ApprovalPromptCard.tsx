@@ -2,7 +2,7 @@ import { useSessionTranscriptSource } from '@/components/sessions/transcript/sou
 import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import type { ApprovalRequest } from '@happier-dev/protocol';
-import { listActionSpecs, resolveApprovalRequestApproveAdmission } from '@happier-dev/protocol/actions';
+import { describeApprovalRequestFields, listActionSpecs, resolveApprovalRequestApproveAdmission } from '@happier-dev/protocol/actions';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
@@ -22,8 +22,9 @@ import { PromptDocApprovalDiff, readPromptDocUpdateApproval } from '@/components
 import { ComputerActionApprovalCard } from '@/components/approvals/ComputerActionApprovalCard';
 import {
     ProjectCommandApprovalFacts,
-    describeProjectCommandApprovalTitle,
+    describeProjectCommandApprovalDecisions,
     readProjectCommandApproval,
+    useProjectCommandApprovalTitle,
 } from '@/components/approvals/ProjectCommandApprovalFacts';
 import { useComputerApprovalChoice } from '@/components/approvals/useComputerApprovalChoice';
 import { isConfidentialSecretApprovalAction, readConfidentialSecretApproval } from '@/components/approvals/confidentialSecretApprovalModel';
@@ -72,14 +73,17 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
     const actionTitle = React.useMemo(() => resolveActionTitle(props.approval), [props.approval]);
     const previewSummary = React.useMemo(() => getPreviewSummary(props.approval.preview), [props.approval.preview]);
     const approveAdmission = React.useMemo(
-        () => resolveApprovalRequestApproveAdmission(props.approval),
+        () => props.approval.status === 'open' ? resolveApprovalRequestApproveAdmission(props.approval) : null,
         [props.approval],
     );
     const confidentialAction = isConfidentialSecretApprovalAction(props.approval.actionId);
     const confidentialApproval = readConfidentialSecretApproval(props.approval);
-    const actionFields = confidentialAction ? null : approveAdmission.presentation;
+    const actionFields = React.useMemo(() => confidentialAction ? null
+        : approveAdmission?.presentation ?? describeApprovalRequestFields(props.approval), [confidentialAction, approveAdmission, props.approval]);
     // An agent's finite Project command reads as its exact command, target and identity (lab `s-agent` ADHOC).
     const projectCommand = React.useMemo(() => readProjectCommandApproval(props.approval), [props.approval]);
+    const projectCommandTitle = useProjectCommandApprovalTitle(projectCommand);
+    const projectCommandDecisions = projectCommand ? describeProjectCommandApprovalDecisions(projectCommand) : null;
     // An Agent's instructions edit reads as its diff against the current document (lab `b-work P`).
     const promptDocUpdate = React.useMemo(() => readPromptDocUpdateApproval(props.approval), [props.approval]);
     const sessionId = props.sessionId;
@@ -98,11 +102,11 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
     const computerAction = computerChoice.presentation;
     const chooseComputerTarget = computerChoice.chooseTarget;
     // An agent's cleanup or stop proposal is this approval's body (plan 60 AGW-6): check on view, pick some.
-    const proposal = useResourceProposalCheck(props.approval, approvalHome.serverId);
+    const proposal = useResourceProposalCheck(props.approval, approvalHome.serverId, props.artifact.id);
     const proposalLabels = proposal ? resolveResourceProposalLabels(proposal) : null;
     const proposalMode = useResourceProposalApprovalMode(props.approval);
     const approvalWithheld = confidentialAction ? confidentialApproval === null || transcriptSource.navigate === null
-        : approveAdmission.status === 'unavailable' || Boolean(proposal?.approveWithheld);
+        : approveAdmission?.status === 'unavailable' || Boolean(proposal?.approveWithheld);
     const sourceInteraction = transcriptSource.useInteraction();
     const canApprove = transcriptSource.actions !== null
         && (props.canApprovePermissions ?? props.canApprove ?? sourceInteraction.canApprovePermissions)
@@ -157,7 +161,7 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
         <ApprovalPromptChrome
             testID="approval-prompt-card"
             chrome={chrome}
-            title={projectCommand ? describeProjectCommandApprovalTitle(projectCommand) : proposalLabels?.title ?? actionTitle}
+            title={projectCommandTitle ?? proposalLabels?.title ?? actionTitle}
             titleNumberOfLines={1}
             subtitle={projectCommand ? null : props.approval.summary || t('approvals.untitled')}
             subtitleNumberOfLines={2}
@@ -179,8 +183,8 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
             ) : null}
             footer={props.approval.status !== 'open' ? undefined : (
                 <ApprovalDecisionFooter
-                    approveLabel={confidentialAction ? t('approvals.confidential.review') : projectCommand ? t('projects.scripts.adhocRunOnce') : proposalLabels?.approve}
-                    rejectLabel={projectCommand ? t('projects.scripts.adhocDeny') : proposalLabels?.reject}
+                    approveLabel={confidentialAction ? t('approvals.confidential.review') : projectCommandDecisions?.approve ?? proposalLabels?.approve}
+                    rejectLabel={projectCommandDecisions?.reject ?? proposalLabels?.reject}
                     disabled={accessDisabled}
                     decisionDisabled={approvalRouteUnavailable}
                     approveDisabled={approvalWithheld}
@@ -225,7 +229,7 @@ const styles = StyleSheet.create((theme) => ({
     headerAccessories: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
     },
     viewButton: {
         minWidth: Platform.select({ ios: 44, default: 48 }),

@@ -12,6 +12,37 @@ import { describeUnnamedApprovalSession } from './approvalRequesterLabels';
 import { describeApprovalActionFields } from './approvalFieldValues';
 import { builtInSettingUiDeclaration } from '@/components/settings/catalog/settingDeclarations';
 import { t } from '@/text';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { getActionSpec } from '@happier-dev/protocol/actions';
+
+it('names reviewed skills and the exact Home machine, keeping their ids in Technical details', async () => {
+    const home = await upsertServerProfile({ name: 'Personal', serverUrl: 'https://capability-approval.test' });
+    profiles.push(home.id);
+    const skillId = 'opaque-reviewed-skill';
+    const machineId = 'opaque-reviewed-machine';
+    const machine = createMachineFixture({ id: machineId, metadata: { ...createMachineFixture().metadata!, displayName: 'Studio' } });
+    await act(async () => {
+        storage.setState({ settingsScope: { serverId: home.id, accountId: 'account' },
+            machineListByServerId: { [home.id]: [machine] } });
+        storage.getState().applyArtifacts([{ id: skillId, title: 'Release notes', isDecrypted: true,
+            header: { v: 1, kind: 'prompt_bundle.v2', bundleSchemaId: 'skills.skill_md_v1', title: 'Release notes' },
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }]);
+    });
+    const spec = getActionSpec('skills.rules.set');
+    const actionArgs = spec.inputSchema.parse({ items: [{ skillId }], change: {
+        kind: 'write', write: { place: { t: 'machine', machineId }, state: 'on' },
+    } });
+    const screen = await renderScreen(<ActionApprovalFieldsCard anatomy="page" serverId={home.id}
+        presentation={describeApprovalActionFields({ actionId: spec.id, actionArgs,
+            preview: { actionId: spec.id, actionArgs: spec.projectObservationInput?.(actionArgs) } })} />);
+    const text = screen.getTextContent();
+    for (const value of ['Skill', 'Release notes', 'Where', 'Machine Studio', 'Change', 'Turn on']) expect(text).toContain(value);
+    for (const value of [skillId, machineId, 'Rules change', 'Kind Write', 'State on']) expect(text).not.toContain(value);
+    const details = screen.findAllByTestId('approvals.technical-details').find(node => typeof node.props.onExpandedChange === 'function');
+    await act(async () => { details?.props.onExpandedChange(true); });
+    expect(screen.getTextContent()).toContain(skillId);
+    expect(screen.getTextContent()).toContain(machineId);
+});
 
 const initialState = storage.getState();
 const profiles: string[] = [];

@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { PROJECT_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import { ProjectSetupReviewV1Schema, type ProjectSetupReviewV1 } from '@happier-dev/protocol/actions/projectSetupConsentFailure';
 import { ProjectExecutionChoiceV1Schema } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 import type { ApprovalRequest } from '@happier-dev/protocol';
 import type { ProjectExecutionChoiceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
@@ -20,6 +21,7 @@ import { t } from '@/text';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { listReviewedSetupCommands } from '@/components/projects/projectSetup/projectSetupEffectPresentation';
 import { formatProjectInvocation } from '@/components/projects/projectSetup/projectScriptPresentation';
+import { ProjectSetupReviewFacts } from '@/components/projects/projectSetup/ProjectSetupReview';
 
 export type ProjectCommandApprovalPresentation =
   | Readonly<{
@@ -36,6 +38,14 @@ export type ProjectCommandApprovalPresentation =
       sourceMachineId: string;
       name: string;
       destination: Destination;
+    }>
+  | Readonly<{
+      /** Target-produced setup review; presentation never grants consent or executes it. */
+      kind: 'setup';
+      serverId: string;
+      sourceMachineId: string;
+      destination: Destination;
+      setupReview: ProjectSetupReviewV1 | null;
     }>
   | Readonly<{
       /** A declared service's current effect, disclosed by the starter before it launches (plan 22). */
@@ -56,7 +66,7 @@ type Destination =
  * request's own strict Action input; it decides nothing and grants no setup consent.
  */
 export function readProjectCommandApproval(
-  approval: Pick<ApprovalRequest, 'actionId' | 'actionArgs'>,
+  approval: Pick<ApprovalRequest, 'actionId' | 'actionArgs'> & Partial<Pick<ApprovalRequest, 'preview'>>,
 ): ProjectCommandApprovalPresentation | null {
   if (approval.actionId === 'projects.compute.exec') {
     const input = PROJECT_ACTION_INPUT_SCHEMAS_V1[
@@ -71,6 +81,21 @@ export function readProjectCommandApproval(
       command: formatProjectInvocation({ tool: executable, args: argv }),
       cwd,
       destination: readDestination(choice),
+    };
+  }
+  if (approval.actionId === 'projects.prepare') {
+    const input = PROJECT_ACTION_INPUT_SCHEMAS_V1['projects.prepare'].safeParse(approval.actionArgs);
+    // Teardown is not a setup ask; it keeps the generic Action reading.
+    if (!input.success || input.data.phase !== 'setup') return null;
+    const reviewed = ProjectSetupReviewV1Schema.safeParse(isRecord(approval.preview) ? approval.preview.setupReview : undefined);
+    const setupReview = reviewed.success && (input.data.expectedEffectDigest === undefined
+      || input.data.expectedEffectDigest === reviewed.data.reviewedEffectDigest) ? reviewed.data : null;
+    return {
+      kind: 'setup',
+      serverId: input.data.workspace.serverId,
+      sourceMachineId: input.data.workspace.machineId,
+      destination: { kind: 'primary' },
+      setupReview,
     };
   }
   if (approval.actionId === 'projects.script.run') {
@@ -133,12 +158,34 @@ function readDestination(choice: ProjectExecutionChoiceV1 | undefined): Destinat
 /** The card's question: one-off commands and named Scripts ask differently; a worker is named as such. */
 export function describeProjectCommandApprovalTitle(
   presentation: ProjectCommandApprovalPresentation,
+  sourceMachineName: string,
 ): string {
+  if (presentation.kind === 'setup')
+    return t('projects.authoring.sessionAsk', { machine: sourceMachineName });
   if (presentation.kind === 'script')
     return t('projects.scripts.adhocRunScriptTitle', { name: presentation.name });
   return presentation.destination.kind === 'primary'
     ? t('projects.scripts.adhocTitle')
     : t('projects.scripts.adhocTitleWorker');
+}
+
+/** The question and the decision labels of a Project approval, named by the machine, never its id. */
+export function useProjectCommandApprovalTitle(
+  presentation: ProjectCommandApprovalPresentation | null,
+): string | null {
+  const source = useServerScopedMachine(presentation?.serverId ?? null, presentation?.sourceMachineId ?? '');
+  return presentation
+    ? describeProjectCommandApprovalTitle(presentation, getMachineDisplayName(source) ?? presentation.sourceMachineId)
+    : null;
+}
+
+/** The two decisions a Project approval asks, in the words of the Scripts page (setup) or the command card. */
+export function describeProjectCommandApprovalDecisions(
+  presentation: ProjectCommandApprovalPresentation,
+): Readonly<{ approve: string; reject: string }> {
+  return presentation.kind === 'setup'
+    ? { approve: t('projects.scripts.setup.run'), reject: t('projects.scripts.setup.notNow') }
+    : { approve: t('projects.scripts.adhocRunOnce'), reject: t('projects.scripts.adhocDeny') };
 }
 
 export const ProjectCommandApprovalFacts = React.memo(
@@ -164,7 +211,7 @@ export const ProjectCommandApprovalFacts = React.memo(
       getMachineDisplayName(source) ?? presentation.sourceMachineId;
     const pool =
       destination.kind === 'pool'
-        ? (pools?.find((candidate) => candidate.id === destination.poolId) ??
+        ? (pools?.find((candidate) => candidate.pool.id === destination.poolId)?.pool ??
           null)
         : null;
     const where =
@@ -203,7 +250,7 @@ export const ProjectCommandApprovalFacts = React.memo(
     ];
     return (
       <View style={styles.root} testID={props.testID}>
-        {presentation.kind !== 'service' || presentation.command ? (
+        {presentation.kind !== 'setup' && (presentation.kind !== 'service' || presentation.command) ? (
           <View testID={`${props.testID}.command`}>
             <CodeBlockView
               code={presentation.kind === 'script' ? presentation.name : `$ ${presentation.command}`}
@@ -211,6 +258,24 @@ export const ProjectCommandApprovalFacts = React.memo(
               wrap
             />
           </View>
+        ) : null}
+        {presentation.kind === 'setup' ? (
+          presentation.setupReview ? (
+            // The same review anatomy as the Scripts page and the Session ask; the owner reads the effect.
+            <ProjectSetupReviewFacts
+              testID={`${props.testID}.review`}
+              reviewedEffect={presentation.setupReview.reviewedEffect}
+              machineName={sourceName}
+              sharedRunAs={null}
+            />
+          ) : (
+            <Text
+              style={[styles.value, { color: theme.colors.text.tertiary }]}
+              testID={`${props.testID}.stepsUnavailable`}
+            >
+              {t('projects.scripts.setup.stepsUnavailable')}
+            </Text>
+          )
         ) : null}
         <View style={styles.rows}>
           {rows.map(([key, label, value]) => (
