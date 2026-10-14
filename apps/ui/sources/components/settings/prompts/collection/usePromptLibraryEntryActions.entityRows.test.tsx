@@ -6,12 +6,9 @@ import { createArtifactStoreBoundary, createPlainArtifactHomeFixture } from '@/d
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
-import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
-import { ArtifactHeaderMetadataV1Schema } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { ARTIFACT_PLAIN_DATA_KEY_MARKER, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { PromptLibraryCatalogKeyV1Schema, PromptLibraryRowMutationV1Schema, type PromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { PROFILE_ROWS_ROUTE_V1, PROFILE_RECORDS_ROUTE_V1, PROFILE_REFERENCE_GUARD_ROUTE_V1,
     ProfileRecordV1Schema, ProfileRowMutationV1Schema, type ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
@@ -23,10 +20,10 @@ import { withUiPromptLibraryArtifactReader } from '@/sync/ops/promptLibrary/prom
 import { resolvePromptStackSystemAppendBlocksV1 } from '@/sync/ops/promptLibrary/resolvePromptStackSystemAppendBlocksV1';
 
 installDisconnectedServerSocketBoundary();
-const skillDeleteConfirmation = vi.hoisted(() => vi.fn(async () => true));
+const deleteConfirmation = vi.hoisted(() => vi.fn(async () => true));
 installPromptLibrarySettingsCommonModuleMocks({ storage: importOriginal => importOriginal(),
     modal: async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true,
-        spies: { confirm: skillDeleteConfirmation } }).module });
+        spies: { confirm: deleteConfirmation } }).module });
 
 const { storage } = await import('@/sync/domains/state/storage');
 const { settingsDefaults } = await import('@/sync/domains/settings/settings');
@@ -34,63 +31,7 @@ const { applyPromptLibraryCatalogSnapshot } = await import('@/sync/store/setting
 const { usePromptLibraryEntryActions } = await import('./usePromptLibraryEntryActions');
 
 describe('prompt deletion catalog mutation', () => {
-    beforeEach(() => { skillDeleteConfirmation.mockReset().mockResolvedValue(true); });
-    it.each(['valid', 'malformed'] as const)('deletes an actual skill through its Action and cleans its rules without an extra confirmation: %s', async content => {
-        await loadSyncSingletonForTests();
-        // Skills use their Action's consent. Any extra generic dialog refuses,
-        // so only the admitted Action can complete the deletion below.
-        skillDeleteConfirmation.mockReset().mockResolvedValue(false);
-        const catalog = createPromptLibraryCatalogBoundary({ records: [{ key: 'skill-rules', value: { v: 1, rules: [
-            { id: 'skill-rule', skillId: 'skill-1', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 },
-            { id: 'neighbor-rule', skillId: 'neighbor-skill', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 },
-        ] } }], revision: 4 });
-        const fixture = await createPlainArtifactHomeFixture(`https://skill-delete-${content}.test`, { handleRequest: catalog.handle });
-        onTestFinished(fixture.dispose);
-        const body = content === 'malformed' ? 'not-json' : JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1,
-            entries: [{ path: 'SKILL.md', contentKind: 'utf8', contentBase64: Buffer.from('---\nname: review\ndescription: Review\n---\nReview.').toString('base64') }] });
-        await fixture.boundary.handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({ id: 'skill-1',
-            header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_bundle.v2', title: 'Review', bundleSchemaId: 'skills.skill_md_v1' }),
-            body: encodePlainArtifactStoredContent({ body }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
-        }) });
-        const hook = await renderHook(() => usePromptLibraryEntryActions('bundle'));
-        const approvals = () => fixture.boundary.list().filter(row => {
-            const header = decodePlainArtifactStoredContent(row.header);
-            return header && typeof header === 'object' && 'kind' in header && header.kind === 'approval_request.v1';
-        });
-        let removed: boolean | undefined;
-        act(() => { void hook.getCurrent().remove('skill-1').then(value => { removed = value; }); });
-        await vi.waitFor(async () => { await flushHookEffects(); expect(approvals()).toHaveLength(1); });
-        const canceledId = approvals()[0]!.id;
-        const canceledRequest = approvalArtifactBodyMatchesHeaderV1(
-            ArtifactHeaderMetadataV1Schema.parse(decodePlainArtifactStoredContent(approvals()[0]!.header)), fixture.boundary.readPlainBody(canceledId)!,
-        );
-        expect(canceledRequest).toMatchObject({ family: 'built_in', request: { status: 'open', actionId: 'skills.delete', actionArgs: { skillId: 'skill-1' } } });
-        expect(fixture.boundary.read('skill-1')).not.toBeNull();
-        expect(catalog.requests).toEqual([]);
-        expect(await decideApprovalAsInbox(fixture.home.id, canceledId, 'cancel')).toMatchObject({ ok: true });
-        await vi.waitFor(async () => { await flushHookEffects(); expect(removed).toBe(false); });
-        expect(fixture.boundary.read('skill-1')).not.toBeNull();
-        expect(catalog.requests).toEqual([]);
-        removed = undefined;
-        act(() => { void hook.getCurrent().remove('skill-1').then(value => { removed = value; }); });
-        await vi.waitFor(async () => { await flushHookEffects(); expect(approvals()).toHaveLength(2); });
-        const approved = approvals().find(row => row.id !== canceledId)!;
-        const approvedRequest = approvalArtifactBodyMatchesHeaderV1(
-            ArtifactHeaderMetadataV1Schema.parse(decodePlainArtifactStoredContent(approved.header)), fixture.boundary.readPlainBody(approved.id)!,
-        );
-        expect(approvedRequest).toMatchObject({ family: 'built_in', request: { status: 'open', actionId: 'skills.delete', actionArgs: { skillId: 'skill-1' } } });
-        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-        // Invoke the real Inbox Action without holding the mounted caller's
-        // continuation inside an async act scope awaiting replay.
-        const decision = await createDefaultActionExecutor({ resolveServerIdForSessionId: () => null }).execute(
-            'approval.request.decide', { artifactId: approved.id, decision: 'approve' }, { surface: 'ui', serverId: fixture.home.id },
-        );
-        expect(decision).toMatchObject({ ok: true, result: { status: 'executed' } });
-        await vi.waitFor(() => expect(removed).toBe(true));
-        expect(fixture.boundary.read('skill-1')).toBeNull();
-        expect(catalog.read('skill-rules')).toMatchObject({ value: { rules: [{ id: 'neighbor-rule', skillId: 'neighbor-skill' }] } });
-        expect(catalog.requests).toEqual([{ key: 'skill-rules', expectedRevision: 4 }]);
-    });
+    beforeEach(() => { deleteConfirmation.mockReset().mockResolvedValue(true); });
     it('opens the acknowledged duplicate in its captured Home when personal placement loses CAS', async () => {
         await loadSyncSingletonForTests();
         promptLibrarySettingsRouterPushSpy.mockClear();
@@ -104,7 +45,7 @@ describe('prompt deletion catalog mutation', () => {
             body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, markdown: 'Retained copy content', createdAtMs: 1, updatedAtMs: 1 }) }),
             dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
         }) });
-        const hook = await renderHook(() => usePromptLibraryEntryActions('doc'));
+        const hook = await renderHook(() => usePromptLibraryEntryActions());
         await act(async () => { await hook.getCurrent().duplicate('source'); });
         expect(catalog.requests).toHaveLength(1);
         const copied = fixture.boundary.list().find(artifact => artifact.id !== 'source');
@@ -191,7 +132,7 @@ describe('prompt deletion catalog mutation', () => {
         storage.setState({ settings: settingsDefaults, settingsScope: scope, profileScope: scope, settingsVersion: 7 });
         applyPromptLibraryCatalogSnapshot(scope, { catalog: { status: 'ready', rows, tombstones, diagnostics: [] },
             rawSettings: {}, sourceSettingsVersion: 7 }, true);
-        const hook = await renderHook(() => usePromptLibraryEntryActions('doc'));
+        const hook = await renderHook(() => usePromptLibraryEntryActions());
         let removed: boolean | undefined;
         await act(async () => { removed = await hook.getCurrent().remove('doc-1'); });
         expect(artifactBoundary.read('doc-1')).toBeNull();

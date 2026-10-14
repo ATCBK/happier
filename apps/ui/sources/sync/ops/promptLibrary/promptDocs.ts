@@ -5,11 +5,6 @@ import { withUiPromptLibraryArtifactStore } from './promptLibraryArtifactStore';
 import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ArtifactFolderCreateActionInputV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionSchemasV1';
-export {
-  findPromptExternalLink,
-  removePromptExternalLink,
-  upsertPromptExternalLink,
-} from './promptExternalLinks';
 
 function readPromptDocActionOutput(result: ActionExecuteResult): unknown {
   if (!result.ok) {

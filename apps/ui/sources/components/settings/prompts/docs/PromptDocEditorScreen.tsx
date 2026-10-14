@@ -29,7 +29,6 @@ import { Modal } from '@/modal';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { ToolDiffView } from '@/components/tools/shell/presentation/ToolDiffView';
 import { useUnsavedDraftNavigationGuard } from '@/utils/navigation/useUnsavedDraftNavigationGuard';
-import { PromptExternalLinksGroup } from '@/components/settings/prompts/shared/PromptExternalLinksGroup';
 import { PromptFolderFieldRow, PromptTagsFieldRow } from '@/components/settings/prompts/shared/PromptOrganizationFields';
 import { usePromptEditorDraftField } from '@/components/settings/prompts/shared/usePromptEditorDraftField';
 import { PromptEditorHeader } from '@/components/settings/prompts/collection/PromptEditorHeader';
@@ -77,9 +76,9 @@ export const PromptDocEditorScreen = React.memo((props: Readonly<{ artifactId: s
     if (!accountRef.current) throw new Error('action_account_scope_changed');
     accountRef.current.assertCurrent();
   }, []);
-  const entryActions = usePromptLibraryEntryActions('doc', editingScope, { expectedRevision: revisionRef.current ?? undefined,
+  const entryActions = usePromptLibraryEntryActions(editingScope, { expectedRevision: revisionRef.current ?? undefined,
     assertCurrent: assertEditingAccountCurrent });
-  const meta = usePromptLibraryEntryMeta(props.artifactId, { scope: editingScope, header: documentRef.current?.artifact.header ?? null });
+  const meta = usePromptLibraryEntryMeta(props.artifactId, { header: documentRef.current?.artifact.header ?? null });
   const [isLoading, setIsLoading] = React.useState<boolean>(Boolean(props.artifactId));
   const titleField = usePromptEditorDraftField('');
   const markdownField = usePromptEditorDraftField('');
@@ -367,7 +366,6 @@ export const PromptDocEditorScreen = React.memo((props: Readonly<{ artifactId: s
     const artifactId = props.artifactId;
     return [
       { id: 'duplicate', testID: 'promptDoc.duplicate', title: t('common.duplicate'), onSelect: () => entryActions.duplicate(artifactId) },
-      { id: 'external', testID: 'promptDoc.externalAssets', title: t('promptLibrary.manageExternalAssets'), onSelect: () => entryActions.manageExternalAssets(artifactId) },
       {
         id: 'delete',
         testID: 'promptDoc.delete',
@@ -458,14 +456,6 @@ export const PromptDocEditorScreen = React.memo((props: Readonly<{ artifactId: s
         </SectionContentRow>
       </ItemGroup>
 
-      <PromptExternalLinksGroup
-        artifactId={props.artifactId}
-        scope={editingScope}
-        libraryKind="doc"
-        manageItemTestID="promptDoc.manageExternalAssets"
-        manageItemSubtitle={t('promptLibrary.surface.manageExternalAssetsDescription')}
-        linkTestIDPrefix="promptDoc.link"
-      />
     </ItemList>
   );
 });

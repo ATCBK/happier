@@ -1,6 +1,6 @@
 import type { InputHints } from '@happier-dev/protocol/inputs/inputFields';
 import { readUsageGroupByOptions } from '@happier-dev/protocol/inputs/usageQuery';
-import { isSameInputOptionValue } from '@happier-dev/protocol/inputs';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 
 import { t, type TranslationKeyNoParams } from './i18n';
 
@@ -77,7 +77,7 @@ export function localizeBuiltinInputLabel(text: string): string {
 /** A stored own choice can be named before the admitted dynamic inventory arrives. */
 export function describeBuiltinInputOptionValue(optionsSourceId: string | undefined, value: unknown): string | null {
   if (optionsSourceId !== 'usage.query.breakdown') return null;
-  const option = readUsageGroupByOptions(value).find(option => isSameInputOptionValue(option.value, value));
+  const option = readUsageGroupByOptions(value).find(option => pluginJsonValuesEqual(option.value, value));
   return option ? localizeBuiltinInputLabel(option.label) : null;
 }
 

@@ -4,12 +4,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 
 const useArtifactsLoaded = vi.hoisted(() => vi.fn());
-const routerState = vi.hoisted(() => ({ pathname: '/settings/prompts', screenOptions: null as null | Record<string, unknown> }));
+const routerState = vi.hoisted(() => ({ pathname: '/settings/prompts', screenOptions: null as null | Record<string, unknown>,
+    params: {} as Record<string, string | string[]> }));
 
 // expo-router is the navigation boundary: record what the layout asks its settings-stack screen to show.
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    const boundary = createExpoRouterMock({ pathname: () => routerState.pathname });
+    const boundary = createExpoRouterMock({ pathname: () => routerState.pathname, params: () => routerState.params });
     return {
         ...boundary.module,
         Slot: () => React.createElement('PromptRouteSlot'),
@@ -32,10 +33,10 @@ describe('PromptsLayoutRoute', () => {
         useArtifactsLoaded.mockReset();
         routerState.pathname = '/settings/prompts';
         routerState.screenOptions = null;
+        routerState.params = {};
     });
 
     it.each([
-        ['/settings/prompts/skills', 'promptLibrary.skills'],
         ['/settings/prompts/templates', 'promptLibrary.templates'],
         ['/settings/prompts/docs/doc-1', 'promptLibrary.editPrompt'],
         ['/settings/prompts', 'settings.prompts'],
@@ -64,5 +65,32 @@ describe('PromptsLayoutRoute', () => {
         const screen = await renderScreen(<PromptsLayoutRoute />);
 
         expect(screen.findAllByType('PromptRouteSlot' as never)).toHaveLength(1);
+    });
+
+    it.each([
+        ['./skills/index', '/settings/skills', {}],
+        ['./skills/new', '/settings/skills/new', {}],
+        ['./skills/[id]', '/settings/skills/[skillId]', { skillId: 'skill/one' }],
+        ['./skills/[id]/export', '/settings/skills/[skillId]', { skillId: 'skill/one' }],
+        ['./skills/[id]/files/edit', '/settings/skills/[skillId]', { skillId: 'skill/one' }],
+        ['./skills/[id]/files/new', '/settings/skills/[skillId]', { skillId: 'skill/one' }],
+        ['./assets', '/settings/skills/found', {}],
+        ['./registries', '/settings/skills', { add: 'browse' }],
+        ['./registries/item', '/settings/skills', { add: 'browse' }],
+    ] as const)('retains the selected Home and item identity through legacy route %s', async (path, pathname, params) => {
+        routerState.params = { id: ['skill/one', 'ignored'], serverId: ['home one', 'ignored'] };
+        const { WorkspaceRouteBody } = await import(path);
+        const screen = await renderScreen(<WorkspaceRouteBody />);
+        const href = screen.findAllByType('Redirect' as never)[0]?.props.href;
+        expect(href).toEqual({ pathname, params: { ...params, serverId: 'home one' } });
+    });
+
+    it('redirects a retired document export to that document on its selected Home', async () => {
+        routerState.params = { id: ['doc/one', 'ignored'], serverId: ['home one', 'ignored'],
+            assetTypeId: 'claude.command', scope: 'project', workspacePath: '/old-target' };
+        const { WorkspaceRouteBody } = await import('./docs/[id]/export');
+        const screen = await renderScreen(<WorkspaceRouteBody />);
+        expect(screen.findAllByType('Redirect' as never)[0]?.props.href)
+            .toEqual({ pathname: '/settings/prompts/docs/[id]', params: { id: 'doc/one', serverId: 'home one' } });
     });
 });

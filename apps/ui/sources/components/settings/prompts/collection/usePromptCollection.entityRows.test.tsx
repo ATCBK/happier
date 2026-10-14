@@ -11,7 +11,6 @@ const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orch
 const { applyPromptLibraryCatalogSnapshot, resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
 const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
 const { usePromptCollection } = await import('./PromptCollectionList');
-const { usePromptLibraryEntryMeta } = await import('./usePromptLibraryEntryMeta');
 
 const scope = { serverId: 'catalog-home', accountId: 'catalog-account' };
 const invocation = { id: 'row-template', token: '/catalog', title: 'Catalog template',
@@ -61,22 +60,4 @@ describe('prompt collection catalog source', () => {
             rows: [{ id: 'doc-1', title: 'Prompt' }] });
     });
 
-    it('reflects external-link row changes in the saved entry metadata without a Settings write', async () => {
-        const settings = storage.getState().settings;
-        applyPromptLibraryCatalogSnapshot(scope, {
-            catalog: { status: 'ready', rows: [{ record: { key: 'external-links', value: { v: 1, links: [{
-                id: 'export-link', artifactId: 'doc-1', assetTypeId: 'claude.instructions',
-                scope: 'user', machineId: 'machine-1', externalRef: { path: '/instructions.md' },
-            }] } }, revision: 4 }], tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 7,
-        }, true);
-        const hook = await renderHook(() => usePromptLibraryEntryMeta('doc-1'));
-        expect(hook.getCurrent().map(fact => fact.key)).toEqual(['exports']);
-        await act(async () => { applyPromptLibraryCatalogSnapshot(scope, {
-            catalog: { status: 'ready', rows: [{ record: { key: 'external-links', value: { v: 1, links: [] } }, revision: 5 }],
-                tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 7,
-        }, true); });
-        expect(hook.getCurrent()).toEqual([]);
-        expect(storage.getState().settings).toBe(settings);
-        expect(storage.getState().settingsVersion).toBe(7);
-    });
 });

@@ -53,9 +53,8 @@ const SEARCH_THRESHOLD = 8;
 /** The narrowest editor that still fits a field beside its label. */
 const PROMPT_DETAIL_MIN_WIDTH_PX = 480;
 
-const NAVIGATORS: Readonly<Record<PromptCollectionKind, SettingsNestedNavigator>> = {
+const NAVIGATORS: Readonly<Record<Exclude<PromptCollectionKind, 'bundle'>, SettingsNestedNavigator>> = {
     doc: 'prompts/docs',
-    bundle: 'prompts/skills',
     template: 'prompts/templates',
 };
 
@@ -361,7 +360,7 @@ const PromptCollectionPage = React.memo(function PromptCollectionPage(props: Rea
  * Prompts, skills or templates beside the selected item's editor (wide), or the list pushing each
  * editor (narrow). The editor stack stays mounted across the change, so an open draft keeps its edits.
  */
-export const PromptCollectionLayout = React.memo(function PromptCollectionLayout(props: Readonly<{ kind: PromptCollectionKind }>) {
+export const PromptCollectionLayout = React.memo(function PromptCollectionLayout(props: Readonly<{ kind: Exclude<PromptCollectionKind, 'bundle'> }>) {
     const navigator = NAVIGATORS[props.kind];
     const resolveChildRoute = React.useCallback(
         (pathname: string) => resolveSettingsNestedRouteName(navigator, pathname) ?? 'index',

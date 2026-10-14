@@ -34,7 +34,8 @@ const { applyPromptLibraryCatalogSnapshot, resetPromptLibraryCatalogSnapshotsFor
 const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
 const scope = { serverId: 'collection-geometry', accountId: 'account' };
 
-it.each(['bundle', 'template'] as const)('settles the real %s phone index without clipping or redirecting away', async kind => {
+it('settles the real template phone index without clipping or redirecting away', async () => {
+    const kind = 'template';
     installWebLayoutBridge();
     Object.defineProperties(window, { innerWidth: { configurable: true, value: 390 },
         innerHeight: { configurable: true, value: 844 } });
@@ -44,10 +45,8 @@ it.each(['bundle', 'template'] as const)('settles the real %s phone index withou
     storage.setState({ settingsScope: scope, isDataReady: true, artifactsLoaded: true, artifacts: {} });
     applyPromptLibraryCatalogSnapshot(scope, { catalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] },
         rawSettings: {}, sourceSettingsVersion: 1 }, true);
-    navigation.pathname = `/settings/prompts/${kind === 'bundle' ? 'skills' : 'templates'}`;
-    navigation.Body = kind === 'bundle'
-        ? (await import('@/app/(app)/settings/prompts/skills/index')).WorkspaceRouteBody
-        : (await import('@/app/(app)/settings/prompts/templates/index')).WorkspaceRouteBody;
+    navigation.pathname = '/settings/prompts/templates';
+    navigation.Body = (await import('@/app/(app)/settings/prompts/templates/index')).WorkspaceRouteBody;
     navigation.push.mockClear(); navigation.redirects = [];
     const host = document.createElement('div'); host.style.height = '844px'; document.body.appendChild(host);
     const root = createRoot(host);
