@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { SessionViewerControllerProvider } from '@/components/sessions/viewer/SessionViewerControllerProvider';
 import { useOptionalSessionViewerController, type SessionViewerController } from '@/components/sessions/viewer/SessionViewerController';
+import { CurrentSessionPresentationActionInputV1Schema } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -75,12 +76,14 @@ describe('SessionHeaderComputerButton', () => {
 
     it('opens the Session viewer on Computer through the mounted presentation owner', async () => {
         const screen = await renderScreen(mounted());
+        expect(screen.findByTestId(TEST_ID)?.props.accessibilityLabel).toBe('computerUse.presentation.sourceComputer');
         await screen.pressByTestIdAsync(TEST_ID);
 
         expect(frontDoor.calls).toHaveLength(1);
         const [actionId, input, context] = frontDoor.calls[0] as [string, unknown, Record<string, unknown>];
         expect(actionId).toBe('session.presentation.apply');
-        expect(input).toEqual({ intent: { kind: 'viewer.open', source: 'computer' } });
+        expect(CurrentSessionPresentationActionInputV1Schema.parse(input))
+            .toEqual({ intent: { kind: 'viewer.open', source: 'computer' } });
         expect(context).toMatchObject({ serverId: 'server_1', defaultSessionId: 'session_1' });
     });
 

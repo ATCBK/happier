@@ -44,7 +44,7 @@ export const SessionHeaderComputerButton = React.memo((props: Readonly<{
 
     if (deviceType === 'phone' || !port || !hasMachine) return null;
 
-    const label = t('computerUse.viewer.sourceComputer');
+    const label = t('computerUse.presentation.sourceComputer');
     return (
         <IconButton
             testID={testId ?? 'session-header-computer-button'}

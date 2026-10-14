@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { createSessionFixture } from '@/dev/testkit';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { flattenTestStyle } from '@/dev/testkit/harness/popoverHarness';
 import { readPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
@@ -151,6 +152,7 @@ const render = (input: Readonly<{
             phase: 'current',
             interactionEnabled: true,
             platform: 'web',
+            accountLifetime: captureActiveServerAccountScopeLifetime(),
         }}
         openFullSurface={input.openFullSurface ?? (() => {})}
         paneScopeId={paneScopeId}
