@@ -20,7 +20,7 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { QualifiedConnectedAccountQuotaResponseV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
-import { QualifiedProviderAccountUsageHistoryRequestV4Schema } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { QualifiedProviderAccountUsageHistoryRequestV4Schema, ProviderAccountUsagePageProjectionWriteV1Schema } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import { parseQualifiedConnectedAccountV4StructuredQueryValue } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { buildProviderAccountUsageScopeKey } from '@/sync/domains/connectedServices/accountUsage/providerAccountUsageLoadRoute';
@@ -80,9 +80,25 @@ const ownerSessionAccess = {
 };
 
 async function context(route: Parameters<typeof serveAccountHomes>[0]['route']) {
+  // HTTP persistence boundary; the real B producer, protection, Resource and
+  // Plans projection remain in-process. Server admission has its SQLite suite.
+  const projections = new Map<string, ReturnType<typeof ProviderAccountUsagePageProjectionWriteV1Schema.parse>>();
   home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-batch.test', accountId: 'account-a' }],
     route: async request => {
+      if (request.path === '/v4/connect/qualified/provider-account-usage/history' && request.method === 'PUT') {
+        const projection = ProviderAccountUsagePageProjectionWriteV1Schema.parse(request.body);
+        projections.set(projection.recordId, projection);
+        return Response.json({ success: true });
+      }
       const response = await route(request);
+      if (request.path === '/v4/connect/qualified/provider-account-usage/history' && response?.ok) {
+        const query = parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema,
+          request.url.searchParams.get('query'));
+        if ('projection' in query) {
+          const projection = projections.get(query.recordId) ?? null;
+          return Response.json({ projection, complete: projection !== null });
+        }
+      }
       if (response) return response;
       // This harness supplies a plain Account token; storage reads also need
       // its canonical currentness response, not just the legacy mode route.
@@ -295,6 +311,45 @@ describe('usage query captured Resource adapter', () => {
       expect.soft(projectionOf(homeEntry).accounts[0]?.state.status).toBe('available');
       expect.soft(usageCoverageSummary(sliceOf(homeEntry), ['quota'])).toBe('Partial history');
       returnHome();
+      // The phone Home route mounts a new single-query batch after the main
+      // pane has released every subscriber. It keeps the same Account owner.
+      const phoneContext = captureUiUsageQueryAccountContext(captured.credentials)!;
+      expect(getUsageQueryResourceStore(phoneContext)).toBe(store);
+      const phoneQuery = normalizeUsageQuery({ ...query, granularity: 'hour' });
+      const phone = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [phoneQuery] }) });
+      holdHistory = true; historyGate = createDeferred<void>();
+      const releasePhone = phone.subscribe(() => {}, false);
+      const phoneProjection = () => {
+        const slice = decodeUsageQueryResource(phone.getSnapshot().value!).results[0]!;
+        return projectUsagePlans(slice.quota, now, slice.pools, slice.sources);
+      };
+      try {
+        await expect.poll(() => phone.getSnapshot().value !== undefined).toBe(true);
+        expect.soft(phoneProjection().tightest?.window.remainingFraction, 'settled / to /home keeps the first headline').toBe(0.5);
+        expect.soft(readPendingPlanAccountCount(phoneProjection().accounts)).toBe(0);
+        expect.soft(phoneProjection().accounts.slice(0, 2).map(account => account.observedAtMs)).toEqual([now, now]);
+        holdHistory = false; historyGate.resolve();
+        await expect.poll(() => phone.getSnapshot().pending).toBe('idle');
+        // An addressable record with no witnessed replacement is not an
+        // observation of zero, and cannot erase the previous last-read date.
+        records[0] = ProviderAccountUsageSnapshotV1Schema.parse({ ...records[0], state: 'not_loaded',
+          observedAtMs: 0, fetchedAtMs: 0, meters: [] });
+        await phone.refresh();
+        expect.soft(phoneProjection().accounts[0]?.observedAtMs, 'unobserved replacement retains the last witnessed read').toBe(now);
+        expect.soft(phoneProjection().accounts[0]?.windows.map(window => window.pace)).toEqual(paces[0]);
+        holdHistory = true; historyGate = createDeferred<void>();
+        const nextHome = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({
+          queries: [normalizeUsageQuery({ ...query, granularity: 'month' })] }) });
+        const releaseNextHome = nextHome.subscribe(() => {}, false);
+        try {
+          await expect.poll(() => nextHome.getSnapshot().value !== undefined).toBe(true);
+          const nextSlice = decodeUsageQueryResource(nextHome.getSnapshot().value!).results[0]!;
+          const nextPlans = projectUsagePlans(nextSlice.quota, now, nextSlice.pools, nextSlice.sources);
+          expect.soft(nextPlans.tightest?.window.remainingFraction, 'a later route inherits the witnessed allowance, not an unobserved replacement').toBe(0.5);
+          expect.soft(readPendingPlanAccountCount(nextPlans.accounts)).toBe(0);
+          expect.soft(nextPlans.accounts[0]?.observedAtMs).toBe(now);
+        } finally { releaseNextHome(); holdHistory = false; historyGate.resolve(); }
+      } finally { releasePhone(); }
     } finally { gates.forEach(gate => gate.resolve()); historyGate.resolve(); releaseHome(); }
   });
   it('exports selected calendar facts while the displayed Resource has accounting ready and quota pending', async () => {
@@ -1170,6 +1225,8 @@ describe('usage query captured Resource adapter', () => {
     let laterHistoryUnavailable = false;
     let laterHistoryDenied = false;
     let holdLaterHistory = false;
+    let heldSource: ReturnType<typeof createDeferred<void>> | null = null;
+    let admittedRecordId: string | null = null;
     let accountingResponse = value;
     const laterHistory = createDeferred<Response>();
     let heldHistoryResponse: Response | undefined;
@@ -1187,18 +1244,23 @@ describe('usage query captured Resource adapter', () => {
     const quotaResponse = QualifiedConnectedAccountQuotaResponseV4Schema.parse({ ref,
       sourceResolution: { source, recordId: snapshot.recordId, providerAccountId: 'provider-work', fetchedAt: now, staleAfterMs: 60_000 },
       content: { t: 'plain', v: quota }, metadata: { fetchedAt: now, staleAfterMs: 60_000, status: 'ok' } });
-    const captured = await context(request => {
+    const captured = await context(async request => {
       if (request.path === '/v2/usage/query') return Response.json(accountingResponse);
       if (request.path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({ features: {
         connectedServices: { enabled: true, quotas: { enabled: quotaEnabled } },
       } }));
       if (request.path === '/v4/connect/qualified/quotas') return quotaRefusal
-        ? new Response('read refused', { status: quotaRefusal }) : Response.json(quotaResponse);
+        ? new Response('read refused', { status: quotaRefusal }) : Response.json({ ...quotaResponse,
+          sourceResolution: { ...quotaResponse.sourceResolution, recordId: admittedRecordId ?? snapshot.recordId } });
       if (request.path === '/v4/connect/qualified/provider-account-usage/record') return Response.json({
-        content: { t: 'plain', v: snapshot }, metadata: { fetchedAt: now, staleAfterMs: 60_000, status: 'ok' }, sources: [source] });
-      if (request.path === '/v4/connect/qualified/provider-account-usage/sources/resolve') return quotaRefusal === 403
-        ? new Response('source refused', { status: 403 }) : Response.json({ source, recordId: snapshot.recordId,
+        content: { t: 'plain', v: admittedRecordId ? { ...snapshot, recordId: admittedRecordId,
+          recordKey: { ...recordKey, accountSubjectId: 'replacement-work' } } : snapshot },
+        metadata: { fetchedAt: now, staleAfterMs: 60_000, status: 'ok' }, sources: [source] });
+      if (request.path === '/v4/connect/qualified/provider-account-usage/sources/resolve') {
+        if (heldSource) await heldSource.promise;
+        return quotaRefusal === 403 ? new Response('source refused', { status: 403 }) : Response.json({ source, recordId: admittedRecordId ?? snapshot.recordId,
           providerAccountId: 'provider-work', fetchedAt: now, staleAfterMs: 60_000 });
+      }
       if (request.path === '/v4/connect/qualified/provider-account-usage/history') {
         const query = parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema,
           request.url.searchParams.get('query'));
@@ -1208,7 +1270,8 @@ describe('usage query captured Resource adapter', () => {
         const id = later ? 'second' : 'first';
         const observedAtMs = now - (later ? 200 : 700);
         const used = later ? 70 : 20;
-        const historical = { ...snapshot, observedAtMs, fetchedAtMs: observedAtMs, state: 'loaded_data',
+        const historical = { ...snapshot, ...(admittedRecordId ? { recordId: admittedRecordId,
+          recordKey: { ...recordKey, accountSubjectId: 'replacement-work' } } : {}), observedAtMs, fetchedAtMs: observedAtMs, state: 'loaded_data',
           meters: [{ meterId: 'ended', label: 'Ended', used, remaining: 100 - used, limit: 100, unit: 'requests',
             utilizationPct: used, resetsAt: now - 200, windowDurationMs: 1000, status: 'ok', details: {} }] };
         const response = Response.json({ entries: [{ id, observedAtMs, record: {
@@ -1374,8 +1437,39 @@ describe('usage query captured Resource adapter', () => {
       await reloadQualifiedQuotaSnapshotAfterRecovery({ ref, serverBasis: readContext.serverBasis });
       expect.soft(getQualifiedQuotaSnapshotEntry(qualifiedKey)).toMatchObject({ supported: false, snapshot: null, usageRecordId: null });
       expect.soft((await readUiUsageQueryBatch(captured, { queries: [query] })).results[0]?.quota).toBeUndefined();
+      // R4A-01: a held replacement cannot reseed protected previous facts
+      // after either explicit refusal or an admitted different record.
+      for (const transition of ['refusal', 'replacement'] as const) {
+        quotaRefusal = transition === 'refusal' ? 403 : 0;
+        admittedRecordId = transition === 'replacement'
+          ? buildProviderAccountUsageRecordId({ ...recordKey, accountSubjectId: 'replacement-work' }) : null;
+        await reloadQualifiedQuotaSnapshotAfterRecovery({ ref, serverBasis: readContext.serverBasis });
+        expect(getQualifiedQuotaSnapshotEntry(qualifiedKey)).toMatchObject(transition === 'refusal'
+          ? { supported: false } : { usageRecordId: admittedRecordId });
+        heldSource = createDeferred<void>();
+        const protectedRevisions: typeof revisions = [];
+        const reads = [query, normalizeUsageQuery({ ...query, granularity: 'hour' })].map(nextQuery =>
+          readUiUsageQueryBatch(captured, { queries: [nextQuery] }, undefined, settledBatch,
+            { onProgress: batch => { protectedRevisions.push(batch); } }));
+        try {
+          await expect.poll(() => protectedRevisions.length).toBeGreaterThanOrEqual(2);
+          await flushHookEffects({ cycles: 20 });
+          for (const revision of protectedRevisions) {
+            expect.soft(revision.results.flatMap(slice => slice.quota ?? [])
+              .some(read => read.current?.recordId === snapshot.recordId), `${transition} never republishes old protected facts`).toBe(false);
+          }
+        } finally {
+          heldSource.resolve();
+          const completed = await Promise.all(reads);
+          heldSource = null;
+          for (const revision of [...protectedRevisions, ...completed]) {
+            expect.soft(revision.results.flatMap(slice => slice.quota ?? [])
+              .some(read => read.current?.recordId === snapshot.recordId), `${transition} cannot restore protected facts at settle`).toBe(false);
+          }
+        }
+      }
       expect(home!.requests.some(request => request.path.endsWith('/refresh'))).toBe(false);
-    } finally { laterHistory.resolve(heldHistoryResponse ?? Response.json({ error: 'not_found' }, { status: 404 })); release(); unwatchQualified(); }
+    } finally { heldSource?.resolve(); laterHistory.resolve(heldHistoryResponse ?? Response.json({ error: 'not_found' }, { status: 404 })); release(); unwatchQualified(); }
   });
 
   it('opens the quota host read through the captured plain Account and retires late provider facts', async () => {

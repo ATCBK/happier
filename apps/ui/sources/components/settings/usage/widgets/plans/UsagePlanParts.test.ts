@@ -99,6 +99,13 @@ describe('readPlanAccountsStatement', () => {
     expect(readPlanAccountsStatement(accounts.map(entry => ({ ...entry, state: { ...entry.state, status: 'available' } })), nameOf)).toBeNull();
     expect(readPlanAccountsStatement([account('unissued', 'not_loaded', false)], nameOf)?.kind).toBe('partial');
   });
+
+  it('keeps first-read coverage pending when an unanswered account follows an unobserved answer', () => {
+    const accounts = [account('observed', 'available', true), account('unobserved', 'partial', false), account('reading', 'pending', false)];
+    expect(readPlanAccountsStatement(accounts, nameOf)).toMatchObject({ kind: 'pending' });
+    expect(readPlanAccountsStatement(accounts, nameOf)?.reason).toContain('1 account');
+    expect(readPlanAccountsStatement(accounts.slice(0, 2), nameOf)?.kind).toBe('partial');
+  });
 });
 
 describe('planAccountStatesMode', () => {

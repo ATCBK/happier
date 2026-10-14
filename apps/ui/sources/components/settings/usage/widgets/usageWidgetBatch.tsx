@@ -272,5 +272,7 @@ export function useUsageWidgetBatchInventorySlice(): UsageQueryResultSlice | und
 
 export function useUsageWidgetPageHasCoverageDetail(): boolean {
     const batch = React.useContext(UsageWidgetBatchContext);
-    return useDecodedUsageWidgetBatchSlices().some(slice => slice.key === batch?.inventoryKey && slice.accounting !== undefined);
+    // Coverage belongs to the page from its first frame, including the time
+    // before its inventory responds. Loading does not transfer it to a body.
+    return batch !== null;
 }

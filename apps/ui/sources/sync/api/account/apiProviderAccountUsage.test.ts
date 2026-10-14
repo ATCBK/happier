@@ -62,6 +62,67 @@ async function loadApi() {
 }
 
 describe('apiProviderAccountUsage', () => {
+    it.each(['plain', 'e2ee'] as const)('backfills a protected %s page projection once and reuses it without replaying exact history', async accountMode => {
+        const { ProviderAccountUsagePageProjectionWriteV1Schema, getProviderAccountUsageQuotaHistoryV1 } = await import('@happier-dev/protocol/connect/providerAccountUsageHistory');
+        const { parseQualifiedConnectedAccountV4StructuredQueryValue } = await import('@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec');
+        const { QualifiedProviderAccountUsageHistoryRequestV4Schema } = await import('@happier-dev/protocol/connect/providerAccountUsageHistory');
+        const snapshot = makeSnapshot();
+        const observations = [1, 2, 3, 4].map(at => ({ ...snapshot, observedAtMs: at, fetchedAtMs: at }));
+        const source = { ref: { service: { pluginId: 'example.usage', localId: 'usage' }, accountId: 'account' }, bindingKind: 'account' as const };
+        const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
+        const sealed = sealProviderAccountUsageSnapshot({ snapshot, material, randomBytes: length => new Uint8Array(length).fill(9) });
+        const record = { content: accountMode === 'plain' ? { t: 'plain', v: snapshot } : { t: 'encrypted', c: sealed.ciphertext, recoveryCreditDetails: sealed.recoveryCreditDetails },
+            metadata: { fetchedAt: 1, staleAfterMs: 2, status: 'ok' }, sources: [source] };
+        const persisted: { value: ReturnType<typeof ProviderAccountUsagePageProjectionWriteV1Schema.parse> | null } = { value: null };
+        let exactPages = 0;
+        let complete = true;
+        const cursors: unknown[] = [];
+        const request = vi.fn(async (path: string, init?: RequestInit) => {
+            if (path.includes('/history')) {
+                if (init?.method === 'PUT') {
+                    persisted.value = ProviderAccountUsagePageProjectionWriteV1Schema.parse(JSON.parse(String(init.body)));
+                    return Response.json({ success: true });
+                }
+                const query = parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema,
+                    new URL(path, 'https://test.invalid').searchParams.get('query')!);
+                if ('projection' in query) return Response.json({ projection: persisted.value, complete: persisted.value !== null && complete });
+                if (!('history' in query)) throw new Error('Expected the exact tail reader');
+                cursors.push(query.history.cursor);
+                exactPages++;
+                return Response.json({ entries: observations.filter(value => value.fetchedAtMs > (query.history.cursor?.observedAtMs ?? 0)).map(value => {
+                    const sealed = sealProviderAccountUsageSnapshot({ snapshot: value, material, randomBytes: length => new Uint8Array(length).fill(9) });
+                    return { id: `witness-${value.fetchedAtMs}`, observedAtMs: value.fetchedAtMs, record: {
+                        ...record, content: accountMode === 'plain' ? { t: 'plain', v: value }
+                            : { t: 'encrypted', c: sealed.ciphertext, recoveryCreditDetails: sealed.recoveryCreditDetails },
+                        metadata: { ...record.metadata, fetchedAt: value.fetchedAtMs },
+                    } };
+                }), nextCursor: null });
+            }
+            return Response.json(path.includes('/sources/resolve') ? { source, recordId: snapshot.recordId,
+                providerAccountId: snapshot.recordKey.accountSubjectId, fetchedAt: 1, staleAfterMs: 2 } : record);
+        });
+        const { getProviderAccountUsageQuota } = await loadApi();
+        const input = { source, projection: { range: { startAtMs: 0, endAtMs: 5 }, resolution: 'accepted_observations' as const } };
+        const options = { accountMode, material, request, nowMs: 1, includePendingWork: false,
+            readAllHistory: { onProgress: () => {} } };
+        const first = await getProviderAccountUsageQuota({ token: 'test-token' }, input, options);
+        expect(first.history).toBeUndefined();
+        expect(getProviderAccountUsageQuotaHistoryV1(first)).toEqual({ entries: observations.map(value => ({
+            id: `witness-${value.fetchedAtMs}`, observedAtMs: value.fetchedAtMs, snapshot: value,
+        })), nextCursor: null });
+        expect(persisted.value?.content.t).toBe(accountMode === 'plain' ? 'plain' : 'encrypted');
+        const before = exactPages;
+        const second = await getProviderAccountUsageQuota({ token: 'test-token' }, input, options);
+        expect(second).toEqual(first);
+        expect(exactPages).toBe(before);
+        complete = false;
+        observations.push({ ...snapshot, observedAtMs: 5, fetchedAtMs: 5, planLabel: 'changed' });
+        const extended = await getProviderAccountUsageQuota({ token: 'test-token' }, { ...input,
+            projection: { ...input.projection, range: { startAtMs: 0, endAtMs: 6 } } }, options);
+        expect(cursors.at(-1)).toEqual({ id: 'witness-4', observedAtMs: 4 });
+        expect(getProviderAccountUsageQuotaHistoryV1(extended)?.entries.map(entry => entry.id))
+            .toEqual(['witness-1', 'witness-2', 'witness-3', 'witness-4', 'witness-5']);
+    });
     it.each(['plain', 'e2ee'] as const)('releases the event loop before publishing a large admitted %s history page', async accountMode => {
         const { DEFAULT_CRYPTO_BATCH_YIELD_CHUNK_SIZE } = await import('@/sync/encryption/cryptoBatchYield');
         const { sealProviderAccountUsageSnapshot } = await import('@happier-dev/protocol/connect/accountUsage');

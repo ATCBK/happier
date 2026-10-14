@@ -159,6 +159,9 @@ export function UsageFlowWidget(props: UsageBodyProps) {
         theme={chartTheme}
         label={cost ? t('usage.cost') : t('usage.tokens')}
         series={series}
+        // Volume buckets count seconds, mix and source buckets milliseconds; exact values read each as its date.
+        coordinateFormatter={(x) => formatUsageCalendarDate(sourceSeries.length === 0 && cost ? x * 1000 : x, props.query.timeZoneOffsetMinutes,
+          range?.granularity === 'hour' ? { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' } : undefined)}
         variant="area"
         size="full"
         viewportHeight={height}

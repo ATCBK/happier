@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { router } from 'expo-router';
 import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
-import { IntervalTimeline } from '@happier-dev/plugin-ui/presentation';
+import { HappierDataRows, IntervalTimeline } from '@happier-dev/plugin-ui/presentation';
 import { DEFAULT_USAGE_COACH_PREFERENCES_V1 } from '@happier-dev/protocol/account/settings/usageCoachPreferencesV1';
 import {
   getUsageQueryKey,
@@ -157,6 +157,21 @@ const model: UsageWidgetBodyModel = {
 const props = { model, slice, query, serverId: 'home' };
 
 describe('Work and Coach widget bodies', () => {
+  it('keeps an unanswered first Coach evaluation pending instead of claiming there are no findings', async () => {
+    const pendingSlice = resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, status: 'available', value: slice.accounting! }],
+      sources: [{ source: 'how_you_work', status: 'pending' }], nowMs: 1000 }).results[0]!;
+    const screen = await renderScreen(<UsageCoachWidget {...props} slice={pendingSlice}
+      model={{ ...model, slice: pendingSlice, pending: true }} id="usage_coach" testID="first-coach" />);
+    expect(screen.findHostByTestId('first-coach.empty')).toBeNull();
+    expect(screen.findHostByTestId('first-coach.loading')).not.toBeNull();
+    const settledSlice = resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, status: 'available', value: slice.accounting! }],
+      howYouWork: [{ query, asOfMs: 1000, detail: { status: 'available', facts: [] } }], nowMs: 1000 }).results[0]!;
+    await screen.update(<UsageCoachWidget {...props} slice={settledSlice}
+      model={{ ...model, slice: settledSlice }} id="usage_coach" testID="first-coach" />);
+    expect(screen.findHostByTestId('first-coach.empty')).not.toBeNull();
+  });
   it.each(['plain', 'e2ee'] as const)('names Work from the admitted protected Project producer and retires it on Account loss (%s)', async mode => {
     const previous = storage.getState();
     const scope = { serverId: 'home', accountId: 'work-label-account' };
@@ -230,6 +245,8 @@ describe('Work and Coach widget bodies', () => {
     expect(once.findHostByTestId('coach.finding.context_bloat.trend')).toBeFalsy();
     const screen = await renderScreen(wide(evaluation));
     expect(screen.findHostByTestId('coach.finding.context_bloat.trend')).toBeTruthy();
+    // The spark's caption says it is the latest sample, not the finding's headline figure.
+    expect(screen.getTextContent()).toContain(t('usage.board.coach.latestSample', { value: '' }).trim());
   });
   it('does not open digest scheduling without a captured Account', async () => {
     const digestSlice = resolveUsagePageAggregation({ queries: [query],
@@ -293,6 +310,24 @@ describe('Work and Coach widget bodies', () => {
     expect(screen.findByTestId('value.autopsy.phases-select-commit:' + 'b'.repeat(40))).toBeNull();
     expect(text).toContain('Compaction');
     expect(screen.findByTestId('value.autopsy.unknownEnds')).toBeTruthy();
+  });
+  it('says only the PR is missing for a turn whose commit is linked, and keeps the broad absence for a turn with no git evidence', async () => {
+    const sessionQuery = normalizeUsageQuery({ ...query, session: 's1' });
+    const branch = { ref: 'refs/heads/master', headSha: 'b'.repeat(40) };
+    const linked = UsageWorkProjectionSchema.parse(allocateUsageOutcomes({
+      contributions: [contribution('with-commit', 's1', 't1'), contribution('bare', 's1', 't2')], evidence: [],
+      branchEvidence: [{ sessionId: 's1', turnId: 't1', repositoryKey: 'opaque-repo', checkpointRef: 'checkpoint/s1/t1',
+        checkpointCommitSha: 'a'.repeat(40), commitSha: 'b'.repeat(40), attributionScope: 'no_happier_checkpoint_overlap_observed', branch }] }));
+    const screen = await renderScreen(<UsageSessionValueWidget {...props} query={sessionQuery}
+      slice={{ ...slice, shownQuery: sessionQuery, work: linked }} id="usage_session_value" testID="value" />);
+    const text = screen.getTextContent();
+    expect(text).toContain('bbbbbbb');
+    expect(text).toContain(t('usage.board.work.reason_missing_pr'));
+    expect(text).toContain(t('usage.board.work.reason_missing_evidence'));
+    // The turn's one caption line leads with the PR state and what was linked, and ends with the long checkpoint ref.
+    const linkedRow = screen.findAllByType(HappierDataRows).find(rows => rows.props.testID === 'value.autopsy.turns')!.props.rows.find((row: readonly unknown[]) => String(row[3]).includes('bbbbbbb'));
+    expect(linkedRow[2]).toBe(t('usage.board.work.reason_missing_pr'));
+    expect(String(linkedRow[linkedRow.length - 1])).toContain('checkpoint/s1/t1');
   });
   it('formats witnessed Autopsy git moments in the preferred language without changing their instants', async () => {
     const previous = getPreferredLanguage();

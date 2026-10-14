@@ -58,7 +58,7 @@ export function readPendingPlanAccountCount(accounts: readonly UsagePlanAccount[
 /**
  * A plan body's accounts usually share one read: four columns each saying "Partial … Retry" say one
  * thing four times. This folds every affected account into one statement: a failure leads, "Still
- * reading" only while all of them are, and the account names only when not every account is affected.
+ * reading" while any is unanswered, and partial coverage only after all accounts answer.
  */
 export function readPlanAccountsStatement(
   accounts: readonly UsagePlanAccount[],
@@ -70,7 +70,7 @@ export function readPlanAccountsStatement(
   });
   if (affected.length === 0) return null;
   const kind: PlanAccountReadKind = affected.some((entry) => entry.kind === 'failed') ? 'failed'
-    : affected.every((entry) => entry.kind === 'pending') ? 'pending' : 'partial';
+    : affected.some((entry) => entry.kind === 'pending') ? 'pending' : 'partial';
   const sources = kind === 'pending' ? t('connectedServices.purposeTargets.poolAccounts', { count: readPendingPlanAccountCount(accounts) })
     : affected.length === accounts.length && accounts.length > 1
     ? usageSourceTitle('quota')

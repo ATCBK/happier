@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { composeUsageRecap, UsageAnalyticsQueryResponseSchema, UsageRecapComposeInputSchema } from '@happier-dev/protocol';
+import { composeUsageRecap } from '@happier-dev/protocol';
+import { UsageAnalyticsQueryResponseSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
+import { UsageRecapComposeInputSchema } from '@happier-dev/protocol/usage/usageRecap';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
@@ -28,6 +30,22 @@ const composed = composeUsageRecap({
 if (composed.kind !== 'composed') throw new Error('The canonical recap producer must admit the renderer fixture');
 
 describe('private stat card renderer', () => {
+    it.each(['cache', 'highlights'] as const)('draws selected %s facts as visible text through compose → model → card', async field => {
+        const value = { ...accounting, series: [{ bucketStartMs: Date.UTC(2026, 6, 1), bucketEndMs: Date.UTC(2026, 8, 30),
+            eventCount: 2, tokens: { ...tokens, total: 12345 }, cost: accounting.totals.cost }] };
+        const snapshot = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value, status: 'available' }] }).results[0]!;
+        const result = composeUsageRecap({ input: UsageRecapComposeInputSchema.parse({ query, selectedFields: [field] }), snapshot });
+        if (result.kind !== 'composed') throw new Error('Expected admitted selected facts');
+        const screen = await renderScreen(<UsageStatCard model={buildUsageStatCardModel(result)} tone="dark" testID="selected" />);
+        try {
+            const text = screen.getTextContent();
+            if (field === 'cache') {
+                expect(text).toContain('600');
+                expect(text).toContain('100');
+            } else expect(text).toContain('12.3k');
+            expect(text).not.toContain('Private Agent');
+        } finally { standardCleanup(); }
+    });
     it.each(USAGE_STAT_CARD_STYLES)('retains every selected mix share beyond the palette in %s', async style => {
         const model = buildUsageStatCardModel({ ...composed, style });
         const mix = Array.from({ length: 9 }, (_, index) => ({ id: `agent-${index}`, label: `Agent ${index}`, share: (index + 1) / 45 }));

@@ -36,7 +36,7 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { buildProviderAccountUsageScopeKey } from '@/sync/domains/connectedServices/accountUsage/providerAccountUsageLoadRoute';
 import { getProviderAccountUsageCacheState, subscribeProviderAccountUsageCache } from '@/sync/domains/connectedServices/accountUsage/providerAccountUsageCache';
-import { buildQualifiedQuotaSnapshotScopeKey, getQualifiedQuotaSnapshotEntry, subscribeQualifiedQuotaSnapshotEntry } from '@/hooks/server/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore';
+import { buildQualifiedQuotaSnapshotScopeKey, getQualifiedQuotaSnapshotEntry, subscribeQualifiedQuotaSnapshotEntry, type QualifiedQuotaSnapshotStoreEntry } from '@/hooks/server/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore';
 import { wasConnectedServiceQuotaObserved } from '@happier-dev/protocol/connect/quotaObservationTime';
 import { shouldHideQuotaForCredentialStatus } from '@/sync/domains/connectedServices/shouldHideQuotaForCredentialStatus';
 import { getCachedServerFeaturesSnapshot, subscribeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
@@ -65,6 +65,13 @@ function readOpenedQuotaScope(context: UsageQueryAccountContext) {
         })) };
 }
 
+/** Unknown admission can retain facts; a refusal or known replacement cannot. */
+function canRetainQuotaRead(admitted: Pick<QualifiedQuotaSnapshotStoreEntry, 'supported' | 'usageRecordId'>,
+    read: ConnectedServiceQuotaGetResultV1): boolean {
+    return admitted.supported !== false
+        && (admitted.usageRecordId === null || admitted.usageRecordId === read.current?.recordId);
+}
+
 /** Observe already-admitted B; this path never probes, decrypts or refreshes a provider. */
 function readOpenedQuota(context: UsageQueryAccountContext, previous?: UsageQueryBatchResult): OpenedQuotaRead {
     const scope = readOpenedQuotaScope(context);
@@ -90,16 +97,15 @@ function readOpenedQuota(context: UsageQueryAccountContext, previous?: UsageQuer
         const admitted = getQualifiedQuotaSnapshotEntry(key);
         const row = admitted.supported === true && admitted.usageRecordId ? rows[admitted.usageRecordId] : undefined;
         const sourceKey = `quota:${createCanonicalJsonSigningInput(source)}`;
-        const retained = retainedBySource.get(createCanonicalJsonSigningInput(source));
+        const candidate = retainedBySource.get(createCanonicalJsonSigningInput(source));
+        const retained = candidate && canRetainQuotaRead(admitted, candidate) ? candidate : undefined;
         const previousState = previousBySource.get(sourceKey);
         const settled = previousState && previousState.status !== 'pending' && previousState.status !== 'not_loaded' ? previousState : undefined;
         // The initial cache observation is a revision of the same Resource too.
         // A vendor reread cannot replace its settled history or qualified state
         // with a current-only projection before the admitted history read answers.
         // The Action may settle before this independent cache has hydrated at all.
-        if (retained?.current && settled && admitted.supported !== false
-            && (admitted.usageRecordId === null || admitted.usageRecordId === retained.current.recordId)
-            && admitted.error === null && !row?.hadError
+        if (retained?.current && settled && admitted.error === null && !row?.hadError
             && (!row?.snapshot || row.snapshot.recordId === retained.current.recordId)) {
             value.push(retained);
             sources.push(settled);
@@ -283,8 +289,11 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
         endAtMs: Math.max(...periods.map(period => period.endMs ?? nowMs)) };
     if (range.endAtMs <= range.startAtMs) return { status: 'unknown', errorCode: 'quota_query_range_empty' };
     const retainedBySource = new Map(opened.value?.map(value => [createCanonicalJsonSigningInput(value.source), value]));
+    const admissionBySource = new Map(scope.sources.map(({ source, key }) => [createCanonicalJsonSigningInput(source), key]));
     for (const value of previous?.results.flatMap(result => result.quota ?? []) ?? []) {
         const key = createCanonicalJsonSigningInput(value.source);
+        const admissionKey = admissionBySource.get(key);
+        if (!admissionKey || !canRetainQuotaRead(getQualifiedQuotaSnapshotEntry(admissionKey), value)) continue;
         const observed = retainedBySource.get(key);
         if (!observed?.current || observed.current.recordId === value.current?.recordId) retainedBySource.set(key, value);
     }
@@ -319,6 +328,12 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
             onProgress?.(projectQuota('partial'));
             return;
         }
+        const retained = retainedBySource.get(createCanonicalJsonSigningInput(scope.sources[index]!.source));
+        const unobservedReplacement = value?.current && !wasConnectedServiceQuotaObserved(value.current)
+            && retained?.current && wasConnectedServiceQuotaObserved(retained.current)
+            && retained.current.recordId === value.current.recordId
+            && canRetainQuotaRead(getQualifiedQuotaSnapshotEntry(scope.sources[index]!.key), retained);
+        if (unobservedReplacement) value = retained;
         progressValues[index] = value;
         const failure = failures.get(index);
         sources[index] = { source: sources[index]!.source,
@@ -326,7 +341,7 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
             // Incompleteness alone cannot say whether its producer is still running.
             // Allowance/history has answered at its last page, independently of
             // the Pending-work and price facets that may still be reading.
-            status: failure ? value ? 'stale' : 'error' : settled || value?.history?.nextCursor === null
+            status: failure ? value ? 'stale' : 'error' : unobservedReplacement ? 'stale' : settled || value?.pageProjection || value?.history?.nextCursor === null
                 ? value?.current && wasConnectedServiceQuotaObserved(value.current) ? 'available' : 'partial' : 'pending',
             ...(value?.current && wasConnectedServiceQuotaObserved(value.current) ? { asOfMs: value.current.fetchedAtMs } : {}),
             ...(failure ? { errorCode: failure } : {}),
@@ -348,16 +363,16 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
         const retained = retainedBySource.get(createCanonicalJsonSigningInput(scope.sources[index]!.source));
         // A failed replacement has not supplied a newer complete history. Keep
         // the same settled allowance and pace, with the source marked stale.
-        if (retained?.history && settledBySource.has(sources[index]!.source)
+        if ((retained?.history || retained?.pageProjection) && settledBySource.has(sources[index]!.source)
             && (!accepted?.current || accepted.current.recordId === retained.current?.recordId)) {
             publishProgress(index, retained);
             return;
         }
         const projected = accepted ? projectProviderAccountUsageQuotaReadV1({ input: { source: scope.sources[index]!.source },
-            current: accepted.current, history: accepted.history, targets: accepted.targets,
+            current: accepted.current, history: accepted.history, pageProjection: accepted.pageProjection, targets: accepted.targets,
             waitingWork: accepted.waitingWork, nowMs: Date.now() })
             : retainedBySource.get(createCanonicalJsonSigningInput(scope.sources[index]!.source));
-        const value = projected ? accepted?.history ? projected
+        const value = projected ? accepted?.history || accepted?.pageProjection ? projected
             : { ...projected, unusedCapacity: { historyStatus: 'unavailable' as const, windows: [] } } : null;
         publishProgress(index, value);
     };
@@ -366,7 +381,7 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
     try {
         await withUiConnectedServiceReader(context, signal, async read => Promise.all(scope.sources.map(async ({ source }, index) => {
             try {
-                const accepted = await read({ source, history: { range, pageSize: 100 } });
+                const accepted = await read({ source, projection: { range, resolution: 'accepted_observations' } });
                 acceptedBySource.set(index, accepted);
                 publishProgress(index, accepted, true);
             } catch (error) { failSource(index, error); }

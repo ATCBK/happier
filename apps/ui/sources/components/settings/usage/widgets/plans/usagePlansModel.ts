@@ -1,5 +1,6 @@
 import { wasConnectedServiceQuotaObserved } from '@happier-dev/protocol/connect/quotaObservationTime';
 import type { ConnectedServiceQuotaGetResultV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { getProviderAccountUsageQuotaHistoryV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import {
   deriveProviderAccountUsageEarlierWindowCurves,
   type ProviderAccountUsageEarlierWindowCurvesV1,
@@ -403,13 +404,14 @@ export function resolveUsageResetStartBinding(account: UsagePlanAccount, meterId
   const window = account.windows.find((candidate) => candidate.meterId === meterId);
   if (!window || window.resetAtMs === null) return { status: 'unavailable', reason: 'no_reset' };
   let witness: Readonly<{ id: string; observedAtMs: number }> | null = null;
-  for (const entry of read.history?.entries ?? []) {
+  const history = getProviderAccountUsageQuotaHistoryV1(read);
+  for (const entry of history?.entries ?? []) {
     if (entry.snapshot.recordId !== current.recordId) continue;
     if (!witness || entry.observedAtMs > witness.observedAtMs) witness = { id: entry.id, observedAtMs: entry.observedAtMs };
   }
   if (!witness) return { status: 'unavailable', reason: 'no_witness' };
   const reset = { source: account.source, recordId: current.recordId, meterId, witness };
-  const snapshot = read.history?.entries.find(entry => entry.id === witness.id && entry.observedAtMs === witness.observedAtMs)?.snapshot ?? null;
+  const snapshot = history?.entries.find(entry => entry.id === witness.id && entry.observedAtMs === witness.observedAtMs)?.snapshot ?? null;
   const admission = evaluatePendingResetStartAdmissionV1({ reset, witness: snapshot, current, nowMs, authorityCurrent: true });
   if (admission.status !== 'available') return { status: 'unavailable', reason: admission.reason === 'witness_unavailable'
     ? 'no_witness' : admission.reason === 'unknown_window' || admission.reason === 'window_changed' ? 'no_reset' : 'no_reading' };
@@ -448,6 +450,6 @@ export function adviseUsageBankedReset(account: UsagePlanAccount): UsageBankedRe
 export function projectUsageEarlierCurves(account: UsagePlanAccount, meterId: string): ProviderAccountUsageEarlierWindowCurvesV1 {
   const current = account.read?.current;
   if (!current) return { status: 'unavailable', reason: 'unknown_window' };
-  const history = account.read?.history?.entries.map((entry) => entry.snapshot);
+  const history = account.read ? getProviderAccountUsageQuotaHistoryV1(account.read)?.entries.map((entry) => entry.snapshot) : undefined;
   return deriveProviderAccountUsageEarlierWindowCurves({ current, meterId, ...(history ? { history } : {}) });
 }

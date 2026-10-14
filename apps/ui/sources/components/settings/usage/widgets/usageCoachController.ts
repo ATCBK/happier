@@ -44,8 +44,6 @@ export type UsageCoachSnapshot = Readonly<{
   pending: readonly UsageCoachOperation[];
   applied: readonly UsageCoachAppliedEntry[];
   digest: Readonly<{ queryKey: string; result: ReturnType<typeof WorkflowTriggerWriteResultV1Schema.parse> }> | null;
-  /** Dismissed/snoozed and acknowledged by the preference owner in this mount, before the Resource re-reads. */
-  hiddenEvidenceKeys: readonly string[];
   error: Readonly<{
     evidenceKey: string;
     actionId: CoachActionId;
@@ -85,7 +83,6 @@ const EMPTY: UsageCoachSnapshot = {
   pending: [],
   applied: [],
   digest: null,
-  hiddenEvidenceKeys: [],
   error: null,
   approval: null,
   retired: false,
@@ -232,10 +229,6 @@ export function createUsageCoachController(
     }
   }
 
-  const hide = (evidenceKey: string) =>
-    snapshot.hiddenEvidenceKeys.includes(evidenceKey)
-      ? snapshot.hiddenEvidenceKeys
-      : [...snapshot.hiddenEvidenceKeys, evidenceKey];
   retirement = options.lifetime.onRetire(dispose);
   if (!current()) retirement.dispose();
   return {
@@ -306,8 +299,7 @@ export function createUsageCoachController(
         { query, evidenceKey, dismissed },
         (value) =>
           UsageCoachPreferenceResultSchema.safeParse(value).success
-            ? { ...snapshot, hiddenEvidenceKeys: dismissed ? hide(evidenceKey)
-              : snapshot.hiddenEvidenceKeys.filter(key => key !== evidenceKey) }
+            ? snapshot
             : null,
       ),
     snooze: (query, evidenceKey, untilMs) =>
@@ -316,15 +308,7 @@ export function createUsageCoachController(
         { query, evidenceKey, untilMs },
         (value) =>
           UsageCoachPreferenceResultSchema.safeParse(value).success
-            ? {
-                ...snapshot,
-                hiddenEvidenceKeys:
-                  untilMs === null
-                    ? snapshot.hiddenEvidenceKeys.filter(
-                        (key) => key !== evidenceKey,
-                      )
-                    : hide(evidenceKey),
-              }
+            ? snapshot
             : null,
       ),
     createDigest: (suggestion, project, trigger) =>
